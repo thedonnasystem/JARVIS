@@ -158,6 +158,18 @@ def _is_dangerous_bash(command: str) -> tuple[bool, str]:
     return False, ""
 
 
+async def _single_message_stream(text: str):
+    """Wrap one plain-text prompt as the AsyncIterable the SDK requires.
+
+    query() only accepts a plain string prompt in its simple, non-streaming
+    mode - and that mode can't carry permission decisions back to the agent,
+    so it's incompatible with a can_use_tool callback. Passing the prompt as
+    a one-item async generator instead puts the call in streaming mode,
+    which can_use_tool requires.
+    """
+    yield {"type": "user", "message": {"role": "user", "content": text}}
+
+
 def _resolve_within_workspace(path_str: str) -> Path | None:
     """Return the resolved path if it's inside WORKSPACE_DIR, else None."""
     candidate = Path(path_str)
@@ -426,7 +438,7 @@ async def run_build_phase(
 
     try:
         async for message in query(
-            prompt=build_prompt,
+            prompt=_single_message_stream(build_prompt),
             options=ClaudeAgentOptions(
                 cwd=str(WORKSPACE_DIR),
                 resume=state["session_id"],
