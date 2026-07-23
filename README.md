@@ -87,8 +87,52 @@ this terminal window open — the bot only runs while this command is active.
 Useful commands inside Telegram:
 - `/start` — greet the bot and clear conversation history
 - `/reset` — clear conversation history (start a fresh topic)
+- `/build <task>` — ask Jarvis to plan and build something (see below)
+- `/cancelbuild` — stop a build that's planning or in progress
 
-### 7. Stopping the bot
+### 7. Enable /build (optional — lets Jarvis build things for you)
+
+`/build` lets you ask Jarvis to write code or automate something, without
+opening Claude Code yourself. It's off by default — only you should be able
+to trigger it, since it can run real commands on your machine.
+
+1. In Telegram, message **@userinfobot** — it replies with your numeric user
+   ID (not your @username).
+2. Open `.env` and paste that number after `JARVIS_OWNER_ID=`.
+3. Reinstall dependencies (adds the Claude Agent SDK): `pip install -r requirements.txt`
+4. Restart the bot.
+
+Now `/build fix the bug in auth.py` (for example) works like this:
+1. **Plan.** Jarvis looks around and replies with what it *intends* to do —
+   it cannot write files or run commands yet, that's enforced by the SDK, not
+   just a prompt.
+2. **You approve or cancel.** Jarvis sends "✅ Build it" / "❌ Cancel" buttons
+   in Telegram. Nothing happens until you tap one.
+3. **Build.** Only after you approve does it actually create/edit files and
+   run commands — inside a dedicated `jarvis-projects/` folder (see below),
+   with live status updates in Telegram as it works.
+4. **Review.** When it's done, Jarvis lists the files it touched. You review,
+   commit, and push yourself — it does not push to GitHub or open pull
+   requests on its own.
+
+**Where the code lives:** by default, `jarvis-projects/` is created as a
+sibling folder next to this repo (not inside it), so Jarvis can never edit
+its own bot code. Override the location with `WORKSPACE_DIR=` in `.env` if
+you want it somewhere else.
+
+**Safety limits, built in regardless of what you approve:**
+- Only your Telegram user ID can use `/build` or approve a build.
+- File writes are blocked outside the `jarvis-projects` workspace.
+- `git push`, `gh` (GitHub CLI), `sudo`, and a few other destructive/
+  network-risky commands are always blocked, even after approval.
+
+**What this does *not* protect against:** this runs directly on your
+machine, not in an isolated container — the command blocklist is a
+best-effort guard, not a hard sandbox. Only approve builds you've actually
+read the plan for, and consider running the bot on a machine/user account
+you're comfortable giving that access to.
+
+### 8. Stopping the bot
 
 Go back to the terminal window and press `Ctrl+C`. To run it again later,
 just repeat Step 5 (your `.env` file stays put, so you won't need to
