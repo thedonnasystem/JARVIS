@@ -12,6 +12,8 @@ import os
 import re
 import sqlite3
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from anthropic import Anthropic, APIError
@@ -57,6 +59,9 @@ WORKSPACE_DIR = Path(
         "WORKSPACE_DIR", str(Path(__file__).resolve().parent.parent / "jarvis-projects")
     )
 ).resolve()
+
+# Webhook Jarvis calls when you ask it to kick off your Make.com scenario.
+MAKE_WEBHOOK_URL = os.environ.get("MAKE_WEBHOOK_URL")
 
 MAX_TURNS = 20  # how many past messages (user+assistant) to keep per chat
 TELEGRAM_MESSAGE_LIMIT = 4096
@@ -246,22 +251,99 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Conversation history cleared.")
 
 
+# Claude decides when to call this based on the description below - no need
+# to match an exact phrase like "kick off my Make scenario".
+MAKE_SCENARIO_TOOL = {
+    "name": "trigger_make_scenario",
+    "description": (
+        "Trigger the user's Make.com automation scenario by calling its "
+        "webhook. Use this whenever the user asks to kick off, run, trigger, "
+        "or start their Make.com scenario, automation, or workflow."
+    ),
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+
+def _should_offer_make_tool(user_id: int) -> bool:
+    # Gated the same way as /build - anyone who messages the bot shouldn't
+    # be able to trigger a real automation in your business.
+    return bool(MAKE_WEBHOOK_URL) and _is_owner(user_id)
+
+
+async def trigger_make_webhook() -> str:
+    """POST to MAKE_WEBHOOK_URL. Returns a short status string for Claude."""
+    if not MAKE_WEBHOOK_URL:
+        return "The Make.com webhook isn't configured - MAKE_WEBHOOK_URL is missing from .env."
+
+    def _post() -> str:
+        req = urllib.request.Request(
+            MAKE_WEBHOOK_URL,
+            data=b"{}",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return f"Webhook responded with HTTP {resp.status}."
+
+    try:
+        result = await asyncio.to_thread(_post)
+        logger.info("Triggered Make.com webhook: %s", result)
+        return result
+    except urllib.error.HTTPError as e:
+        logger.error("Make.com webhook returned an error: %s", e)
+        return f"Webhook call failed with HTTP {e.code}."
+    except Exception as e:
+        logger.exception("Make.com webhook call failed")
+        return f"Webhook call failed: {e}"
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     user_text = update.message.text
 
     history = load_history(chat_id)
-    history.append({"role": "user", "content": user_text})
+    messages = history + [{"role": "user", "content": user_text}]
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    kwargs = {}
+    if _should_offer_make_tool(update.effective_user.id):
+        kwargs["tools"] = [MAKE_SCENARIO_TOOL]
 
     try:
         response = anthropic_client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=2048,
             system=SYSTEM_PROMPT,
-            messages=history,
+            messages=messages,
+            **kwargs,
         )
+
+        if response.stop_reason == "tool_use":
+            tool_use_block = next(
+                b for b in response.content if b.type == "tool_use"
+            )
+            tool_result_text = await trigger_make_webhook()
+            messages = messages + [
+                {"role": "assistant", "content": response.content},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_block.id,
+                            "content": tool_result_text,
+                        }
+                    ],
+                },
+            ]
+            response = anthropic_client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=2048,
+                system=SYSTEM_PROMPT,
+                messages=messages,
+                **kwargs,
+            )
     except APIError as e:
         logger.exception("Anthropic API error")
         await update.message.reply_text(

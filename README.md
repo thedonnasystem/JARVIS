@@ -90,6 +90,10 @@ Useful commands inside Telegram:
 - `/build <task>` — ask Jarvis to plan and build something (see below)
 - `/cancelbuild` — stop a build that's planning or in progress
 
+There's no special command for automations — once Make.com is connected
+(Step 8 below), just say things like "kick off my Make scenario" in normal
+chat.
+
 ### 7. Enable /build (optional — lets Jarvis build things for you)
 
 `/build` lets you ask Jarvis to write code or automate something, without
@@ -132,7 +136,29 @@ best-effort guard, not a hard sandbox. Only approve builds you've actually
 read the plan for, and consider running the bot on a machine/user account
 you're comfortable giving that access to.
 
-### 8. Stopping the bot
+### 8. Enable Make.com integration (optional — lets Jarvis trigger your scenarios)
+
+Jarvis can kick off a Make.com scenario by calling its webhook, just by you
+asking in normal conversation — e.g. "kick off my Make scenario" or "run my
+automation." No special command needed; Claude decides when to call it based
+on what you say.
+
+1. **Get your webhook URL from Make.com:** open the scenario you want Jarvis
+   to trigger, add a **Webhooks → Custom webhook** trigger module (or use one
+   you already have), click **Add**, and copy the URL it gives you.
+2. Open `.env` and paste that URL after `MAKE_WEBHOOK_URL=`.
+3. This also requires `JARVIS_OWNER_ID` (Step 7 above) to be set — the same
+   restriction as `/build`, so a stranger messaging the bot can't trigger
+   your business automation. If you skipped Step 7, do that first.
+4. Restart the bot.
+
+That's it — just talk to Jarvis normally. It sends a plain `POST` with an
+empty JSON body (`{}`) to your webhook URL; nothing else is configurable, on
+purpose, to keep this simple. If you need to pass specific data into the
+scenario, that's a bigger change (ask for it explicitly and we can extend
+this).
+
+### 9. Stopping the bot
 
 Go back to the terminal window and press `Ctrl+C`. To run it again later,
 just repeat Step 5 (your `.env` file stays put, so you won't need to
