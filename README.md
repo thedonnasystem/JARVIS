@@ -96,11 +96,14 @@ re-enter your keys).
 
 ## Notes
 
-- The bot remembers the last ~20 messages per Telegram chat so it can hold a
-  conversation, but that memory resets whenever you stop and restart it.
+- The bot remembers the last ~20 messages per Telegram chat, saved to a file
+  called `conversations.db` in this folder — so it still remembers your
+  conversation even after you stop and restart the bot. Delete that file (or
+  send `/reset` in Telegram) to wipe history and start fresh.
 - By default it uses Anthropic's `claude-opus-4-8` model. To use a cheaper/
   faster model instead, add a line like `CLAUDE_MODEL=claude-haiku-4-5` to
   your `.env` file.
 - Keep your `.env` file private — anyone with your Anthropic API key can
   spend money on your account, and anyone with your bot token can control
-  your bot.
+  your bot. `conversations.db` holds your chat history, so treat it as
+  private too — it's already excluded from git via `.gitignore`.
