@@ -18,6 +18,7 @@ from anthropic import Anthropic, APIError
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ClaudeSDKClient,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -156,18 +157,6 @@ def _is_dangerous_bash(command: str) -> tuple[bool, str]:
     if ("curl" in lowered or "wget" in lowered) and piping_to_shell:
         return True, "downloads and pipes into a shell"
     return False, ""
-
-
-async def _single_message_stream(text: str):
-    """Wrap one plain-text prompt as the AsyncIterable the SDK requires.
-
-    query() only accepts a plain string prompt in its simple, non-streaming
-    mode - and that mode can't carry permission decisions back to the agent,
-    so it's incompatible with a can_use_tool callback. Passing the prompt as
-    a one-item async generator instead puts the call in streaming mode,
-    which can_use_tool requires.
-    """
-    yield {"type": "user", "message": {"role": "user", "content": text}}
 
 
 def _resolve_within_workspace(path_str: str) -> Path | None:
@@ -463,36 +452,45 @@ async def run_build_phase(
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     before_snapshot = _snapshot_workspace()
 
+    # The module-level query() function ties the whole session to the
+    # lifetime of its input: with a can_use_tool callback, if the prompt
+    # generator finishes before a tool call is fully permitted and executed,
+    # the connection those permission decisions travel over can close
+    # mid-flight ("AbortError: Stream closed"). ClaudeSDKClient decouples
+    # sending the prompt from consuming the response, keeping the session
+    # open for the whole turn - which is what a can_use_tool callback needs.
     try:
-        async for message in query(
-            prompt=_single_message_stream(build_prompt),
+        async with ClaudeSDKClient(
             options=ClaudeAgentOptions(
                 cwd=str(WORKSPACE_DIR),
                 resume=state["session_id"],
                 permission_mode="default",
                 disallowed_tools=["AskUserQuestion"],
                 can_use_tool=build_permission_gate,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, ToolUseBlock):
-                        # These are what Claude *requested* - just for a live
-                        # progress ping. Whether they actually landed on disk
-                        # is checked afterwards via before/after_snapshot,
-                        # since a request can be denied or fail silently.
-                        if block.name in ("Write", "Edit", "NotebookEdit"):
-                            file_path = block.input.get("file_path")
-                            await update_status(f"✏️ Editing {file_path}")
-                        elif block.name == "Bash":
-                            command = str(block.input.get("command", ""))[:200]
-                            await update_status(f"⚙️ Running: {command}")
-                        else:
-                            await update_status(f"🔍 Using {block.name}...")
-                    elif isinstance(block, TextBlock):
-                        final_text_parts.append(block.text)
-            elif isinstance(message, ResultMessage):
-                result_summary = message
+            )
+        ) as client:
+            await client.query(build_prompt)
+            async for message in client.receive_response():
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, ToolUseBlock):
+                            # These are what Claude *requested* - just for a
+                            # live progress ping. Whether they actually
+                            # landed on disk is checked afterwards via
+                            # before/after_snapshot, since a request can be
+                            # denied or fail silently.
+                            if block.name in ("Write", "Edit", "NotebookEdit"):
+                                file_path = block.input.get("file_path")
+                                await update_status(f"✏️ Editing {file_path}")
+                            elif block.name == "Bash":
+                                command = str(block.input.get("command", ""))[:200]
+                                await update_status(f"⚙️ Running: {command}")
+                            else:
+                                await update_status(f"🔍 Using {block.name}...")
+                        elif isinstance(block, TextBlock):
+                            final_text_parts.append(block.text)
+                elif isinstance(message, ResultMessage):
+                    result_summary = message
     except Exception:
         logger.exception("Build phase crashed")
         build_sessions.pop(chat_id, None)
