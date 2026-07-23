@@ -184,6 +184,21 @@ def _resolve_within_workspace(path_str: str) -> Path | None:
     return None
 
 
+def _snapshot_workspace() -> dict[str, float]:
+    """Map every file currently under WORKSPACE_DIR to its last-modified time.
+
+    Used to detect what actually changed on disk during a build, instead of
+    trusting the model's tool calls (a requested write may have been denied,
+    resolved somewhere other than WORKSPACE_DIR, or simply failed).
+    """
+    snapshot: dict[str, float] = {}
+    if WORKSPACE_DIR.exists():
+        for path in WORKSPACE_DIR.rglob("*"):
+            if path.is_file():
+                snapshot[str(path.relative_to(WORKSPACE_DIR))] = path.stat().st_mtime
+    return snapshot
+
+
 async def build_permission_gate(tool_name, input_data, context):
     """can_use_tool callback for the build phase - the actual safety boundary.
 
@@ -196,8 +211,11 @@ async def build_permission_gate(tool_name, input_data, context):
         if _resolve_within_workspace(file_path) is None:
             return PermissionResultDeny(
                 message=(
-                    f"'{file_path}' is outside the jarvis-projects workspace, "
-                    "so I can't write there. Stay inside the workspace directory."
+                    f"'{file_path}' is outside the allowed workspace, so I can't "
+                    f"write there. Use an absolute path starting with exactly "
+                    f"'{WORKSPACE_DIR}' for every file you create or edit - for "
+                    f"example '{WORKSPACE_DIR}/hello.py', not a bare relative "
+                    "filename or a path anywhere else."
                 )
             )
         return PermissionResultAllow(updated_input=input_data)
@@ -328,9 +346,13 @@ async def run_plan_phase(
 
     plan_prompt = (
         f"{task_text}\n\n"
-        "Explore the workspace as needed and propose a concrete, specific plan "
-        "for how you'd build this. Do not write or edit any files or run any "
-        "commands yet - just explain what you'd create or change, and why."
+        f"Your workspace is {WORKSPACE_DIR} - explore it as needed. When you "
+        f"describe files you'd create or change, always give the full path "
+        f"starting with {WORKSPACE_DIR} (e.g. {WORKSPACE_DIR}/hello.py), never "
+        "a bare filename or a path outside this directory. Propose a concrete, "
+        "specific plan for how you'd build this. Do not write or edit any "
+        "files or run any commands yet - just explain what you'd create or "
+        "change, and why."
     )
 
     try:
@@ -429,12 +451,17 @@ async def run_build_phase(
         except Exception:
             pass  # text unchanged or rate-limited - not worth failing over
 
-    files_touched: set[str] = set()
     result_summary = None
+    final_text_parts: list[str] = []
     build_prompt = (
-        "Go ahead and build the plan you just proposed. Work only inside this "
-        "workspace directory."
+        "Go ahead and build the plan you just proposed. Create and edit every "
+        f"file using its full absolute path starting with exactly "
+        f"{WORKSPACE_DIR} (e.g. {WORKSPACE_DIR}/hello.py) - never a bare "
+        "relative filename, and never a path outside this directory."
     )
+
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    before_snapshot = _snapshot_workspace()
 
     try:
         async for message in query(
@@ -450,16 +477,20 @@ async def run_build_phase(
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, ToolUseBlock):
+                        # These are what Claude *requested* - just for a live
+                        # progress ping. Whether they actually landed on disk
+                        # is checked afterwards via before/after_snapshot,
+                        # since a request can be denied or fail silently.
                         if block.name in ("Write", "Edit", "NotebookEdit"):
                             file_path = block.input.get("file_path")
-                            if file_path:
-                                files_touched.add(file_path)
                             await update_status(f"✏️ Editing {file_path}")
                         elif block.name == "Bash":
                             command = str(block.input.get("command", ""))[:200]
                             await update_status(f"⚙️ Running: {command}")
                         else:
                             await update_status(f"🔍 Using {block.name}...")
+                    elif isinstance(block, TextBlock):
+                        final_text_parts.append(block.text)
             elif isinstance(message, ResultMessage):
                 result_summary = message
     except Exception:
@@ -472,24 +503,43 @@ async def run_build_phase(
 
     build_sessions.pop(chat_id, None)
 
-    if result_summary and result_summary.subtype == "success":
-        files_list = "\n".join(f"- {f}" for f in sorted(files_touched)) or "(no files changed)"
-        cost = (
-            f"${result_summary.total_cost_usd:.2f}"
-            if result_summary.total_cost_usd
-            else "n/a"
+    # Ground truth: what actually changed on disk, not what was requested.
+    after_snapshot = _snapshot_workspace()
+    created = sorted(after_snapshot.keys() - before_snapshot.keys())
+    modified = sorted(
+        p for p in (after_snapshot.keys() & before_snapshot.keys())
+        if after_snapshot[p] != before_snapshot[p]
+    )
+    final_text = "\n".join(final_text_parts).strip()
+
+    if not created and not modified:
+        message_text = (
+            "⚠️ Claude finished, but I couldn't find any new or changed files "
+            f"in {WORKSPACE_DIR}. It may have tried writing outside the "
+            "workspace (which I block) or hit an error. Here's what it said:\n\n"
+            f"{final_text or '(no explanation given)'}"
         )
-        await update_status(
-            f"✅ Done.\n\nFiles touched:\n{files_list}\n\nCost: {cost}\n\n"
-            f"Everything is in {WORKSPACE_DIR} - review it and commit/push "
-            "yourself when you're happy with it."
-        )
-    else:
-        err = result_summary.error_code if result_summary else "unknown"
-        await update_status(
-            f"⚠️ Finished with an error ({err}). Check the files in "
-            f"{WORKSPACE_DIR} before trusting the result."
-        )
+        await update_status(message_text[:TELEGRAM_MESSAGE_LIMIT])
+        if len(message_text) > TELEGRAM_MESSAGE_LIMIT:
+            for chunk in split_for_telegram(message_text[TELEGRAM_MESSAGE_LIMIT:]):
+                await context.bot.send_message(chat_id, chunk)
+        return
+
+    changes = [f"- created {p}" for p in created] + [f"- modified {p}" for p in modified]
+    files_list = "\n".join(changes)
+    cost = (
+        f"${result_summary.total_cost_usd:.2f}"
+        if result_summary and result_summary.total_cost_usd
+        else "n/a"
+    )
+    status_prefix = "✅ Done." if (result_summary and result_summary.subtype == "success") else (
+        f"⚠️ Finished with an error ({result_summary.error_code if result_summary else 'unknown'}), "
+        "but some files did change:"
+    )
+    await update_status(
+        f"{status_prefix}\n\nChanges in {WORKSPACE_DIR}:\n{files_list}\n\nCost: {cost}\n\n"
+        "Review it and commit/push yourself when you're happy with it."
+    )
 
 
 def main() -> None:
