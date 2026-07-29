@@ -1394,7 +1394,7 @@ async def vault_store(key: str, value: str, note: str = "") -> str:
             raise RuntimeError("Bitwarden Secrets Manager isn't configured.")
         project_ids = [BW_PROJECT_ID] if BW_PROJECT_ID else None
         resp = client.secrets().create(BW_ORGANIZATION_ID, key, value, note, project_ids)
-        return resp.data.id
+        return str(resp.data.id)
 
     return await asyncio.to_thread(_create)
 
