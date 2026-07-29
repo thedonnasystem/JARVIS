@@ -16,8 +16,11 @@ import sqlite3
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
+import psycopg2
+import psycopg2.extras
 from anthropic import Anthropic, APIError
 from claude_agent_sdk import (
     AssistantMessage,
@@ -76,6 +79,16 @@ MAX_TURNS = 20  # how many past messages (user+assistant) to keep per chat
 TELEGRAM_MESSAGE_LIMIT = 4096
 DB_PATH = os.environ.get("DB_PATH", "conversations.db")
 
+# Shared memory now lives in Postgres (set by Railway's Postgres plugin) so
+# every agent function reads/writes the same store. Falls back to the local
+# SQLite file if DATABASE_URL isn't set (e.g. running outside Railway) so the
+# bot still works, just without cross-restart shared memory guarantees.
+DATABASE_URL = os.environ.get("DATABASE_URL")
+IS_POSTGRES = bool(DATABASE_URL)
+
+# How many shared-memory entries an agent pulls in as context by default.
+MEMORY_RECALL_LIMIT = 10
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
@@ -84,8 +97,33 @@ logger = logging.getLogger(__name__)
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
+def get_conn():
+    """Return a DB-API connection - Postgres in production, SQLite as a
+    local-only fallback if DATABASE_URL isn't set."""
+    if IS_POSTGRES:
+        return psycopg2.connect(DATABASE_URL)
+    return sqlite3.connect(DB_PATH)
+
+
 def init_db() -> None:
     """Create the conversation history table if it doesn't exist yet."""
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS messages (
+                    id SERIAL PRIMARY KEY,
+                    chat_id BIGINT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages (chat_id, id)"
+            )
+        return
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             """
@@ -105,6 +143,14 @@ def init_db() -> None:
 
 def load_history(chat_id: int) -> list[dict]:
     """Load this chat's saved conversation, oldest message first."""
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT role, content FROM messages WHERE chat_id = %s ORDER BY id ASC",
+                (chat_id,),
+            )
+            rows = cur.fetchall()
+        return [{"role": role, "content": content} for role, content in rows]
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(
             "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id ASC",
@@ -115,6 +161,22 @@ def load_history(chat_id: int) -> list[dict]:
 
 def save_message(chat_id: int, role: str, content: str) -> None:
     """Persist one message and trim old ones beyond MAX_TURNS for this chat."""
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO messages (chat_id, role, content) VALUES (%s, %s, %s)",
+                (chat_id, role, content),
+            )
+            cur.execute(
+                """
+                DELETE FROM messages
+                WHERE chat_id = %s AND id NOT IN (
+                    SELECT id FROM messages WHERE chat_id = %s ORDER BY id DESC LIMIT %s
+                )
+                """,
+                (chat_id, chat_id, MAX_TURNS),
+            )
+        return
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             "INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)",
@@ -132,17 +194,34 @@ def save_message(chat_id: int, role: str, content: str) -> None:
 
 
 def clear_history(chat_id: int) -> None:
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM messages WHERE chat_id = %s", (chat_id,))
+        return
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
 
 
 def init_n8n_registry() -> None:
-    """Create the local table that maps workflow names to n8n ids/webhooks.
+    """Create the table that maps workflow names to n8n ids/webhooks.
 
     n8n itself is the source of truth for workflow content; this table just
     lets Jarvis look a workflow up by the plain-English name the user used,
     without having to search n8n every time.
     """
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS n8n_workflows (
+                    name TEXT PRIMARY KEY,
+                    workflow_id TEXT NOT NULL,
+                    webhook_path TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+        return
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             """
@@ -157,6 +236,19 @@ def init_n8n_registry() -> None:
 
 
 def save_n8n_workflow(name: str, workflow_id: str, webhook_path: str | None) -> None:
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO n8n_workflows (name, workflow_id, webhook_path)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (name) DO UPDATE
+                    SET workflow_id = EXCLUDED.workflow_id,
+                        webhook_path = EXCLUDED.webhook_path
+                """,
+                (name, workflow_id, webhook_path),
+            )
+        return
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO n8n_workflows (name, workflow_id, webhook_path) "
@@ -167,6 +259,13 @@ def save_n8n_workflow(name: str, workflow_id: str, webhook_path: str | None) -> 
 
 def get_n8n_workflow(name: str) -> tuple[str, str | None] | None:
     """Case-insensitive lookup of a previously-registered workflow by name."""
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT workflow_id, webhook_path FROM n8n_workflows WHERE name ILIKE %s",
+                (name,),
+            )
+            return cur.fetchone()
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
             "SELECT workflow_id, webhook_path FROM n8n_workflows "
@@ -174,6 +273,110 @@ def get_n8n_workflow(name: str) -> tuple[str, str | None] | None:
             (name,),
         ).fetchone()
     return row
+
+
+# --- Shared memory ----------------------------------------------------------
+#
+# One store every agent function reads from and writes to. This is what lets
+# Jarvis answer "what's already been done" without re-asking Moe, and lets
+# e.g. the Builder Agent pick up findings the Research Agent saved earlier.
+
+def init_memory() -> None:
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory (
+                    id SERIAL PRIMARY KEY,
+                    agent TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    key TEXT,
+                    value TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_memory_category ON memory (category)")
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent TEXT NOT NULL,
+                category TEXT NOT NULL,
+                key TEXT,
+                value TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_category ON memory (category)")
+
+
+def remember(agent: str, category: str, value: str, key: str | None = None) -> None:
+    """Log one decision/finding/result to shared memory."""
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO memory (agent, category, key, value) VALUES (%s, %s, %s, %s)",
+                (agent, category, key, value),
+            )
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO memory (agent, category, key, value) VALUES (?, ?, ?, ?)",
+            (agent, category, key, value),
+        )
+
+
+def recall(
+    query: str | None = None,
+    category: str | None = None,
+    agent: str | None = None,
+    limit: int = MEMORY_RECALL_LIMIT,
+) -> list[dict]:
+    """Search shared memory, most recent first."""
+    clauses = []
+    params: list = []
+    ph = "%s" if IS_POSTGRES else "?"
+    like_op = "ILIKE" if IS_POSTGRES else "LIKE"
+
+    if query:
+        clauses.append(f"value {like_op} {ph}")
+        params.append(f"%{query}%")
+    if category:
+        clauses.append(f"category = {ph}")
+        params.append(category)
+    if agent:
+        clauses.append(f"agent = {ph}")
+        params.append(agent)
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = (
+        f"SELECT agent, category, key, value, created_at FROM memory {where} "
+        f"ORDER BY id DESC LIMIT {ph}"
+    )
+    params.append(limit)
+
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+    else:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(sql, params).fetchall()
+
+    return [
+        {
+            "agent": r[0],
+            "category": r[1],
+            "key": r[2],
+            "value": r[3],
+            "created_at": str(r[4]),
+        }
+        for r in rows
+    ]
 
 
 # In-memory state for the /build feature, keyed by Telegram chat id.
@@ -607,6 +810,12 @@ async def handle_build_n8n_workflow(
             result += f" It can be triggered via trigger_n8n_workflow(name='{name}')."
         else:
             result += " It has no Webhook node, so it can't be triggered on demand."
+        remember(
+            agent="builder",
+            category="workflow",
+            key=name,
+            value=f"Built and activated n8n workflow '{name}' (id {workflow_id}). {summary}",
+        )
         return result
     except Exception as e:
         logger.exception("Failed to build n8n workflow")
@@ -655,6 +864,12 @@ async def handle_trigger_n8n_workflow(
 
     try:
         result = await trigger_webhook_path(webhook_path)
+        remember(
+            agent="builder",
+            category="workflow",
+            key=display_name,
+            value=f"Triggered n8n workflow '{display_name}'. {result}",
+        )
         return f"SUCCESS: triggered '{display_name}'. {result}"
     except Exception as e:
         logger.exception("Failed to trigger n8n workflow")
@@ -675,6 +890,258 @@ async def handle_list_n8n_workflows() -> str:
     return "Workflows in n8n:\n" + "\n".join(lines)
 
 
+# --- The five agents --------------------------------------------------------
+#
+# Jarvis (the main conversation) is the orchestrator: it decides which agent a
+# request needs and calls it as a tool. Every agent reads relevant context
+# from shared memory before acting and writes its result back, so any other
+# agent (or a later conversation) can pick up where it left off without
+# re-asking Moe.
+
+RESEARCH_AGENT_TOOL = {
+    "name": "research_agent",
+    "description": (
+        "Research Agent - web research, sourcing, competitive/product "
+        "research. Use for questions that need looking something up or "
+        "reasoning through options (market research, competitor analysis, "
+        "sourcing tools/suppliers/pricing, technical research). It searches "
+        "the web when possible and saves its findings to shared memory under "
+        "category 'research' so the Builder Agent or a later conversation can "
+        "reuse them without Moe repeating himself."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "task": {
+                "type": "string",
+                "description": "The research question or task, as specific as possible.",
+            }
+        },
+        "required": ["task"],
+    },
+}
+
+RECALL_MEMORY_TOOL = {
+    "name": "recall_memory",
+    "description": (
+        "Search shared memory for anything already researched, decided, "
+        "built, or logged, across every agent. Use this before starting real "
+        "work (e.g. before building something, check whether research on it "
+        "already exists) or when Moe asks what's already been done, so you "
+        "don't re-ask him for context you already have."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Keyword(s) to search for in shared memory.",
+            },
+            "category": {
+                "type": "string",
+                "description": (
+                    "Optional filter: 'research', 'content', 'todo', "
+                    "'decision', 'account', 'workflow', or 'social'."
+                ),
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+CONTENT_AGENT_TOOL = {
+    "name": "content_agent",
+    "description": (
+        "Content Agent - writes captions, copy, concepts, and lyrics for "
+        "Moe's brands (AAA Adoption and other business ventures, Klumbsy / "
+        "Born2Ball Records music, Sheikhspeare faith content). Use whenever "
+        "Moe wants a caption, post copy, song concept, lyric help, or "
+        "branding text drafted. Image/video generation is a future paid "
+        "add-on, not available yet - say so if asked. Saves drafts to shared "
+        "memory under category 'content' so the Social Agent can pick them "
+        "up once posting is wired up."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "brief": {
+                "type": "string",
+                "description": "What to write, the brand/context, tone, and platform if relevant.",
+            }
+        },
+        "required": ["brief"],
+    },
+}
+
+OPERATIONS_AGENT_TOOL = {
+    "name": "operations_agent",
+    "description": (
+        "Operations Agent - calendar, time/reminders, accounts, credentials, "
+        "scheduling. Use for 'what's on today', adding/checking to-dos and "
+        "reminders, or anything about current date/time. Calendar sync isn't "
+        "wired up yet (coming in a later phase) - for now this manages "
+        "to-dos/reminders in shared memory directly."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["add_todo", "list_todos", "current_time"],
+                "description": "What to do.",
+            },
+            "text": {
+                "type": "string",
+                "description": "The to-do/reminder text - required for action=add_todo.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
+SOCIAL_AGENT_TOOL = {
+    "name": "social_agent",
+    "description": (
+        "Social Agent - posts and manages social accounts once they exist. "
+        "Posting isn't wired up yet (Meta Graph API integration is a later "
+        "phase). Use this when Moe asks to post/schedule something publicly "
+        "so the request gets logged to shared memory and he gets an honest "
+        "'not live yet' answer instead of a false confirmation."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "request": {
+                "type": "string",
+                "description": "What Moe asked to post/manage, verbatim.",
+            }
+        },
+        "required": ["request"],
+    },
+}
+
+
+async def handle_research_agent(tool_input: dict) -> str:
+    task = (tool_input.get("task") or "").strip()
+    if not task:
+        return "No research task was given."
+
+    prior = recall(query=task, category="research", limit=5)
+    context_note = ""
+    if prior:
+        context_note = "Earlier related research already in shared memory:\n" + "\n".join(
+            f"- ({p['created_at']}) {p['value'][:300]}" for p in prior
+        )
+
+    research_prompt = (
+        f"Research task: {task}\n\n"
+        + (context_note + "\n\n" if context_note else "")
+        + "Give a concise, well-sourced answer. If you cannot access the web, "
+        "reason from what you know and clearly say the answer is not "
+        "web-verified."
+    )
+
+    def _call(use_web_search: bool):
+        kwargs = {}
+        if use_web_search:
+            kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+        return anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1500,
+            system="You are the Research Agent, a focused research assistant.",
+            messages=[{"role": "user", "content": research_prompt}],
+            **kwargs,
+        )
+
+    try:
+        response = await asyncio.to_thread(_call, True)
+    except APIError:
+        logger.warning("web_search tool unavailable for research_agent, falling back to no-tool")
+        response = await asyncio.to_thread(_call, False)
+
+    findings = "".join(b.text for b in response.content if b.type == "text").strip()
+    if not findings:
+        findings = "(no findings returned)"
+
+    remember(agent="research", category="research", key=task[:200], value=findings)
+    return f"RESEARCH FINDINGS (saved to shared memory):\n\n{findings}"
+
+
+async def handle_recall_memory(tool_input: dict) -> str:
+    query = (tool_input.get("query") or "").strip()
+    category = (tool_input.get("category") or "").strip() or None
+    if not query:
+        return "No search query was given."
+
+    results = recall(query=query, category=category, limit=MEMORY_RECALL_LIMIT)
+    if not results:
+        return "Nothing in shared memory matches that."
+
+    lines = [
+        f"- [{r['agent']}/{r['category']}] ({r['created_at']}) {r['value'][:400]}"
+        for r in results
+    ]
+    return "Shared memory matches:\n" + "\n".join(lines)
+
+
+async def handle_content_agent(tool_input: dict) -> str:
+    brief = (tool_input.get("brief") or "").strip()
+    if not brief:
+        return "No content brief was given."
+
+    response = await asyncio.to_thread(
+        anthropic_client.messages.create,
+        model=CLAUDE_MODEL,
+        max_tokens=800,
+        system=(
+            "You are the Content Agent. Write captions/copy/lyrics that sound "
+            "like Moe - direct, hungry, emotional, ambitious, never generic "
+            "corporate hype. Match whatever brand/platform is specified."
+        ),
+        messages=[{"role": "user", "content": brief}],
+    )
+    draft = "".join(b.text for b in response.content if b.type == "text").strip()
+    if not draft:
+        draft = "(no draft returned)"
+
+    remember(agent="content", category="content", key=brief[:200], value=draft)
+    return f"DRAFT (saved to shared memory, not posted anywhere):\n\n{draft}"
+
+
+async def handle_operations_agent(tool_input: dict) -> str:
+    action = tool_input.get("action")
+    now = datetime.now(timezone.utc)
+
+    if action == "current_time":
+        return f"Current date/time (UTC): {now.strftime('%A, %B %d, %Y %H:%M')}"
+
+    if action == "add_todo":
+        text = (tool_input.get("text") or "").strip()
+        if not text:
+            return "No to-do text was given."
+        remember(agent="operations", category="todo", key=None, value=text)
+        return f"Saved to-do: {text}"
+
+    if action == "list_todos":
+        todos = recall(category="todo", limit=50)
+        if not todos:
+            return "No to-dos saved yet."
+        lines = [f"- ({t['created_at']}) {t['value']}" for t in todos]
+        return "Current to-dos:\n" + "\n".join(lines)
+
+    return f"Unknown operations action: {action}"
+
+
+async def handle_social_agent(tool_input: dict) -> str:
+    request = (tool_input.get("request") or "").strip()
+    remember(agent="social", category="social", key=None, value=request or "(no detail given)")
+    return (
+        "NOT LIVE YET: posting/account management isn't wired up - the Meta "
+        "Graph API integration hasn't been built yet. This request has been "
+        "logged to shared memory so it's not lost, but nothing was posted."
+    )
+
+
 async def dispatch_tool_call(
     tool_name: str, tool_input: dict, context: ContextTypes.DEFAULT_TYPE, chat_id: int
 ) -> str:
@@ -686,6 +1153,16 @@ async def dispatch_tool_call(
         return await handle_trigger_n8n_workflow(tool_input, context, chat_id)
     if tool_name == "list_n8n_workflows":
         return await handle_list_n8n_workflows()
+    if tool_name == "research_agent":
+        return await handle_research_agent(tool_input)
+    if tool_name == "recall_memory":
+        return await handle_recall_memory(tool_input)
+    if tool_name == "content_agent":
+        return await handle_content_agent(tool_input)
+    if tool_name == "operations_agent":
+        return await handle_operations_agent(tool_input)
+    if tool_name == "social_agent":
+        return await handle_social_agent(tool_input)
     return f"Unknown tool: {tool_name}"
 
 
@@ -703,6 +1180,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         tools.append(MAKE_SCENARIO_TOOL)
     if _should_offer_n8n_tools(update.effective_user.id):
         tools.extend([BUILD_N8N_WORKFLOW_TOOL, TRIGGER_N8N_WORKFLOW_TOOL, LIST_N8N_WORKFLOWS_TOOL])
+    if _is_owner(update.effective_user.id):
+        # The five agents are always available to the owner - they're core
+        # Jarvis capabilities, not optional integrations like n8n/Make.
+        tools.extend(
+            [
+                RESEARCH_AGENT_TOOL,
+                RECALL_MEMORY_TOOL,
+                CONTENT_AGENT_TOOL,
+                OPERATIONS_AGENT_TOOL,
+                SOCIAL_AGENT_TOOL,
+            ]
+        )
     kwargs = {"tools": tools} if tools else {}
 
     # Cap on tool round-trips per user message, so a confused model can't
@@ -1038,6 +1527,11 @@ def main() -> None:
 
     init_db()
     init_n8n_registry()
+    init_memory()
+
+    logger.info(
+        "Shared memory backend: %s", "Postgres" if IS_POSTGRES else "SQLite (local fallback)"
+    )
 
     if not (N8N_BASE_URL and N8N_API_KEY):
         logger.warning(
