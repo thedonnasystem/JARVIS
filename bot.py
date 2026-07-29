@@ -343,7 +343,12 @@ def recall(
     like_op = "ILIKE" if IS_POSTGRES else "LIKE"
 
     if query:
-        clauses.append(f"value {like_op} {ph}")
+        # Search both the content (value) and the topic label (key) - a
+        # follow-up like "build something using that CRM research" often
+        # echoes the original topic more than the exact wording of the
+        # findings themselves.
+        clauses.append(f"(value {like_op} {ph} OR key {like_op} {ph})")
+        params.append(f"%{query}%")
         params.append(f"%{query}%")
     if category:
         clauses.append(f"category = {ph}")
