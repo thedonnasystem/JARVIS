@@ -7,6 +7,8 @@ edit this file to add secrets.
 """
 
 import asyncio
+import itertools
+import json
 import logging
 import os
 import re
@@ -62,6 +64,13 @@ WORKSPACE_DIR = Path(
 
 # Webhook Jarvis calls when you ask it to kick off your Make.com scenario.
 MAKE_WEBHOOK_URL = os.environ.get("MAKE_WEBHOOK_URL")
+
+# Self-hosted n8n instance Jarvis can build and trigger workflows in.
+N8N_BASE_URL = os.environ.get("N8N_BASE_URL", "").rstrip("/")
+N8N_API_KEY = os.environ.get("N8N_API_KEY")
+
+# How long an approval request waits for a yes/no tap before giving up.
+APPROVAL_TIMEOUT_SECONDS = 300
 
 MAX_TURNS = 20  # how many past messages (user+assistant) to keep per chat
 TELEGRAM_MESSAGE_LIMIT = 4096
@@ -127,9 +136,109 @@ def clear_history(chat_id: int) -> None:
         conn.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
 
 
+def init_n8n_registry() -> None:
+    """Create the local table that maps workflow names to n8n ids/webhooks.
+
+    n8n itself is the source of truth for workflow content; this table just
+    lets Jarvis look a workflow up by the plain-English name the user used,
+    without having to search n8n every time.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS n8n_workflows (
+                name TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                webhook_path TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+
+def save_n8n_workflow(name: str, workflow_id: str, webhook_path: str | None) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO n8n_workflows (name, workflow_id, webhook_path) "
+            "VALUES (?, ?, ?)",
+            (name, workflow_id, webhook_path),
+        )
+
+
+def get_n8n_workflow(name: str) -> tuple[str, str | None] | None:
+    """Case-insensitive lookup of a previously-registered workflow by name."""
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT workflow_id, webhook_path FROM n8n_workflows "
+            "WHERE name = ? COLLATE NOCASE",
+            (name,),
+        ).fetchone()
+    return row
+
+
 # In-memory state for the /build feature, keyed by Telegram chat id.
 # Ephemeral by design - if the bot restarts mid-build, just run /build again.
 build_sessions: dict[int, dict] = {}
+
+# Pending yes/no approval requests (e.g. before building/activating/triggering
+# an n8n workflow), keyed by a short request id. Ephemeral by design - if the
+# bot restarts while a request is outstanding, it's simply lost and whatever
+# was waiting on it will report a denial/timeout.
+pending_approvals: dict[str, asyncio.Future] = {}
+_approval_id_counter = itertools.count()
+
+
+async def request_approval(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    description: str,
+    timeout: float = APPROVAL_TIMEOUT_SECONDS,
+) -> bool:
+    """Ask the owner to approve an action on Telegram and wait for their tap.
+
+    This is the safety boundary for every build/activate/trigger action Jarvis
+    can take in n8n: nothing happens until this returns True. Returns False on
+    an explicit deny, a timeout, or if the button is never pressed.
+    """
+    request_id = f"{chat_id}-{next(_approval_id_counter)}"
+    future: asyncio.Future = asyncio.get_running_loop().create_future()
+    pending_approvals[request_id] = future
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Approve", callback_data=f"approve:yes:{request_id}"),
+                InlineKeyboardButton("❌ Deny", callback_data=f"approve:no:{request_id}"),
+            ]
+        ]
+    )
+    await context.bot.send_message(chat_id, description, reply_markup=keyboard)
+
+    try:
+        return await asyncio.wait_for(future, timeout=timeout)
+    except asyncio.TimeoutError:
+        return False
+    finally:
+        pending_approvals.pop(request_id, None)
+
+
+async def approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query_cb = update.callback_query
+    await query_cb.answer()
+
+    if not _is_owner(query_cb.from_user.id):
+        return
+
+    _, decision, request_id = query_cb.data.split(":", 2)
+    future = pending_approvals.get(request_id)
+    if future is None or future.done():
+        await query_cb.edit_message_text("This request is no longer active.")
+        return
+
+    approved = decision == "yes"
+    future.set_result(approved)
+    await query_cb.edit_message_text("✅ Approved." if approved else "❌ Denied.")
+
 
 # Bash commands /build will always refuse, even after you've approved a plan.
 # This is a best-effort denylist, not a hard sandbox - see the README.
@@ -297,6 +406,283 @@ async def trigger_make_webhook() -> str:
         return f"Webhook call failed: {e}"
 
 
+# --- n8n integration -------------------------------------------------------
+#
+# Claude decides when to call these based on their descriptions below. Every
+# build/activate/trigger action goes through request_approval() first - see
+# handle_build_n8n_workflow / handle_trigger_n8n_workflow.
+
+BUILD_N8N_WORKFLOW_TOOL = {
+    "name": "build_n8n_workflow",
+    "description": (
+        "Create and activate a brand-new workflow in the user's self-hosted "
+        "n8n instance. Use this when the user asks you to build, create, or "
+        "set up a new automation/workflow in n8n. You must construct the "
+        "complete n8n workflow JSON yourself: a JSON object with a 'nodes' "
+        "array and a 'connections' object, following n8n's node-based "
+        "workflow schema (each node needs at minimum id, name, type, "
+        "typeVersion, position, and parameters). The workflow MUST include "
+        "exactly one Webhook trigger node (type 'n8n-nodes-base.webhook') "
+        "with a short unique 'path' (e.g. a slug of the workflow name), so "
+        "it can be triggered later with trigger_n8n_workflow. If the user "
+        "wants this workflow to run on a recurring schedule (e.g. daily, "
+        "hourly), also add a Schedule Trigger node (type "
+        "'n8n-nodes-base.scheduleTrigger') configured with that cadence, in "
+        "addition to the Webhook node. This tool will NOT run until the "
+        "user approves it on Telegram - the result you get back tells you "
+        "whether it was approved and whether it succeeded. Do not tell the "
+        "user the workflow exists until you see a success result."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Short, human-readable workflow name.",
+            },
+            "workflow_json": {
+                "type": "string",
+                "description": (
+                    "The complete n8n workflow definition as a JSON string "
+                    "(a JSON object with 'nodes' and 'connections' keys)."
+                ),
+            },
+            "summary": {
+                "type": "string",
+                "description": (
+                    "One or two plain-English sentences describing what this "
+                    "workflow does and what happens when it runs, shown to "
+                    "the user in the Telegram approval prompt."
+                ),
+            },
+        },
+        "required": ["name", "workflow_json", "summary"],
+    },
+}
+
+TRIGGER_N8N_WORKFLOW_TOOL = {
+    "name": "trigger_n8n_workflow",
+    "description": (
+        "Immediately run an existing n8n workflow by name, via its webhook "
+        "trigger. Use this when the user asks to run, trigger, kick off, or "
+        "test a workflow that already exists in n8n - not for building a new "
+        "one. This tool will NOT run until the user approves it on Telegram."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "The workflow's name, as created or listed.",
+            }
+        },
+        "required": ["name"],
+    },
+}
+
+LIST_N8N_WORKFLOWS_TOOL = {
+    "name": "list_n8n_workflows",
+    "description": (
+        "List workflows that exist in the user's n8n instance, and whether "
+        "each is active. Read-only - use this freely when the user asks "
+        "what workflows exist or wants a status check; it does not require "
+        "approval."
+    ),
+    "input_schema": {"type": "object", "properties": {}},
+}
+
+
+def _should_offer_n8n_tools(user_id: int) -> bool:
+    # Same reasoning as the Make.com tool: only the owner can build/trigger
+    # real automations, and only once n8n is actually configured.
+    return bool(N8N_BASE_URL) and bool(N8N_API_KEY) and _is_owner(user_id)
+
+
+def _n8n_request(method: str, path: str, body: dict | None = None) -> dict:
+    """Blocking helper - always call via asyncio.to_thread."""
+    url = f"{N8N_BASE_URL}{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "X-N8N-API-KEY": N8N_API_KEY or "",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        raw = resp.read()
+        return json.loads(raw) if raw else {}
+
+
+async def n8n_create_workflow(name: str, workflow_json: dict) -> dict:
+    body = {
+        "name": name,
+        "nodes": workflow_json["nodes"],
+        "connections": workflow_json["connections"],
+        "settings": workflow_json.get("settings", {}),
+    }
+    return await asyncio.to_thread(_n8n_request, "POST", "/api/v1/workflows", body)
+
+
+async def n8n_activate_workflow(workflow_id: str) -> dict:
+    return await asyncio.to_thread(
+        _n8n_request, "POST", f"/api/v1/workflows/{workflow_id}/activate"
+    )
+
+
+async def n8n_get_workflow(workflow_id: str) -> dict:
+    return await asyncio.to_thread(_n8n_request, "GET", f"/api/v1/workflows/{workflow_id}")
+
+
+async def n8n_list_workflows() -> list[dict]:
+    result = await asyncio.to_thread(_n8n_request, "GET", "/api/v1/workflows")
+    return result.get("data", [])
+
+
+def _extract_webhook_path(workflow_json: dict) -> str | None:
+    for node in workflow_json.get("nodes", []):
+        if node.get("type") == "n8n-nodes-base.webhook":
+            return node.get("parameters", {}).get("path")
+    return None
+
+
+async def trigger_webhook_path(path: str) -> str:
+    url = f"{N8N_BASE_URL}/webhook/{path.lstrip('/')}"
+
+    def _post() -> int:
+        req = urllib.request.Request(
+            url, data=b"{}", method="POST", headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status
+
+    status = await asyncio.to_thread(_post)
+    return f"Webhook responded with HTTP {status}."
+
+
+async def handle_build_n8n_workflow(
+    tool_input: dict, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+) -> str:
+    name = tool_input.get("name") or "Untitled workflow"
+    summary = tool_input.get("summary", "").strip()
+    raw_json = tool_input.get("workflow_json", "")
+
+    try:
+        workflow_json = json.loads(raw_json)
+    except (json.JSONDecodeError, TypeError) as e:
+        return f"Couldn't parse the workflow JSON: {e}. Fix it and try again."
+
+    if not isinstance(workflow_json, dict) or "nodes" not in workflow_json or "connections" not in workflow_json:
+        return "The workflow JSON must be an object with 'nodes' and 'connections' keys."
+
+    description = (
+        f"🔧 Build n8n workflow: {name}\n\n"
+        f"{summary or '(no description given)'}\n\n"
+        "This will create it in n8n and activate it. Approve?"
+    )
+    if not await request_approval(context, chat_id, description):
+        return "DENIED: the user did not approve this. Do not create the workflow or tell the user it exists."
+
+    try:
+        created = await n8n_create_workflow(name, workflow_json)
+        workflow_id = created.get("id")
+        if not workflow_id:
+            return f"n8n did not return a workflow id. Raw response: {created}"
+
+        await n8n_activate_workflow(workflow_id)
+        webhook_path = _extract_webhook_path(workflow_json)
+        save_n8n_workflow(name, workflow_id, webhook_path)
+
+        result = f"SUCCESS: created and activated '{name}' (n8n id {workflow_id})."
+        if webhook_path:
+            result += f" It can be triggered via trigger_n8n_workflow(name='{name}')."
+        else:
+            result += " It has no Webhook node, so it can't be triggered on demand."
+        return result
+    except Exception as e:
+        logger.exception("Failed to build n8n workflow")
+        return f"FAILED: could not create/activate the workflow in n8n: {e}"
+
+
+async def handle_trigger_n8n_workflow(
+    tool_input: dict, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+) -> str:
+    name = (tool_input.get("name") or "").strip()
+    if not name:
+        return "No workflow name was given."
+
+    display_name = name
+    webhook_path = None
+    row = get_n8n_workflow(name)
+
+    if row:
+        _, webhook_path = row
+    else:
+        # Not built through Jarvis (or the local registry was wiped) - fall
+        # back to asking n8n directly.
+        try:
+            workflows = await n8n_list_workflows()
+        except Exception as e:
+            return f"Couldn't reach n8n to look up '{name}': {e}"
+        match = next(
+            (w for w in workflows if w.get("name", "").strip().lower() == name.lower()), None
+        )
+        if not match:
+            return f"No workflow called '{name}' was found. Use list_n8n_workflows to see what exists."
+        display_name = match.get("name", name)
+        try:
+            detail = await n8n_get_workflow(match["id"])
+            webhook_path = _extract_webhook_path(detail)
+            save_n8n_workflow(display_name, match["id"], webhook_path)
+        except Exception:
+            logger.exception("Failed to fetch workflow detail from n8n")
+
+    if not webhook_path:
+        return f"'{display_name}' has no Webhook trigger node, so it can't be triggered on demand."
+
+    description = f"▶️ Trigger n8n workflow: {display_name}\n\nApprove?"
+    if not await request_approval(context, chat_id, description):
+        return "DENIED: the user did not approve this. Do not trigger the workflow."
+
+    try:
+        result = await trigger_webhook_path(webhook_path)
+        return f"SUCCESS: triggered '{display_name}'. {result}"
+    except Exception as e:
+        logger.exception("Failed to trigger n8n workflow")
+        return f"FAILED: could not trigger '{display_name}': {e}"
+
+
+async def handle_list_n8n_workflows() -> str:
+    try:
+        workflows = await n8n_list_workflows()
+    except Exception as e:
+        return f"Couldn't reach n8n: {e}"
+    if not workflows:
+        return "There are no workflows in n8n yet."
+    lines = [
+        f"- {w.get('name')} ({'active' if w.get('active') else 'inactive'})"
+        for w in workflows
+    ]
+    return "Workflows in n8n:\n" + "\n".join(lines)
+
+
+async def dispatch_tool_call(
+    tool_name: str, tool_input: dict, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+) -> str:
+    if tool_name == "trigger_make_scenario":
+        return await trigger_make_webhook()
+    if tool_name == "build_n8n_workflow":
+        return await handle_build_n8n_workflow(tool_input, context, chat_id)
+    if tool_name == "trigger_n8n_workflow":
+        return await handle_trigger_n8n_workflow(tool_input, context, chat_id)
+    if tool_name == "list_n8n_workflows":
+        return await handle_list_n8n_workflows()
+    return f"Unknown tool: {tool_name}"
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     user_text = update.message.text
@@ -306,9 +692,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    kwargs = {}
+    tools = []
     if _should_offer_make_tool(update.effective_user.id):
-        kwargs["tools"] = [MAKE_SCENARIO_TOOL]
+        tools.append(MAKE_SCENARIO_TOOL)
+    if _should_offer_n8n_tools(update.effective_user.id):
+        tools.extend([BUILD_N8N_WORKFLOW_TOOL, TRIGGER_N8N_WORKFLOW_TOOL, LIST_N8N_WORKFLOWS_TOOL])
+    kwargs = {"tools": tools} if tools else {}
+
+    # Cap on tool round-trips per user message, so a confused model can't
+    # loop forever - five is generous for e.g. "build this, then trigger it".
+    MAX_TOOL_ROUNDS = 5
 
     try:
         response = anthropic_client.messages.create(
@@ -319,23 +712,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             **kwargs,
         )
 
-        if response.stop_reason == "tool_use":
-            tool_use_block = next(
-                b for b in response.content if b.type == "tool_use"
-            )
-            tool_result_text = await trigger_make_webhook()
+        for _ in range(MAX_TOOL_ROUNDS):
+            if response.stop_reason != "tool_use":
+                break
+
+            assistant_content = response.content
+            tool_results = []
+            for block in assistant_content:
+                if block.type != "tool_use":
+                    continue
+                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+                result_text = await dispatch_tool_call(block.name, block.input, context, chat_id)
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result_text,
+                    }
+                )
+
             messages = messages + [
-                {"role": "assistant", "content": response.content},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_block.id,
-                            "content": tool_result_text,
-                        }
-                    ],
-                },
+                {"role": "assistant", "content": assistant_content},
+                {"role": "user", "content": tool_results},
             ]
             response = anthropic_client.messages.create(
                 model=CLAUDE_MODEL,
@@ -633,6 +1031,13 @@ def main() -> None:
         )
 
     init_db()
+    init_n8n_registry()
+
+    if not (N8N_BASE_URL and N8N_API_KEY):
+        logger.warning(
+            "N8N_BASE_URL/N8N_API_KEY not set - n8n build/trigger tools are "
+            "disabled until both are added to Railway's Variables."
+        )
 
     if not JARVIS_OWNER_ID:
         logger.warning(
@@ -646,6 +1051,7 @@ def main() -> None:
     app.add_handler(CommandHandler("build", build))
     app.add_handler(CommandHandler("cancelbuild", cancel_build))
     app.add_handler(CallbackQueryHandler(build_callback, pattern=r"^build:"))
+    app.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^approve:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot starting (model=%s)...", CLAUDE_MODEL)
