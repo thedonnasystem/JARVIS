@@ -1563,7 +1563,11 @@ OPERATIONS_AGENT_TOOL = {
         "with store_credential immediately instead of just repeating it back "
         "- never keep a credential only in the conversation. Use "
         "get_credential when Moe asks for a saved credential by name, and "
-        "list_credentials to see what's stored."
+        "list_credentials to see what's stored. When a task needs a new API "
+        "key or account for some service and one isn't already in the vault, "
+        "use request_signup to ask Moe to create it himself (never try to "
+        "sign up for anything yourself, never ask him for a password) - once "
+        "he pastes back the resulting key/token, immediately store_credential it."
     ),
     "input_schema": {
         "type": "object",
@@ -1582,6 +1586,7 @@ OPERATIONS_AGENT_TOOL = {
                     "store_credential",
                     "get_credential",
                     "list_credentials",
+                    "request_signup",
                 ],
                 "description": "What to do.",
             },
@@ -1606,6 +1611,24 @@ OPERATIONS_AGENT_TOOL = {
             "note": {
                 "type": "string",
                 "description": "Optional note about the credential, for store_credential.",
+            },
+            "service_name": {
+                "type": "string",
+                "description": (
+                    "Human-readable service name, e.g. 'NewsAPI' - required for "
+                    "action=request_signup."
+                ),
+            },
+            "signup_url": {
+                "type": "string",
+                "description": "Direct signup/registration URL - required for action=request_signup.",
+            },
+            "details": {
+                "type": "string",
+                "description": (
+                    "Optional: which plan/tier to pick and why Jarvis needs this, "
+                    "for action=request_signup."
+                ),
             },
             "summary": {
                 "type": "string",
@@ -1926,6 +1949,32 @@ async def handle_operations_agent(
         if not names:
             return "No credentials stored yet."
         return "Stored credentials:\n" + "\n".join(f"- {n}" for n in names)
+
+    if action == "request_signup":
+        service_name = (tool_input.get("service_name") or "").strip()
+        signup_url = (tool_input.get("signup_url") or "").strip()
+        details = (tool_input.get("details") or "").strip()
+        if not (service_name and signup_url):
+            return "request_signup needs service_name and signup_url."
+        remember(
+            agent="operations",
+            category="account",
+            key=f"{service_name} (signup requested)",
+            value=(
+                f"Asked Moe to sign up for {service_name} at {signup_url}. "
+                f"Purpose: {details or 'not specified'}. Awaiting the resulting "
+                "credential - once Moe pastes it, store it with store_credential."
+            ),
+        )
+        note_line = f"\nWhy: {details}" if details else ""
+        return (
+            f"I can't create accounts or fill in signup forms myself - that always "
+            f"needs to be you. Here's what to do:\n\n"
+            f"1. Open {signup_url}\n"
+            f"2. Sign up for {service_name} (free tier).{note_line}\n"
+            f"3. Once you have the API key, paste it here and I'll store it in the "
+            f"vault and log the account."
+        )
 
     return f"Unknown operations action: {action}"
 
