@@ -224,7 +224,13 @@ async def request_approval(
 
 async def approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query_cb = update.callback_query
-    await query_cb.answer()
+    try:
+        await query_cb.answer()
+    except Exception:
+        # A stale/expired callback_query_id makes Telegram reject the ack
+        # with a 400. That's cosmetic - don't let it stop us from actually
+        # resolving the approval below.
+        logger.warning("answerCallbackQuery failed (likely expired query id); continuing anyway")
 
     if not _is_owner(query_cb.from_user.id):
         return
@@ -1045,7 +1051,12 @@ def main() -> None:
             "Telegram user id to .env. Chat still works normally."
         )
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # concurrent_updates is required for the approval gate: while
+    # request_approval() is awaiting a button tap inside one update's
+    # handler, the bot must still be able to process the callback_query
+    # update from that very tap. Without this, python-telegram-bot handles
+    # updates one at a time and the two deadlock until the approval times out.
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("build", build))
