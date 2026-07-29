@@ -85,6 +85,16 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 
+# Bitwarden Secrets Manager - the real vault (Phase 3). Uses a machine-account
+# access token (not Moe's master password) so Jarvis can store/retrieve
+# credentials autonomously. BW_ACCESS_TOKEN/BW_ORGANIZATION_ID are generated
+# once by Moe in the Bitwarden web vault (Secrets Manager > machine accounts)
+# and pasted into Railway's Variables - same pattern as every other API key
+# this bot already uses, and NOT Moe's actual account password.
+BW_ACCESS_TOKEN = os.environ.get("BW_ACCESS_TOKEN")
+BW_ORGANIZATION_ID = os.environ.get("BW_ORGANIZATION_ID")
+BW_PROJECT_ID = os.environ.get("BW_PROJECT_ID")  # optional - default project for new secrets
+
 # How long an approval request waits for a yes/no tap before giving up.
 APPROVAL_TIMEOUT_SECONDS = 300
 
@@ -442,6 +452,81 @@ def deactivate_reminder(reminder_id: int) -> None:
         return
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("UPDATE reminders SET active = 0 WHERE id = ?", (reminder_id,))
+
+
+# --- Bitwarden vault index ---------------------------------------------------
+#
+# Stores ONLY a name -> Bitwarden secret-id mapping, never the credential
+# value itself. The value only ever exists inside Bitwarden's encrypted vault,
+# decrypted transiently in-process when fetched. This table is what lets
+# Jarvis look a credential up by a human name ("AAA Adoption Stripe key")
+# instead of needing the raw UUID.
+
+def init_vault_index() -> None:
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vault_index (
+                    name TEXT PRIMARY KEY,
+                    secret_id TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vault_index (
+                name TEXT PRIMARY KEY,
+                secret_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+
+def save_vault_index(name: str, secret_id: str) -> None:
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vault_index (name, secret_id) VALUES (%s, %s)
+                ON CONFLICT (name) DO UPDATE SET secret_id = EXCLUDED.secret_id
+                """,
+                (name, secret_id),
+            )
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_index (name, secret_id) VALUES (?, ?)",
+            (name, secret_id),
+        )
+
+
+def get_vault_secret_id(name: str) -> str | None:
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT secret_id FROM vault_index WHERE name ILIKE %s", (name,))
+            row = cur.fetchone()
+    else:
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT secret_id FROM vault_index WHERE name = ? COLLATE NOCASE", (name,)
+            ).fetchone()
+    return row[0] if row else None
+
+
+def list_vault_names() -> list[str]:
+    if IS_POSTGRES:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT name FROM vault_index ORDER BY name")
+            rows = cur.fetchall()
+    else:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute("SELECT name FROM vault_index ORDER BY name").fetchall()
+    return [r[0] for r in rows]
 
 
 # --- Shared memory ----------------------------------------------------------
@@ -1270,6 +1355,61 @@ async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     asyncio.create_task(_poll())
 
 
+# --- Bitwarden Secrets Manager vault ------------------------------------------
+#
+# Real vault, not shared memory. Authenticates with a machine-account access
+# token (BW_ACCESS_TOKEN) - never Moe's master password. This is the store
+# every agent should push a credential to instead of remember()ing it.
+
+_bw_client = None
+_bw_authenticated = False
+
+
+def vault_configured() -> bool:
+    return bool(BW_ACCESS_TOKEN and BW_ORGANIZATION_ID)
+
+
+def _get_bw_client():
+    """Blocking helper - always call via asyncio.to_thread."""
+    global _bw_client, _bw_authenticated
+    if not vault_configured():
+        return None
+    from bitwarden_sdk import BitwardenClient
+
+    if _bw_client is None:
+        _bw_client = BitwardenClient()
+    if not _bw_authenticated:
+        _bw_client.auth().login_access_token(BW_ACCESS_TOKEN)
+        _bw_authenticated = True
+    return _bw_client
+
+
+async def vault_store(key: str, value: str, note: str = "") -> str:
+    """Store one credential in the vault. Returns its Bitwarden secret id -
+    the value itself is never returned/logged from here."""
+
+    def _create() -> str:
+        client = _get_bw_client()
+        if client is None:
+            raise RuntimeError("Bitwarden Secrets Manager isn't configured.")
+        project_ids = [BW_PROJECT_ID] if BW_PROJECT_ID else None
+        resp = client.secrets().create(BW_ORGANIZATION_ID, key, value, note, project_ids)
+        return resp.data.id
+
+    return await asyncio.to_thread(_create)
+
+
+async def vault_retrieve(secret_id: str) -> str:
+    def _get() -> str:
+        client = _get_bw_client()
+        if client is None:
+            raise RuntimeError("Bitwarden Secrets Manager isn't configured.")
+        resp = client.secrets().get(secret_id)
+        return resp.data.value
+
+    return await asyncio.to_thread(_get)
+
+
 # --- Recurring reminders / JobQueue ------------------------------------------
 
 async def _fire_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1417,7 +1557,13 @@ OPERATIONS_AGENT_TOOL = {
         "setting a one-time or recurring reminder, listing reminders, or "
         "adding/checking to-dos. Google Calendar is live once Moe has run "
         "/connectcalendar; if a calendar action fails because it's not "
-        "connected, tell him to run /connectcalendar."
+        "connected, tell him to run /connectcalendar. Also owns the "
+        "Bitwarden credential vault: whenever you or Moe generate/receive a "
+        "password, API key, or other credential for any account, store it "
+        "with store_credential immediately instead of just repeating it back "
+        "- never keep a credential only in the conversation. Use "
+        "get_credential when Moe asks for a saved credential by name, and "
+        "list_credentials to see what's stored."
     ),
     "input_schema": {
         "type": "object",
@@ -1433,6 +1579,9 @@ OPERATIONS_AGENT_TOOL = {
                     "add_event",
                     "set_reminder",
                     "list_reminders",
+                    "store_credential",
+                    "get_credential",
+                    "list_credentials",
                 ],
                 "description": "What to do.",
             },
@@ -1442,6 +1591,21 @@ OPERATIONS_AGENT_TOOL = {
                     "The to-do text (action=add_todo) or reminder message "
                     "(action=set_reminder)."
                 ),
+            },
+            "name": {
+                "type": "string",
+                "description": (
+                    "Human-readable credential name, e.g. 'AAA Adoption Stripe key' - "
+                    "required for store_credential/get_credential."
+                ),
+            },
+            "value": {
+                "type": "string",
+                "description": "The actual credential/secret value - required for store_credential.",
+            },
+            "note": {
+                "type": "string",
+                "description": "Optional note about the credential, for store_credential.",
             },
             "summary": {
                 "type": "string",
@@ -1601,7 +1765,10 @@ def _format_event(ev: dict) -> str:
 
 
 async def handle_operations_agent(
-    tool_input: dict, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+    tool_input: dict,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    redact: list[str] | None = None,
 ) -> str:
     action = tool_input.get("action")
     now = datetime.now(timezone.utc)
@@ -1706,6 +1873,60 @@ async def handle_operations_agent(
         ]
         return "Active reminders:\n" + "\n".join(lines)
 
+    if action == "store_credential":
+        name = (tool_input.get("name") or "").strip()
+        value = (tool_input.get("value") or "").strip()
+        if not (name and value):
+            return "store_credential needs name and value."
+        if not vault_configured():
+            return (
+                "The Bitwarden vault isn't configured yet - BW_ACCESS_TOKEN and "
+                "BW_ORGANIZATION_ID are missing from Railway's Variables. Tell "
+                "Moe this credential could NOT be saved anywhere safe."
+            )
+        try:
+            secret_id = await vault_store(name, value, tool_input.get("note", ""))
+        except Exception as e:
+            logger.exception("Vault store failed")
+            return f"FAILED to store '{name}' in the vault: {e}"
+        save_vault_index(name, secret_id)
+        # Log only that it happened - never the value - to shared memory.
+        remember(
+            agent="operations",
+            category="account",
+            key=name,
+            value=f"Credential '{name}' stored in the Bitwarden vault.",
+        )
+        if redact is not None:
+            redact.append(value)
+        return f"SUCCESS: '{name}' is now stored in the Bitwarden vault."
+
+    if action == "get_credential":
+        name = (tool_input.get("name") or "").strip()
+        if not name:
+            return "get_credential needs a name."
+        if not vault_configured():
+            return "The Bitwarden vault isn't configured yet."
+        secret_id = get_vault_secret_id(name)
+        if not secret_id:
+            return f"No credential named '{name}' is in the vault index."
+        try:
+            value = await vault_retrieve(secret_id)
+        except Exception as e:
+            logger.exception("Vault retrieve failed")
+            return f"FAILED to retrieve '{name}': {e}"
+        if redact is not None:
+            redact.append(value)
+        return f"Retrieved '{name}' from the vault: {value}"
+
+    if action == "list_credentials":
+        if not vault_configured():
+            return "The Bitwarden vault isn't configured yet."
+        names = list_vault_names()
+        if not names:
+            return "No credentials stored yet."
+        return "Stored credentials:\n" + "\n".join(f"- {n}" for n in names)
+
     return f"Unknown operations action: {action}"
 
 
@@ -1720,7 +1941,11 @@ async def handle_social_agent(tool_input: dict) -> str:
 
 
 async def dispatch_tool_call(
-    tool_name: str, tool_input: dict, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+    tool_name: str,
+    tool_input: dict,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    redact: list[str] | None = None,
 ) -> str:
     if tool_name == "trigger_make_scenario":
         return await trigger_make_webhook()
@@ -1737,7 +1962,7 @@ async def dispatch_tool_call(
     if tool_name == "content_agent":
         return await handle_content_agent(tool_input)
     if tool_name == "operations_agent":
-        return await handle_operations_agent(tool_input, context, chat_id)
+        return await handle_operations_agent(tool_input, context, chat_id, redact)
     if tool_name == "social_agent":
         return await handle_social_agent(tool_input)
     return f"Unknown tool: {tool_name}"
@@ -1784,6 +2009,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             **kwargs,
         )
 
+        # Credential values that pass through store_credential/get_credential -
+        # delivered to Moe over Telegram as normal, but scrubbed before this
+        # turn is persisted to conversation history (see save_message calls
+        # below), so a fetched secret never ends up sitting in plaintext in
+        # the messages table.
+        redact_values: list[str] = []
+
         for _ in range(MAX_TOOL_ROUNDS):
             if response.stop_reason != "tool_use":
                 break
@@ -1794,7 +2026,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if block.type != "tool_use":
                     continue
                 await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-                result_text = await dispatch_tool_call(block.name, block.input, context, chat_id)
+                result_text = await dispatch_tool_call(
+                    block.name, block.input, context, chat_id, redact_values
+                )
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -1827,8 +2061,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not reply_text:
         reply_text = "(Claude returned no text - it may have refused this request.)"
 
-    save_message(chat_id, "user", user_text)
-    save_message(chat_id, "assistant", reply_text)
+    persisted_user_text = user_text
+    persisted_reply_text = reply_text
+    for secret_value in redact_values:
+        if not secret_value:
+            continue
+        persisted_user_text = persisted_user_text.replace(secret_value, "[credential redacted]")
+        persisted_reply_text = persisted_reply_text.replace(secret_value, "[credential redacted]")
+
+    save_message(chat_id, "user", persisted_user_text)
+    save_message(chat_id, "assistant", persisted_reply_text)
 
     for chunk in split_for_telegram(reply_text):
         await update.message.reply_text(chunk)
@@ -2107,6 +2349,7 @@ def main() -> None:
     init_memory()
     init_oauth_tokens()
     init_reminders()
+    init_vault_index()
 
     logger.info(
         "Shared memory backend: %s", "Postgres" if IS_POSTGRES else "SQLite (local fallback)"
@@ -2123,6 +2366,13 @@ def main() -> None:
             "GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET not set - /connectcalendar "
             "and Calendar tools are disabled until both are added to Railway's "
             "Variables."
+        )
+
+    if not vault_configured():
+        logger.warning(
+            "BW_ACCESS_TOKEN/BW_ORGANIZATION_ID not set - the Bitwarden vault "
+            "(store_credential/get_credential) is disabled until both are "
+            "added to Railway's Variables."
         )
 
     if not JARVIS_OWNER_ID:
