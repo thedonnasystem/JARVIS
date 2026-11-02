@@ -127,6 +127,33 @@ class T(unittest.TestCase):
         self.assertEqual(d["kind"], "contract")
         self.assertIn("line one", d["message"])
 
+    def test_auditor_facts_saved_to_memory(self):
+        b = Board()
+        t = {"id": "a1", "assigned_agent": "real-estate-auditor", "title": "Audit: x", "venture_id": "v1"}
+        text = ("VERDICT: PASS WITH FIXES. ok\nFACTS:\n"
+                "- RECO registration is required to trade in real estate in Ontario | https://www.reco.on.ca/x | high\n"
+                "- too short | https://a.b | high\n"
+                "- No source on this one at all | medium\n")
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_facts(t, text), 1)
+        row = [i[1] for i in b.inserts if "memory" in i[0]][0]
+        self.assertEqual((row["kind"], row["confidence"], row["venture_id"]), ("fact", "high", "v1"))
+        self.assertTrue(row["source"].startswith("https://www.reco.on.ca"))
+
+    def test_audit_fail_becomes_lesson_not_fact(self):
+        b = Board()
+        t = {"id": "a1", "assigned_agent": "donna-auditor", "title": "Audit: y", "venture_id": "v2"}
+        with mock.patch.object(hq, "_request", b):
+            E._store_facts(t, "VERDICT: FAIL prices were made up\nFACTS:\n- A fact that should not save | https://x.y/z | high")
+        kinds = [i[1]["kind"] for i in b.inserts if "memory" in i[0]]
+        self.assertEqual(kinds, ["lesson"])
+
+    def test_non_auditor_never_writes_memory(self):
+        b = Board()
+        with mock.patch.object(hq, "_request", b):
+            E._store_facts({"id": "r", "assigned_agent": "donna-researcher", "title": "t"}, "FACTS:\n- Something long enough here | https://x.y | high")
+        self.assertFalse(b.inserts)
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')
