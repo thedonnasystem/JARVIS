@@ -205,6 +205,9 @@ def _work_tasks() -> bool:
         except Exception as e:
             _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked", "result": f"error: {str(e)[:300]}", "updated_at": _now()})
             continue
+        if len((text or "").strip()) < 2:
+            _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked", "result": "error: empty or near-empty model output; not marked done", "updated_at": _now()})
+            continue
         try:
             _log_prediction(t["assigned_agent"], t["id"], text, can_search(t["assigned_agent"]))
             _queue_audit(t, text)
