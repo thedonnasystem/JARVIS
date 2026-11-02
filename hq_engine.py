@@ -523,7 +523,7 @@ def _apply_plan(text: str, planner: str) -> int:
         return 0
     if not isinstance(items, list):
         return 0
-    active = {a["slug"] for a in _get("agents?status=eq.active&select=slug")}
+    active = {a["slug"]: a.get("venture_id") for a in _get("agents?status=eq.active&select=slug,venture_id")}
     room = MAX_TODO_QUEUE - len(_get("tasks?status=eq.todo&select=id"))
     made = 0
     for it in items[:MAX_NEW_PER_PLAN]:
@@ -532,7 +532,7 @@ def _apply_plan(text: str, planner: str) -> int:
         agent, title, detail = it.get("agent"), str(it.get("title", ""))[:140], str(it.get("detail", ""))[:1500]
         if agent not in active or agent == planner or not title or not detail:
             continue
-        _insert("tasks", {"assigned_agent": agent, "created_by": planner, "title": title,
+        _insert("tasks", {"assigned_agent": agent, "created_by": planner, "title": title, "venture_id": active[agent],
                           "detail": detail + PLAN_SUFFIX, "status": "todo", "priority": 3})
         made += 1
     _audit(planner, "plan_applied", None, {"proposed": len(items), "created": made})
