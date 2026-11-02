@@ -197,6 +197,22 @@ class T(unittest.TestCase):
         self.assertTrue(all(r["needs_decision"] and r["kind"] == "proposal" for r in rows))
         self.assertIn("cheap model", rows[0]["body"])
 
+    def test_first_tick_after_start_releases_orphans(self):
+        b = Board()
+        E._started = False
+        with mock.patch.object(hq, "_request", b):
+            E._recover_stale()
+            first = list(b.patches)
+            E._recover_stale()
+        self.assertTrue(any("llm_calls?status=eq.reserved" in p[0] and p[1]["status"] == "released" for p in first))
+        self.assertEqual(sum("llm_calls" in p[0] for p in b.patches), 1)  # only on the first tick
+
+    def test_unblock_matches_title_with_colons(self):
+        b = Board(tasks=[{"id": "t1", "title": "Finish: call rules"}, {"id": "t2", "title": "Other"}])
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E.unblock_task_for("Finish: call rules: ESCALATE legal flag"), 1)
+        self.assertTrue(any("tasks?id=eq.t1" in p[0] and p[1]["status"] == "done" for p in b.patches))
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')

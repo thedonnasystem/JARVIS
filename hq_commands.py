@@ -192,6 +192,10 @@ def apply_decision(msg_id: str, approved: bool) -> str:
     if ref_table == "escalations" and ref_id:
         hq._request("PATCH", f"/rest/v1/escalations?id=eq.{_q(ref_id)}",
                     {"status": "closed", "resolution": f"Owner {verdict}", "resolved_at": now}, prefer="return=minimal")
+        esc = _get(f"escalations?id=eq.{_q(ref_id)}&select=summary&limit=1")
+        if esc:
+            import hq_engine
+            hq_engine.unblock_task_for(esc[0].get("summary") or "")
     elif ref_table == "outbox" and ref_id:
         hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=in.(draft,qa_passed)",
                     {"status": verdict, "decided_at": now}, prefer="return=minimal")
