@@ -260,6 +260,47 @@ async def hq_systems_cmd(update, context) -> None:
     await update.message.reply_text("Systems:\n" + "\n".join(hq_systems.status_lines()))
 
 
+async def hq_day(update, context) -> None:
+    """/day <dials> <pitches> <submissions>: log today's sales numbers (overwrites today's entry)."""
+    if not _owner(update):
+        return
+    args = context.args or []
+    if len(args) != 3 or not all(a.isdigit() for a in args):
+        await update.message.reply_text("Use: /day 280 6 2   (dials pitches submissions for today)")
+        return
+    d, p, sub = (int(a) for a in args)
+    today = _toronto_today().isoformat()
+    hq._request("POST", "/rest/v1/dayjob_days?on_conflict=day",
+                {"day": today, "dials": d, "pitches": p, "submissions": sub, "updated_at": datetime.now(timezone.utc).isoformat()},
+                prefer="resolution=merge-duplicates,return=minimal")
+    t = (_get("dayjob_targets?id=eq.1&select=*") or [{}])[0]
+    marks = [f"dials {d}/{t.get('dials_per_day', 250)}", f"pitches {p}/{t.get('pitches_per_day', 6)}",
+             f"submissions {sub}/{t.get('submissions_per_day', 2)}"]
+    week = hq._request("POST", "/rest/v1/rpc/dayjob_week_text", {}) or ""
+    await update.message.reply_text("Logged: " + ", ".join(marks) + f"\n{week}")
+
+
+async def hq_paid(update, context) -> None:
+    """/paid [name]: a deal paid out after install. Counts toward the weekly target and logs revenue."""
+    if not _owner(update):
+        return
+    who = " ".join(context.args or [])[:120]
+    t = (_get("dayjob_targets?id=eq.1&select=payout_cents_per_deal") or [{}])[0]
+    cents = int(t.get("payout_cents_per_deal") or 100000)
+    today = _toronto_today().isoformat()
+    row = (_get(f"dayjob_days?day=eq.{today}&select=paid_deals") or [{}])[0]
+    hq._request("POST", "/rest/v1/dayjob_days?on_conflict=day",
+                {"day": today, "paid_deals": int(row.get("paid_deals") or 0) + 1,
+                 "updated_at": datetime.now(timezone.utc).isoformat()},
+                prefer="resolution=merge-duplicates,return=minimal")
+    vid, _ = _venture_id("dayjob")
+    hq._request("POST", "/rest/v1/ledger", {"venture_id": vid, "kind": "revenue", "amount_cents": cents, "currency": "CAD",
+                                            "status": "received", "note": f"Paid deal {who}".strip(),
+                                            "occurred_on": today}, prefer="return=minimal")
+    week = hq._request("POST", "/rest/v1/rpc/dayjob_week_text", {}) or ""
+    await update.message.reply_text(f"Paid deal logged (+${cents/100:,.0f}).\n{week}")
+
+
 async def hq_agents(update, context) -> None:
     if not _owner(update):
         return
@@ -442,7 +483,7 @@ async def hq_decision_callback(update, context) -> None:
 
 
 MENU = [
-    ("hq", "Company status"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -465,7 +506,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
-                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd)):
+                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))

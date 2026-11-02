@@ -106,6 +106,33 @@ class ChatTools(unittest.TestCase):
             self.assertIn("No active agent", C._assign("nobody", "x"))
 
 
+class Score(unittest.TestCase):
+    def setUp(self):
+        os.environ["JARVIS_OWNER_ID"] = "42"
+
+    def test_day_upserts_today(self):
+        f, u = Fake(), upd()
+        with mock.patch.object(hq, "_request", f):
+            asyncio.run(C.hq_day(u, SimpleNamespace(args=["280", "6", "2"])))
+        post = [c for c in f.calls if c[0] == "POST" and "dayjob_days" in c[1]][0]
+        self.assertIn("on_conflict=day", post[1])
+        self.assertEqual((post[2]["dials"], post[2]["pitches"], post[2]["submissions"]), (280, 6, 2))
+        self.assertIn("dials 280/250", u.message.sent[0])
+
+    def test_day_rejects_bad_input(self):
+        f, u = Fake(), upd()
+        with mock.patch.object(hq, "_request", f):
+            asyncio.run(C.hq_day(u, SimpleNamespace(args=["lots"])))
+        self.assertFalse([c for c in f.calls if c[0] == "POST"])
+
+    def test_paid_logs_revenue(self):
+        f, u = Fake(), upd()
+        with mock.patch.object(hq, "_request", f):
+            asyncio.run(C.hq_paid(u, SimpleNamespace(args=["Smith"])))
+        led = [c[2] for c in f.calls if c[0] == "POST" and "ledger" in c[1]][0]
+        self.assertEqual((led["kind"], led["amount_cents"]), ("revenue", 100000))
+
+
 class DecisionFake(Fake):
     def __init__(self, already=False):
         super().__init__(); self.already = already
