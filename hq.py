@@ -77,7 +77,9 @@ async def deliver_owner_messages(context) -> None:
     try:
         rows = _request(
             "GET",
-            "/rest/v1/owner_messages?sent_at=is.null&order=created_at.asc&limit=10"
+            "/rest/v1/owner_messages?sent_at=is.null"
+            f"&or=(deliver_after.is.null,deliver_after.lte.{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})"
+            "&order=created_at.asc&limit=10"
             "&select=id,kind,channel,body,needs_decision",
         ) or []
     except (urllib.error.URLError, TimeoutError, ValueError) as e:
