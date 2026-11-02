@@ -35,6 +35,8 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 from dotenv import load_dotenv
+
+import hq
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -2446,6 +2448,16 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     reschedule_all_reminders(app)
+
+    # Fendezy HQ: Jarvis is the only agent allowed to contact the owner.
+    if hq.hq_enabled():
+        app.job_queue.run_repeating(hq.deliver_owner_messages, interval=60, first=15, name="hq-owner-messages")
+        logger.info("Fendezy HQ bridge on: delivering owner messages every 60s")
+    else:
+        logger.warning(
+            "HQ_SUPABASE_URL/HQ_SUPABASE_SERVICE_KEY not set - the Fendezy HQ "
+            "bridge is off until both are added to Railway's Variables."
+        )
 
     logger.info("Bot starting (model=%s)...", CLAUDE_MODEL)
     app.run_polling()
