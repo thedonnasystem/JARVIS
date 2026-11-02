@@ -58,7 +58,7 @@ Every task prompt includes the venture's **company knowledge** (recent facts, de
 
 ## Owner commands (Telegram)
 
-`/hq` status · `/brief` daily brief · `/due` follow-ups · `/lead name | phone | note | days` · `/done # days note` · `/money in|out amount venture note` · `/ask agent task` · `/agents` · `/leads` · `/drafts` · `/sent code` · `/systems` · `/ideas` · `/testidea name` · `/parkidea name` · `/kill` · `/resume`
+`/hq` status · `/brief` daily brief · `/due` follow-ups · `/day dials pitches submissions` · `/paid name` · `/lead name | phone | note | days` · `/done # days note` · `/money in|out amount venture note` · `/ask agent task` · `/agents` · `/leads` · `/drafts` · `/sent code` · `/systems` · `/ideas` · `/testidea name` · `/parkidea name` · `/kill` · `/resume`
 
 ## The Donna money loop
 
@@ -77,6 +77,20 @@ Every task prompt includes the venture's **company knowledge** (recent facts, de
 | Company | Jarvis + engine (Railway) | Heartbeat, plus reconciliation alerts. |
 
 `/systems` shows each one's last health check. The registry lives in the `systems` table.
+
+## Messages to the owner
+
+- **Quiet hours:** 10pm–7am Toronto. Only `emergency` messages are delivered at night; everything else waits until 7am.
+- **Scheduling:** `owner_messages.deliver_after` holds a message until a set time (used for the 7am morning brief).
+- **Decisions:** `contract` and `proposal` messages carry Approve/Reject buttons. Approving `set_cap:<cents>` changes the daily cap (hard ceiling $20); approving `pause_venture` pauses that venture's agents.
+
+## Company knowledge
+
+Every task gets the venture's decisions and lessons first (up to 20), then its 10 newest facts, then 5 company-wide facts. Decisions can never be pushed out by a pile of facts. (On Nov 2 that had happened: drafts came out with `[OFFER]` placeholders, and the engine now drops any draft with a placeholder.)
+
+## Sales scoreboard
+
+`/day 280 6 2` logs today's dials, pitches and submissions against the targets in `dayjob_targets` (250, 6, 2 a day; 5 paid deals a week). `/paid` adds a paid deal and $1,000 revenue to the ledger. The daily brief shows the week so far.
 
 ## Results rule
 
