@@ -166,6 +166,18 @@ class T(unittest.TestCase):
         rows = [i[1] for i in b.inserts if "leads" in i[0]]
         self.assertTrue(all(r["do_not_contact"] and r["status"] == "new" for r in rows))
 
+    def test_complete_keeps_final_answer_and_flags_truncation(self):
+        from types import SimpleNamespace as N
+        resp = N(content=[N(type="text", text="I'll search now."), N(type="server_tool_use"), N(type="web_search_tool_result"),
+                          N(type="text", text="VERDICT: PASS ok\nFACTS:")],
+                 stop_reason="max_tokens", usage=N(input_tokens=1, output_tokens=2, server_tool_use=N(web_search_requests=1)))
+        client = mock.Mock(); client.messages.create.return_value = resp
+        with mock.patch.object(E, "_anthropic", return_value=client):
+            text, _, _, s = E._complete("m", "sys", "u", 10, search=True)
+        self.assertTrue(text.startswith("VERDICT: PASS"))
+        self.assertIn("TRUNCATED", text)
+        self.assertEqual(s, 1)
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')
