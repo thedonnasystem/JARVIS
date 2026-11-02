@@ -411,6 +411,33 @@ async def hq_due(update, context) -> None:
 DECISION_TABLES = {"escalations", "outbox"}
 
 
+def _mailing_address(venture: str = "donna") -> str:
+    rows = _get(f"company_profile?venture_slug=eq.{_q(venture)}&select=mailing_address&limit=1")
+    return ((rows or [{}])[0].get("mailing_address") or "").strip()
+
+
+def casl_footer(venture: str = "donna") -> str:
+    """CASL identification + unsubscribe: sender, mailing address and a working way to opt out."""
+    rows = _get(f"company_profile?venture_slug=eq.{_q(venture)}&select=sender_name,brand,mailing_address&limit=1")
+    p = (rows or [{}])[0]
+    addr = (p.get("mailing_address") or "").strip() or "[ADD YOUR BUSINESS MAILING ADDRESS - required by CASL]"
+    return (f"\n\n--\n{p.get('sender_name') or 'Moe'}, {p.get('brand') or 'The Donna System'}\n{addr}\n"
+            "To stop receiving emails from us, reply \"unsubscribe\" and we will remove you within 10 business days.")
+
+
+async def hq_setaddress(update, context) -> None:
+    if not _owner(update):
+        return
+    addr = " ".join(context.args or []).strip()
+    if len(addr) < 10 or not re.search(r"\d", addr):
+        await update.message.reply_text("Use: /setaddress 123 Example St, Ottawa ON K1A 0A1  (your business mailing address, required by CASL)")
+        return
+    hq._request("POST", "/rest/v1/company_profile?on_conflict=venture_slug",
+                {"venture_slug": "donna", "mailing_address": addr[:200], "updated_at": datetime.now(timezone.utc).isoformat()},
+                prefer="resolution=merge-duplicates,return=minimal")
+    await update.message.reply_text("Saved. Every approved email now ends with your name, this address and an unsubscribe line.")
+
+
 def apply_decision(msg_id: str, approved: bool) -> str:
     """Record the owner's tap. Returns a short status line. Idempotent: a second tap changes nothing."""
     verdict = "approved" if approved else "rejected"
@@ -447,8 +474,11 @@ def apply_decision(msg_id: str, approved: bool) -> str:
                 if ob[0].get("lead_id"):
                     hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(ob[0]['lead_id'])}", {"status": "approved_to_send"},
                                 prefer="return=minimal")
-                ready = (f"Approved. Send this from your business email:\n\nTo: {ob[0].get('to_ref')}\n{ob[0].get('body')}\n\n"
-                         f"Once sent, reply /sent {ref_id[:8]}")
+                ready = (f"Approved. Send this from your business email:\n\nTo: {ob[0].get('to_ref')}\n"
+                         f"{ob[0].get('body')}{casl_footer()}\n\nOnce sent, reply /sent {ref_id[:8]}")
+                if not _mailing_address():
+                    ready += ("\n\nBefore sending: CASL requires your business mailing address in every email. "
+                              "Set it once with /setaddress 123 Example St, Ottawa ON K1A 0A1 and it is added from then on.")
                 _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
                 return ready
     _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
@@ -485,7 +515,7 @@ async def hq_decision_callback(update, context) -> None:
 MENU = [
     ("hq", "Company status"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
-    ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
+    ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("kill", "Stop all agents"), ("resume", "Restart agents"),
 ]
 
@@ -506,7 +536,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
-                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid)):
+                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))

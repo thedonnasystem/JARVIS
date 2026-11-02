@@ -359,6 +359,25 @@ class T(unittest.TestCase):
         self.assertEqual(E.fetch_budget("Task: Value fixer leads 2026-11-02"), E.FETCH_HEAVY)
         self.assertEqual(E.fetch_budget("Task: Competitor map\nFind Donna prospects later"), E.MAX_FETCHES)
 
+    def test_measured_cost_uses_recent_actuals(self):
+        rows = [{"actual_cents": c} for c in (3, 20, 25, 30, 85, 178)]
+        with mock.patch.object(hq, "_request", lambda *a, **k: rows):
+            self.assertGreaterEqual(E.measured_cost("real-estate-researcher"), 85)
+        with mock.patch.object(hq, "_request", lambda *a, **k: []):
+            self.assertEqual(E.measured_cost("x"), 0)
+
+    def test_planner_cannot_send_real_estate_house_hunting(self):
+        b = Board()
+        orig = b.__call__
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            if path.startswith("/rest/v1/agents?status=eq.active"):
+                return [{"slug": "real-estate-researcher", "venture_id": "vr"}]
+            return orig(method, path, body, timeout, prefer)
+        plan = ('[{"agent":"real-estate-researcher","title":"Find 5 distressed private-seller houses","detail":"d","expected_cad":15000,"days_to_cash":30},'
+                '{"agent":"real-estate-researcher","title":"Build a cash buyer list for Ottawa","detail":"buyers","expected_cad":15000,"days_to_cash":30}]')
+        with mock.patch.object(hq, "_request", fake):
+            self.assertEqual(E._apply_plan(plan, "jarvis"), 1)
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')

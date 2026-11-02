@@ -187,6 +187,14 @@ class D(unittest.TestCase):
             C.apply_decision("m3", True)
         self.assertFalse(any("system_state" in c[1] for c in crazy.calls))
 
+    def test_casl_footer_flags_missing_address(self):
+        with mock.patch.object(hq, "_request", lambda *a, **k: [{"sender_name": "Moe", "brand": "The Donna System", "mailing_address": None}]):
+            f = C.casl_footer()
+        self.assertIn("ADD YOUR BUSINESS MAILING ADDRESS", f)
+        self.assertIn("unsubscribe", f)
+        with mock.patch.object(hq, "_request", lambda *a, **k: [{"sender_name": "Moe", "brand": "The Donna System", "mailing_address": "1 Main St, Ottawa ON"}]):
+            self.assertIn("1 Main St, Ottawa ON", C.casl_footer())
+
     def test_second_tap_changes_nothing(self):
         f = DecisionFake(already=True)
         with mock.patch.object(hq, "_request", f):
