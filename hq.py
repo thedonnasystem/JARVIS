@@ -62,6 +62,15 @@ def format_owner_message(msg: dict) -> str:
     return f"{prefix}{label}\n\n{msg.get('body', '')}{note}"
 
 
+QUIET_START, QUIET_END = 22, 7  # Toronto hours; non-emergency messages wait until morning
+
+
+def in_quiet_hours(now: datetime | None = None) -> bool:
+    from zoneinfo import ZoneInfo
+    h = (now or datetime.now(ZoneInfo("America/Toronto"))).hour
+    return h >= QUIET_START or h < QUIET_END
+
+
 def decision_buttons(msg_id: str):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     return InlineKeyboardMarkup([[
@@ -85,7 +94,10 @@ async def deliver_owner_messages(context) -> None:
     except (urllib.error.URLError, TimeoutError, ValueError) as e:
         logger.warning("HQ: could not read owner_messages: %s", e)
         return
+    quiet = in_quiet_hours()
     for msg in rows:
+        if quiet and msg.get("kind") != "emergency":
+            continue  # held until 7am Toronto; only emergencies wake the owner
         try:
             # Plain text on purpose: no parse_mode, so message content cannot inject formatting.
             markup = decision_buttons(msg["id"]) if msg.get("needs_decision") else None

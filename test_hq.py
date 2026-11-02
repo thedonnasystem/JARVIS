@@ -33,7 +33,7 @@ class HQBridge(unittest.TestCase):
             calls.append((method, path, body))
             return rows if method == "GET" else None
 
-        with mock.patch.object(hq, "_request", side_effect=fake):
+        with mock.patch.object(hq, "_request", side_effect=fake), mock.patch.object(hq, "in_quiet_hours", return_value=False):
             asyncio.run(hq.deliver_owner_messages(Ctx(bot)))
         return calls
 
@@ -66,6 +66,30 @@ class HQBridge(unittest.TestCase):
     def test_run_agent_unconfigured(self):
         with mock.patch.object(hq, "HQ_SUPABASE_URL", ""):
             self.assertEqual(hq.run_agent("ceo", "x"), {"error": "HQ is not configured"})
+
+
+class Quiet(unittest.TestCase):
+    def test_non_emergency_held_at_night_emergency_sent(self):
+        class Bot:
+            def __init__(s): s.sent = []
+            async def send_message(s, chat_id, text, reply_markup=None): s.sent.append(text)
+        class C:
+            def __init__(s, b): s.bot = b
+        rows = [{"id": "a", "kind": "proposal", "body": "drafts ready"}, {"id": "b", "kind": "emergency", "body": "fire"}]
+        bot = Bot()
+        with mock.patch.object(hq, "_request", side_effect=lambda m, *a, **k: rows if m == "GET" else None), \
+             mock.patch.object(hq, "in_quiet_hours", return_value=True):
+            asyncio.run(hq.deliver_owner_messages(C(bot)))
+        self.assertEqual(len(bot.sent), 1)
+        self.assertIn("fire", bot.sent[0])
+
+    def test_quiet_hours(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("America/Toronto")
+        self.assertTrue(hq.in_quiet_hours(datetime(2026, 11, 2, 1, 0, tzinfo=tz)))
+        self.assertTrue(hq.in_quiet_hours(datetime(2026, 11, 2, 22, 30, tzinfo=tz)))
+        self.assertFalse(hq.in_quiet_hours(datetime(2026, 11, 2, 7, 0, tzinfo=tz)))
 
 
 if __name__ == "__main__":
