@@ -29,7 +29,7 @@ class HQBridge(unittest.TestCase):
     def run_job(self, rows, bot):
         calls = []
 
-        def fake(method, path, body=None, timeout=30):
+        def fake(method, path, body=None, timeout=30, prefer=None):
             calls.append((method, path, body))
             return rows if method == "GET" else None
 

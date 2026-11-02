@@ -39,15 +39,15 @@ def hq_enabled() -> bool:
     return bool(HQ_SUPABASE_URL and HQ_SUPABASE_SERVICE_KEY and JARVIS_OWNER_ID)
 
 
-def _request(method: str, path: str, body: dict | None = None, timeout: int = 30):
+def _request(method: str, path: str, body: dict | None = None, timeout: int = 30, prefer: str | None = None):
     url = f"{HQ_SUPABASE_URL}{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("apikey", HQ_SUPABASE_SERVICE_KEY)
     req.add_header("Authorization", f"Bearer {HQ_SUPABASE_SERVICE_KEY}")
     req.add_header("Content-Type", "application/json")
-    if method in ("PATCH", "POST"):
-        req.add_header("Prefer", "return=minimal")
+    if prefer:
+        req.add_header("Prefer", prefer)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
         return json.loads(raw) if raw else None
@@ -87,6 +87,7 @@ async def deliver_owner_messages(context) -> None:
                 "PATCH",
                 f"/rest/v1/owner_messages?id=eq.{urllib.parse.quote(str(msg['id']))}",
                 {"sent_at": datetime.now(timezone.utc).isoformat()},
+                prefer="return=minimal",
             )
         except (urllib.error.URLError, TimeoutError) as e:
             logger.error("HQ: sent %s but could not mark it sent: %s", msg.get("id"), e)
