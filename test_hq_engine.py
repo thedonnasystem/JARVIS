@@ -295,6 +295,16 @@ class T(unittest.TestCase):
         self.assertTrue(rows["Quiet Co"]["do_not_contact"])
         self.assertTrue(rows["Form Only"]["do_not_contact"]); self.assertIn("contact page", rows["Form Only"]["notes"])
 
+    def test_fetch_rejected_falls_back_to_search_only(self):
+        from types import SimpleNamespace as N
+        ok = N(content=[N(type="text", text="answer")], stop_reason="end_turn",
+               usage=N(input_tokens=1, output_tokens=1, server_tool_use=None))
+        client = mock.Mock(); client.messages.create.side_effect = [RuntimeError("unknown tool type web_fetch_20260318"), ok]
+        with mock.patch.object(E, "_anthropic", return_value=client):
+            text, *_ = E._complete("m", "s", "u", 10, search=True)
+        self.assertEqual(text, "answer")
+        self.assertEqual(len(client.messages.create.call_args_list[1].kwargs["tools"]), 1)
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')

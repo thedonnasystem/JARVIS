@@ -60,6 +60,10 @@ SEARCH_AGENT_SUFFIXES = ("researcher", "auditor")
 SEARCH_AGENTS = {"research", "compliance-qa"}
 MAX_SEARCHES = 6
 SEARCH_CENTS = 1  # about $0.01 per web search; budgeted per search so the gateway sees it
+FETCH_ENABLED = os.environ.get("HQ_WEB_FETCH", "1") != "0"
+FETCH_TOOL = "web_fetch_20260318"  # no per-fetch fee; fetched text is billed as input tokens
+MAX_FETCHES = 4
+FETCH_MAX_TOKENS = 5000  # per page, keeps a fetch to about 1.5 cents of input on the standard model
 
 
 def can_search(slug: str) -> bool:
@@ -71,15 +75,30 @@ def _complete(model: str, system: str, user: str, max_tokens: int, search: bool 
     kwargs = {}
     if search:
         kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": MAX_SEARCHES}]
-    resp = _anthropic().messages.create(
-        model=model, max_tokens=max_tokens, system=system,
-        messages=[{"role": "user", "content": user}], **kwargs,
-    )
+        if FETCH_ENABLED:
+            kwargs["tools"].append({"type": FETCH_TOOL, "name": "web_fetch", "max_uses": MAX_FETCHES,
+                                    "max_content_tokens": FETCH_MAX_TOKENS})
+    try:
+        resp = _anthropic().messages.create(
+            model=model, max_tokens=max_tokens, system=system,
+            messages=[{"role": "user", "content": user}], **kwargs,
+        )
+    except Exception as e:
+        # If the page-fetch tool is rejected, fall back to search only rather than failing the task.
+        if search and FETCH_ENABLED and "fetch" in str(e).lower():
+            logger.warning("HQ: web_fetch rejected (%s); retrying with search only", str(e)[:200])
+            kwargs["tools"] = kwargs["tools"][:1]
+            resp = _anthropic().messages.create(
+                model=model, max_tokens=max_tokens, system=system,
+                messages=[{"role": "user", "content": user}], **kwargs,
+            )
+        else:
+            raise
     # Keep only the final answer: text written before or between searches is the model thinking out loud.
     parts: list[str] = []
     for b in resp.content:
         kind = getattr(b, "type", "")
-        if kind in ("server_tool_use", "web_search_tool_result"):
+        if kind in ("server_tool_use", "web_search_tool_result", "web_fetch_tool_result"):
             parts = []
         elif kind == "text":
             parts.append(b.text)
@@ -141,7 +160,8 @@ def system_prompt(agent: dict, handbook: str | None) -> str:
         "Hard length limit: about 700 words. Use short bullets, no long tables, no restating the task. Put the most important findings first so nothing that matters is lost if you run long.",
         "Verify before acting: cite the source (a URL you actually opened or searched) for every factual claim. "
         "If you cannot verify something, label it UNVERIFIED and do not act on it."
-        + (" You have a web search tool: use it, prefer official sources (government, regulator, statute text), "
+        + (" You have web search and a web_fetch tool that opens a page found in search results: open the official page "
+           "(statute text, regulator page, the business's own contact page) instead of relying on snippets. Prefer official sources, "
            "and give the URL and the date for each fact." if can_search(agent["slug"]) else ""),
         "You cannot contact the owner. If something needs the owner, start a line with ESCALATE and say why; "
         "Jarvis decides what reaches him.",
@@ -189,17 +209,23 @@ def _store_leads(t: dict, text: str) -> int:
     """Researcher prospect lists -> leads table (status new, do-not-contact until a consent basis is set)."""
     if not t["assigned_agent"].endswith("researcher") or not t.get("venture_id") or "LEADS:" not in text:
         return 0
-    existing = {(r.get("name") or "").strip().lower()
-                for r in _get(f"leads?venture_id=eq.{_q(t['venture_id'])}&select=name&limit=1000")}
+    rows = _get(f"leads?venture_id=eq.{_q(t['venture_id'])}&select=id,name,email&limit=1000")
+    existing = {(r.get("name") or "").strip().lower() for r in rows}
+    missing_email = {(r.get("name") or "").strip().lower(): r["id"] for r in rows if not r.get("email")}
     saved = 0
     for m in LEAD_LINE.finditer(text.split("LEADS:", 1)[1]):
         if saved >= MAX_LEADS_PER_TASK:
             break
         name, url, note = m.group(1).strip(" *"), m.group(2).rstrip(").,"), m.group(3).strip()
         contact, no_solicit = (m.group(4) or "").strip(), (m.group(5) or "").lower() == "yes"
-        if name.lower() in existing:
-            continue
         email = EMAIL_RE.search(contact)
+        if name.lower() in existing:
+            lid = missing_email.get(name.lower())
+            if lid and email and not no_solicit:  # we found the contact we were missing
+                _patch(f"leads?id=eq.{_q(lid)}", {"email": email.group(0)[:200], "do_not_contact": False,
+                       "consent_basis": "CASL implied: conspicuously published business email, no opt-out notice"})
+                missing_email.pop(name.lower(), None)
+            continue
         contact_page = contact if contact.startswith("http") else None
         # CASL: a business address the business publishes itself, with no "no unsolicited messages" notice,
         # supports implied consent for a message relevant to the business. Anything else stays do-not-contact.
@@ -431,7 +457,7 @@ def run_turn_sync(slug: str, task: str, max_out: int, purpose: str) -> str:
     system = system_prompt(agent, hb[0]["content"] if hb else None)
     model = TIER_MODEL.get(agent.get("model_tier"), TIER_MODEL["cheap"])
     search = can_search(slug)
-    est_in = math.ceil((len(system) + len(task)) / 3) + (25000 if search else 0)  # search results add a lot of input tokens (measured: ~17c per search task)
+    est_in = math.ceil((len(system) + len(task)) / 3) + (25000 + (MAX_FETCHES * FETCH_MAX_TOKENS if FETCH_ENABLED else 0) if search else 0)  # search results add a lot of input tokens (measured: ~17c per search task)
     try:
         est = _rpc("estimate_call_cents", {"p_model": model, "p_input_tokens": est_in, "p_max_output_tokens": max_out})
         if search:
@@ -697,7 +723,8 @@ def _triage_escalations() -> None:
             # Never loop on a bad reply. Do not dump raw agent text on the owner; the task stays 'blocked'
             # on the board and the daily brief counts blocked tasks.
             logger.warning("HQ triage reply unreadable for escalation %s", e["id"])
-            _patch(f"escalations?id=eq.{_q(e['id'])}", {"status": "closed", "resolution": "triage reply unreadable; task stays blocked on the board", "resolved_at": resolved_at})
+            _patch(f"escalations?id=eq.{_q(e['id'])}", {"status": "closed", "resolved_at": resolved_at,
+                   "resolution": "triage reply unreadable; task stays blocked. Raw: " + (text or "")[:300]})
         elif d["action"] == "send_to_owner":
             kind = d.get("kind") if d.get("kind") in OWNER_KINDS else "proposal"
             row = {"from_agent": "jarvis", "kind": kind, "channel": "telegram", "body": str(d.get("message", ""))[:3500]}
