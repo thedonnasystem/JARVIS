@@ -2022,6 +2022,8 @@ async def dispatch_tool_call(
         return await handle_operations_agent(tool_input, context, chat_id, redact)
     if tool_name == "social_agent":
         return await handle_social_agent(tool_input)
+    if tool_name in hq_commands.HQ_CHAT_TOOL_NAMES:
+        return await hq_commands.handle_chat_tool(tool_name, tool_input)
     return f"Unknown tool: {tool_name}"
 
 
@@ -2051,6 +2053,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 SOCIAL_AGENT_TOOL,
             ]
         )
+        if hq.hq_enabled():
+            tools.extend(hq_commands.HQ_CHAT_TOOLS)
     kwargs = {"tools": tools} if tools else {}
 
     # Cap on tool round-trips per user message, so a confused model can't

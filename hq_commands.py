@@ -421,3 +421,74 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
 
 async def _menu_job(context) -> None:
     await set_menu(context.application)
+
+
+# ---- Chat tools: let Jarvis answer HQ questions in normal conversation (owner only) ----
+
+HQ_CHAT_TOOLS = [
+    {
+        "name": "hq_company_status",
+        "description": "Fendezy HQ status: spend vs cap, task board, escalations, leads, memory, today's brief. "
+                       "Use when the owner asks how the company, agents or ventures are doing.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "hq_search_knowledge",
+        "description": "Search Fendezy HQ's company memory (verified facts with sources, decisions, lessons) and finished "
+                       "task results for a keyword. Use before answering questions about rules, research or past work.",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "one or two keywords"}},
+                         "required": ["query"]},
+    },
+    {
+        "name": "hq_assign_task",
+        "description": "Put a research or drafting task on a Fendezy HQ agent's board (runs within ~5 minutes, dry-run only). "
+                       "Only when the owner asks for it. Agents: <venture>-researcher, <venture>-auditor, <venture>-division "
+                       "where venture is day-job-sales, donna, real-estate or new-ventures; plus jarvis.",
+        "input_schema": {"type": "object", "properties": {"agent": {"type": "string"}, "task": {"type": "string"}},
+                         "required": ["agent", "task"]},
+    },
+]
+HQ_CHAT_TOOL_NAMES = {t["name"] for t in HQ_CHAT_TOOLS}
+
+
+def _search_knowledge(query: str) -> str:
+    q = re.sub(r"[^\w\s-]", " ", query or "").strip()[:60]
+    if len(q) < 2:
+        return "Give a keyword."
+    pat = _q(f"*{q}*")
+    mem = _get(f"memory?content=ilike.{pat}&order=created_at.desc&limit=8&select=kind,content,source,confidence")
+    tasks = _get(f"tasks?status=in.(done,blocked)&or=(title.ilike.{pat},result.ilike.{pat})&order=updated_at.desc&limit=3"
+                 "&select=title,assigned_agent,result")
+    out = []
+    for m in mem:
+        out.append(f"[{m['kind']}/{m.get('confidence')}] {m['content']}" + (f" (source: {m['source']})" if m.get("source") else ""))
+    for t in tasks:
+        out.append(f"[task by {t['assigned_agent']}] {t['title']}: {(t.get('result') or '')[:1200]}")
+    return "\n\n".join(out) if out else f"Nothing in HQ memory or task results mentions '{q}'."
+
+
+def _assign(agent: str, task: str) -> str:
+    rows = _get(f"agents?slug=eq.{_q((agent or '').lower())}&status=eq.active&select=slug,venture_id&limit=1")
+    if not rows:
+        return f"No active agent called {agent}."
+    hq._request("POST", "/rest/v1/tasks", {
+        "assigned_agent": rows[0]["slug"], "venture_id": rows[0].get("venture_id"), "created_by": "owner", "priority": 1,
+        "status": "todo", "title": task[:140],
+        "detail": task + "\n\nAsked by the owner in chat. Research or drafting only: no contacting anyone, no spending, no signing.",
+    }, prefer="return=minimal")
+    return f"Queued for {rows[0]['slug']}; it runs within about 5 minutes."
+
+
+async def handle_chat_tool(name: str, tool_input: dict) -> str:
+    try:
+        if name == "hq_company_status":
+            brief = hq._request("POST", "/rest/v1/rpc/daily_brief_text", {}) or ""
+            return status_text() + "\n\n" + str(brief)[:3000]
+        if name == "hq_search_knowledge":
+            return _search_knowledge(tool_input.get("query", ""))
+        if name == "hq_assign_task":
+            return _assign(tool_input.get("agent", ""), tool_input.get("task", ""))
+    except Exception as e:
+        logger.exception("HQ chat tool failed")
+        return f"HQ tool error: {str(e)[:200]}"
+    return f"Unknown HQ tool {name}"

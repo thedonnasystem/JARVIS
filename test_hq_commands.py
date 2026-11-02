@@ -88,6 +88,24 @@ class L(unittest.TestCase):
         self.assertIn("signed contract", patch["notes"])
 
 
+class ChatTools(unittest.TestCase):
+    def test_search_knowledge_formats_and_sanitizes(self):
+        class F(Fake):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                s.calls.append((method, path, body))
+                if "memory" in path: return [{"kind": "fact", "content": "RECO registration needed", "source": "https://reco.on.ca", "confidence": "high"}]
+                return []
+        f = F()
+        with mock.patch.object(hq, "_request", f):
+            out = asyncio.run(C.handle_chat_tool("hq_search_knowledge", {"query": "RECO);drop"}))
+        self.assertIn("RECO registration needed", out)
+        self.assertNotIn(";", f.calls[0][1].split("content=ilike.")[1].split("&")[0])
+
+    def test_assign_rejects_unknown_agent(self):
+        with mock.patch.object(hq, "_request", lambda *a, **k: []):
+            self.assertIn("No active agent", C._assign("nobody", "x"))
+
+
 class DecisionFake(Fake):
     def __init__(self, already=False):
         super().__init__(); self.already = already
