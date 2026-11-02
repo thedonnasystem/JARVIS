@@ -64,6 +64,26 @@ class T(unittest.TestCase):
         self.assertEqual([m[1]["title"] for m in made], ["A"])  # only the first 3 proposals are read; ghost and self-assigned are skipped
         self.assertIn("No contacting anyone", made[0][1]["detail"])
 
+    def test_research_task_logs_prediction_and_queues_audit(self):
+        b = Board(tasks=[{"id": "t1", "assigned_agent": "donna-researcher", "title": "Map", "detail": ""}])
+        self.run_tick(b, "Found it. Source: https://example.com/page.")
+        pred = [i for i in b.inserts if i[0].endswith("/predictions")][0][1]
+        self.assertTrue(pred["correct"]); self.assertEqual(pred["action_ref"], "task:t1")
+        audit = [i for i in b.inserts if i[0].endswith("/tasks")][0][1]
+        self.assertEqual(audit["assigned_agent"], "donna-auditor"); self.assertTrue(audit["title"].startswith("Audit: "))
+        self.assertIn("<<<", audit["detail"])
+
+    def test_cut_off_or_unsourced_research_is_a_wrong_prediction(self):
+        b = Board(tasks=[{"id": "t1", "assigned_agent": "donna-researcher", "title": "Map", "detail": ""}])
+        self.run_tick(b, "Found it, and then the answer stops mid sen")
+        self.assertFalse([i for i in b.inserts if i[0].endswith("/predictions")][0][1]["correct"])
+
+    def test_audit_of_audit_not_queued_and_fail_escalates(self):
+        b = Board(tasks=[{"id": "t2", "assigned_agent": "donna-auditor", "title": "Audit: Map", "detail": ""}])
+        self.run_tick(b, "Claim 2 is wrong.\nVERDICT: FAIL, price outdated.")
+        self.assertFalse([i for i in b.inserts if i[0].endswith("/tasks")])
+        self.assertTrue([i for i in b.inserts if i[0].endswith("/escalations")])
+
     def test_task_done(self):
         b = Board(tasks=[{"id": "t1", "assigned_agent": "x", "title": "T", "detail": "d"}])
         self.run_tick(b)
