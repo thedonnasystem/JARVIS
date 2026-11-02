@@ -380,6 +380,11 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         if esc:
             import hq_engine
             hq_engine.unblock_task_for(esc[0].get("summary") or "")
+    elif ref_table and ref_table.startswith("set_cap:") and approved:
+        # Approving a budget proposal applies it: the gateway reads this cap on every call.
+        cents = int(ref_table.split(":", 1)[1])
+        if 0 < cents <= 2000:  # hard ceiling of $20/day no matter what a message says
+            hq._request("PATCH", "/rest/v1/system_state?id=eq.1", {"daily_spend_cap_cents": cents}, prefer="return=minimal")
     elif ref_table == "pause_venture" and ref_id and approved:
         # Approving a pause stops the venture's spend: the gateway refuses calls from paused agents.
         hq._request("PATCH", f"/rest/v1/agents?venture_id=eq.{_q(ref_id)}", {"status": "paused"}, prefer="return=minimal")

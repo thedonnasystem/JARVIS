@@ -143,6 +143,23 @@ class D(unittest.TestCase):
         self.assertIn("/sent abcdef12", out)
         self.assertFalse(any(c[0] == "POST" and "memory" in c[1] for c in f.calls))  # single emails are not policy
 
+    def test_cap_proposal_applies_with_ceiling(self):
+        class F(DecisionFake):
+            def __init__(s, ref): super().__init__(); s.ref = ref
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                s.calls.append((method, path, body))
+                if method == "PATCH" and "owner_messages" in path:
+                    return [{"id": "m3", "body": "raise cap", "ref_table": s.ref, "ref_id": None}]
+                return []
+        ok = F("set_cap:500")
+        with mock.patch.object(hq, "_request", ok):
+            C.apply_decision("m3", True)
+        self.assertTrue(any("system_state" in c[1] and c[2] == {"daily_spend_cap_cents": 500} for c in ok.calls))
+        crazy = F("set_cap:999999")
+        with mock.patch.object(hq, "_request", crazy):
+            C.apply_decision("m3", True)
+        self.assertFalse(any("system_state" in c[1] for c in crazy.calls))
+
     def test_second_tap_changes_nothing(self):
         f = DecisionFake(already=True)
         with mock.patch.object(hq, "_request", f):
