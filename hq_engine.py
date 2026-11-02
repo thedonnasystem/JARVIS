@@ -216,6 +216,7 @@ def _store_leads(t: dict, text: str) -> int:
     rows = _get(f"leads?venture_id=eq.{_q(t['venture_id'])}&select=id,name,email&limit=1000")
     existing = {(r.get("name") or "").strip().lower() for r in rows}
     missing_email = {(r.get("name") or "").strip().lower(): r["id"] for r in rows if not r.get("email")}
+    known_emails = {(r.get("email") or "").lower() for r in rows if r.get("email")}
     saved = 0
     for m in LEAD_LINE.finditer(text.split("LEADS:", 1)[1]):
         if saved >= MAX_LEADS_PER_TASK:
@@ -223,6 +224,8 @@ def _store_leads(t: dict, text: str) -> int:
         name, url, note = m.group(1).strip(" *"), m.group(2).rstrip(").,"), m.group(3).strip()
         contact, no_solicit = (m.group(4) or "").strip(), (m.group(5) or "").lower() == "yes"
         email = EMAIL_RE.search(contact)
+        if email and email.group(0).lower() in known_emails:
+            continue  # same business under another name
         if name.lower() in existing:
             lid = missing_email.get(name.lower())
             if lid and email and not no_solicit:  # we found the contact we were missing
@@ -242,6 +245,8 @@ def _store_leads(t: dict, text: str) -> int:
                                     + (" | site says no unsolicited messages" if no_solicit else "")
                                     + f" (found by {t['assigned_agent']}, task {t['id']})")})
         existing.add(name.lower())
+        if email:
+            known_emails.add(email.group(0).lower())
         saved += 1
     return saved
 
@@ -289,6 +294,9 @@ def _store_drafts(t: dict, text: str) -> int:
                     "&select=id,source,email&limit=1")
         if not lead or not lead[0].get("email"):
             continue
+        if _get(f"outbox?to_ref=eq.{_q(lead[0]['email'])}&status=neq.rejected&select=id&limit=1"):
+            _patch(f"leads?id=eq.{_q(lead[0]['id'])}&status=eq.new", {"status": "drafted"})
+            continue  # one live draft per inbox, even if the business was saved twice
         _insert("outbox", {"venture_id": t["venture_id"], "agent": t["assigned_agent"], "channel": "email",
                            "to_ref": lead[0]["email"], "lead_id": lead[0]["id"], "status": "draft", "needs_owner": True,
                            "body": f"Subject: {subject}\n\n{body}", "idempotency_key": f"draft-{t['id']}-{sid}"})

@@ -346,6 +346,14 @@ class T(unittest.TestCase):
         self.assertLess(out.index("Offer: AI receptionist"), out.index("fact"))
         self.assertTrue(all("or=(" not in p for p in seen))  # no duplicate or= params
 
+    def test_leads_dedupe_by_email(self):
+        b = Board()
+        t = {"id": "r3", "assigned_agent": "donna-researcher", "title": "List", "venture_id": "v3"}
+        text = ("LEADS:\n- Brown's | https://b.ca | x | info@b.ca | no\n"
+                "- Brown's Entrepreneur Specialise | https://b.ca/fr | y | INFO@b.ca | no\n")
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_leads(t, text), 1)
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')
