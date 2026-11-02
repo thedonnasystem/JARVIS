@@ -67,7 +67,9 @@ def parse_amount(s: str) -> int | None:
 
 def status_text() -> str:
     state = (_get("system_state?id=eq.1&select=kill_switch,mode,daily_spend_cap_cents,last_heartbeat") or [{}])[0]
-    since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    from zoneinfo import ZoneInfo
+    local_midnight = datetime.now(ZoneInfo("America/Toronto")).replace(hour=0, minute=0, second=0, microsecond=0)
+    since = local_midnight.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     calls = _get(f"llm_calls?started_at=gte.{since}&status=in.(reserved,done)&select=actual_cents,reserved_cents")
     spent = sum((c.get("actual_cents") if c.get("actual_cents") is not None else c.get("reserved_cents") or 0) for c in calls)
     hb = state.get("last_heartbeat")
@@ -78,7 +80,7 @@ def status_text() -> str:
     lines = [
         "Fendezy HQ",
         f"- Mode: {state.get('mode')}  Kill switch: {'ON' if state.get('kill_switch') else 'off'}",
-        f"- Spend today (UTC): ${spent/100:.2f} of ${(state.get('daily_spend_cap_cents') or 0)/100:.2f}",
+        f"- Spend today: ${spent/100:.2f} of ${(state.get('daily_spend_cap_cents') or 0)/100:.2f}",
         f"- Engine heartbeat: {hb_txt}",
         f"- Tasks: {_count('tasks?status=eq.todo&select=id')} queued, {_count('tasks?status=eq.doing&select=id')} running, "
         f"{_count('tasks?status=eq.blocked&select=id')} blocked, {_count('tasks?status=eq.done&select=id')} done",
@@ -153,6 +155,16 @@ async def hq_ask(update, context) -> None:
         "detail": text + "\n\nAsked directly by the owner. Research or drafting only: no contacting anyone, no spending, no signing.",
     }, prefer="return=minimal")
     await update.message.reply_text(f"Queued for {slug}. It runs within about 5 minutes; Jarvis reports anything that matters.")
+
+
+async def hq_brief(update, context) -> None:
+    if not _owner(update):
+        return
+    try:
+        text = hq._request("POST", "/rest/v1/rpc/daily_brief_text", {}) or "No brief available."
+    except Exception as e:
+        text = f"Brief failed: {str(e)[:200]}"
+    await update.message.reply_text(str(text)[:4000])
 
 
 async def hq_agents(update, context) -> None:
@@ -311,10 +323,36 @@ async def hq_decision_callback(update, context) -> None:
         pass
 
 
+MENU = [
+    ("hq", "Company status"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("lead", "Save a lead: name | phone | note | days"),
+    ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
+    ("ask", "Give an agent a task"), ("agents", "List agents"), ("leads", "Lead counts"),
+    ("kill", "Stop all agents"), ("resume", "Restart agents"),
+]
+
+
+async def set_menu(app) -> None:
+    """Show HQ commands in Telegram's menu, keeping the bot's existing ones."""
+    try:
+        from telegram import BotCommand
+        existing = await app.bot.get_my_commands()
+        names = {c.command for c in existing}
+        cmds = list(existing) + [BotCommand(n, d[:256]) for n, d in MENU if n not in names]
+        await app.bot.set_my_commands(cmds[:100])
+    except Exception as e:
+        logger.warning("HQ: could not set the command menu: %s", e)
+
+
 def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
-                     ("lead", hq_lead), ("done", hq_done), ("due", hq_due)):
+                     ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))
+    if getattr(app, "job_queue", None) is not None:
+        app.job_queue.run_once(_menu_job, when=10, name="hq-menu")
+
+
+async def _menu_job(context) -> None:
+    await set_menu(context.application)
