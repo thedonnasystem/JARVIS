@@ -362,7 +362,9 @@ class T(unittest.TestCase):
     def test_measured_cost_uses_recent_actuals(self):
         rows = [{"actual_cents": c} for c in (3, 20, 25, 30, 85, 178)]
         with mock.patch.object(hq, "_request", lambda *a, **k: rows):
-            self.assertGreaterEqual(E.measured_cost("real-estate-researcher"), 85)
+            got = E.measured_cost("real-estate-researcher")
+            self.assertGreaterEqual(got, 30)
+            self.assertLessEqual(got, E.MEASURED_RESERVE_CEILING)  # an outlier can't lock the agent out
         with mock.patch.object(hq, "_request", lambda *a, **k: []):
             self.assertEqual(E.measured_cost("x"), 0)
 

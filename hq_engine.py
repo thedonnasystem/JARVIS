@@ -553,6 +553,9 @@ FETCH_HEAVY_PREFIXES = ("Find Donna prospects", "Find public contact emails", "V
 FETCH_HEAVY = 6  # prospect lists and valuations must open many pages (contact pages, listings)
 
 
+MEASURED_RESERVE_CEILING = 90  # cents; agent caps are 150c/day for researchers and auditors
+
+
 def measured_cost(slug: str, sample: int = 12) -> int:
     """~90th percentile of this agent's recent actual call cost, plus 20%. 0 when there is no history yet."""
     try:
@@ -563,8 +566,9 @@ def measured_cost(slug: str, sample: int = 12) -> int:
     costs = sorted(int(r["actual_cents"]) for r in rows if r.get("actual_cents") is not None)
     if not costs:
         return 0
-    p90 = costs[min(len(costs) - 1, int(round(0.9 * (len(costs) - 1))))]
-    return int(p90 * 1.2)
+    p75 = costs[min(len(costs) - 1, int(round(0.75 * (len(costs) - 1))))]
+    # Clamp: one runaway call (Nov 2: 178c, since made cheaper) must not lock an agent out of its own daily cap.
+    return min(int(p75 * 1.2), MEASURED_RESERVE_CEILING)
 
 
 def fetch_budget(task: str) -> int:
