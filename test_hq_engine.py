@@ -213,6 +213,34 @@ class T(unittest.TestCase):
             self.assertEqual(E.unblock_task_for("Finish: call rules: ESCALATE legal flag"), 1)
         self.assertTrue(any("tasks?id=eq.t1" in p[0] and p[1]["status"] == "done" for p in b.patches))
 
+    def test_error_retries_once_then_blocks(self):
+        b = Board(tasks=[{"id": "t1", "assigned_agent": "x", "title": "T", "detail": "", "result": None}])
+        with mock.patch.object(hq, "_request", b), mock.patch.object(E, "_complete", side_effect=RuntimeError("overloaded")):
+            E._work_tasks()
+        last = [p[1] for p in b.patches if "tasks?id=eq.t1" in p[0]][-1]
+        self.assertEqual(last["status"], "todo")
+        self.assertTrue(last["result"].startswith(E.RETRY_MARK) and "due_at" in last)
+        b2 = Board(tasks=[{"id": "t1", "assigned_agent": "x", "title": "T", "detail": "", "result": E.RETRY_MARK + " overloaded"}])
+        with mock.patch.object(hq, "_request", b2), mock.patch.object(E, "_complete", side_effect=RuntimeError("overloaded")):
+            E._work_tasks()
+        self.assertEqual([p[1] for p in b2.patches if "tasks?id=eq.t1" in p[0]][-1]["status"], "blocked")
+
+    def test_drafts_go_to_outbox_never_sent(self):
+        class B(Board):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                if method == "GET" and path.startswith("/rest/v1/leads"):
+                    return [{"id": "L7", "source": "https://coolair.example.ca"}]
+                return Board.__call__(s, method, path, body, timeout, prefer)
+        b = B()
+        t = {"id": "d1", "assigned_agent": "donna-division", "title": "Draft outreach for 5 HVAC leads", "venture_id": "vd"}
+        text = ("DRAFT #7\nSubject: Missed calls cost you jobs\nBody:\nHi team,\nWe answer every lead in 60 seconds.\n"
+                "Reply STOP to opt out.\nEND DRAFT\n")
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_drafts(t, text), 1)
+        row = [i[1] for i in b.inserts if "outbox" in i[0]][0]
+        self.assertEqual((row["status"], row["needs_owner"], row["lead_id"]), ("draft", True, "L7"))
+        self.assertTrue(row["body"].startswith("Subject: Missed calls"))
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')
