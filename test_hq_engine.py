@@ -241,6 +241,17 @@ class T(unittest.TestCase):
         self.assertEqual((row["status"], row["needs_owner"], row["lead_id"]), ("draft", True, "L7"))
         self.assertTrue(row["body"].startswith("Subject: Missed calls"))
 
+    def test_ideas_parsed_and_clamped(self):
+        b = Board()
+        t = {"id": "i1", "assigned_agent": "new-ventures-researcher", "title": "Shortlist"}
+        text = ("IDEA: Gutter guard installs | sell and install guards in Barrhaven | 4 | $350 | 3 | https://ex.ca/demand | under 3 quotes in 7 days\n"
+                "IDEA: Bad row | missing fields | 3\n"
+                "- **IDEA:** Pet waste pickup | weekly yard service | 9 | 120.50 | 0 | https://ex.ca/2 | fewer than 5 signups\n")
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_ideas(t, text), 2)
+        rows = [i[1] for i in b.inserts if "ideas" in i[0]]
+        self.assertEqual((rows[0]["startup_cost_cents"], rows[1]["speed_to_cash"], rows[1]["effort"]), (35000, 5, 1))
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')

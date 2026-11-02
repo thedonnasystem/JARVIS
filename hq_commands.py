@@ -167,6 +167,54 @@ async def hq_brief(update, context) -> None:
     await update.message.reply_text(str(text)[:4000])
 
 
+async def hq_ideas(update, context) -> None:
+    if not _owner(update):
+        return
+    rows = _get("ideas?status=in.(new,testing,scaled)&order=score.desc.nullslast&limit=10"
+                "&select=name,status,score,startup_cost_cents,test_ends_on,kill_metric")
+    if not rows:
+        await update.message.reply_text("No ideas in the lab.")
+        return
+    out = []
+    for r in rows:
+        tag = f"TESTING until {r['test_ends_on']}" if r["status"] == "testing" else r["status"]
+        out.append(f"- {r['name']} [{tag}] score {r.get('score')}, start ${(r.get('startup_cost_cents') or 0)/100:,.0f}")
+    await update.message.reply_text("Idea lab (best first):\n" + "\n".join(out) + "\n\nStart a 7-day test: /testidea <name>   Park: /parkidea <name>")
+
+
+async def _set_idea_status(update, context, status: str) -> None:
+    if not _owner(update):
+        return
+    frag = " ".join(context.args or []).strip()
+    if len(frag) < 3:
+        await update.message.reply_text("Give at least 3 letters of the idea's name.")
+        return
+    rows = _get(f"ideas?name=ilike.*{_q(frag)}*&select=id,name&limit=2")
+    if len(rows) != 1:
+        await update.message.reply_text("No match." if not rows else "More than one match; be more specific.")
+        return
+    try:
+        hq._request("PATCH", f"/rest/v1/ideas?id=eq.{_q(rows[0]['id'])}", {"status": status}, prefer="return=minimal")
+    except Exception as e:
+        msg = str(e)
+        try:
+            import json as _j
+            msg = _j.loads(e.read().decode()).get("message", msg)
+        except Exception:
+            pass
+        await update.message.reply_text(f"Not changed: {msg[:200]}")
+        return
+    await update.message.reply_text(f"{rows[0]['name']} is now {status}." + (" 7-day test clock started." if status == "testing" else ""))
+
+
+async def hq_testidea(update, context) -> None:
+    await _set_idea_status(update, context, "testing")
+
+
+async def hq_parkidea(update, context) -> None:
+    await _set_idea_status(update, context, "parked")
+
+
 async def hq_agents(update, context) -> None:
     if not _owner(update):
         return
@@ -326,7 +374,7 @@ async def hq_decision_callback(update, context) -> None:
 MENU = [
     ("hq", "Company status"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
-    ("ask", "Give an agent a task"), ("agents", "List agents"), ("leads", "Lead counts"),
+    ("ask", "Give an agent a task"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("kill", "Stop all agents"), ("resume", "Restart agents"),
 ]
 
@@ -346,7 +394,8 @@ async def set_menu(app) -> None:
 def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
-                     ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief)):
+                     ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
+                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))

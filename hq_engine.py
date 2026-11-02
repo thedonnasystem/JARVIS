@@ -155,6 +155,8 @@ def system_prompt(agent: dict, handbook: str | None) -> str:
         parts.append(LEADS_RULE)
     if agent["slug"].endswith("division"):
         parts.append(DRAFT_RULE)
+    if agent["slug"] == "new-ventures-researcher":
+        parts.append(IDEA_RULE)
     parts.append("If 'Company knowledge' is given with the task, build on it: do not re-research facts already there "
                  "unless you have reason to think they changed, and say so if you find one is wrong.")
     return "\n\n".join(p for p in parts if p)
@@ -238,6 +240,39 @@ def _store_drafts(t: dict, text: str) -> int:
                            "body": f"Subject: {subject}\n\n{body}", "idempotency_key": f"draft-{t['id']}-{sid}"})
         _patch(f"leads?id=eq.{_q(lead[0]['id'])}&status=eq.new", {"status": "drafted"})
         saved += 1
+    return saved
+
+
+IDEA_RULE = (
+    "When you propose venture ideas, list each one first, one per line, exactly in this form:\n"
+    "IDEA: <name> | <one-line description> | <speed to cash 1-5, 5 = fastest> | <startup cost in CAD, number only> | "
+    "<effort 1-5, 5 = hardest> | <demand evidence URL> | <kill metric for a 7-day test>"
+)
+MAX_IDEAS_PER_TASK = 5
+
+
+def _store_ideas(t: dict, text: str) -> int:
+    """Idea-lab proposals -> ideas table (status new). Duplicates by name are skipped by a unique index."""
+    if t["assigned_agent"] != "new-ventures-researcher":
+        return 0
+    saved = 0
+    for line in re.findall(r"(?im)^\s*[-*]?\s*\**IDEA:\**\s*(.+)$", text):
+        if saved >= MAX_IDEAS_PER_TASK:
+            break
+        f = [x.strip() for x in line.split("|")]
+        if len(f) < 7 or not re.match(r"https?://", f[5]):
+            continue
+        try:
+            speed, effort = max(1, min(5, int(re.sub(r"\D", "", f[2]) or 0))), max(1, min(5, int(re.sub(r"\D", "", f[4]) or 0)))
+            cost = int(float(re.sub(r"[^0-9.]", "", f[3]) or 0) * 100)
+        except ValueError:
+            continue
+        try:
+            _insert("ideas", {"name": f[0][:120], "description": f[1][:500], "speed_to_cash": speed, "effort": effort,
+                              "startup_cost_cents": cost, "demand_source": f[5][:500], "kill_metric": f[6][:300], "status": "new"})
+            saved += 1
+        except Exception:
+            continue  # duplicate name or bad row
     return saved
 
 
@@ -427,6 +462,7 @@ def _work_tasks() -> bool:
             _store_leads(t, text)
             _send_proposals(t, text)
             _store_drafts(t, text)
+            _store_ideas(t, text)
         except Exception:
             logger.exception("HQ memory write failed")
         if re.search(r"(?im)^\s*VERDICT:\s*FAIL\b", text):
