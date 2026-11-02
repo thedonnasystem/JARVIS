@@ -119,6 +119,10 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+# httpx logs every request URL at INFO, and Telegram puts the bot token in that URL.
+# Keep the token out of the deploy logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
