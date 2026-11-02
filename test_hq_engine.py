@@ -46,6 +46,11 @@ class T(unittest.TestCase):
         settle = [r for r in b.rpcs if r[0] == "settle_llm_call"][0][1]
         self.assertEqual(settle["p_actual_cents"], 1 + 2 * E.SEARCH_CENTS)
 
+    def test_stale_doing_tasks_requeued(self):
+        b = Board()
+        self.run_tick(b)
+        self.assertTrue(any("status=eq.doing" in p[0] and p[1].get("status") == "todo" for p in b.patches))
+
     def test_task_done(self):
         b = Board(tasks=[{"id": "t1", "assigned_agent": "x", "title": "T", "detail": "d"}])
         self.run_tick(b)

@@ -18,7 +18,7 @@ import os
 import re
 import urllib.error
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import hq
 
@@ -171,6 +171,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+STALE_MINUTES = 15
+
+
+def _recover_stale() -> None:
+    """A restart mid-run leaves a task stuck in 'doing'. Put old ones back in the queue."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=STALE_MINUTES)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _patch(f"tasks?status=eq.doing&updated_at=lt.{cutoff}", {"status": "todo", "updated_at": _now()})
+
+
 def _work_tasks() -> bool:
     """Run up to MAX_TASKS_PER_TICK todo tasks. Returns False if the gateway blocked (stop for now)."""
     now = _now()
@@ -255,6 +264,7 @@ def tick_sync() -> None:
     state = _get("system_state?id=eq.1&select=kill_switch")
     if state and state[0].get("kill_switch"):
         return
+    _recover_stale()
     if _work_tasks():
         _triage_escalations()
 
