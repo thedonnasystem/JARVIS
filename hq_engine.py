@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import hq
 import hq_wholesale
+import hq_systems
 
 logger = logging.getLogger(__name__)
 
@@ -829,6 +830,10 @@ def tick_sync() -> None:
     except Exception:
         logger.exception("HQ heartbeat write failed")
     _recover_stale()
+    try:
+        hq_systems.run_due_checks()
+    except Exception:
+        logger.exception("HQ system health checks failed")
     # Triage first: it is quick and cheap, and long research tasks must never starve it.
     try:
         _triage_escalations()
