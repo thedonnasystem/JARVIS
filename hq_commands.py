@@ -215,6 +215,22 @@ async def hq_parkidea(update, context) -> None:
     await _set_idea_status(update, context, "parked")
 
 
+async def hq_drafts(update, context) -> None:
+    if not _owner(update):
+        return
+    rows = _get("outbox?status=eq.draft&order=created_at.asc&limit=5&select=id,body,to_ref,agent")
+    if not rows:
+        await update.message.reply_text("No drafts waiting.")
+        return
+    for r in rows:
+        body = f"Draft by {r.get('agent')} to {r.get('to_ref') or 'unknown'}:\n\n{r['body']}"[:3500]
+        msg = (hq._request("POST", "/rest/v1/owner_messages", {
+            "from_agent": "jarvis", "kind": "proposal", "channel": "telegram", "body": body, "needs_decision": True,
+            "ref_table": "outbox", "ref_id": r["id"], "sent_at": datetime.now(timezone.utc).isoformat(),
+        }, prefer="return=representation") or [{}])[0]
+        await update.message.reply_text(body, reply_markup=hq.decision_buttons(msg["id"]) if msg.get("id") else None)
+
+
 async def hq_agents(update, context) -> None:
     if not _owner(update):
         return
@@ -374,7 +390,7 @@ async def hq_decision_callback(update, context) -> None:
 MENU = [
     ("hq", "Company status"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
-    ("ask", "Give an agent a task"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
+    ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("kill", "Stop all agents"), ("resume", "Restart agents"),
 ]
 
@@ -395,7 +411,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
-                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea)):
+                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))

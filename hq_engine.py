@@ -240,6 +240,10 @@ def _store_drafts(t: dict, text: str) -> int:
                            "body": f"Subject: {subject}\n\n{body}", "idempotency_key": f"draft-{t['id']}-{sid}"})
         _patch(f"leads?id=eq.{_q(lead[0]['id'])}&status=eq.new", {"status": "drafted"})
         saved += 1
+    if saved:
+        _insert("owner_messages", {"from_agent": "jarvis", "kind": "proposal", "channel": "telegram",
+                                   "body": f"{saved} outreach drafts are ready for review. Send /drafts to approve or reject each one. "
+                                           "Nothing is sent until you approve, and the company is still in dry-run."})
     return saved
 
 
