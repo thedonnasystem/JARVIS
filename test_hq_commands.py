@@ -63,6 +63,31 @@ class T(unittest.TestCase):
         self.assertTrue(any("audit_log" in c[1] for c in f.calls))
 
 
+class L(unittest.TestCase):
+    def setUp(self):
+        os.environ["JARVIS_OWNER_ID"] = "42"
+
+    def test_parse_lead(self):
+        self.assertEqual(C.parse_lead("Jane Doe | 613-555-0101 | fixed rate | 3"),
+                         {"name": "Jane Doe", "phone": "613-555-0101", "note": "fixed rate", "days": 3})
+        self.assertEqual(C.parse_lead("Bob")["days"], C.DEFAULT_FOLLOWUP_DAYS)
+        self.assertIsNone(C.parse_lead("Bob | call me maybe"))  # not a phone number
+        self.assertIsNone(C.parse_lead(""))
+
+    def test_done_zero_days_closes(self):
+        class F(Fake):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                s.calls.append((method, path, body))
+                if method == "GET" and "leads" in path: return [{"id": "L1", "name": "Jane", "notes": "", "contact_count": 1}]
+                return []
+        f, u = F(), upd()
+        with mock.patch.object(hq, "_request", f):
+            asyncio.run(C.hq_done(u, SimpleNamespace(args=["#7", "0", "signed", "contract"])))
+        patch = [c[2] for c in f.calls if c[0] == "PATCH"][0]
+        self.assertEqual((patch["status"], patch["next_followup_at"], patch["contact_count"]), ("closed", None, 2))
+        self.assertIn("signed contract", patch["notes"])
+
+
 class DecisionFake(Fake):
     def __init__(self, already=False):
         super().__init__(); self.already = already

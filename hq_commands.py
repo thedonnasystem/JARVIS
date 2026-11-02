@@ -176,6 +176,92 @@ async def hq_leads(update, context) -> None:
     await update.message.reply_text("Leads:\n" + "\n".join(f"- {k}: {v}" for k, v in sorted(counts.items())))
 
 
+DAYJOB_SLUG = "day-job-sales"
+DEFAULT_FOLLOWUP_DAYS = 2
+
+
+def _toronto_today():
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("America/Toronto")).date()
+
+
+def parse_lead(text: str) -> dict | None:
+    """'Jane Doe | 613-555-0101 | wants fixed rate | 3' -> fields. Name required; phone, note, days optional."""
+    parts = [p.strip() for p in text.split("|")]
+    if not parts or not parts[0]:
+        return None
+    days = DEFAULT_FOLLOWUP_DAYS
+    if len(parts) >= 4 and parts[3].isdigit():
+        days = int(parts[3])
+    phone = parts[1] if len(parts) > 1 else ""
+    if phone and not re.fullmatch(r"[0-9+()\-.\s]{7,20}", phone):
+        return None
+    return {"name": parts[0][:120], "phone": phone or None, "note": (parts[2] if len(parts) > 2 else "")[:300], "days": min(days, 90)}
+
+
+async def hq_lead(update, context) -> None:
+    if not _owner(update):
+        return
+    lead = parse_lead(" ".join(context.args or []))
+    if not lead:
+        await update.message.reply_text("Use: /lead Jane Doe | 613-555-0101 | wants fixed rate | 3\n(name | phone | note | follow up in N days)")
+        return
+    vid, _ = _venture_id("dayjob")
+    from datetime import timedelta
+    due = _toronto_today() + timedelta(days=lead["days"])
+    rows = hq._request("POST", "/rest/v1/leads", {
+        "venture_id": vid, "name": lead["name"], "phone": lead["phone"], "source": "owner", "status": "new",
+        "consent_basis": "owner-entered; owner dials personally", "do_not_contact": False,
+        "notes": lead["note"] or None, "next_followup_at": due.isoformat(),
+    }, prefer="return=representation") or [{}]
+    await update.message.reply_text(f"Saved #{rows[0].get('short_id', '?')} {lead['name']}. Follow up {due:%a %b %d}.")
+
+
+async def hq_done(update, context) -> None:
+    """/done <#id> [days] [outcome...]  -- logs a contact and sets the next follow-up (0 days = close it)."""
+    if not _owner(update):
+        return
+    args = context.args or []
+    if not args or not args[0].lstrip("#").isdigit():
+        await update.message.reply_text("Use: /done 12 3 left voicemail   (lead #, follow up in N days, note). /done 12 0 signed  closes it.")
+        return
+    sid = int(args[0].lstrip("#"))
+    days = int(args[1]) if len(args) > 1 and args[1].isdigit() else DEFAULT_FOLLOWUP_DAYS
+    outcome = " ".join(args[2:] if len(args) > 1 and args[1].isdigit() else args[1:])[:200]
+    rows = _get(f"leads?short_id=eq.{sid}&select=id,name,notes,contact_count&limit=1")
+    if not rows:
+        await update.message.reply_text(f"No lead #{sid}.")
+        return
+    lead = rows[0]
+    from datetime import timedelta
+    stamp = _toronto_today().isoformat()
+    notes = ((lead.get("notes") or "") + (f"\n{stamp}: {outcome}" if outcome else f"\n{stamp}: contacted")).strip()[-2000:]
+    body = {"last_contact_at": datetime.now(timezone.utc).isoformat(), "contact_count": (lead.get("contact_count") or 0) + 1,
+            "notes": notes, "status": "contacted"}
+    if days == 0:
+        body.update({"next_followup_at": None, "status": "closed"})
+        reply = f"#{sid} {lead['name']} closed."
+    else:
+        due = _toronto_today() + timedelta(days=days)
+        body["next_followup_at"] = due.isoformat()
+        reply = f"#{sid} {lead['name']} logged. Next follow-up {due:%a %b %d}."
+    hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(lead['id'])}", body, prefer="return=minimal")
+    await update.message.reply_text(reply)
+
+
+async def hq_due(update, context) -> None:
+    if not _owner(update):
+        return
+    today = _toronto_today().isoformat()
+    rows = _get(f"leads?next_followup_at=lte.{today}&do_not_contact=eq.false&status=neq.closed"
+                "&order=next_followup_at.asc&limit=30&select=short_id,name,phone,notes,next_followup_at")
+    if not rows:
+        await update.message.reply_text("No follow-ups due.")
+        return
+    lines = [f"#{r['short_id']} {r['name']}  {r.get('phone') or ''}  ({r['next_followup_at']})" for r in rows]
+    await update.message.reply_text("Due now:\n" + "\n".join(lines) + "\n\nAfter each call: /done <#> <days> <note>")
+
+
 DECISION_TABLES = {"escalations", "outbox"}
 
 
@@ -227,7 +313,8 @@ async def hq_decision_callback(update, context) -> None:
 
 def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
-                     ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads)):
+                     ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
+                     ("lead", hq_lead), ("done", hq_done), ("due", hq_due)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))
