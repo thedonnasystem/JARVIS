@@ -200,6 +200,9 @@ def _work_tasks() -> bool:
             text = run_turn_sync(t["assigned_agent"], prompt, TASK_MAX_OUTPUT, f"task {t['id']}")
         except GatewayBlocked as e:
             _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "todo", "updated_at": _now()})
+            if str(e).startswith("Agent "):
+                logger.info("HQ agent-level block (%s); skipping this task, continuing the board", e)
+                continue
             logger.info("HQ gateway blocked (%s); pausing the task board until it clears", e)
             return False
         except Exception as e:
