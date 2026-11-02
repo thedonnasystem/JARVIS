@@ -45,6 +45,7 @@ Every task prompt includes the venture's **company knowledge** (recent facts, de
 | `hq-followups-0815` | 8:15 Mon–Sat | Sales follow-ups due today |
 | `hq-brief-2300utc` / `hq-brief-0000utc` | 6pm / 7pm | Daily brief |
 | `weekly-self-review` | Sun 8pm | Weekly review and proposals |
+| `hq-queue-drafts` | :07 and :37 | When a venture has 3+ emailable new leads, queues one "Draft outreach" task for its GM |
 | `hq-reconcile` | every 15 min | Releases stuck spend holds; flags stuck or stale tasks; overdue money, engine down, spend at 80% |
 | `hq-prune` | Sun 3am | Removes audit log and agent-run rows older than 90 days |
 | `hq-heartbeat` | off | Old fake heartbeat, switched off. Only the engine writes the heartbeat now, so "engine down" alerts are real. |
@@ -57,7 +58,18 @@ Every task prompt includes the venture's **company knowledge** (recent facts, de
 
 ## Owner commands (Telegram)
 
-`/hq` status · `/brief` daily brief · `/due` follow-ups · `/lead name | phone | note | days` · `/done # days note` · `/money in|out amount venture note` · `/ask agent task` · `/agents` · `/leads` · `/drafts` · `/ideas` · `/testidea name` · `/parkidea name` · `/kill` · `/resume`
+`/hq` status · `/brief` daily brief · `/due` follow-ups · `/lead name | phone | note | days` · `/done # days note` · `/money in|out amount venture note` · `/ask agent task` · `/agents` · `/leads` · `/drafts` · `/sent code` · `/ideas` · `/testidea name` · `/parkidea name` · `/kill` · `/resume`
+
+## The Donna money loop
+
+1. A researcher finds shops and records each one's **published business email**. Under CASL that gives implied consent if the site has no "no unsolicited messages" notice. Leads without such an email stay do-not-contact.
+2. Once 3 or more emailable leads exist, `hq-queue-drafts` queues a draft task. Donna's GM writes short emails using the offer saved in memory (AI receptionist, $297–397/mo plus $250 setup; call to action: free strategy meeting).
+3. Moe gets one ping. He runs `/drafts` and taps **Approve** on each, and Jarvis replies with the exact email to send.
+4. Moe sends it, then `/sent <code>`. The lead is marked contacted and a 3-day follow-up appears in the 8:15am list.
+
+## Results rule
+
+The daily planner must give every task an `expected_cad` and a `days_to_cash`, or the task is discarded. Cash within 14 days runs first.
 
 ## Owner rules built into the database
 
