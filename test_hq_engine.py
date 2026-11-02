@@ -354,6 +354,11 @@ class T(unittest.TestCase):
         with mock.patch.object(hq, "_request", b):
             self.assertEqual(E._store_leads(t, text), 1)
 
+    def test_fetch_budget_by_task(self):
+        self.assertEqual(E.fetch_budget("Task: Find Donna prospects: HVAC, Kingston\n\nx"), E.FETCH_HEAVY)
+        self.assertEqual(E.fetch_budget("Task: Value fixer leads 2026-11-02"), E.FETCH_HEAVY)
+        self.assertEqual(E.fetch_budget("Task: Competitor map\nFind Donna prospects later"), E.MAX_FETCHES)
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')

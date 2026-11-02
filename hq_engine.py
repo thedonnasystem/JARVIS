@@ -72,13 +72,13 @@ def can_search(slug: str) -> bool:
     return slug in SEARCH_AGENTS or slug.endswith(SEARCH_AGENT_SUFFIXES)
 
 
-def _complete(model: str, system: str, user: str, max_tokens: int, search: bool = False):
+def _complete(model: str, system: str, user: str, max_tokens: int, search: bool = False, fetches: int | None = None):
     """Returns (text, input_tokens, output_tokens, searches_used)."""
     kwargs = {}
     if search:
         kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": MAX_SEARCHES}]
         if FETCH_ENABLED:
-            kwargs["tools"].append({"type": FETCH_TOOL, "name": "web_fetch", "max_uses": MAX_FETCHES,
+            kwargs["tools"].append({"type": FETCH_TOOL, "name": "web_fetch", "max_uses": fetches or MAX_FETCHES,
                                     "max_content_tokens": FETCH_MAX_TOKENS})
     try:
         resp = _anthropic().messages.create(
@@ -201,7 +201,9 @@ LEADS_RULE = (
     "<the business email published on its own website, or its contact-page URL, or none> | <yes if the site says no "
     "unsolicited messages, else no>\n"
     "Businesses only, from public pages. Only a generic business address the business itself publishes (info@, office@, "
-    "sales@); never a person's private email, personal phone or home address."
+    "sales@) on its own website or on a page the business itself runs (its own Facebook page or Google Business "
+    "profile). Never an address from a third-party directory, never a person's private email, personal phone or home "
+    "address."
 )
 LEAD_LINE = re.compile(r"^\s*[-*]\s*([^|\n]{2,120}?)\s*\|\s*(https?://\S+)\s*\|\s*([^|\n]{0,300}?)"
                        r"(?:\s*\|\s*([^|\n]{0,200}?))?(?:\s*\|\s*(yes|no))?\s*$", re.MULTILINE | re.IGNORECASE)
@@ -534,6 +536,15 @@ def _store_facts(t: dict, text: str) -> int:
     return saved
 
 
+FETCH_HEAVY_PREFIXES = ("Find Donna prospects", "Find public contact emails", "Value fixer leads")
+FETCH_HEAVY = 10  # prospect lists and valuations must open many pages (contact pages, listings)
+
+
+def fetch_budget(task: str) -> int:
+    first = task.split("\n", 1)[0]
+    return FETCH_HEAVY if any(p in first for p in FETCH_HEAVY_PREFIXES) else MAX_FETCHES
+
+
 def run_turn_sync(slug: str, task: str, max_out: int, purpose: str) -> str:
     rows = _get(f"agents?slug=eq.{_q(slug)}&select=slug,title,charter,metric,model_tier,role,status&limit=1")
     if not rows:
@@ -543,7 +554,8 @@ def run_turn_sync(slug: str, task: str, max_out: int, purpose: str) -> str:
     system = system_prompt(agent, hb[0]["content"] if hb else None)
     model = TIER_MODEL.get(agent.get("model_tier"), TIER_MODEL["cheap"])
     search = can_search(slug)
-    est_in = math.ceil((len(system) + len(task)) / 3) + (25000 + (MAX_FETCHES * FETCH_MAX_TOKENS if FETCH_ENABLED else 0) if search else 0)  # search results add a lot of input tokens (measured: ~17c per search task)
+    fetches = fetch_budget(task)
+    est_in = math.ceil((len(system) + len(task)) / 3) + (25000 + (fetches * FETCH_MAX_TOKENS if FETCH_ENABLED else 0) if search else 0)  # search results add a lot of input tokens (measured: ~17c per search task)
     try:
         est = _rpc("estimate_call_cents", {"p_model": model, "p_input_tokens": est_in, "p_max_output_tokens": max_out})
         if search:
@@ -552,7 +564,7 @@ def run_turn_sync(slug: str, task: str, max_out: int, purpose: str) -> str:
     except urllib.error.HTTPError as e:
         raise GatewayBlocked(_err_message(e)) from e
     try:
-        text, tin, tout, searches = _complete(model, system, task, max_out, search)
+        text, tin, tout, searches = _complete(model, system, task, max_out, search, fetches)
     except Exception as e:
         _rpc("settle_llm_call", {"p_id": call_id, "p_actual_cents": 0, "p_status": "failed"})
         _audit(slug, "llm_call_failed", str(call_id), {"error": str(e)[:300]})
