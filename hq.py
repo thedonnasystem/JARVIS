@@ -62,6 +62,14 @@ def format_owner_message(msg: dict) -> str:
     return f"{prefix}{label}\n\n{msg.get('body', '')}{note}"
 
 
+def decision_buttons(msg_id: str):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Approve", callback_data=f"hqd:ok:{msg_id}"),
+        InlineKeyboardButton("Reject", callback_data=f"hqd:no:{msg_id}"),
+    ]])
+
+
 async def deliver_owner_messages(context) -> None:
     """Repeating job: send unsent owner messages to the owner on Telegram, oldest first."""
     if not hq_enabled():
@@ -70,7 +78,7 @@ async def deliver_owner_messages(context) -> None:
         rows = _request(
             "GET",
             "/rest/v1/owner_messages?sent_at=is.null&order=created_at.asc&limit=10"
-            "&select=id,kind,channel,body",
+            "&select=id,kind,channel,body,needs_decision",
         ) or []
     except (urllib.error.URLError, TimeoutError, ValueError) as e:
         logger.warning("HQ: could not read owner_messages: %s", e)
@@ -78,7 +86,8 @@ async def deliver_owner_messages(context) -> None:
     for msg in rows:
         try:
             # Plain text on purpose: no parse_mode, so message content cannot inject formatting.
-            await context.bot.send_message(int(JARVIS_OWNER_ID), format_owner_message(msg))
+            markup = decision_buttons(msg["id"]) if msg.get("needs_decision") else None
+            await context.bot.send_message(int(JARVIS_OWNER_ID), format_owner_message(msg), reply_markup=markup)
         except Exception as e:  # leave unsent so it is retried next minute
             logger.warning("HQ: Telegram send failed for %s: %s", msg.get("id"), e)
             return

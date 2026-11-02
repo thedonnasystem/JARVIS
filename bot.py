@@ -2450,7 +2450,7 @@ def main() -> None:
     app.add_handler(CommandHandler("cancelbuild", cancel_build))
     app.add_handler(CommandHandler("connectcalendar", connect_calendar))
     if hq.hq_enabled():
-        hq_commands.register(app, CommandHandler)
+        hq_commands.register(app, CommandHandler, CallbackQueryHandler)
     app.add_handler(CallbackQueryHandler(build_callback, pattern=r"^build:"))
     app.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^approve:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

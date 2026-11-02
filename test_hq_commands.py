@@ -63,5 +63,33 @@ class T(unittest.TestCase):
         self.assertTrue(any("audit_log" in c[1] for c in f.calls))
 
 
+class DecisionFake(Fake):
+    def __init__(self, already=False):
+        super().__init__(); self.already = already
+    def __call__(self, method, path, body=None, timeout=30, prefer=None):
+        self.calls.append((method, path, body))
+        if method == "PATCH" and "owner_messages" in path:
+            return [] if self.already else [{"id": "m1", "body": "Sign the pilot?", "ref_table": "escalations", "ref_id": "e1"}]
+        return []
+
+
+class D(unittest.TestCase):
+    def test_approve_closes_escalation_and_saves_decision(self):
+        f = DecisionFake()
+        with mock.patch.object(hq, "_request", f):
+            out = C.apply_decision("m1", True)
+        self.assertIn("APPROVED", out)
+        self.assertTrue(any(c[0] == "PATCH" and "escalations?id=eq.e1" in c[1] and c[2]["status"] == "closed" for c in f.calls))
+        mem = [c[2] for c in f.calls if c[0] == "POST" and "memory" in c[1]][0]
+        self.assertEqual((mem["kind"], mem["agent"]), ("decision", "owner"))
+        self.assertIn("approved", mem["content"])
+
+    def test_second_tap_changes_nothing(self):
+        f = DecisionFake(already=True)
+        with mock.patch.object(hq, "_request", f):
+            self.assertEqual(C.apply_decision("m1", False), "Already decided.")
+        self.assertFalse(any(c[0] == "POST" for c in f.calls))
+
+
 if __name__ == "__main__":
     unittest.main()

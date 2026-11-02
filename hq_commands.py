@@ -176,7 +176,54 @@ async def hq_leads(update, context) -> None:
     await update.message.reply_text("Leads:\n" + "\n".join(f"- {k}: {v}" for k, v in sorted(counts.items())))
 
 
-def register(app, CommandHandler) -> None:
+DECISION_TABLES = {"escalations", "outbox"}
+
+
+def apply_decision(msg_id: str, approved: bool) -> str:
+    """Record the owner's tap. Returns a short status line. Idempotent: a second tap changes nothing."""
+    verdict = "approved" if approved else "rejected"
+    now = datetime.now(timezone.utc).isoformat()
+    claimed = hq._request("PATCH", f"/rest/v1/owner_messages?id=eq.{_q(msg_id)}&decision=is.null&needs_decision=eq.true",
+                          {"decision": verdict, "decided_at": now}, prefer="return=representation") or []
+    if not claimed:
+        return "Already decided."
+    msg = claimed[0]
+    ref_table, ref_id = msg.get("ref_table"), msg.get("ref_id")
+    if ref_table == "escalations" and ref_id:
+        hq._request("PATCH", f"/rest/v1/escalations?id=eq.{_q(ref_id)}",
+                    {"status": "closed", "resolution": f"Owner {verdict}", "resolved_at": now}, prefer="return=minimal")
+    elif ref_table == "outbox" and ref_id:
+        hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=in.(draft,qa_passed)",
+                    {"status": verdict, "decided_at": now}, prefer="return=minimal")
+    hq._request("POST", "/rest/v1/memory", {"agent": "owner", "kind": "decision", "confidence": "high",
+                                            "content": f"Owner {verdict}: {(msg.get('body') or '')[:500]}"}, prefer="return=minimal")
+    hq._request("POST", "/rest/v1/audit_log", {"actor": "owner", "action": f"decision_{verdict}", "target": f"owner_messages/{msg_id}",
+                                               "detail": {"ref_table": ref_table, "ref_id": ref_id, "via": "telegram"}}, prefer="return=minimal")
+    return f"Decision saved: {verdict.upper()}. Agents will follow it."
+
+
+async def hq_decision_callback(update, context) -> None:
+    query = update.callback_query
+    if not _owner(update):
+        await query.answer()
+        return
+    try:
+        _, choice, msg_id = query.data.split(":", 2)
+        result = apply_decision(msg_id, choice == "ok")
+    except Exception as e:
+        logger.exception("HQ decision failed")
+        result = f"Could not save the decision: {str(e)[:150]}"
+    await query.answer(result[:190])
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(result)
+    except Exception:
+        pass
+
+
+def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads)):
         app.add_handler(CommandHandler(name, fn))
+    if CallbackQueryHandler is not None:
+        app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))

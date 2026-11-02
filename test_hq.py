@@ -14,7 +14,7 @@ class FakeBot:
     def __init__(self, fail=False):
         self.sent, self.fail = [], fail
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, reply_markup=None):
         if self.fail:
             raise RuntimeError("telegram down")
         self.sent.append((chat_id, text))

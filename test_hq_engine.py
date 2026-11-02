@@ -178,6 +178,12 @@ class T(unittest.TestCase):
         self.assertIn("TRUNCATED", text)
         self.assertEqual(s, 1)
 
+    def test_triage_contract_gets_decision_buttons(self):
+        b = Board(escalations=[{"id": "e9", "from_agent": "x", "kind": "u", "summary": "s"}])
+        self.run_tick(b, '{"action":"send_to_owner","kind":"contract","message":"Sign the pilot?"}')
+        row = [i[1] for i in b.inserts if "owner_messages" in i[0]][0]
+        self.assertEqual((row["needs_decision"], row["ref_table"], row["ref_id"]), (True, "escalations", "e9"))
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')

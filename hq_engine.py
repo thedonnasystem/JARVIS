@@ -34,6 +34,7 @@ MAX_ESCALATIONS_PER_TICK = 2
 TASK_MAX_OUTPUT = 4500
 TRIAGE_MAX_OUTPUT = 600
 OWNER_KINDS = {"brief", "money", "health", "contract", "proposal", "emergency"}
+DECISION_KINDS = {"contract", "proposal"}  # these reach the owner with Approve/Reject buttons
 
 JARVIS_RULES = """You are Jarvis. You decide the way Moe (the owner) would decide, inside his rules.
 Send to the owner ONLY: a contract or assignment needing his signature, a deal above his thresholds, a spend-cap hit or unusual charge, a legal or compliance flag, a system or security failure, a home emergency, or an improvement proposal with expected gain, cost and risk.
@@ -491,7 +492,10 @@ def _triage_escalations() -> None:
             _patch(f"escalations?id=eq.{_q(e['id'])}", {"status": "closed", "resolution": "triage reply unreadable; task stays blocked on the board", "resolved_at": resolved_at})
         elif d["action"] == "send_to_owner":
             kind = d.get("kind") if d.get("kind") in OWNER_KINDS else "proposal"
-            _insert("owner_messages", {"from_agent": "jarvis", "kind": kind, "channel": "telegram", "body": str(d.get("message", ""))[:3500]})
+            row = {"from_agent": "jarvis", "kind": kind, "channel": "telegram", "body": str(d.get("message", ""))[:3500]}
+            if kind in DECISION_KINDS:
+                row.update({"needs_decision": True, "ref_table": "escalations", "ref_id": e["id"]})
+            _insert("owner_messages", row)
             _patch(f"escalations?id=eq.{_q(e['id'])}", {"status": "sent_to_owner", "resolution": str(d.get("message", ""))[:500], "resolved_at": resolved_at})
         else:
             _patch(f"escalations?id=eq.{_q(e['id'])}", {"status": "closed", "resolution": str(d.get("message", ""))[:500], "resolved_at": resolved_at})
