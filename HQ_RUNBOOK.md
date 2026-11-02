@@ -46,7 +46,8 @@ Every task prompt includes the venture's **company knowledge** (recent facts, de
 | `hq-brief-2300utc` / `hq-brief-0000utc` | 6pm / 7pm | Daily brief |
 | `weekly-self-review` | Sun 8pm | Weekly review and proposals |
 | `hq-reconcile` | every 15 min | Releases stuck spend holds; flags stuck or stale tasks; overdue money, engine down, spend at 80% |
-| `hq-heartbeat`, `hq-prune` | daily / weekly | Housekeeping |
+| `hq-prune` | Sun 3am | Removes audit log and agent-run rows older than 90 days |
+| `hq-heartbeat` | off | Old fake heartbeat, switched off. Only the engine writes the heartbeat now, so "engine down" alerts are real. |
 
 ## Money safety
 
