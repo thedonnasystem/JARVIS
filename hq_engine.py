@@ -205,11 +205,49 @@ def _work_tasks() -> bool:
         except Exception as e:
             _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked", "result": f"error: {str(e)[:300]}", "updated_at": _now()})
             continue
+        if t["title"].startswith(PLAN_PREFIX):
+            try:
+                _apply_plan(text, t["assigned_agent"])
+            except Exception:
+                logger.exception("HQ plan apply failed")
         escalate = bool(re.search(r"(?im)^\s*ESCALATE\b", text))
         _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked" if escalate else "done", "result": text[:8000], "updated_at": _now()})
         if escalate:
             _insert("escalations", {"from_agent": t["assigned_agent"], "kind": "uncertain", "summary": f"{t['title']}: {text[:1500]}"})
     return True
+
+
+PLAN_PREFIX = "Daily planning"
+MAX_NEW_PER_PLAN = 3
+MAX_TODO_QUEUE = 8
+PLAN_SUFFIX = "\n\nRules for this task: research or drafting only. No contacting anyone, no spending, no signing."
+
+
+def _apply_plan(text: str, planner: str) -> int:
+    """Create the tasks Jarvis proposed in his daily plan. Guarded; returns how many were created."""
+    m = re.search(r"\[.*\]", text, re.DOTALL)
+    if not m:
+        return 0
+    try:
+        items = json.loads(m.group(0))
+    except ValueError:
+        return 0
+    if not isinstance(items, list):
+        return 0
+    active = {a["slug"] for a in _get("agents?status=eq.active&select=slug")}
+    room = MAX_TODO_QUEUE - len(_get("tasks?status=eq.todo&select=id"))
+    made = 0
+    for it in items[:MAX_NEW_PER_PLAN]:
+        if made >= room or not isinstance(it, dict):
+            break
+        agent, title, detail = it.get("agent"), str(it.get("title", ""))[:140], str(it.get("detail", ""))[:1500]
+        if agent not in active or agent == planner or not title or not detail:
+            continue
+        _insert("tasks", {"assigned_agent": agent, "created_by": planner, "title": title,
+                          "detail": detail + PLAN_SUFFIX, "status": "todo", "priority": 3})
+        made += 1
+    _audit(planner, "plan_applied", None, {"proposed": len(items), "created": made})
+    return made
 
 
 def _parse_decision(text: str) -> dict | None:

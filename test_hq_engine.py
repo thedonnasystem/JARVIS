@@ -51,6 +51,19 @@ class T(unittest.TestCase):
         self.run_tick(b)
         self.assertTrue(any("status=eq.doing" in p[0] and p[1].get("status") == "todo" for p in b.patches))
 
+    def test_plan_creates_guarded_tasks(self):
+        plan = '[{"agent":"donna-researcher","title":"A","detail":"d"},{"agent":"ghost","title":"B","detail":"d"},{"agent":"jarvis","title":"C","detail":"d"},{"agent":"donna-researcher","title":"D","detail":"d"},{"agent":"donna-researcher","title":"E","detail":"d"}]'
+        b = Board(tasks=[{"id": "t1", "assigned_agent": "jarvis", "title": "Daily planning 2026-11-02", "detail": ""}])
+        orig = b.__call__
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            if path.startswith("/rest/v1/agents?status=eq.active"): return [{"slug": "donna-researcher"}, {"slug": "jarvis"}]
+            return orig(method, path, body, timeout, prefer)
+        with mock.patch.object(hq, "_request", fake), mock.patch.object(E, "_complete", return_value=(plan, 10, 5, 0)):
+            E.tick_sync()
+        made = [i for i in b.inserts if i[0].endswith("/tasks")]
+        self.assertEqual([m[1]["title"] for m in made], ["A"])  # only the first 3 proposals are read; ghost and self-assigned are skipped
+        self.assertIn("No contacting anyone", made[0][1]["detail"])
+
     def test_task_done(self):
         b = Board(tasks=[{"id": "t1", "assigned_agent": "x", "title": "T", "detail": "d"}])
         self.run_tick(b)
