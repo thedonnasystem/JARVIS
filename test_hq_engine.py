@@ -184,6 +184,19 @@ class T(unittest.TestCase):
         row = [i[1] for i in b.inserts if "owner_messages" in i[0]][0]
         self.assertEqual((row["needs_decision"], row["ref_table"], row["ref_id"]), (True, "escalations", "e9"))
 
+    def test_weekly_review_proposals_get_buttons(self):
+        b = Board()
+        t = {"id": "w", "assigned_agent": "jarvis", "title": "Weekly company self-review"}
+        text = ("1. ...\nPROPOSAL: Move auditors to the cheap model | gain: save $5/week | cost: none | risk: weaker audits\n"
+                "- **PROPOSAL:** Add a lead scraper for Ottawa HVAC | gain: 50 leads | cost: $10 | risk: low\n"
+                "PROPOSAL: a | b\nPROPOSAL: Fourth one should be dropped because max is three | gain: x | cost: y | risk: z\n"
+                "PROPOSAL: Third valid proposal here | gain: g | cost: c | risk: r\n")
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._send_proposals(t, text), 3)
+        rows = [i[1] for i in b.inserts if "owner_messages" in i[0]]
+        self.assertTrue(all(r["needs_decision"] and r["kind"] == "proposal" for r in rows))
+        self.assertIn("cheap model", rows[0]["body"])
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')

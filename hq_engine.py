@@ -196,6 +196,26 @@ def _store_leads(t: dict, text: str) -> int:
     return saved
 
 
+REVIEW_TITLE = "Weekly company self-review"
+PROPOSAL_LINE = re.compile(r"(?im)^\s*[-*]?\s*\**PROPOSAL:\**\s*(.{10,600})$")
+MAX_PROPOSALS = 3
+
+
+def _send_proposals(t: dict, text: str) -> int:
+    """Jarvis's weekly review -> up to 3 improvement proposals, each sent to the owner with Approve/Reject."""
+    if t["assigned_agent"] != "jarvis" or not t["title"].startswith(REVIEW_TITLE):
+        return 0
+    sent = 0
+    for m in PROPOSAL_LINE.finditer(text):
+        if sent >= MAX_PROPOSALS:
+            break
+        body = "Improvement proposal (weekly review):\n" + " \n".join(p.strip() for p in m.group(1).split("|"))
+        _insert("owner_messages", {"from_agent": "jarvis", "kind": "proposal", "channel": "telegram",
+                                   "body": body[:1500], "needs_decision": True})
+        sent += 1
+    return sent
+
+
 MAX_FACTS_PER_AUDIT = 8
 MEMORY_IN_PROMPT = 15
 FACT_TTL_DAYS = 90
@@ -329,6 +349,7 @@ def _work_tasks() -> bool:
         try:
             _store_facts(t, text)
             _store_leads(t, text)
+            _send_proposals(t, text)
         except Exception:
             logger.exception("HQ memory write failed")
         if re.search(r"(?im)^\s*VERDICT:\s*FAIL\b", text):
