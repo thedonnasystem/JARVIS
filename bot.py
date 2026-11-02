@@ -38,6 +38,7 @@ from dotenv import load_dotenv
 
 import hq
 import hq_engine
+import hq_commands
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -2448,6 +2449,8 @@ def main() -> None:
     app.add_handler(CommandHandler("build", build))
     app.add_handler(CommandHandler("cancelbuild", cancel_build))
     app.add_handler(CommandHandler("connectcalendar", connect_calendar))
+    if hq.hq_enabled():
+        hq_commands.register(app, CommandHandler)
     app.add_handler(CallbackQueryHandler(build_callback, pattern=r"^build:"))
     app.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^approve:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
