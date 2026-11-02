@@ -361,6 +361,10 @@ def tick_sync() -> None:
     state = _get("system_state?id=eq.1&select=kill_switch")
     if state and state[0].get("kill_switch"):
         return
+    try:
+        _patch("system_state?id=eq.1", {"last_heartbeat": _now()})
+    except Exception:
+        logger.exception("HQ heartbeat write failed")
     _recover_stale()
     if _work_tasks():
         _triage_escalations()
