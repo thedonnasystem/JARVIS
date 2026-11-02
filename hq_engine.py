@@ -157,6 +157,7 @@ def system_prompt(agent: dict, handbook: str | None) -> str:
         parts.append(DRAFT_RULE)
     if agent["slug"] == "new-ventures-researcher":
         parts.append(IDEA_RULE)
+    parts.append(NEXT_RULE)
     parts.append("If 'Company knowledge' is given with the task, build on it: do not re-research facts already there "
                  "unless you have reason to think they changed, and say so if you find one is wrong.")
     return "\n\n".join(p for p in parts if p)
@@ -278,6 +279,47 @@ def _store_ideas(t: dict, text: str) -> int:
         except Exception:
             continue  # duplicate name or bad row
     return saved
+
+
+NEXT_RULE = (
+    "If your work shows a clear, valuable next step that another task should do, add up to 2 lines anywhere in your answer, "
+    "exactly in this form:\nNEXT: <agent slug> | <short task title> | <what to do and what the output must contain>\n"
+    "Research or drafting only. Do not repeat work already in company knowledge."
+)
+NEXT_LINE = re.compile(r"(?im)^\s*[-*]?\s*\**NEXT:\**\s*([a-z0-9-]+)\s*\|\s*([^|\n]{5,140})\s*\|\s*([^\n]{10,1200})$")
+MAX_NEXT_PER_TASK = 2
+MAX_CHAIN_DEPTH = 2
+CHAIN_TAG = re.compile(r"\[chain (\d+)\]")
+
+
+def _queue_next(t: dict, text: str) -> int:
+    """Agents queue their own follow-up work. Guards: active agents only, queue cap, chain depth, no duplicate titles,
+    nothing for audits or planning (those have their own flows)."""
+    if t["title"].startswith((AUDIT_PREFIX, PLAN_PREFIX, REVIEW_TITLE)):
+        return 0
+    m = CHAIN_TAG.search(t.get("detail") or "")
+    depth = int(m.group(1)) if m else 0
+    if depth >= MAX_CHAIN_DEPTH:
+        return 0
+    items = NEXT_LINE.findall(text)[:MAX_NEXT_PER_TASK]
+    if not items:
+        return 0
+    todo = _get("tasks?status=in.(todo,doing)&select=title")
+    if len(todo) >= MAX_TODO_QUEUE:
+        return 0
+    titles = {(r.get("title") or "").strip().lower() for r in todo}
+    active = {a["slug"]: a.get("venture_id") for a in _get("agents?status=eq.active&select=slug,venture_id")}
+    made = 0
+    for slug, title, detail in items:
+        slug, title = slug.strip().lower(), title.strip()
+        if slug not in active or slug == "jarvis" or title.lower() in titles or len(todo) + made >= MAX_TODO_QUEUE:
+            continue
+        _insert("tasks", {"assigned_agent": slug, "venture_id": active[slug], "created_by": t["assigned_agent"],
+                          "title": title[:140], "status": "todo", "priority": 4,
+                          "detail": f"{detail.strip()}{PLAN_SUFFIX}\n[chain {depth + 1}] Follow-up from task: {t['title'][:100]}"})
+        titles.add(title.lower())
+        made += 1
+    return made
 
 
 REVIEW_TITLE = "Weekly company self-review"
@@ -467,6 +509,7 @@ def _work_tasks() -> bool:
             _send_proposals(t, text)
             _store_drafts(t, text)
             _store_ideas(t, text)
+            _queue_next(t, text)
         except Exception:
             logger.exception("HQ memory write failed")
         if re.search(r"(?im)^\s*VERDICT:\s*FAIL\b", text):
@@ -663,8 +706,12 @@ def tick_sync() -> None:
     except Exception:
         logger.exception("HQ heartbeat write failed")
     _recover_stale()
-    if _work_tasks():
+    # Triage first: it is quick and cheap, and long research tasks must never starve it.
+    try:
         _triage_escalations()
+    except Exception:
+        logger.exception("HQ triage failed")
+    _work_tasks()
 
 
 async def tick(context) -> None:

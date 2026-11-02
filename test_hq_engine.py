@@ -252,6 +252,28 @@ class T(unittest.TestCase):
         rows = [i[1] for i in b.inserts if "ideas" in i[0]]
         self.assertEqual((rows[0]["startup_cost_cents"], rows[1]["speed_to_cash"], rows[1]["effort"]), (35000, 5, 1))
 
+    def test_next_lines_queue_followups_with_guards(self):
+        class B(Board):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                if method == "GET" and path.startswith("/rest/v1/agents"):
+                    return [{"slug": "donna-researcher", "venture_id": "vd"}, {"slug": "jarvis", "venture_id": None}]
+                if method == "GET" and path.startswith("/rest/v1/tasks"):
+                    return [{"title": "Already queued thing"}]
+                return Board.__call__(s, method, path, body, timeout, prefer)
+        b = B()
+        t = {"id": "x1", "assigned_agent": "donna-researcher", "title": "Competitor map", "detail": "do it"}
+        text = ("NEXT: donna-researcher | Price check on Podium vendor pages | Open each vendor pricing page and list plan prices with URLs\n"
+                "NEXT: jarvis | Plan things | jarvis should never get chained work here\n"
+                "NEXT: donna-researcher | Already queued thing | duplicate title should be skipped entirely\n")
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._queue_next(t, text), 1)
+        row = [i[1] for i in b.inserts if "tasks" in i[0]][0]
+        self.assertIn("[chain 1]", row["detail"])
+        self.assertEqual(row["venture_id"], "vd")
+        deep = dict(t, detail="x [chain 2] y")
+        with mock.patch.object(hq, "_request", B()):
+            self.assertEqual(E._queue_next(deep, text), 0)
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')
