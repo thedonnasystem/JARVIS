@@ -146,7 +146,7 @@ def run_turn_sync(slug: str, task: str, max_out: int, purpose: str) -> str:
     system = system_prompt(agent, hb[0]["content"] if hb else None)
     model = TIER_MODEL.get(agent.get("model_tier"), TIER_MODEL["cheap"])
     search = can_search(slug)
-    est_in = math.ceil((len(system) + len(task)) / 3) + (4000 if search else 0)  # search results add input tokens
+    est_in = math.ceil((len(system) + len(task)) / 3) + (25000 if search else 0)  # search results add a lot of input tokens (measured: ~17c per search task)
     try:
         est = _rpc("estimate_call_cents", {"p_model": model, "p_input_tokens": est_in, "p_max_output_tokens": max_out})
         if search:
