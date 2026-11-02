@@ -33,8 +33,18 @@ class Board:
 
 class T(unittest.TestCase):
     def run_tick(self, board, reply="done"):
-        with mock.patch.object(hq, "_request", board), mock.patch.object(E, "_complete", return_value=(reply, 10, 5)):
+        with mock.patch.object(hq, "_request", board), mock.patch.object(E, "_complete", return_value=(reply, 10, 5, 0)):
             E.tick_sync()
+
+    def test_search_flag_and_cost(self):
+        self.assertTrue(E.can_search("real-estate-researcher")); self.assertTrue(E.can_search("donna-auditor"))
+        self.assertFalse(E.can_search("ceo")); self.assertFalse(E.can_search("jarvis"))
+        b = Board(tasks=[{"id": "t1", "assigned_agent": "real-estate-researcher", "title": "T", "detail": ""}])
+        with mock.patch.object(hq, "_request", b), mock.patch.object(E, "_complete", return_value=("ok", 10, 5, 2)) as c:
+            E.tick_sync()
+        self.assertTrue(c.call_args[0][4] is True)
+        settle = [r for r in b.rpcs if r[0] == "settle_llm_call"][0][1]
+        self.assertEqual(settle["p_actual_cents"], 1 + 2 * E.SEARCH_CENTS)
 
     def test_task_done(self):
         b = Board(tasks=[{"id": "t1", "assigned_agent": "x", "title": "T", "detail": "d"}])
