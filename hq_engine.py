@@ -139,6 +139,8 @@ def system_prompt(agent: dict, handbook: str | None) -> str:
         parts.append(JARVIS_RULES)
     if agent["slug"].endswith("auditor"):
         parts.append(AUDITOR_FACTS_RULE)
+    if agent["slug"].endswith("researcher"):
+        parts.append(LEADS_RULE)
     parts.append("If 'Company knowledge' is given with the task, build on it: do not re-research facts already there "
                  "unless you have reason to think they changed, and say so if you find one is wrong.")
     return "\n\n".join(p for p in parts if p)
@@ -151,6 +153,37 @@ AUDITOR_FACTS_RULE = (
     "Only include facts you are sure of. These are saved to company memory and other agents will rely on them."
 )
 FACT_LINE = re.compile(r"^\s*[-*]\s*(.+?)\s*\|\s*(https?://\S+)\s*\|\s*(high|medium|low)\s*$", re.IGNORECASE | re.MULTILINE)
+LEADS_RULE = (
+    "Only if the task asks you to find prospects, businesses or leads: end with a section that starts with the line LEADS: "
+    "and list each one, one per line, in exactly this form:\n"
+    "- <business name> | <business website or listing URL> | <one short note: size signal or why it fits>\n"
+    "Businesses only, from public pages. No personal phone numbers, emails or home addresses."
+)
+LEAD_LINE = re.compile(r"^\s*[-*]\s*([^|\n]{2,120}?)\s*\|\s*(https?://\S+)\s*\|\s*([^\n]{0,300})$", re.MULTILINE)
+MAX_LEADS_PER_TASK = 30
+
+
+def _store_leads(t: dict, text: str) -> int:
+    """Researcher prospect lists -> leads table (status new, do-not-contact until a consent basis is set)."""
+    if not t["assigned_agent"].endswith("researcher") or not t.get("venture_id") or "LEADS:" not in text:
+        return 0
+    existing = {(r.get("name") or "").strip().lower()
+                for r in _get(f"leads?venture_id=eq.{_q(t['venture_id'])}&select=name&limit=1000")}
+    saved = 0
+    for m in LEAD_LINE.finditer(text.split("LEADS:", 1)[1]):
+        if saved >= MAX_LEADS_PER_TASK:
+            break
+        name, url, note = m.group(1).strip(" *"), m.group(2).rstrip(").,"), m.group(3).strip()
+        if name.lower() in existing:
+            continue
+        _insert("leads", {"venture_id": t["venture_id"], "name": name[:120], "source": url[:500], "status": "new",
+                          "do_not_contact": True, "consent_basis": None,
+                          "notes": f"{note[:300]} (found by {t['assigned_agent']}, task {t['id']})"})
+        existing.add(name.lower())
+        saved += 1
+    return saved
+
+
 MAX_FACTS_PER_AUDIT = 8
 MEMORY_IN_PROMPT = 15
 FACT_TTL_DAYS = 90
@@ -283,6 +316,7 @@ def _work_tasks() -> bool:
             logger.exception("HQ audit/prediction step failed")
         try:
             _store_facts(t, text)
+            _store_leads(t, text)
         except Exception:
             logger.exception("HQ memory write failed")
         if re.search(r"(?im)^\s*VERDICT:\s*FAIL\b", text):

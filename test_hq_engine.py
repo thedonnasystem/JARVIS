@@ -154,6 +154,18 @@ class T(unittest.TestCase):
             E._store_facts({"id": "r", "assigned_agent": "donna-researcher", "title": "t"}, "FACTS:\n- Something long enough here | https://x.y | high")
         self.assertFalse(b.inserts)
 
+    def test_leads_saved_deduped_and_locked(self):
+        b = Board()
+        t = {"id": "r1", "assigned_agent": "donna-researcher", "title": "List HVAC", "venture_id": "v3"}
+        text = ("Here you go.\nLEADS:\n"
+                "- Cool Air Ottawa | https://coolair.example.ca | 8 trucks, web form only\n"
+                "- Cool Air Ottawa | https://coolair.example.ca | duplicate\n"
+                "- Warm Co | https://warm.example.ca | 40 reviews\n")
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_leads(t, text), 2)
+        rows = [i[1] for i in b.inserts if "leads" in i[0]]
+        self.assertTrue(all(r["do_not_contact"] and r["status"] == "new" for r in rows))
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')
