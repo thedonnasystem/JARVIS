@@ -118,7 +118,14 @@ class T(unittest.TestCase):
         self.assertEqual([i for i in b.inserts if "owner_messages" in i[0]][0][1]["kind"], "proposal")
         b2 = Board(escalations=[{"id": "e2", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b2, "not json")
-        self.assertEqual([i for i in b2.inserts if "owner_messages" in i[0]][0][1]["kind"], "health")
+        self.assertFalse(any("owner_messages" in i[0] for i in b2.inserts))  # no raw dumps on the owner
+        self.assertTrue(any(p[1].get("status") == "closed" for p in b2.patches))
+
+    def test_parse_decision_handles_raw_newlines(self):
+        d = E._parse_decision('{"action": "send_to_owner", "kind": "contract", "message": "line one\nline "two""}')
+        self.assertEqual(d["action"], "send_to_owner")
+        self.assertEqual(d["kind"], "contract")
+        self.assertIn("line one", d["message"])
 
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
