@@ -58,7 +58,7 @@ Every task prompt includes the venture's **company knowledge** (recent facts, de
 
 ## Owner commands (Telegram)
 
-`/hq` status · `/brief` daily brief · `/due` follow-ups · `/lead name | phone | note | days` · `/done # days note` · `/money in|out amount venture note` · `/ask agent task` · `/agents` · `/leads` · `/drafts` · `/sent code` · `/ideas` · `/testidea name` · `/parkidea name` · `/kill` · `/resume`
+`/hq` status · `/brief` daily brief · `/due` follow-ups · `/lead name | phone | note | days` · `/done # days note` · `/money in|out amount venture note` · `/ask agent task` · `/agents` · `/leads` · `/drafts` · `/sent code` · `/systems` · `/ideas` · `/testidea name` · `/parkidea name` · `/kill` · `/resume`
 
 ## The Donna money loop
 
@@ -66,6 +66,17 @@ Every task prompt includes the venture's **company knowledge** (recent facts, de
 2. Once 3 or more emailable leads exist, `hq-queue-drafts` queues a draft task. Donna's GM writes short emails using the offer saved in memory (AI receptionist, $297–397/mo plus $250 setup; call to action: free strategy meeting).
 3. Moe gets one ping. He runs `/drafts` and taps **Approve** on each, and Jarvis replies with the exact email to send.
 4. Moe sends it, then `/sent <code>`. The lead is marked contacted and a 3-day follow-up appears in the 8:15am list.
+
+## Rooms (each system stays separate; HQ watches and supports)
+
+| Room | System | How HQ connects |
+|---|---|---|
+| Real estate | Deal funnel (Render + GitHub Actions + Supabase `wholesale-pipeline`) | Reads `hq_valuation_candidates()`. The researcher values the best unvalued fixers (search + page fetch) and writes AI ARV fields via the funnel's `rows_merge`. The funnel judges them with its own opportunity rules and shows comp links. Off until `WHOLESALE_SUPABASE_SERVICE_KEY` is set. `hq-value-fixers` runs at 9:45am and 4:45pm. |
+| Donna | Leads, drafts and outbox in HQ; Retell/Twilio/Cal.com outside | `hq-donna-prospects` runs daily at 10:15am. It rotates Ontario markets and trades, and skips when 15+ emailable leads are waiting. Drafts are queued automatically. |
+| Day job | Dialer and call coach (Render) | Health checked and woken at 7:50am. The follow-up tracker lives in HQ. |
+| Company | Jarvis + engine (Railway) | Heartbeat, plus reconciliation alerts. |
+
+`/systems` shows each one's last health check. The registry lives in the `systems` table.
 
 ## Results rule
 
