@@ -320,6 +320,32 @@ class T(unittest.TestCase):
         import hq_wholesale as W
         self.assertEqual(W.mao(290000, 45000), 290000 * 0.70 - 45000 - 15000)
 
+    def test_draft_with_placeholder_is_dropped(self):
+        class B(Board):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                if method == "GET" and path.startswith("/rest/v1/leads"):
+                    return [{"id": "L7", "source": "x", "email": "info@x.ca"}]
+                return Board.__call__(s, method, path, body, timeout, prefer)
+        b = B()
+        t = {"id": "d2", "assigned_agent": "donna-division", "title": "Draft outreach for new donna leads", "venture_id": "vd"}
+        text = "DRAFT #7\nSubject: Hi\nBody:\nI'm [Name]. [OFFER]\nReply stop to opt out.\nEND DRAFT\n"
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_drafts(t, text), 0)
+
+    def test_knowledge_puts_decisions_first(self):
+        seen = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            seen.append(path)
+            if "kind=in.(decision,lesson)" in path:
+                return [{"kind": "decision", "content": "Offer: AI receptionist $297-397/mo", "confidence": "high"}]
+            if "kind=eq.fact" in path:
+                return [{"kind": "fact", "content": f"fact {len(seen)}", "source": "https://x", "confidence": "high"}]
+            return []
+        with mock.patch.object(hq, "_request", fake):
+            out = E._company_knowledge("vd")
+        self.assertLess(out.index("Offer: AI receptionist"), out.index("fact"))
+        self.assertTrue(all("or=(" not in p for p in seen))  # no duplicate or= params
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')
