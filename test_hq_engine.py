@@ -52,7 +52,7 @@ class T(unittest.TestCase):
         self.assertTrue(any("status=eq.doing" in p[0] and p[1].get("status") == "todo" for p in b.patches))
 
     def test_plan_creates_guarded_tasks(self):
-        plan = '[{"agent":"donna-researcher","title":"A","detail":"d"},{"agent":"ghost","title":"B","detail":"d"},{"agent":"jarvis","title":"C","detail":"d"},{"agent":"donna-researcher","title":"D","detail":"d"},{"agent":"donna-researcher","title":"E","detail":"d"}]'
+        plan = '[{"agent":"donna-researcher","title":"A","detail":"d","expected_cad":500,"days_to_cash":10},{"agent":"ghost","title":"B","detail":"d","expected_cad":1,"days_to_cash":1},{"agent":"jarvis","title":"C","detail":"d","expected_cad":1,"days_to_cash":1},{"agent":"donna-researcher","title":"D","detail":"d"},{"agent":"donna-researcher","title":"E","detail":"d"}]'
         b = Board(tasks=[{"id": "t1", "assigned_agent": "jarvis", "title": "Daily planning 2026-11-02", "detail": ""}])
         orig = b.__call__
         def fake(method, path, body=None, timeout=30, prefer=None):
@@ -63,6 +63,12 @@ class T(unittest.TestCase):
         made = [i for i in b.inserts if i[0].endswith("/tasks")]
         self.assertEqual([m[1]["title"] for m in made], ["A"])  # only the first 3 proposals are read; ghost and self-assigned are skipped
         self.assertIn("No contacting anyone", made[0][1]["detail"])
+        self.assertEqual(made[0][1]["priority"], 2)  # cash within 14 days runs first
+        self.assertIn("$500 CAD within 10 days", made[0][1]["detail"])
+
+    def test_plan_without_value_is_rejected(self):
+        with mock.patch.object(hq, "_request", Board()):
+            self.assertEqual(E._apply_plan('[{"agent":"x","title":"A","detail":"d"}]', "jarvis"), 0)
 
     def test_research_task_logs_prediction_and_queues_audit(self):
         b = Board(tasks=[{"id": "t1", "assigned_agent": "donna-researcher", "title": "Map", "detail": ""}])

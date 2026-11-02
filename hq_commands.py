@@ -358,6 +358,11 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         if esc:
             import hq_engine
             hq_engine.unblock_task_for(esc[0].get("summary") or "")
+    elif ref_table == "pause_venture" and ref_id and approved:
+        # Approving a pause stops the venture's spend: the gateway refuses calls from paused agents.
+        hq._request("PATCH", f"/rest/v1/agents?venture_id=eq.{_q(ref_id)}", {"status": "paused"}, prefer="return=minimal")
+        hq._request("PATCH", f"/rest/v1/tasks?venture_id=eq.{_q(ref_id)}&status=eq.todo",
+                    {"status": "cancelled", "result": "Cancelled: owner paused this venture."}, prefer="return=minimal")
     elif ref_table == "outbox" and ref_id:
         hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=in.(draft,qa_passed)",
                     {"status": verdict, "decided_at": now}, prefer="return=minimal")

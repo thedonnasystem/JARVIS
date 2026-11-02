@@ -615,8 +615,17 @@ def _apply_plan(text: str, planner: str) -> int:
         agent, title, detail = it.get("agent"), str(it.get("title", ""))[:140], str(it.get("detail", ""))[:1500]
         if agent not in active or agent == planner or not title or not detail:
             continue
+        try:  # results rule: every planned task must say what it is worth and how soon
+            value, days = float(it.get("expected_cad")), int(it.get("days_to_cash"))
+        except (TypeError, ValueError):
+            continue
+        if value <= 0 or days <= 0:
+            continue
+        priority = 2 if days <= 14 else 3 if days <= 45 else 5
         _insert("tasks", {"assigned_agent": agent, "created_by": planner, "title": title, "venture_id": active[agent],
-                          "detail": detail + PLAN_SUFFIX, "status": "todo", "priority": 3})
+                          "detail": f"{detail}\nWhy this matters: expected about ${value:,.0f} CAD within {days} days."
+                                    f" {it.get('why', '')}"[:1800] + PLAN_SUFFIX,
+                          "status": "todo", "priority": priority})
         made += 1
     _audit(planner, "plan_applied", None, {"proposed": len(items), "created": made})
     return made
