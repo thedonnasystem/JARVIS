@@ -235,7 +235,7 @@ class T(unittest.TestCase):
         class B(Board):
             def __call__(s, method, path, body=None, timeout=30, prefer=None):
                 if method == "GET" and path.startswith("/rest/v1/leads"):
-                    return [{"id": "L7", "source": "https://coolair.example.ca"}]
+                    return [{"id": "L7", "source": "https://coolair.example.ca", "email": "info@coolair.example.ca"}]
                 return Board.__call__(s, method, path, body, timeout, prefer)
         b = B()
         t = {"id": "d1", "assigned_agent": "donna-division", "title": "Draft outreach for 5 HVAC leads", "venture_id": "vd"}
@@ -246,6 +246,7 @@ class T(unittest.TestCase):
         row = [i[1] for i in b.inserts if "outbox" in i[0]][0]
         self.assertEqual((row["status"], row["needs_owner"], row["lead_id"]), ("draft", True, "L7"))
         self.assertTrue(row["body"].startswith("Subject: Missed calls"))
+        self.assertEqual(row["to_ref"], "info@coolair.example.ca")
 
     def test_ideas_parsed_and_clamped(self):
         b = Board()
@@ -279,6 +280,20 @@ class T(unittest.TestCase):
         deep = dict(t, detail="x [chain 2] y")
         with mock.patch.object(hq, "_request", B()):
             self.assertEqual(E._queue_next(deep, text), 0)
+
+    def test_lead_email_sets_casl_basis(self):
+        b = Board()
+        t = {"id": "r2", "assigned_agent": "donna-researcher", "title": "List HVAC", "venture_id": "v3"}
+        text = ("LEADS:\n"
+                "- Cool Air | https://coolair.example.ca | 8 trucks | info@coolair.example.ca | no\n"
+                "- Quiet Co | https://quiet.example.ca | small | office@quiet.example.ca | yes\n"
+                "- Form Only | https://form.example.ca | web form | https://form.example.ca/contact | no\n")
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_leads(t, text), 3)
+        rows = {r["name"]: r for r in [i[1] for i in b.inserts if "leads" in i[0]]}
+        self.assertFalse(rows["Cool Air"]["do_not_contact"]); self.assertEqual(rows["Cool Air"]["email"], "info@coolair.example.ca")
+        self.assertTrue(rows["Quiet Co"]["do_not_contact"])
+        self.assertTrue(rows["Form Only"]["do_not_contact"]); self.assertIn("contact page", rows["Form Only"]["notes"])
 
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])

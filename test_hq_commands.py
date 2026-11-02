@@ -127,6 +127,22 @@ class D(unittest.TestCase):
         self.assertEqual((mem["kind"], mem["agent"]), ("decision", "owner"))
         self.assertIn("approved", mem["content"])
 
+    def test_approved_draft_returns_ready_to_send_email(self):
+        class F(DecisionFake):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                s.calls.append((method, path, body))
+                if method == "PATCH" and "owner_messages" in path:
+                    return [{"id": "m2", "body": "draft", "ref_table": "outbox", "ref_id": "abcdef12-0000"}]
+                if method == "GET" and "outbox" in path:
+                    return [{"to_ref": "info@coolair.example.ca", "body": "Subject: Hi\n\nHello", "lead_id": "L7"}]
+                return []
+        f = F()
+        with mock.patch.object(hq, "_request", f):
+            out = C.apply_decision("m2", True)
+        self.assertIn("To: info@coolair.example.ca", out)
+        self.assertIn("/sent abcdef12", out)
+        self.assertFalse(any(c[0] == "POST" and "memory" in c[1] for c in f.calls))  # single emails are not policy
+
     def test_second_tap_changes_nothing(self):
         f = DecisionFake(already=True)
         with mock.patch.object(hq, "_request", f):

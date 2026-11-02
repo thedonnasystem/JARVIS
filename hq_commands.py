@@ -231,6 +231,28 @@ async def hq_drafts(update, context) -> None:
         await update.message.reply_text(body, reply_markup=hq.decision_buttons(msg["id"]) if msg.get("id") else None)
 
 
+async def hq_sent(update, context) -> None:
+    """/sent <first 8 chars of draft id>: the owner sent an approved email himself."""
+    if not _owner(update):
+        return
+    frag = (context.args or [""])[0].strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{8}", frag):
+        await update.message.reply_text("Use: /sent <8-character code from the approval message>")
+        return
+    rows = [r for r in _get("outbox?status=eq.approved&select=id,lead_id&limit=200") if r["id"].startswith(frag)]
+    if len(rows) != 1:
+        await update.message.reply_text("No approved draft with that code.")
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", {"status": "sent", "sent_at": now}, prefer="return=minimal")
+    if rows[0].get("lead_id"):
+        from datetime import timedelta
+        due = (_toronto_today() + timedelta(days=3)).isoformat()
+        hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(rows[0]['lead_id'])}",
+                    {"status": "contacted", "last_contact_at": now, "next_followup_at": due}, prefer="return=minimal")
+    await update.message.reply_text("Marked sent. Follow-up reminder set for 3 days from now.")
+
+
 async def hq_agents(update, context) -> None:
     if not _owner(update):
         return
@@ -366,11 +388,26 @@ def apply_decision(msg_id: str, approved: bool) -> str:
     elif ref_table == "outbox" and ref_id:
         hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=in.(draft,qa_passed)",
                     {"status": verdict, "decided_at": now}, prefer="return=minimal")
-    hq._request("POST", "/rest/v1/memory", {"agent": "owner", "kind": "decision", "confidence": "high",
-                                            "content": f"Owner {verdict}: {(msg.get('body') or '')[:500]}"}, prefer="return=minimal")
+        if approved:
+            ob = _get(f"outbox?id=eq.{_q(ref_id)}&select=to_ref,body,lead_id&limit=1")
+            if ob:
+                if ob[0].get("lead_id"):
+                    hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(ob[0]['lead_id'])}", {"status": "approved_to_send"},
+                                prefer="return=minimal")
+                ready = (f"Approved. Send this from your business email:\n\nTo: {ob[0].get('to_ref')}\n{ob[0].get('body')}\n\n"
+                         f"Once sent, reply /sent {ref_id[:8]}")
+                _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
+                return ready
+    _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
+    return f"Decision saved: {verdict.upper()}. Agents will follow it."
+
+
+def _record_decision_memory(msg: dict, verdict: str, msg_id: str, ref_table, ref_id) -> None:
+    if ref_table != "outbox":  # individual email approvals are not company policy
+        hq._request("POST", "/rest/v1/memory", {"agent": "owner", "kind": "decision", "confidence": "high",
+                                                "content": f"Owner {verdict}: {(msg.get('body') or '')[:500]}"}, prefer="return=minimal")
     hq._request("POST", "/rest/v1/audit_log", {"actor": "owner", "action": f"decision_{verdict}", "target": f"owner_messages/{msg_id}",
                                                "detail": {"ref_table": ref_table, "ref_id": ref_id, "via": "telegram"}}, prefer="return=minimal")
-    return f"Decision saved: {verdict.upper()}. Agents will follow it."
 
 
 async def hq_decision_callback(update, context) -> None:
@@ -395,7 +432,7 @@ async def hq_decision_callback(update, context) -> None:
 MENU = [
     ("hq", "Company status"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
-    ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
+    ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("kill", "Stop all agents"), ("resume", "Restart agents"),
 ]
 
@@ -416,7 +453,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
-                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts)):
+                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))
