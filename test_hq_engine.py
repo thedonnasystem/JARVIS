@@ -305,6 +305,21 @@ class T(unittest.TestCase):
         self.assertEqual(text, "answer")
         self.assertEqual(len(client.messages.create.call_args_list[1].kwargs["tools"]), 1)
 
+    def test_valuations_parsed_sanity_checked_and_downgraded(self):
+        lid = "11111111-2222-3333-4444-555555555555"
+        text = (f"VALUATION: {lid} | ARV $310,000 | low 290,000 | high 330,000 | repairs 45,000 | medium | "
+                "https://a.ca/1 https://a.ca/2 https://a.ca/3\n"
+                f"VALUATION: {lid} | ARV 300000 | low 350000 | high 360000 | repairs 1 | high | https://a.ca/1\n"
+                f"VALUATION: {lid} | ARV 200000 | low 190000 | high 210000 | repairs 30000 | high | https://a.ca/1 https://a.ca/1\n")
+        vs = E.parse_valuations(text)
+        self.assertEqual(len(vs), 2)  # low > ARV is dropped
+        self.assertEqual((vs[0]["arv"], vs[0]["confidence"], len(vs[0]["comps"])), (310000, "medium", 3))
+        self.assertEqual(vs[1]["confidence"], "low")  # one unique comp cannot be "high"
+
+    def test_valuation_mao_uses_low_arv(self):
+        import hq_wholesale as W
+        self.assertEqual(W.mao(290000, 45000), 290000 * 0.70 - 45000 - 15000)
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')
