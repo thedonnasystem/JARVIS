@@ -79,6 +79,13 @@ def decision_buttons(msg_id: str):
     ]])
 
 
+def option_buttons(msg_id: str, options: list):
+    """Task Brief: one button per option (max 4), each on its own row so long labels stay readable."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup([[InlineKeyboardButton(str(o)[:60], callback_data=f"hqq:{i}:{msg_id}")]
+                                 for i, o in enumerate(options[:4])])
+
+
 async def deliver_owner_messages(context) -> None:
     """Repeating job: send unsent owner messages to the owner on Telegram, oldest first."""
     if not hq_enabled():
@@ -89,7 +96,7 @@ async def deliver_owner_messages(context) -> None:
             "/rest/v1/owner_messages?sent_at=is.null"
             f"&or=(deliver_after.is.null,deliver_after.lte.{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})"
             "&order=created_at.asc&limit=10"
-            "&select=id,kind,channel,body,needs_decision",
+            "&select=id,kind,channel,body,needs_decision,options",
         ) or []
     except (urllib.error.URLError, TimeoutError, ValueError) as e:
         logger.warning("HQ: could not read owner_messages: %s", e)
@@ -100,7 +107,10 @@ async def deliver_owner_messages(context) -> None:
             continue  # held until 7am Toronto; only emergencies wake the owner
         try:
             # Plain text on purpose: no parse_mode, so message content cannot inject formatting.
-            markup = decision_buttons(msg["id"]) if msg.get("needs_decision") else None
+            if msg.get("options"):
+                markup = option_buttons(msg["id"], msg["options"])
+            else:
+                markup = decision_buttons(msg["id"]) if msg.get("needs_decision") else None
             await context.bot.send_message(int(JARVIS_OWNER_ID), format_owner_message(msg), reply_markup=markup)
         except Exception as e:  # leave unsent so it is retried next minute
             logger.warning("HQ: Telegram send failed for %s: %s", msg.get("id"), e)

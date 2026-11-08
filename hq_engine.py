@@ -182,6 +182,7 @@ def system_prompt(agent: dict, handbook: str | None) -> str:
     if agent["slug"] == "real-estate-researcher":
         parts.append(VALUATION_RULE)
     parts.append(NEXT_RULE)
+    parts.append(BRIEF_RULE)
     parts.append("If 'Company knowledge' is given with the task, build on it: do not re-research facts already there "
                  "unless you have reason to think they changed, and say so if you find one is wrong.")
     return "\n\n".join(p for p in parts if p)
@@ -459,6 +460,34 @@ def _store_valuations(t: dict, text: str) -> int:
     return saved
 
 
+BRIEF_RULE = (
+    "If you reach a real fork that only the owner can decide (which market, which offer, whether to spend, which of "
+    "two directions) and company knowledge does not already answer it, do NOT guess. Put ONE line anywhere in your "
+    "answer, exactly: QUESTION: <one short question> | <option 1> | <option 2> [| <option 3>] [| <option 4>]\n"
+    "Options must be concrete and short. Finish the rest of the work you can do without the answer."
+)
+QUESTION_LINE = re.compile(r"(?im)^\s*[-*]?\s*\**QUESTION:\**\s*([^|\n]{8,240}?)\s*((?:\|\s*[^|\n]{1,60}\s*){2,4})$")
+WAITING_PREFIX = "waiting on owner:"
+
+
+def _ask_owner(t: dict, text: str) -> bool:
+    """Task Brief (from StarNet): one concrete question with tappable options instead of a silent wrong guess.
+    The task waits; the owner's tap saves a standing decision and puts the task back on the board with the answer."""
+    m = QUESTION_LINE.search(text)
+    if not m:
+        return False
+    q = m.group(1).strip()
+    opts = [o.strip() for o in m.group(2).split("|") if o.strip()][:4]
+    if len(opts) < 2:
+        return False
+    _insert("owner_messages", {"from_agent": t["assigned_agent"], "kind": "proposal", "channel": "telegram",
+                               "body": f"Question from {t['assigned_agent']} (task: {t['title'][:80]}):\n{q}",
+                               "options": opts, "ref_table": "tasks", "ref_id": t["id"]})
+    _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked", "updated_at": _now(),
+                                          "result": f"{WAITING_PREFIX} {q}\n\n{text}"[:20000]})
+    return True
+
+
 REVIEW_TITLE = "Weekly company self-review"
 PROPOSAL_LINE = re.compile(r"(?im)^\s*[-*]?\s*\**PROPOSAL:\**\s*(.{10,600})$")
 MAX_PROPOSALS = 3
@@ -625,6 +654,19 @@ PROBE_EVERY_MINUTES = 60
 _last_probe: datetime | None = None
 
 
+def end_night_shift_if_due(st: dict) -> bool:
+    """At 7am (or when the owner ends it early): restore the normal cap and send the overnight report."""
+    until = datetime.fromisoformat(str(st["night_until"]).replace("Z", "+00:00"))
+    if datetime.now(timezone.utc) < until:
+        return False
+    since = st.get("night_started_at") or (until - timedelta(hours=10)).isoformat()
+    _patch("system_state?id=eq.1", {"daily_spend_cap_cents": st.get("day_cap_cents") or 330, "night_until": None,
+                                    "night_started_at": None})
+    report = _rpc("night_shift_report", {"p_since": since}) or "Night Shift ended."
+    _insert("owner_messages", {"from_agent": "jarvis", "kind": "brief", "channel": "telegram", "body": str(report)[:3800]})
+    return True
+
+
 def is_out_of_credits(e: Exception) -> bool:
     m = str(e).lower()
     return "credit balance is too low" in m or ("billing" in m and "credit" in m)
@@ -763,6 +805,11 @@ def _work_tasks() -> bool:
                 _apply_plan(text, t["assigned_agent"])
             except Exception:
                 logger.exception("HQ plan apply failed")
+        try:
+            if _ask_owner(t, text):
+                continue  # the task waits for the owner's tap (Task Brief)
+        except Exception:
+            logger.exception("HQ task brief failed")
         escalate = bool(re.search(r"(?im)^\s*ESCALATE\b", text))
         _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked" if escalate else "done", "result": text[:8000], "updated_at": _now()})
         if escalate:
@@ -955,13 +1002,18 @@ def unblock_task_for(summary: str) -> int:
 
 
 def tick_sync() -> None:
-    state = _get("system_state?id=eq.1&select=kill_switch,pause_reason,paused_at")
+    state = _get("system_state?id=eq.1&select=kill_switch,pause_reason,paused_at,night_until,night_started_at,day_cap_cents")
     if state and state[0].get("kill_switch"):
         return
     try:
         _patch("system_state?id=eq.1", {"last_heartbeat": _now()})
     except Exception:
         logger.exception("HQ heartbeat write failed")
+    if state and state[0].get("night_until"):
+        try:
+            end_night_shift_if_due(state[0])
+        except Exception:
+            logger.exception("HQ night shift wrap-up failed")
     if state and state[0].get("pause_reason") == CREDITS_PAUSE:
         if not _credits_back(state[0].get("paused_at")):
             return  # paused: no AI calls, no new work, until a probe succeeds

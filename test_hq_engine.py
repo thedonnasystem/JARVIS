@@ -416,6 +416,36 @@ class T(unittest.TestCase):
         st = {p[0].split("tasks?id=eq.")[1].split("&")[0]: p[1]["status"] for p in b.patches if "tasks?id=eq." in p[0]}
         self.assertEqual(st, {"a": "todo", "b": "cancelled"})
 
+    def test_task_brief_asks_owner_and_task_waits(self):
+        b = Board()
+        t = {"id": "t9", "assigned_agent": "donna-division", "title": "Plan outreach"}
+        text = "Work so far.\nQUESTION: Which niche should the next 20 emails target? | HVAC | Plumbing | Electrical\nmore"
+        with mock.patch.object(hq, "_request", b):
+            self.assertTrue(E._ask_owner(t, text))
+        msg = [i[1] for i in b.inserts if "owner_messages" in i[0]][0]
+        self.assertEqual(msg["options"], ["HVAC", "Plumbing", "Electrical"])
+        self.assertEqual((msg["ref_table"], msg["ref_id"]), ("tasks", "t9"))
+        self.assertEqual([p[1]["status"] for p in b.patches if "tasks?id=eq.t9" in p[0]][-1], "blocked")
+        with mock.patch.object(hq, "_request", Board()):
+            self.assertFalse(E._ask_owner(t, "QUESTION: Only one option? | yes"))
+
+    def test_night_shift_ends_at_7_restores_cap_and_reports(self):
+        b = Board()
+        orig = b.__call__
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            if "/rpc/night_shift_report" in path:
+                return "Night Shift report: 3 tasks"
+            return orig(method, path, body, timeout, prefer)
+        st = {"night_until": "2020-01-01T12:00:00Z", "night_started_at": "2020-01-01T02:00:00Z", "day_cap_cents": 330}
+        with mock.patch.object(hq, "_request", fake):
+            self.assertTrue(E.end_night_shift_if_due(st))
+        patch = [p[1] for p in b.patches if "system_state" in p[0]][0]
+        self.assertEqual((patch["daily_spend_cap_cents"], patch["night_until"]), (330, None))
+        self.assertIn("3 tasks", [i[1] for i in b.inserts if "owner_messages" in i[0]][0]["body"])
+        future = dict(st, night_until="2999-01-01T12:00:00Z")
+        with mock.patch.object(hq, "_request", Board()):
+            self.assertFalse(E.end_night_shift_if_due(future))
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')

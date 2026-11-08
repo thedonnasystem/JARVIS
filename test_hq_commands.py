@@ -133,6 +133,73 @@ class Score(unittest.TestCase):
         self.assertEqual((led["kind"], led["amount_cents"]), ("revenue", 100000))
 
 
+class Answers(unittest.TestCase):
+    def test_answer_saves_decision_and_resumes_task(self):
+        calls = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body))
+            if method == "GET" and "owner_messages" in path:
+                return [{"id": "m1", "body": "Question from x (task: y):\nWhich niche?", "options": ["HVAC", "Plumbing"],
+                         "answer": None, "ref_table": "tasks", "ref_id": "t9"}]
+            if method == "PATCH" and "owner_messages" in path:
+                return [{"id": "m1"}]
+            if method == "GET" and "tasks" in path:
+                return [{"id": "t9", "detail": "do it", "venture_id": "vd"}]
+            return []
+        with mock.patch.object(hq, "_request", fake):
+            out = C.apply_answer("m1", 1)
+        self.assertIn("Plumbing", out)
+        task = [c[2] for c in calls if c[0] == "PATCH" and "tasks?id=eq.t9" in c[1]][0]
+        self.assertEqual(task["status"], "todo"); self.assertIn("Plumbing", task["detail"])
+        mem = [c[2] for c in calls if c[0] == "POST" and "memory" in c[1]][0]
+        self.assertEqual((mem["kind"], mem["venture_id"]), ("decision", "vd"))
+
+    def test_second_answer_ignored(self):
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            if method == "GET": return [{"id": "m1", "options": ["a", "b"], "answer": "a"}]
+            return []
+        with mock.patch.object(hq, "_request", fake):
+            self.assertIn("Already answered", C.apply_answer("m1", 1))
+
+
+class Night(unittest.TestCase):
+    def setUp(self):
+        os.environ["JARVIS_OWNER_ID"] = "42"
+
+    def _fake(self, state):
+        calls = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body))
+            if method == "GET" and "system_state" in path:
+                return [state]
+            if method == "POST" and "/rpc/queue_prospect_task" in path:
+                return "some-id"
+            return None
+        return fake, calls
+
+    def test_start_sets_leash_until_7am_and_queues_backlog(self):
+        fake, calls = self._fake({"daily_spend_cap_cents": 330, "night_until": None, "pause_reason": None})
+        u = upd()
+        with mock.patch.object(hq, "_request", fake):
+            asyncio.run(C.hq_nightshift(u, SimpleNamespace(args=["8"])))
+        st = [c[2] for c in calls if c[0] == "PATCH" and "system_state" in c[1]][0]
+        self.assertEqual((st["daily_spend_cap_cents"], st["day_cap_cents"]), (800, 330))
+        self.assertTrue(st["night_until"])
+        self.assertIn("Donna prospecting", u.message.sent[0])
+
+    def test_ceiling_and_credit_guard(self):
+        fake, calls = self._fake({"daily_spend_cap_cents": 330, "night_until": None, "pause_reason": None})
+        with mock.patch.object(hq, "_request", fake):
+            asyncio.run(C.hq_nightshift(upd(), SimpleNamespace(args=["500"])))
+        self.assertEqual([c[2] for c in calls if c[0] == "PATCH"][0]["daily_spend_cap_cents"], C.NIGHT_MAX_CENTS)
+        fake2, calls2 = self._fake({"daily_spend_cap_cents": 330, "night_until": None, "pause_reason": "api_credits"})
+        u = upd()
+        with mock.patch.object(hq, "_request", fake2):
+            asyncio.run(C.hq_nightshift(u, SimpleNamespace(args=["8"])))
+        self.assertFalse([c for c in calls2 if c[0] == "PATCH"])
+        self.assertIn("out of credit", u.message.sent[0])
+
+
 class DecisionFake(Fake):
     def __init__(self, already=False):
         super().__init__(); self.already = already

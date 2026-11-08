@@ -301,6 +301,70 @@ async def hq_paid(update, context) -> None:
     await update.message.reply_text(f"Paid deal logged (+${cents/100:,.0f}).\n{week}")
 
 
+NIGHT_MAX_CENTS = 2000  # $20 hard ceiling, same as budget proposals
+
+
+def _next_7am_utc() -> str:
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("America/Toronto")
+    now = datetime.now(tz)
+    seven = now.replace(hour=7, minute=0, second=0, microsecond=0)
+    if now >= seven:
+        seven += timedelta(days=1)
+    return seven.astimezone(timezone.utc).isoformat()
+
+
+async def hq_nightshift(update, context) -> None:
+    """/nightshift [dollars]: StarNet-style Night Shift. Overnight budget leash, backlog queued, cap restored at 7am,
+    and a morning report of every task worked and what it cost."""
+    if not _owner(update):
+        return
+    args = context.args or []
+    if args and args[0].lower() in ("off", "stop", "end"):
+        st = (_get("system_state?id=eq.1&select=day_cap_cents,night_until") or [{}])[0]
+        if not st.get("night_until"):
+            await update.message.reply_text("Night Shift isn't running.")
+            return
+        hq._request("PATCH", "/rest/v1/system_state?id=eq.1", {"daily_spend_cap_cents": st.get("day_cap_cents") or 330,
+                    "night_until": datetime.now(timezone.utc).isoformat()}, prefer="return=minimal")
+        await update.message.reply_text("Night Shift ending. The normal cap is back, and the report arrives within 5 minutes.")
+        return
+    cents = parse_amount(args[0]) if args else 500
+    if not cents:
+        await update.message.reply_text("Use: /nightshift 8   (overnight AI budget in dollars, max $20)   or /nightshift off")
+        return
+    cents = min(cents, NIGHT_MAX_CENTS)
+    st = (_get("system_state?id=eq.1&select=daily_spend_cap_cents,night_until,pause_reason") or [{}])[0]
+    if st.get("pause_reason") == "api_credits":
+        await update.message.reply_text("Can't start Night Shift: the Anthropic API account is out of credit. Top up at "
+                                        "console.anthropic.com > Settings > Billing, then try again.")
+        return
+    day_cap = st.get("daily_spend_cap_cents") or 330
+    if st.get("night_until"):  # already running: just change the leash
+        hq._request("PATCH", "/rest/v1/system_state?id=eq.1", {"daily_spend_cap_cents": cents}, prefer="return=minimal")
+        await update.message.reply_text(f"Night Shift budget changed to ${cents/100:.2f}.")
+        return
+    hq._request("PATCH", "/rest/v1/system_state?id=eq.1", {
+        "day_cap_cents": day_cap, "daily_spend_cap_cents": max(cents, day_cap), "night_until": _next_7am_utc(),
+        "night_started_at": datetime.now(timezone.utc).isoformat()}, prefer="return=minimal")
+    queued = []
+    for fn, label in (("queue_prospect_task", "Donna prospecting"), ("queue_valuation_task", "deal valuations"),
+                      ("queue_outreach_drafts", "outreach drafts")):
+        try:
+            r = hq._request("POST", f"/rest/v1/rpc/{fn}", {})
+            if r:
+                queued.append(label)
+        except Exception:
+            logger.exception("Night Shift could not queue %s", fn)
+    hq._request("POST", "/rest/v1/audit_log", {"actor": "owner", "action": "night_shift_start", "target": "system_state",
+                                               "detail": {"cap_cents": cents, "via": "telegram"}}, prefer="return=minimal")
+    await update.message.reply_text(
+        f"Night Shift on until 7am with a ${max(cents, day_cap)/100:.2f} budget. "
+        + (f"Queued: {', '.join(queued)}. " if queued else "No new backlog to queue; agents work what's on the board. ")
+        + "You get a report of every task and its cost in the morning. /nightshift off ends it early.")
+
+
 async def hq_agents(update, context) -> None:
     if not _owner(update):
         return
@@ -516,7 +580,7 @@ MENU = [
     ("hq", "Company status"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
-    ("kill", "Stop all agents"), ("resume", "Restart agents"),
+    ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
 ]
 
 
@@ -532,14 +596,68 @@ async def set_menu(app) -> None:
         logger.warning("HQ: could not set the command menu: %s", e)
 
 
+def apply_answer(msg_id: str, idx: int) -> str:
+    """Owner tapped an option on a Task Brief: save it as a standing decision and resume the task with it."""
+    rows = _get(f"owner_messages?id=eq.{_q(msg_id)}&select=id,body,options,answer,ref_table,ref_id,from_agent&limit=1")
+    if not rows:
+        return "That question no longer exists."
+    m = rows[0]
+    opts = m.get("options") or []
+    if m.get("answer"):
+        return f"Already answered: {m['answer']}"
+    if not 0 <= idx < len(opts):
+        return "That option is no longer valid."
+    choice = str(opts[idx])
+    claimed = hq._request("PATCH", f"/rest/v1/owner_messages?id=eq.{_q(msg_id)}&answer=is.null",
+                          {"answer": choice, "decided_at": datetime.now(timezone.utc).isoformat()},
+                          prefer="return=representation") or []
+    if not claimed:
+        return "Already answered."
+    question = (m.get("body") or "").split("\n", 1)[-1][:300]
+    venture = None
+    if m.get("ref_table") == "tasks" and m.get("ref_id"):
+        t = (_get(f"tasks?id=eq.{_q(m['ref_id'])}&select=id,detail,venture_id&limit=1") or [{}])[0]
+        venture = t.get("venture_id")
+        if t.get("id"):
+            hq._request("PATCH", f"/rest/v1/tasks?id=eq.{_q(t['id'])}", {
+                "status": "todo", "updated_at": datetime.now(timezone.utc).isoformat(),
+                "detail": ((t.get("detail") or "") + f"\n\nOwner's answer to \"{question}\": {choice}. Continue with it.")[:8000],
+            }, prefer="return=minimal")
+    hq._request("POST", "/rest/v1/memory", {"agent": "owner", "kind": "decision", "confidence": "high", "venture_id": venture,
+                                            "content": f"Owner decided: {question} -> {choice}"}, prefer="return=minimal")
+    hq._request("POST", "/rest/v1/audit_log", {"actor": "owner", "action": "answered_question", "target": f"owner_messages/{msg_id}",
+                                               "detail": {"choice": choice, "via": "telegram"}}, prefer="return=minimal")
+    return f"Got it: {choice}. Saved as a decision and the task is back to work."
+
+
+async def hq_answer_callback(update, context) -> None:
+    query = update.callback_query
+    if not _owner(update):
+        await query.answer()
+        return
+    try:
+        _, idx, msg_id = query.data.split(":", 2)
+        result = apply_answer(msg_id, int(idx))
+    except Exception as e:
+        logger.exception("HQ answer failed")
+        result = f"Could not save the answer: {str(e)[:150]}"
+    await query.answer(result[:190])
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(result)
+    except Exception:
+        pass
+
+
 def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
-                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress)):
+                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))
+        app.add_handler(CallbackQueryHandler(hq_answer_callback, pattern=r"^hqq:"))
     if getattr(app, "job_queue", None) is not None:
         app.job_queue.run_once(_menu_job, when=10, name="hq-menu")
 
