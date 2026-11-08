@@ -380,6 +380,42 @@ class T(unittest.TestCase):
         with mock.patch.object(hq, "_request", fake):
             self.assertEqual(E._apply_plan(plan, "jarvis"), 1)
 
+    def test_out_of_credits_pauses_engine_and_tells_owner_once(self):
+        b = Board(tasks=[{"id": "t1", "assigned_agent": "x", "title": "T", "detail": "", "result": None}])
+        err = RuntimeError("Error code: 400 - Your credit balance is too low to access the Anthropic API.")
+        with mock.patch.object(hq, "_request", b), mock.patch.object(E, "_complete", side_effect=err):
+            self.assertFalse(E._work_tasks())
+        self.assertTrue(any("system_state" in p[0] and p[1].get("pause_reason") == E.CREDITS_PAUSE for p in b.patches))
+        task_patch = [p[1] for p in b.patches if "tasks?id=eq.t1" in p[0]][-1]
+        self.assertEqual(task_patch["status"], "todo")  # not burned as a failed retry
+        self.assertEqual(sum("owner_messages" in i[0] for i in b.inserts), 1)
+
+    def test_paused_tick_does_no_work_until_probe_succeeds(self):
+        calls = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body))
+            if path.startswith("/rest/v1/system_state"):
+                return [{"kill_switch": False, "pause_reason": E.CREDITS_PAUSE, "paused_at": "2026-11-06T05:30:00Z"}]
+            return []
+        E._last_probe = None
+        with mock.patch.object(hq, "_request", fake), mock.patch.object(E, "_credits_back", return_value=False), \
+             mock.patch.object(E, "_work_tasks") as work, mock.patch.object(E, "_triage_escalations") as tri:
+            E.tick_sync()
+        work.assert_not_called(); tri.assert_not_called()
+
+    def test_resume_requeues_credit_failures_and_drops_stale_plans(self):
+        dead = [{"id": "a", "title": "Find Donna prospects: HVAC"}, {"id": "b", "title": "Daily planning 2026-11-06"}]
+        b = Board()
+        orig = b.__call__
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            if method == "GET" and "credit%20balance" in path:
+                return dead
+            return orig(method, path, body, timeout, prefer)
+        with mock.patch.object(hq, "_request", fake):
+            self.assertEqual(E.resume_after_credits(), 1)
+        st = {p[0].split("tasks?id=eq.")[1].split("&")[0]: p[1]["status"] for p in b.patches if "tasks?id=eq." in p[0]}
+        self.assertEqual(st, {"a": "todo", "b": "cancelled"})
+
     def test_triage_close(self):
         b = Board(escalations=[{"id": "e1", "from_agent": "x", "kind": "u", "summary": "s"}])
         self.run_tick(b, '{"action":"close","message":"fine"}')

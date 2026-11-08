@@ -620,6 +620,63 @@ STALE_MINUTES = 15
 
 RETRY_MARK = "retry after error:"
 RETRY_AFTER_MINUTES = 20
+CREDITS_PAUSE = "api_credits"
+PROBE_EVERY_MINUTES = 60
+_last_probe: datetime | None = None
+
+
+def is_out_of_credits(e: Exception) -> bool:
+    m = str(e).lower()
+    return "credit balance is too low" in m or ("billing" in m and "credit" in m)
+
+
+def pause_for_credits(err: str) -> None:
+    """The Anthropic account ran out of credit. Stop all AI work and tell the owner once (Nov 6-8 2026: this went
+    unnoticed for two days while a drafting task failed every 30 minutes)."""
+    rows = _get("system_state?id=eq.1&select=pause_reason")
+    if rows and rows[0].get("pause_reason") == CREDITS_PAUSE:
+        return
+    _patch("system_state?id=eq.1", {"pause_reason": CREDITS_PAUSE, "paused_at": _now()})
+    _insert("owner_messages", {"from_agent": "jarvis", "kind": "money", "channel": "telegram", "body":
+        "Money: the Anthropic API account is out of credit, so every agent has stopped. Top up at "
+        "console.anthropic.com > Settings > Billing (turn on auto-reload to stop this happening again). "
+        "HQ checks every hour and restarts on its own when credit is back; you don't need to do anything else."})
+    logger.warning("HQ paused: Anthropic credit exhausted (%s)", err[:200])
+
+
+def _credits_back(paused_at: str | None) -> bool:
+    """A 1-token call to the cheapest model, at most once an hour. Costs a tiny fraction of a cent."""
+    global _last_probe
+    now = datetime.now(timezone.utc)
+    if _last_probe and now - _last_probe < timedelta(minutes=PROBE_EVERY_MINUTES):
+        return False
+    _last_probe = now
+    try:
+        _anthropic().messages.create(model=TIER_MODEL["cheap"], max_tokens=1,
+                                     messages=[{"role": "user", "content": "ok"}])
+        return True
+    except Exception as e:
+        if not is_out_of_credits(e):
+            logger.warning("HQ credit probe failed for another reason: %s", str(e)[:200])
+        return False
+
+
+def resume_after_credits() -> int:
+    """Clear the pause, put work that died of the credit error back on the board, and tell the owner."""
+    _patch("system_state?id=eq.1", {"pause_reason": None, "paused_at": None})
+    dead = _get("tasks?status=eq.blocked&result=ilike.*credit%20balance%20is%20too%20low*&select=id,title&limit=100")
+    requeued = 0
+    for t in dead:
+        if t["title"].startswith(PLAN_PREFIX):  # an old day's plan is stale; today's runs at 7am
+            _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "cancelled", "updated_at": _now()})
+            continue
+        _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "todo", "result": None, "due_at": None, "updated_at": _now()})
+        requeued += 1
+    _insert("owner_messages", {"from_agent": "jarvis", "kind": "health", "channel": "telegram", "body":
+        f"Health: API credit is back and HQ is running again. {requeued} stalled tasks were put back on the board."})
+    return requeued
+
+
 STARTUP_GRACE_MINUTES = 2  # a deploy can briefly overlap the old container; leave very fresh work alone
 _started = False
 
@@ -670,6 +727,10 @@ def _work_tasks() -> bool:
             logger.info("HQ gateway blocked (%s); pausing the task board until it clears", e)
             return False
         except Exception as e:
+            if is_out_of_credits(e):
+                _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "todo", "updated_at": _now()})
+                pause_for_credits(str(e))
+                return False
             if (t.get("result") or "").startswith(RETRY_MARK):
                 _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked", "result": f"error: {str(e)[:300]}", "updated_at": _now()})
             else:  # first failure: often a temporary API error, so try once more later
@@ -894,13 +955,17 @@ def unblock_task_for(summary: str) -> int:
 
 
 def tick_sync() -> None:
-    state = _get("system_state?id=eq.1&select=kill_switch")
+    state = _get("system_state?id=eq.1&select=kill_switch,pause_reason,paused_at")
     if state and state[0].get("kill_switch"):
         return
     try:
         _patch("system_state?id=eq.1", {"last_heartbeat": _now()})
     except Exception:
         logger.exception("HQ heartbeat write failed")
+    if state and state[0].get("pause_reason") == CREDITS_PAUSE:
+        if not _credits_back(state[0].get("paused_at")):
+            return  # paused: no AI calls, no new work, until a probe succeeds
+        resume_after_credits()
     _recover_stale()
     try:
         hq_systems.run_due_checks()
