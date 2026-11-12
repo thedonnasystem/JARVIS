@@ -141,3 +141,9 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - Send an RBC CSV export to the bot with caption `bank`: rows are imported, de-duplicated, matched to the ledger and to settled spend. `/bank unmatched` lists the gaps.
 - Daily alert (once/23h) for stale balance (>7d), unmatched rows older than 3 days, ledger above bank, balance under the reserve floor.
 - Only the last 4 account digits are kept. No credentials, ever. Payments stay with the owner in RBC.
+
+## Proactive initiative (Section 12)
+- Migration `20261112_org_v1.sql`: `org_changes` (every proposal with gain, cost, time to results, risk, alternative, disagreement), `agent_scorecard` (7-day cost vs finished work, flags idle/spending-with-nothing-done/failing), and a weekly review prompt that asks for those fields.
+- Jarvis's weekly `PROPOSAL:` lines now carry `kind | gain | cost | time | risk | alt | disagree`. Old 4-field lines still work.
+- Approve on a proposal opens a mission for it (budget, evidence and verification apply); Reject closes it and is remembered as an owner decision.
+- Nothing here lets an agent spend or commit beyond limits: external commitments and money still go through approvals and the capital controller.

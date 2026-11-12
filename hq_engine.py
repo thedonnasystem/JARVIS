@@ -491,8 +491,41 @@ def _ask_owner(t: dict, text: str) -> bool:
 
 
 REVIEW_TITLE = "Weekly company self-review"
-PROPOSAL_LINE = re.compile(r"(?im)^\s*[-*]?\s*\**PROPOSAL:\**\s*(.{10,600})$")
+PROPOSAL_LINE = re.compile(r"(?im)^\s*[-*]?\s*\**PROPOSAL:\**\s*(.{10,1200})$")
 MAX_PROPOSALS = 3
+ORG_KINDS = ("improvement", "agent", "department", "venture", "workflow", "tool", "shutdown")
+_FIELD_KEYS = {"kind": "kind", "gain": "gain", "cost": "cost", "time": "time_to_results", "risk": "risk",
+               "alt": "alternatives", "disagree": "disagrees_with_owner"}
+
+
+def parse_proposal(raw: str) -> dict:
+    """'change | kind: x | gain: y | cost: z | time: t | risk: r | alt: a | disagree: d' -> fields.
+    Parts without a known label stay part of the change text, so older 4-field proposals still work."""
+    parts = [p.strip() for p in raw.split("|") if p.strip()]
+    out: dict = {"change": parts[0] if parts else raw.strip()}
+    extra = []
+    for p in parts[1:]:
+        k, _, v = p.partition(":")
+        key = _FIELD_KEYS.get(k.strip().lower())
+        if key and v.strip():
+            out[key] = v.strip()[:400]
+        else:
+            extra.append(p)
+    if extra:
+        out["change"] = out["change"] + " " + " ".join(extra)
+    if out.get("kind") not in ORG_KINDS:
+        out["kind"] = "improvement"
+    out["change"] = out["change"][:500]
+    return out
+
+
+def _record_org_change(fields: dict) -> str | None:
+    """Log the proposal in org_changes (when the table exists). Returns its id, used to link the owner's tap."""
+    try:
+        made = hq._request("POST", "/rest/v1/org_changes", {**fields, "proposed_by": "jarvis"}, prefer="return=representation")
+        return made[0]["id"] if made else None
+    except Exception:
+        return None  # migration not applied yet: the owner message still goes out
 
 
 def _send_proposals(t: dict, text: str) -> int:
@@ -503,9 +536,17 @@ def _send_proposals(t: dict, text: str) -> int:
     for m in PROPOSAL_LINE.finditer(text):
         if sent >= MAX_PROPOSALS:
             break
-        body = "Improvement proposal (weekly review):\n" + " \n".join(p.strip() for p in m.group(1).split("|"))
-        _insert("owner_messages", {"from_agent": "jarvis", "kind": "proposal", "channel": "telegram",
-                                   "body": body[:1500], "needs_decision": True})
+        f = parse_proposal(m.group(1))
+        lines = [f"Proposal ({f['kind']}): {f['change']}"]
+        for label, key in (("Expected gain", "gain"), ("Cost", "cost"), ("Time to results", "time_to_results"), ("Risk", "risk"),
+                           ("Alternative", "alternatives"), ("I disagree with the current direction because", "disagrees_with_owner")):
+            if f.get(key):
+                lines.append(f"{label}: {f[key]}")
+        row = {"from_agent": "jarvis", "kind": "proposal", "channel": "telegram", "body": "\n".join(lines)[:1500], "needs_decision": True}
+        oc = _record_org_change(f)
+        if oc:
+            row.update({"ref_table": "org_changes", "ref_id": oc})
+        _insert("owner_messages", row)
         sent += 1
     return sent
 

@@ -538,6 +538,16 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         hq._request("PATCH", f"/rest/v1/agents?venture_id=eq.{_q(ref_id)}", {"status": "paused"}, prefer="return=minimal")
         hq._request("PATCH", f"/rest/v1/tasks?venture_id=eq.{_q(ref_id)}&status=eq.todo",
                     {"status": "cancelled", "result": "Cancelled: owner paused this venture."}, prefer="return=minimal")
+    elif ref_table == "org_changes" and ref_id:
+        hq._request("PATCH", f"/rest/v1/org_changes?id=eq.{_q(ref_id)}", {"status": verdict, "decided_at": now}, prefer="return=minimal")
+        if approved:
+            oc = _get(f"org_changes?id=eq.{_q(ref_id)}&select=kind,change,gain,cost,time_to_results,risk&limit=1")
+            if oc:
+                c = oc[0]
+                made = hq_missions.create_mission(
+                    f"Implement approved {c['kind']} change: {c['change']} Expected gain: {c.get('gain') or 'unstated'}. "
+                    f"Budget guide: {c.get('cost') or 'unstated'}. Stay inside the budget and permission limits.",
+                    title=f"Org change: {c['change'][:60]}", created_by="owner")
     elif ref_table == "approval_requests" and ref_id:
         # Red action (or approve-first Yellow): the tap approves this one action, once. authorize_action consumes it.
         hq_policy.decide_approval(ref_id, approved)
