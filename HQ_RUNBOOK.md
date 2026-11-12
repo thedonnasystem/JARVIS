@@ -152,6 +152,7 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - Migration `20261112_ventures_v1.sql` (tested on local Postgres 16: slug rules, inert-until-owner, stage gates need evidence, workspace JSON, kill).
 - "Start a new venture" in chat (tool `hq_start_venture`) or `/venture new Name | what it does`: creates the venture INACTIVE (manager paused, own department, budget ceiling capped at $50/month by the database), opens a validation mission under Idea Lab (planning only, independent verifier), and sends you one Approve card.
 - Approve (or `/venture activate <slug>`) wakes the manager inside a 25c/day cap. Only the owner can activate; stages move one gate at a time with evidence (`set_venture_stage`); kill pauses everything.
+- On activation the manager is queued a first task (30-day operating plan, planning only), then a weekly review every Monday (skipped when the venture is over budget).
 - `/venture <slug>` shows the workspace: stage, budget used, money, agents, leads, goals. The engine skips tasks of a venture that used its monthly budget (retries next day).
 - Not built yet: venture-specific tools/websites and the sandboxed self-dev environment (needs a repo-per-venture decision and your approval of the deploy path).
 
