@@ -441,7 +441,8 @@ def _check_budget(m: dict) -> bool:
     try:
         spent = int(_rpc("mission_spent_cents", {"p_mission": m["id"]}) or 0)
     except Exception:
-        return True
+        logger.warning("HQ mission budget check failed; not advancing %s this tick", m.get("id"))
+        return False  # fail closed: if spend cannot be read, do not create more spending work
     if spent >= int(m.get("budget_cents") or 0) and m["status"] in ("captured", "evaluated", "planned", "executing", "blocked"):
         for t in _mission_tasks(m["id"]):
             if t["status"] == "todo":
@@ -582,3 +583,16 @@ def set_budget(prefix: str, cents: int) -> str:
     cents = max(0, min(int(cents), MAX_BUDGET_CENTS))
     _patch(f"missions?id=eq.{_q(rows[0]['id'])}", {"budget_cents": cents})
     return f"{rows[0]['title']}: budget set to {cents}c CAD." + (" Use /mission resume to restart it." if rows[0]["status"] == "paused" else "")
+
+
+def set_focus(arg: str) -> str:
+    """Owner: /mission focus <id> limits all AI work to that mission; /mission focus off clears it. Enforced by the spend gateway."""
+    if (arg or "").lower() in ("off", "none", "clear"):
+        _rpc("set_focus_mission", {"p_mission": None, "p_by": "owner:telegram"})
+        return "Focus mode off: the normal task board can run again."
+    p = re.sub(r"[^0-9a-f-]", "", (arg or "").lower())
+    rows = [r for r in _get("missions?order=created_at.desc&limit=200&select=id,title,status") if str(r["id"]).startswith(p)] if len(p) >= 4 else []
+    if not rows:
+        return "No mission with that id."
+    _rpc("set_focus_mission", {"p_mission": rows[0]["id"], "p_by": "owner:telegram"})
+    return f"Focus mode ON: only '{rows[0]['title']}' may use AI. Everything else waits. Clear it with /mission focus off."

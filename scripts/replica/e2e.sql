@@ -199,3 +199,32 @@ begin
   if public.queue_valuation_task() is not null then raise exception 'valuation task created without integration'; end if;
 end $$;
 select 'alerts_and_gate_ok';
+
+-- Mission guard: hard per-mission budget and focus mode, enforced by the spend gateway
+do $$ declare ag text; mid uuid; other uuid; t1 uuid; t2 uuid; c1 uuid; ok boolean;
+begin
+  select slug into ag from public.agents where status = 'active' limit 1;
+  update public.agents set daily_spend_cap_cents = 100000 where slug = ag;
+  update public.system_state set daily_spend_cap_cents = 100000, kill_switch = false where id = 1;
+  insert into public.missions (title, objective, status, budget_cents, created_by) values ('guard test', 'guard test objective long enough', 'captured', 10, 'owner') returning id into mid;
+  insert into public.missions (title, objective, status, budget_cents, created_by) values ('other', 'other mission objective long enough', 'captured', 100, 'owner') returning id into other;
+  insert into public.tasks (title, status, mission_id) values ('s1', 'doing', mid) returning id into t1;
+  insert into public.tasks (title, status, mission_id) values ('s2', 'doing', other) returning id into t2;
+  c1 := public.reserve_llm_budget(ag, 6, 'm', 'task ' || t1);
+  update public.llm_calls set status = 'done', actual_cents = 6 where id = c1;
+  begin perform public.reserve_llm_budget(ag, 6, 'm', 'task ' || t1); raise exception 'over-budget reservation accepted';
+  exception when raise_exception then if sqlerrm like 'over-budget%' then raise; end if; end;
+  perform public.reserve_llm_budget(ag, 4, 'm', 'task ' || t1);                      -- exactly at the budget is fine
+  perform public.reserve_llm_budget(ag, 5, 'm', 'untracked purpose');               -- non-mission spend unaffected when no focus
+  perform public.set_focus_mission(mid, 'owner:test');
+  begin perform public.reserve_llm_budget(ag, 1, 'm', 'task ' || t2); raise exception 'focus mode let another mission spend';
+  exception when raise_exception then if sqlerrm like 'focus mode let%' then raise; end if; end;
+  begin perform public.reserve_llm_budget(ag, 1, 'm', 'untracked purpose'); raise exception 'focus mode let backlog spend';
+  exception when raise_exception then if sqlerrm like 'focus mode let%' then raise; end if; end;
+  begin perform public.set_focus_mission(null, 'agent:jarvis'); raise exception 'non-owner cleared focus';
+  exception when raise_exception then if sqlerrm like 'non-owner%' then raise; end if; end;
+  perform public.set_focus_mission(null, 'owner:test');
+  perform public.reserve_llm_budget(ag, 1, 'm', 'task ' || t2);
+  if not exists (select 1 from public.audit_log where action = 'focus_set') then raise exception 'focus not audited'; end if;
+end $$;
+select 'mission_guard_ok';

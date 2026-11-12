@@ -422,6 +422,23 @@ class T(unittest.TestCase):
             E.tick_sync()
         work.assert_not_called(); tri.assert_not_called()
 
+    def test_focus_mode_only_fetches_the_focused_missions_tasks(self):
+        seen = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            seen.append(path); return []
+        E._FOCUS = "11111111-2222-3333-4444-555555555555"
+        try:
+            with mock.patch.object(hq, "_request", fake):
+                E._work_tasks()
+        finally:
+            E._FOCUS = None
+        q = [p for p in seen if p.startswith("/rest/v1/tasks?status=eq.todo")]
+        self.assertTrue(q and "mission_id=eq.11111111-2222-3333-4444-555555555555" in q[0])
+        seen.clear()
+        with mock.patch.object(hq, "_request", fake):
+            E._work_tasks()
+        self.assertNotIn("mission_id=eq.", [p for p in seen if p.startswith("/rest/v1/tasks?status=eq.todo")][0])
+
     def test_integration_status_is_reported_even_while_paused(self):
         calls = []
         def fake(method, path, body=None, timeout=30, prefer=None):

@@ -288,3 +288,20 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FocusAndBudgetTests(unittest.TestCase):
+    def test_budget_check_fails_closed_when_spend_unreadable(self):
+        import hq_missions as M
+        with mock.patch.object(M, "_rpc", side_effect=RuntimeError("down")):
+            self.assertFalse(M._check_budget({"id": "m1", "status": "executing", "budget_cents": 200, "title": "t"}))
+
+    def test_focus_command_sets_and_clears(self):
+        import hq_missions as M
+        calls = []
+        with mock.patch.object(M, "_rpc", side_effect=lambda n, a: calls.append((n, a))), \
+             mock.patch.object(M, "_get", return_value=[{"id": "abcd1234-0000", "title": "First test", "status": "captured"}]):
+            self.assertIn("Focus mode ON", M.set_focus("abcd"))
+            self.assertIn("off", M.set_focus("off").lower())
+        self.assertEqual(calls[0], ("set_focus_mission", {"p_mission": "abcd1234-0000", "p_by": "owner:telegram"}))
+        self.assertEqual(calls[1][1]["p_mission"], None)

@@ -141,6 +141,9 @@ def _insert(table: str, row: dict) -> None:
     hq._request("POST", f"/rest/v1/{table}", row, prefer="return=minimal")
 
 
+_FOCUS: str | None = None  # set by the owner (focus mode): only this mission's tasks run; the database enforces the same rule
+
+
 def sync_integrations() -> None:
     """Tell the database which optional integrations are configured, so recurring work for a missing one is not created
     (the value-fixer task used to be created daily and cancelled when the funnel key was missing)."""
@@ -873,7 +876,8 @@ def _work_tasks() -> bool:
     tasks = _get(
         "tasks?status=eq.todo&assigned_agent=not.is.null"
         f"&or=(due_at.is.null,due_at.lte.{now})"
-        f"&order=priority.asc,created_at.asc&limit={MAX_TASKS_PER_TICK}"
+        + (f"&mission_id=eq.{_q(_FOCUS)}" if _FOCUS else "")
+        + f"&order=priority.asc,created_at.asc&limit={MAX_TASKS_PER_TICK}"
         "&select=id,assigned_agent,title,detail,venture_id,result"
     )
     for t in tasks:
@@ -1153,7 +1157,9 @@ def _coast_notice() -> None:
 
 
 def tick_sync() -> None:
-    state = _get("system_state?id=eq.1&select=kill_switch,pause_reason,paused_at,night_until,night_started_at,day_cap_cents")
+    state = _get("system_state?id=eq.1&select=kill_switch,pause_reason,paused_at,night_until,night_started_at,day_cap_cents,focus_mission")
+    global _FOCUS
+    _FOCUS = (state[0].get("focus_mission") if state else None) or None
     if state and state[0].get("kill_switch"):
         return
     try:
@@ -1183,7 +1189,8 @@ def tick_sync() -> None:
         logger.exception("HQ system health checks failed")
     # Triage first: it is quick and cheap, and long research tasks must never starve it.
     try:
-        _triage_escalations()
+        if not _FOCUS:  # focus mode: nothing but the chosen mission may use AI
+            _triage_escalations()
     except Exception:
         logger.exception("HQ triage failed")
     if hq_waterfall.coast():  # owner away: finish queued work, start nothing new
