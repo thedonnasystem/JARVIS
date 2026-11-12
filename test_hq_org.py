@@ -98,3 +98,28 @@ class Pnl(unittest.TestCase):
         self.assertIn("NET after overhead: $965.76", t); self.assertIn("Not cash: pipeline $5,000.00", t)
         with mock.patch.object(hq, "_request", side_effect=RuntimeError("x")):
             self.assertIn("not installed", K.pnl_text())
+
+
+class OpportunityScan(unittest.TestCase):
+    def _run(self, t, text):
+        calls = []
+
+        def req(method, path, body=None, timeout=30, prefer=None):
+            calls.append(path)
+            if path.endswith("/org_changes"):
+                return [{"id": "oc"}]
+        with mock.patch.object(hq, "_request", req):
+            return E._send_proposals(t, text), calls
+
+    def test_manager_scan_sends_at_most_two(self):
+        t = {"id": "s", "assigned_agent": "acme-manager", "created_by": "system", "title": "Opportunity scan: acme"}
+        n, _ = self._run(t, "\n".join("PROPOSAL: " + FULL for _ in range(4)))
+        self.assertEqual(n, 2)
+
+    def test_scan_title_from_non_system_or_non_manager_is_ignored(self):
+        self.assertEqual(self._run({"id": "s", "assigned_agent": "acme-manager", "created_by": "jarvis", "title": "Opportunity scan: x"}, "PROPOSAL: " + FULL)[0], 0)
+        self.assertEqual(self._run({"id": "s", "assigned_agent": "research", "created_by": "system", "title": "Opportunity scan: x"}, "PROPOSAL: " + FULL)[0], 0)
+
+    def test_scans_do_not_chain_follow_up_tasks(self):
+        t = {"id": "s", "assigned_agent": "acme-manager", "title": "Opportunity scan: acme", "detail": ""}
+        self.assertEqual(E._queue_next(t, "NEXT: research: do more things"), 0)

@@ -374,7 +374,7 @@ CHAIN_TAG = re.compile(r"\[chain (\d+)\]")
 def _queue_next(t: dict, text: str) -> int:
     """Agents queue their own follow-up work. Guards: active agents only, queue cap, chain depth, no duplicate titles,
     nothing for audits or planning (those have their own flows)."""
-    if t["title"].startswith((AUDIT_PREFIX, PLAN_PREFIX, REVIEW_TITLE, hq_missions.TITLE_PREFIX)):
+    if t["title"].startswith((AUDIT_PREFIX, PLAN_PREFIX, REVIEW_TITLE, OPPORTUNITY_PREFIX, hq_missions.TITLE_PREFIX)):
         return 0  # mission steps follow the mission plan, not ad-hoc chains
     m = CHAIN_TAG.search(t.get("detail") or "")
     depth = int(m.group(1)) if m else 0
@@ -491,6 +491,7 @@ def _ask_owner(t: dict, text: str) -> bool:
 
 
 REVIEW_TITLE = "Weekly company self-review"
+OPPORTUNITY_PREFIX = "Opportunity scan:"
 PROPOSAL_LINE = re.compile(r"(?im)^\s*[-*]?\s*\**PROPOSAL:\**\s*(.{10,1200})$")
 MAX_PROPOSALS = 3
 ORG_KINDS = ("improvement", "agent", "department", "venture", "workflow", "tool", "shutdown")
@@ -530,11 +531,14 @@ def _record_org_change(fields: dict) -> str | None:
 
 def _send_proposals(t: dict, text: str) -> int:
     """Jarvis's weekly review -> up to 3 improvement proposals, each sent to the owner with Approve/Reject."""
-    if t["assigned_agent"] != "jarvis" or not t["title"].startswith(REVIEW_TITLE):
+    review = t["assigned_agent"] == "jarvis" and t["title"].startswith(REVIEW_TITLE)
+    scan = t.get("created_by") == "system" and t["title"].startswith(OPPORTUNITY_PREFIX) and t["assigned_agent"].endswith("-manager")
+    if not (review or scan):
         return 0
+    limit = MAX_PROPOSALS if review else 2
     sent = 0
     for m in PROPOSAL_LINE.finditer(text):
-        if sent >= MAX_PROPOSALS:
+        if sent >= limit:
             break
         f = parse_proposal(m.group(1))
         lines = [f"Proposal ({f['kind']}): {f['change']}"]
