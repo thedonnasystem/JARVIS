@@ -2570,8 +2570,13 @@ begin
   select max_steps, strict_steps, attempts into v_max, v_strict, v_att from public.missions where id = new.mission_id;
   v_max := coalesce(v_max, 8) * case when coalesce(v_strict, false) then 1 else 1 + coalesce(v_att, 0) end;
   if coalesce(new.mission_role, 'step') = 'step' then
-    select count(*) into v_n from public.tasks
-      where mission_id = new.mission_id and status <> 'cancelled' and coalesce(mission_role, 'step') = 'step';
+    -- A cancelled step frees its slot only if it never spent. In a strict (lifetime) mission a step that cost money keeps its slot forever,
+    -- so pause/cancel/resume cannot be used to run more than max_steps paid steps.
+    select count(*) into v_n from public.tasks t
+      where t.mission_id = new.mission_id and coalesce(t.mission_role, 'step') = 'step'
+        and (t.status <> 'cancelled'
+             or (coalesce(v_strict, false) and exists (select 1 from public.llm_calls c
+                                                       where c.purpose = 'task ' || t.id::text and c.status in ('reserved','done'))));
     if v_n >= v_max then
       raise exception 'Mission step limit reached (% of % steps).', v_n, v_max;
     end if;

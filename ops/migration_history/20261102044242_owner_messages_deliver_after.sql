@@ -1,0 +1,1 @@
+alter table public.owner_messages add column if not exists deliver_after timestamptz;

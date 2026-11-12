@@ -270,6 +270,28 @@ begin
   exception when raise_exception then if sqlerrm like 'strict%' then raise; end if; end;
 end $$;
 select 'step_allowance_ok';
+-- Lifetime ceiling: in a strict mission a cancelled step that SPENT keeps its slot; a cancelled step that never spent frees it
+do $$ declare mid uuid; i int; ag text; tid uuid; c uuid;
+begin
+  select slug into ag from public.agents where status = 'active' and slug <> 'jarvis-chat' limit 1;
+  update public.agents set daily_spend_cap_cents = 100000 where slug = ag;
+  update public.system_state set daily_spend_cap_cents = 100000, kill_switch = false, pause_reason = null, focus_mission = null where id = 1;
+  insert into public.missions (title, objective, status, budget_cents, created_by, max_steps, strict_steps)
+    values ('lifetime', 'lifetime ceiling objective long enough', 'captured', 200, 'owner', 4, true) returning id into mid;
+  for i in 1..4 loop insert into public.tasks (title, status, mission_id, mission_role) values ('Mission: step ' || i, 'todo', mid, 'step'); end loop;
+  select id into tid from public.tasks where mission_id = mid and title = 'Mission: step 1';
+  c := public.reserve_llm_budget(ag, 10, 'm', 'task ' || tid);
+  update public.llm_calls set status = 'done', actual_cents = 10 where id = c;
+  update public.tasks set status = 'cancelled' where id = tid;                        -- paid step cancelled
+  begin insert into public.tasks (title, status, mission_id, mission_role) values ('Mission: step 1 again', 'todo', mid, 'step'); raise exception 'paid cancelled step freed its slot';
+  exception when raise_exception then if sqlerrm like 'paid cancelled%' then raise; end if; end;
+  update public.tasks set status = 'cancelled' where mission_id = mid and title = 'Mission: step 4';   -- unpaid step cancelled
+  insert into public.tasks (title, status, mission_id, mission_role) values ('Mission: step 4 again', 'todo', mid, 'step');
+  begin insert into public.tasks (title, status, mission_id, mission_role) values ('Mission: step 6', 'todo', mid, 'step'); raise exception 'ceiling exceeded after replacement';
+  exception when raise_exception then if sqlerrm like 'ceiling%' then raise; end if; end;
+end $$;
+select 'lifetime_ceiling_ok';
+
 
 -- Focus-mode isolation (database level): backlog, cron-made tasks, chat, budget inside focus, cleanup, stale-focus alert
 do $$ declare ag text; mid uuid; t_in uuid; t_bk uuid; c uuid; n int;
@@ -365,3 +387,52 @@ begin
   perform public.set_focus_mission(null, 'owner:test');
 end $$;
 select 'chat_exemption_scoped_ok';
+-- INDEPENDENT CONTROLS: each of the six guards is shown to stop spend/sending ON ITS OWN while every other guard is wide open.
+do $$ declare ag text; ag2 text; mid uuid; t1 uuid; c uuid; l uuid; o uuid; lim text;
+begin
+  select slug into ag from public.agents where status = 'active' and slug <> 'jarvis-chat' order by slug limit 1;
+  select slug into ag2 from public.agents where status = 'active' and slug <> 'jarvis-chat' and slug <> ag order by slug limit 1;
+  delete from public.llm_calls;
+  update public.agents set daily_spend_cap_cents = 100000;
+  update public.system_state set daily_spend_cap_cents = 100000, kill_switch = false, pause_reason = null, focus_mission = null, mode = 'dry_run' where id = 1;
+  -- (1) 200c mission budget alone: global/agent caps 100000c, no focus, kill off
+  insert into public.missions (title, objective, status, budget_cents, created_by, max_steps, strict_steps)
+    values ('ctl', 'independent control objective long enough', 'captured', 200, 'owner', 4, true) returning id into mid;
+  insert into public.tasks (title, status, mission_id, mission_role) values ('Mission: s', 'doing', mid, 'step') returning id into t1;
+  c := public.reserve_llm_budget(ag, 200, 'm', 'task ' || t1); update public.llm_calls set status = 'done', actual_cents = 200 where id = c;
+  begin perform public.reserve_llm_budget(ag, 1, 'm', 'task ' || t1); raise exception 'CTL1 201st cent accepted';
+  exception when raise_exception then if sqlerrm like 'CTL1%' then raise; end if; end;
+  -- (2) 4-step lifetime ceiling alone is covered by step_limit_ok / lifetime_ceiling_ok (no spend involved)
+  -- (3) focus alone: a different mission is refused although its own budget and every cap have room
+  insert into public.tasks (title, status, created_by) values ('backlog', 'doing', 'system') returning id into t1;
+  perform public.set_focus_mission(mid, 'owner:test');
+  begin perform public.reserve_llm_budget(ag, 1, 'm', 'task ' || t1); raise exception 'CTL3 focus let backlog spend';
+  exception when raise_exception then if sqlerrm like 'CTL3%' then raise; end if; end;
+  perform public.set_focus_mission(null, 'owner:test');
+  -- (4) global daily cap alone (330c): no mission budget, no focus, agent caps huge
+  delete from public.llm_calls;
+  update public.system_state set daily_spend_cap_cents = 330 where id = 1;
+  c := public.reserve_llm_budget(ag, 200, 'm', 'untracked'); update public.llm_calls set status = 'done', actual_cents = 200 where id = c;
+  c := public.reserve_llm_budget(ag2, 130, 'm', 'untracked'); update public.llm_calls set status = 'done', actual_cents = 130 where id = c;   -- exactly 330 across two agents
+  begin perform public.reserve_llm_budget(ag2, 1, 'm', 'untracked'); raise exception 'CTL4 331st cent accepted';
+  exception when raise_exception then if sqlerrm like 'CTL4%' then raise; end if; end;
+  -- (5) dry_run alone: an approved, QA-passed draft cannot be marked sent while kill switch is OFF
+  update public.system_state set daily_spend_cap_cents = 100000 where id = 1;
+  insert into public.leads (venture_id, name, email, source, status) values ((select id from public.ventures limit 1), 'ctl lead', 'ctl@example.com', 'test', 'new') returning id into l;
+  insert into public.outbox (venture_id, agent, channel, to_ref, body, status, lead_id) values ((select id from public.ventures limit 1), ag, 'email', 'ctl@example.com', 'Subject: x' || E'\nhi', 'draft', l) returning id into o;
+  update public.outbox set status = 'qa_passed', qa_agent = ag2 where id = o;
+  update public.outbox set status = 'approved' where id = o;
+  begin update public.outbox set status = 'sent' where id = o; raise exception 'CTL5 sent in dry_run';
+  exception when raise_exception then if sqlerrm like 'CTL5%' then raise; end if; if sqlerrm !~* 'dry.run' then raise exception 'CTL5 wrong reason: %', sqlerrm; end if; end;
+  -- (6) kill switch alone: spend refused with everything else open; and sending refused even in live mode
+  update public.system_state set kill_switch = true where id = 1;
+  begin perform public.reserve_llm_budget(ag, 1, 'm', 'untracked'); raise exception 'CTL6 spend under kill switch';
+  exception when raise_exception then if sqlerrm like 'CTL6%' then raise; end if; if sqlerrm !~* 'kill switch' then raise exception 'CTL6 wrong reason: %', sqlerrm; end if; end;
+  update public.system_state set mode = 'approve_first' where id = 1;
+  begin update public.outbox set status = 'sent' where id = o; raise exception 'CTL6b sent under kill switch';
+  exception when raise_exception then if sqlerrm like 'CTL6b%' then raise; end if; if sqlerrm !~* 'kill switch' then raise exception 'CTL6b wrong reason: %', sqlerrm; end if; end;
+  update public.system_state set kill_switch = false, mode = 'dry_run' where id = 1;
+  if exists (select 1 from public.outbox where status = 'sent') then raise exception 'something was sent'; end if;
+end $$;
+select 'independent_controls_ok';
+

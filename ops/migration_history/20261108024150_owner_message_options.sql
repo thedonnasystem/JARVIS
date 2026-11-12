@@ -1,0 +1,1 @@
+alter table public.owner_messages add column if not exists options jsonb, add column if not exists answer text;

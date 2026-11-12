@@ -11,7 +11,7 @@ Written 2026-11-12 from what was observed on the live accounts. Nothing here was
 Consequences:
 - Merging a PR into `overnight-build` publishes the PWA. It does not touch Railway or Supabase. If the PR changes nothing under `webapp/`, the publish is a no-op.
 - Railway is deployed by moving the deploy branch. Nothing else moves it.
-- There is no branch protection on any branch (GitHub reports 404). Optional hardening, needs owner approval: protect `claude/telegram-claude-bot-59nusk` (require PR + passing checks), and set a Render build filter to `webapp/**` so non-web merges do not redeploy.
+- There is no branch protection on any branch (re-checked 2026-11-12: `protected: false` on all six branches). Optional hardening, needs owner approval: protect `claude/telegram-claude-bot-59nusk` (require PR + passing checks), and set a Render build filter to `webapp/**` so non-web merges do not redeploy.
 
 ## 2. The four gates (each is a separate, explicit authorization)
 1. **Approve**: owner approves the PR. Required before anything below. CI (`unit`, `migrations`) must be green; it also runs the replica end-to-end, the real-engine integration run and the rollback drill.
@@ -25,7 +25,11 @@ Pre-flight (read-only, safe any time):
 ```
 ops/verify_deploy.sh                       # Railway live commit vs branch tips (GitHub deployments API)
 # Supabase: run ops/verify_live.sql (read-only). Expect every security row = none, mode dry_run, pause api_credits, focus off.
+# Supabase: run ops/preflight_live.sql (read-only). Proves the migrations will apply cleanly on live data and that lockdown_v1 is a no-op on current privileges.
+#   Expected on 2026-11-12: no duplicate drafts; none of the new columns/objects present; triggers = build_requests:build_rules, missions:missions_lifecycle;
+#   function md5s equal the baseline; lockdown_would_revoke = none; lockdown_would_grant_service_role = none; policies = none; grants = postgres + service_role only.
 ```
+Any difference from those expectations means production changed since the audit: stop and re-review before gate 3.
 Gate 2: merge PR #1 into `overnight-build`. Render redeploys (webapp unchanged).
 Gate 3: apply, in this order, via `apply_migration` (which also writes the migration ledger, closing the `lockdown_v1` gap):
 1. `20261113_phase1_repair_v1.sql`
@@ -33,7 +37,7 @@ Gate 3: apply, in this order, via `apply_migration` (which also writes the migra
 3. `20261112_lockdown_v1.sql`  (re-run LAST; idempotent; records `lockdown_v1` in the ledger and re-asserts privileges on the new functions)
 Then run `ops/verify_live.sql` and check: security rows all `none`; drift vs `ops/live_functions_baseline_20261112.txt` equals `ops/EXPECTED_NEW_FUNCTIONS.txt` (3 changed, 8 new, `enforce_build_rules` unchanged); `to_regclass('integration_status')` exists.
 Do not start or create missions between gate 3 and gate 4 (old code does not tag mission tasks with a role, so evaluation/verification would count as steps).
-Gate 4: `git push origin <merged sha>:claude/telegram-claude-bot-59nusk` (fast-forward only; never force). Then `ops/verify_deploy.sh` must report `Railway LIVE commit == deploy branch tip`, and `ops/verify_live.sql` `integrations` must show `engine_build ... commit <first 12 of the sha>` within ~10 minutes (the bot writes it every tick). The `ALERT: HQ is paused: Anthropic credits are out` message will arrive once; that is expected while credits are out.
+Gate 4: `git push origin <merged sha>:claude/telegram-claude-bot-59nusk` (fast-forward only; never force). This is a fast-forward only if `overnight-build` still equals `a3d7d7d` plus the merge; check with `git merge-base --is-ancestor a3d7d7d <merged sha>`. A squash or merge commit both qualify. Then `ops/verify_deploy.sh` must report `Railway LIVE commit == deploy branch tip`, and `ops/verify_live.sql` `integrations` must show `engine_build ... commit <first 12 of the sha>` within ~10 minutes (the bot writes it every tick). The `ALERT: HQ is paused: Anthropic credits are out` message will arrive once; that is expected while credits are out.
 
 Compatibility (tested): new code on the OLD database keeps the engine alive (focus_mission column missing → tolerated; integration_status missing → warning only; missions stay inert until migrated). New database with the OLD code is safe except the mission-role note above.
 
