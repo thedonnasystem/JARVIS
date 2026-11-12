@@ -50,3 +50,4 @@ Sending email, spending money, signing, contacting leads, any call. Ventures sta
 - `dist/POST_APPLY.sql` = registers owner emails in `app_owners`.
 - Supabase dashboard -> SQL editor -> paste APPLY_ALL -> Run -> paste POST_APPLY -> Run.
 - The assistant's own attempt to apply to production was blocked by the permission system; it needs the owner's explicit approval.
+- Bundle now also includes `setters_v1` (Donna setter tracking); 20 migrations total.

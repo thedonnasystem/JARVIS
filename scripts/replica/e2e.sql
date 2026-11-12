@@ -63,3 +63,24 @@ begin
 end $$;
 reset role;
 select 'privileged_functions_not_callable_by_signed_in_users';
+
+-- setters_v1
+select public.setter_add('Sam Setter','sam@x.com','salons');
+select public.setter_log('sam','booked','Acme Salon');
+select public.setter_log('sam','closed','Acme Salon');
+select public.setter_log('sam','closed','B Salon');
+select public.setter_log('sam','closed','C Salon');
+do $$ declare r record; j jsonb; begin
+  select * into r from public.setter_standing where name = 'Sam Setter';
+  if r.closes <> 3 or r.owed_close_cents <> 36000 or not r.recurring_on or r.owed_recurring_cents <> 15000 then raise exception 'setter math wrong: %', to_jsonb(r); end if;
+  j := public.setter_record_payout('Sam Setter','close',99999);
+  if j->>'error' is null then raise exception 'overpay allowed'; end if;
+  j := public.setter_record_payout('Sam Setter','close',36000,'ref1');
+  if j->>'ok' is null then raise exception 'payout failed %', j; end if;
+  j := public.setter_record_payout('Sam Setter','recurring',15000,'ref2');
+  j := public.setter_record_payout('Sam Setter','recurring',15000,'ref3');
+  if j->>'error' is null then raise exception 'recurring paid twice'; end if;
+  select * into r from public.setter_standing where name = 'Sam Setter';
+  if r.owed_close_cents <> 0 or r.owed_recurring_cents <> 0 then raise exception 'owed not cleared'; end if;
+end $$;
+select 'setters_ok';

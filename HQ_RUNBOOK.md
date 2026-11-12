@@ -198,3 +198,10 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 
 ## Testing the migrations before go-live
 - `scripts/replica/run.sh` rebuilds a copy of the live schema in a scratch Postgres, applies every migration twice in `migrations/APPLY_ORDER.txt` order, then runs an end-to-end script as a fake owner (venture, payment, account, allocation, office, app snapshot) and proves a non-owner is refused by every app function. CI runs it on every push.
+
+## Donna setters (setters_v1)
+- Terms (database `setter_terms`): $120 per closed deal; $50/month per active client once a setter has 3 closes; recurring lapses after 90 days with no activity unless `notified_until` is set.
+- `/setter` lists standings and what is owed. `/setter add Name | contact | niche`, `/setter booked|closed|cancelled Name | client`, `/setter paid Name close|recurring|bonus amount ref`.
+- A setter's first logged booking makes them active (add to the group chat, send your personal contact).
+- You pay in RBC (Fridays); `/setter paid` refuses more than is owed, never pays a recurring month twice, and logs a Donna expense.
+- Not built: public self-serve signup form (needs a safe intake endpoint) and the monthly top-setter bonus pick (record bonuses with `/setter paid ... bonus`).
