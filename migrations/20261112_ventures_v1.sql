@@ -40,7 +40,7 @@ begin
   values (p_slug, p_name, case when p_kind in ('revenue','personal','lab') then p_kind else 'lab' end, 'proposed', 'idea',
           p_metric, p_description, v_budget, p_by)
   returning id into v_id;
-  insert into public.departments (slug, name, venture_id, kind, status) values (p_slug, p_name, v_id, 'venture', 'proposed')
+  insert into public.departments (slug, name, venture_id, kind, status) values (p_slug, p_name, v_id, 'venture', 'paused')
   on conflict (slug) do nothing;
   v_mgr := p_slug || '-manager';
   -- Inert until activated: a paused agent cannot make model calls. Cheap tier, tight cap, cannot contact the owner.
