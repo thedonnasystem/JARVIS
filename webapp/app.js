@@ -294,13 +294,17 @@ function rAgents(s) {
   const org = (s.org_changes || []).map((o) => h('div', { class: 'card' },
     h('div', { class: 'row dim' }, h('span', {}, o.kind), h('span', { class: 'tag' }, o.status)), h('div', {}, o.change),
     h('div', { class: 'dim' }, [o.gain ? 'Gain: ' + o.gain : '', o.cost ? 'Cost: ' + o.cost : ''].filter(Boolean).join(' · '))));
-  $('v-agents').replaceChildren(...(s.agents || []).map((a) => h('div', { class: 'card' },
+  const groups = {}; (s.agents || []).forEach((a) => { (groups[a.venture || 'Company'] = groups[a.venture || 'Company'] || []).push(a); });
+  const order = Object.keys(groups).sort((x, y) => (x === 'Company' ? -1 : y === 'Company' ? 1 : x.localeCompare(y)));
+  const agentCard = (a) => h('div', { class: 'card' },
     h('div', { class: 'row' }, h('h3', {}, a.title || a.slug), h('span', { class: 'tag' }, a.status)),
     h('div', { class: 'dim' }, `${a.role} · ${a.tier || ''} · ${a.venture || 'company'}`),
     h('div', { class: 'dim' }, `Today ${usd(a.spent_today)} of ${usd(a.cap_cents)} · ${a.open} open · ${a.done_7d} done this week`),
     sc[a.slug] && sc[a.slug].flag && sc[a.slug].flag !== 'ok' ? h('div', { class: 'dim', style: 'color:var(--warn)' }, 'Review: ' + flagTxt(sc[a.slug].flag) + (sc[a.slug].cents_per_done != null ? ' · ' + sc[a.slug].cents_per_done + 'c per finished task' : '')) : null,
     a.last_task ? h('div', { class: 'dim' }, 'Last: ' + a.last_task) : null,
-    h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => rpc('app_set_agent', { p_slug: a.slug, p_status: a.status === 'active' ? 'paused' : 'active' }).then(refresh).catch((e) => note(e.message)) }, a.status === 'active' ? 'Pause' : 'Resume')))),
+    h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => rpc('app_set_agent', { p_slug: a.slug, p_status: a.status === 'active' ? 'paused' : 'active' }).then(refresh).catch((e) => note(e.message)) }, a.status === 'active' ? 'Pause' : 'Resume')));
+  $('v-agents').replaceChildren(
+    ...order.flatMap((g) => [h('h2', {}, g === 'Company' ? 'Company' : g), ...groups[g].map(agentCard)]),
     ...(org.length ? [h('h2', {}, 'Proposals and org changes'), ...org] : []));
 }
 function rMoney(s) {
