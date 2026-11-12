@@ -101,6 +101,20 @@ class ChatTools(unittest.TestCase):
         self.assertIn("RECO registration needed", out)
         self.assertNotIn(";", f.calls[0][1].split("content=ilike.")[1].split("&")[0])
 
+    def test_search_includes_chat_history_and_survives_missing_table(self):
+        def req(method, path, body=None, timeout=30, prefer=None):
+            if path.startswith("web_messages") or "/web_messages" in path or "web_messages?" in path:
+                return [{"role": "owner", "body": "We decided to target HVAC first", "created_at": "2026-11-10T12:00:00Z"}]
+            return []
+        with mock.patch.object(hq, "_request", req):
+            self.assertIn("target HVAC first", C._search_knowledge("HVAC"))
+
+        def boom(method, path, body=None, timeout=30, prefer=None):
+            if "web_messages" in path: raise RuntimeError("404")
+            return []
+        with mock.patch.object(hq, "_request", boom):
+            self.assertIn("Nothing in HQ memory", C._search_knowledge("HVAC"))
+
     def test_assign_rejects_unknown_agent(self):
         with mock.patch.object(hq, "_request", lambda *a, **k: []):
             self.assertIn("No active agent", C._assign("nobody", "x"))

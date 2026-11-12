@@ -1021,7 +1021,13 @@ def _search_knowledge(query: str) -> str:
     mem = _get(f"memory?content=ilike.{pat}&order=created_at.desc&limit=8&select=kind,content,source,confidence")
     tasks = _get(f"tasks?status=in.(done,blocked)&or=(title.ilike.{pat},result.ilike.{pat})&order=updated_at.desc&limit=3"
                  "&select=title,assigned_agent,result")
+    try:  # app chat history (table exists once webapp_v1 is applied)
+        chat = _get(f"web_messages?body=ilike.{pat}&role=in.(owner,jarvis)&order=created_at.desc&limit=4&select=role,body,created_at")
+    except Exception:
+        chat = []
     out = []
+    for c in chat:
+        out.append(f"[chat {str(c.get('created_at'))[:10]} {c['role']}] {c['body'][:400]}")
     for m in mem:
         out.append(f"[{m['kind']}/{m.get('confidence')}] {m['content']}" + (f" (source: {m['source']})" if m.get("source") else ""))
     for t in tasks:
