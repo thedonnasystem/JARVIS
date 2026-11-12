@@ -98,6 +98,37 @@ create or replace function public.payments_text() returns text language sql stab
   from payment_instructions where status in ('awaiting_owner', 'approved')
 $$;
 
+-- bank_alerts now also reports upcoming commitments and unusual debits (replaces the bank_v1 version; same name and return).
+create or replace function public.bank_alerts() returns jsonb language plpgsql stable set search_path to 'public' as $$
+declare s jsonb; p public.capital_policy; out jsonb := '[]'::jsonb; n int; big int; v_txt text;
+begin
+  s := public.capital_snapshot();
+  select * into p from public.capital_policy where id = 1;
+  if s->>'bank_balance_cents' is null then
+    out := out || to_jsonb('No bank balance on record: spending is limited by the internal ledger only. Send /bank balance <amount>.'::text);
+  else
+    if (s->>'bank_age_days')::int > 7 then out := out || to_jsonb(('Bank balance is ' || (s->>'bank_age_days') || ' days old. Send /bank balance <amount>.')::text); end if;
+    if (s->>'bank_balance_cents')::int < p.min_reserve_cents then out := out || to_jsonb('Bank balance is below the reserve floor.'::text); end if;
+    if (s->>'ledger_available_cents')::int > (s->>'bank_available_cents')::int then
+      out := out || to_jsonb(('Ledger shows $' || round((s->>'ledger_available_cents')::numeric/100,2) || ' but the bank supports only $' || round((s->>'bank_available_cents')::numeric/100,2) || '. Spending is capped at the bank figure.')::text);
+    end if;
+  end if;
+  select count(*), coalesce(max(abs(amount_cents)), 0) into n, big from public.bank_transactions where status = 'unmatched' and posted_on < current_date - 3;
+  if n > 0 then out := out || to_jsonb((n || ' bank transaction(s) older than 3 days have no matching record (largest $' || round(big::numeric/100,2) || '). Use /bank unmatched.')::text); end if;
+  -- Upcoming commitments: approved payments not yet paid, and subscriptions renewing within 7 days.
+  select string_agg(format('$%s to %s%s', to_char(amount_cents / 100.0, 'FM999,990.00'), payee, case when due_on is null then '' else ' by ' || due_on end), '; ' order by due_on nulls last)
+    into v_txt from public.payment_instructions where status = 'approved' and (due_on is null or due_on <= current_date + 7);
+  if v_txt is not null then out := out || to_jsonb(('Payments waiting for you to pay in RBC: ' || v_txt || '. Then /pay done.')::text); end if;
+  select string_agg(format('%s ($%s on %s)', slug, to_char(monthly_cost_cents / 100.0, 'FM999,990.00'), next_renewal_on), '; ' order by next_renewal_on)
+    into v_txt from public.tool_registry where status = 'active' and next_renewal_on between current_date and current_date + 7 and coalesce(monthly_cost_cents, 0) > 0;
+  if v_txt is not null then out := out || to_jsonb(('Renewing within 7 days: ' || v_txt)::text); end if;
+  -- Unusual activity: a bank debit bigger than the per-transaction limit in the last 7 days.
+  select count(*), coalesce(max(abs(amount_cents)), 0) into n, big from public.bank_transactions
+    where amount_cents < 0 and abs(amount_cents) > p.per_transaction_limit_cents and posted_on >= current_date - 7;
+  if n > 0 then out := out || to_jsonb((n || ' bank debit(s) above your per-transaction limit in the last 7 days (largest $' || round(big::numeric/100,2) || '). Check they are yours.')::text); end if;
+  return out;
+end $$;
+
 create or replace function public.app_payments() returns jsonb
 language plpgsql stable security definer set search_path to 'public' as $$
 begin
