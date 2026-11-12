@@ -19,6 +19,7 @@ import hq
 import hq_missions
 import hq_policy
 import hq_bank
+import hq_dev
 import hq_ventures
 import hq_capital
 
@@ -901,6 +902,17 @@ HQ_CHAT_TOOLS = [
             "required": ["name", "description"]},
     },
     {
+        "name": "hq_propose_code_change",
+        "description": "Propose a change to Jarvis's own code as a GitHub pull request (never merged by you: the owner merges). Use only when "
+                       "the owner asks for a code change or after he approves an engineering proposal. Send complete file contents (1-5 files). "
+                       "Money, permission, spend, bank and migration files are protected and flagged in the PR. Never include secrets.",
+        "input_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "rationale": {"type": "string", "description": "why, and what it changes"},
+            "files": {"type": "array", "items": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                                                  "required": ["path", "content"]}}},
+            "required": ["title", "rationale", "files"]},
+    },
+    {
         "name": "hq_venture",
         "description": "Show one venture's workspace: stage, budget used, money, agents, leads, goals. Use for 'how is X doing'.",
         "input_schema": {"type": "object", "properties": {"slug": {"type": "string"}}, "required": ["slug"]},
@@ -962,6 +974,10 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
                                   tool_input.get("budget_cents") or 0, by="owner-chat")
             return r.get("error") or (f"Venture {r['slug']} created inactive. Validation mission: {r['mission']}. "
                                       "The owner has a card to activate it; nothing is spent before that.")
+        if name == "hq_propose_code_change":
+            import asyncio
+            return await asyncio.to_thread(hq_dev.propose_change, tool_input.get("title", ""), tool_input.get("rationale", ""),
+                                           tool_input.get("files") or [])
         if name == "hq_venture":
             return hq_ventures.workspace_text((tool_input.get("slug") or "").lower())
         if name == "hq_missions":

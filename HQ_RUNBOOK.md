@@ -163,3 +163,9 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 ## Holding company and earn-your-keep
 - Migration `20261112_holding_v1.sql` (after org_v1; tested locally). `/pnl [days]` and the app's Money tab show per-venture and total P&L: received cash only, intercompany excluded, company-level AI cost counted as overhead; signed/qualified pipeline and forecasts are shown apart and never added to cash.
 - Every Monday the review flags agents older than 14 days that spent 50+ cents and finished nothing, or cost over 3x the median per finished task. Each becomes a 'shutdown' proposal with Approve/Reject. Approve pauses that one agent (reversible); Jarvis himself is never flagged. Nothing is paused without your tap.
+
+## Self-development (Section 11), pull requests only
+- `hq_dev.py` + chat tool `hq_propose_code_change`. Needs `GITHUB_TOKEN` (fine-grained, this repo only, contents + pull requests) and `GITHUB_REPO` on Railway; without them it says "not set up".
+- Jarvis branches off the base branch, commits 1-5 files (60 KB max each), opens a PR. He cannot merge or push to the deploy branch. You merge; Railway redeploys; rollback is reverting the PR.
+- Refused outright: secrets (key patterns scanned), `.env`, key files, path traversal. PRs touching money/permissions/spend/bank/migrations/requirements are labelled PROTECTED in the PR body.
+- Tests must pass before you merge. Next step when you are ready: a GitHub Action that runs the tests on every `jarvis/*` branch and posts the result on the PR.
