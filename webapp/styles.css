@@ -30,3 +30,10 @@ nav button{flex:1;background:none;color:var(--dim);border-radius:0;font-size:.72
 .bar{height:6px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--gold)}
 .tag{font-size:.75rem;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
 @media (prefers-reduced-motion:no-preference){.view.on{animation:f .15s ease-out}@keyframes f{from{opacity:.4}}}
+
+.floor{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.room{display:flex;flex-direction:column;gap:6px;align-items:flex-start;text-align:left;background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:var(--r);padding:10px;min-height:92px;font-weight:500}
+.room .rn{font-size:.72rem;line-height:1.15;color:var(--gold)}.room .rs{font-size:.7rem}
+.room.busy{border-color:var(--gold)}.room.hot{border-color:var(--bad)}.room.empty{opacity:.55;border-style:dashed}
+.dots{display:flex;flex-wrap:wrap;gap:4px;flex:1;align-content:flex-start}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--dim)}.dot.on{background:var(--ok)}

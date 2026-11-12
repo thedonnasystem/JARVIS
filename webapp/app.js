@@ -306,6 +306,22 @@ function officeCards(o) {
     h('div', { class: 'dim' }, f.open + ' open · ' + f.blocked + ' blocked · ' + f.done_7d + ' done this week · AI 7d ' + usd(f.spent_7d)),
     f.agents.length ? h('div', { class: 'dim' }, f.agents.map((a) => a.title || a.slug).join(', ')) : h('div', { class: 'dim' }, 'No agents yet.')))];
 }
+function floorPlan(o) {
+  if (!o || !o.length) return [];
+  const dot = (a) => h('i', { class: 'dot ' + (a.status === 'active' ? 'on' : 'off'), title: (a.title || a.slug) + ' · ' + a.status });
+  const room = (f) => {
+    const live = f.agents.filter((a) => a.status === 'active');
+    const cls = 'room' + (f.blocked ? ' hot' : live.length && f.open ? ' busy' : live.length ? '' : ' empty');
+    return h('button', { class: cls, onclick: () => { S.openRoom = S.openRoom === f.fn ? null : f.fn; render(); }, 'aria-expanded': String(S.openRoom === f.fn) },
+      h('span', { class: 'rn' }, f.name),
+      h('span', { class: 'dots' }, f.agents.length ? f.agents.slice(0, 12).map(dot) : h('span', { class: 'dim' }, 'unstaffed')),
+      h('span', { class: 'rs dim' }, f.open + ' open' + (f.blocked ? ' · ' + f.blocked + ' blocked' : '')));
+  };
+  const sel = o.find((f) => f.fn === S.openRoom);
+  return [h('h2', {}, 'Headquarters'), h('div', { class: 'floor' }, o.map(room)),
+    sel ? h('div', { class: 'card' }, h('h3', {}, sel.name), h('div', { class: 'dim' }, sel.headline),
+      ...(sel.agents.length ? sel.agents.map((a) => h('div', { class: 'row' }, h('span', {}, a.title || a.slug), h('span', { class: 'dim' }, a.status + ' · ' + usd(a.spent_today) + ' today'))) : [h('div', { class: 'dim' }, 'No agents yet. Jarvis can propose to staff this room.')])) : null];
+}
 function rAgents(s) {
   const sc = s.scorecard || {}; const flagTxt = (f) => ({ 'spending, nothing done': 'spending, nothing done', 'failing more than finishing': 'failing more than finishing', idle: 'idle' })[f];
   const org = (s.org_changes || []).map((o) => h('div', { class: 'card' },
@@ -321,6 +337,7 @@ function rAgents(s) {
     a.last_task ? h('div', { class: 'dim' }, 'Last: ' + a.last_task) : null,
     h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => rpc('app_set_agent', { p_slug: a.slug, p_status: a.status === 'active' ? 'paused' : 'active' }).then(refresh).catch((e) => note(e.message)) }, a.status === 'active' ? 'Pause' : 'Resume')));
   $('v-agents').replaceChildren(
+    ...floorPlan(S.office),
     ...officeCards(S.office),
     h('h2', {}, 'All agents'),
     ...order.flatMap((g) => [h('h3', { style: 'margin:14px 0 4px;color:var(--dim)' }, g), ...groups[g].map(agentCard)]),
