@@ -59,3 +59,24 @@ Status: BUILT = code and tests on `overnight-build`, not live until you apply mi
 
 ## Still needs you
 Migration green light, Auth setup, merge to the Railway branch, VAPID keys, Anthropic credit top-up, `WHOLESALE_SUPABASE_SERVICE_KEY`, `/setaddress`, repo-scoped GitHub token (PR-only) and a staging service for self-deploy, RBC API application (optional), phone-call vendor if you want the emergency call.
+
+## Master Plan and Log (Nov 1 artifact), added Nov 12
+| Requirement | Status |
+|---|---|
+| Reinvestment waterfall (tax, costs, buffer, draw, 60/25/15 pool), only received cash | BUILT: `/waterfall`, finance_rules_v1. Rates are proposals you set |
+| HST watch at $30,000 | BUILT (trailing 12 months, warns at 80%) |
+| Max three revenue ventures at once | BUILT (DB-enforced at activation) |
+| New-venture test capped at $50 | BUILT (venture budget ceiling 5000c) |
+| Coast mode when the owner is away | BUILT (3 days; finishes work, starts nothing new, tells you once) |
+| Dead-man's switch alerting a trusted person | NOT BUILT: needs the person's contact and your consent |
+| Autonomy ladder promoted by measured error rate | BUILT as evidence (`/autonomy`); you alone change the mode |
+| Monthly audit of recurring charges | BUILT (`/tool`; you must enter the charges once) |
+| Succession document, vault pointers, runbooks | BUILT as a sheet (`/succession`); trust, will and trustee need a lawyer |
+| Donna setter program (pay ladder, Friday payouts) | BUILT (setters_v1); public self-signup NOT BUILT |
+| Visual HQ with rooms | BUILT (PWA floor plan; the Station artifact already exists) |
+| Deploy-and-verify evidence | BUILT (`hq_verify_url`) |
+| Website drafts as PRs | BUILT (hq_sites); publishing needs your token/host |
+| Day-job lead ranking of the ~14,000 portal leads | NOT BUILT: needs the lead export (and written company permission) |
+| Telegram voice notes in/out | NOT BUILT: needs a transcription provider key |
+| Real send provider for outbox | NOT BUILT: needs a provider account and your CASL address |
+| Daily database backup | NOT BUILT: needs storage you own |
