@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https://ihxzvpwbqydqtblvazbq.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'">
+<title>Become a Donna setter</title>
+<style>
+:root{--bg:#fff;--fg:#14171c;--mut:#5b6472;--line:#d9dee6;--acc:#1f5eff;--err:#b3261e;--ok:#17653a}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1318;--fg:#eef1f5;--mut:#9aa4b2;--line:#2a313b;--acc:#6b95ff;--err:#ff8a80;--ok:#6fd49a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif}
+main{max-width:520px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:1.5rem;margin:.2em 0}p{color:var(--mut)}ul{color:var(--mut);padding-left:1.1em}
+label{display:block;margin:14px 0 4px;font-weight:600}
+input,textarea{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--fg);font:inherit}
+textarea{min-height:90px}button{margin-top:18px;width:100%;padding:14px;border:0;border-radius:10px;background:var(--acc);color:#fff;font:inherit;font-weight:700}
+button:disabled{opacity:.6}.hp{position:absolute;left:-9999px;height:0;overflow:hidden}
+#msg{margin-top:14px;font-weight:600}.small{font-size:.85rem}
+</style></head><body><main>
+<h1>Become a Donna setter</h1>
+<p>You book appointments for The Donna System with trade and home-service businesses. Commission only, no salary, no guaranteed income.</p>
+<ul>
+<li>$120 for every deal that closes from an appointment you set.</li>
+<li>After 3 closed deals, $50 a month for each client who stays active.</li>
+<li>Recurring pay pauses after 90 days with no activity unless you tell us ahead of time.</li>
+<li>Paid on Fridays.</li>
+</ul>
+<form id="f" novalidate>
+<label for="name">Your name</label><input id="name" autocomplete="name" maxlength="80" required>
+<label for="contact">Phone or email</label><input id="contact" autocomplete="email" maxlength="120" required>
+<label for="niche">Niche or experience (optional)</label><input id="niche" maxlength="120" placeholder="e.g. HVAC, cold calling, 2 years">
+<label for="note">Anything else (optional)</label><textarea id="note" maxlength="500"></textarea>
+<div class="hp" aria-hidden="true"><label for="web">Leave empty</label><input id="web" tabindex="-1" autocomplete="off"></div>
+<button id="go" type="submit">Apply</button>
+<div id="msg" role="status"></div>
+<p class="small">We use your details only to contact you about this role. We will reach out if there is a fit. Applying does not create an agreement or promise work.</p>
+</form></main>
+<script src="apply.js"></script></body></html>

@@ -127,9 +127,28 @@ select 'autonomy_ok';
 do $$ declare bad text; begin
   select string_agg(p.proname, ',') into bad from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.prokind = 'f'
-     and (has_function_privilege('anon', p.oid, 'execute')
+     and ((has_function_privilege('anon', p.oid, 'execute') and p.proname <> 'setter_apply')
           or (has_function_privilege('authenticated', p.oid, 'execute')
-              and p.proname not in ('is_app_owner','app_snapshot','app_messages','app_send','app_set_kill','app_set_agent','app_venture','app_venture_extras','app_office','app_payments','app_push_public_key','app_save_push')));
+              and p.proname not in ('is_app_owner','app_snapshot','app_messages','app_send','app_set_kill','app_set_agent','app_venture','app_venture_extras','app_office','app_payments','app_push_public_key','app_save_push','setter_apply')));
   if bad is not null then raise exception 'callable by anon/authenticated: %', bad; end if;
 end $$;
 select 'lockdown_ok';
+
+-- setter_apply: public intake safeguards
+do $$ declare r jsonb; n0 int; begin
+  select count(*) into n0 from public.setters;
+  r := public.setter_apply('Pat Public', 'pat@example.com', 'hvac', 'hello', '');
+  if (r->>'ok')::boolean is not true or (select count(*) from public.setters) <> n0 + 1 then raise exception 'apply failed %', r; end if;
+  if (select status from public.setters where name = 'Pat Public') <> 'applied' then raise exception 'not applied status'; end if;
+  perform public.setter_apply('Pat Public', 'other@example.com');            -- same name: no overwrite
+  if (select contact from public.setters where name = 'Pat Public') <> 'pat@example.com' then raise exception 'existing setter overwritten'; end if;
+  perform public.setter_apply('Bot', 'bot@example.com', null, null, 'http://spam');   -- honeypot
+  if exists (select 1 from public.setters where name = 'Bot') then raise exception 'honeypot stored'; end if;
+  r := public.setter_apply('X', '1');
+  if (r->>'ok')::boolean then raise exception 'bad input accepted'; end if;
+  r := public.setter_apply('No Contact Format', 'nothing');
+  if (r->>'ok')::boolean then raise exception 'invalid contact accepted'; end if;
+  for i in 1..20 loop perform public.setter_apply('Flood '||i, 'flood'||i||'@example.com'); end loop;
+  if (select count(*) from public.setters where notes like 'self-signup%' and created_at > now() - interval '1 hour') > 15 then raise exception 'rate limit broken'; end if;
+end $$;
+select 'setter_apply_ok';
