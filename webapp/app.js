@@ -130,7 +130,9 @@ function rHome(s) {
     h('h2', {}, 'Needs you'), ...(need.length ? need : [h('p', { class: 'dim' }, 'Nothing waiting on you.')]),
     h('h2', {}, 'Ventures'), ...(s.ventures || []).map((x) => h('div', { class: 'card' },
       h('div', { class: 'row' }, h('h3', {}, x.name), h('span', { class: 'tag' }, [x.status === 'proposed' ? 'awaiting approval' : (s.venture_stage || {})[x.slug], x.agents + ' agents', x.leads + ' leads'].filter(Boolean).join(' · '))),
-      h('div', { class: 'dim' }, 'In ' + usd(x.in_cents) + ' · Out ' + usd(x.out_cents) + ' · Expected ' + usd(x.expected_cents) + ' (not cash) · AI 7d ' + usd(x.ai_cents_7d)))),
+      h('div', { class: 'dim' }, 'In ' + usd(x.in_cents) + ' · Out ' + usd(x.out_cents) + ' · Expected ' + usd(x.expected_cents) + ' (not cash) · AI 7d ' + usd(x.ai_cents_7d)),
+      h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => toggleVenture(x.slug) }, ventureOpen[x.slug] ? 'Hide details' : 'Details')),
+      ventureOpen[x.slug] ? ventureDetail(ventureOpen[x.slug]) : null)),
     h('h2', {}, 'Pipeline'), h('div', { class: 'card dim' },
       `Tasks: ${s.tasks.todo} todo, ${s.tasks.doing} doing, ${s.tasks.blocked} blocked, ${s.tasks.done_24h} done today. Leads: ${s.leads.total} (${s.leads.due} due). Drafts waiting: ${(s.drafts || []).length}.`),
     h('h2', {}, 'Systems'), ...(s.systems || []).map((x) => h('div', { class: 'row dim' }, h('span', {}, x.name), h('span', {}, x.status || '?'))),
@@ -204,6 +206,20 @@ function bankCard(c) {
       h('button', { onclick: () => { if (amt.value.trim()) { act('bank', { verb: 'balance', amount: amt.value.trim() }); amt.value = ''; } } }, 'Save balance'),
       h('button', { class: 'ghost', onclick: () => file.click() }, 'Import statement CSV'),
       h('button', { class: 'ghost', onclick: () => act('bank', { verb: 'reconcile' }) }, 'Reconcile')), file));
+}
+const ventureOpen = {};
+async function toggleVenture(slug) {
+  if (ventureOpen[slug]) { delete ventureOpen[slug]; return refresh(); }
+  try { ventureOpen[slug] = (await rpc('app_venture', { p_slug: slug })) || { name: slug, goals: [], memory: [], tasks: [] }; } catch (e) { note(e.message); return; }
+  refresh();
+}
+function ventureDetail(d) {
+  const list = (title, items, fmt) => items && items.length ? h('div', {}, h('div', { class: 'dim', style: 'margin-top:10px;font-weight:600' }, title), ...items.map((i) => h('div', { class: 'dim' }, fmt(i)))) : null;
+  return h('div', {},
+    d.metric ? h('div', { class: 'dim' }, 'Metric: ' + d.metric + (d.budget_cents ? ' · Budget ' + usd(d.budget_cents) + '/mo' : '')) : null,
+    list('Goals', d.goals, (g) => g.metric + ' — target ' + (g.target ?? '?') + ', now ' + (g.now ?? '?') + ' (' + g.status + ')'),
+    list('Recent work', d.tasks, (t) => t.agent + ': ' + t.title + ' [' + t.status + ']'),
+    list('What it knows', d.memory, (m) => m.content));
 }
 function addLeadCard() {
   const name = h('input', { placeholder: 'Name', autocomplete: 'off' });
