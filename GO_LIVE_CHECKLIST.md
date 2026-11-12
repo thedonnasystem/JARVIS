@@ -13,6 +13,7 @@ Everything below is built, tested (136 unit tests; SQL tested on local Postgres 
 | 6b | holding_v1 | Holding P&L (received cash only), weekly earn-your-keep review proposing to pause costly idle agents (you approve) | Low |
 | 7 | ventures_v1 | Venture factory (inert until you approve) | Low |
 | 8 | webapp_v1 | Owner-only app functions | Medium until owner list is set: apply, then add your email BEFORE sharing the URL |
+| 8b | brief_v3 | 7pm brief gains P&L, bank alerts, forecast accuracy, pending proposals (apply after 3-7) | Low |
 | 9 | push_v1 | Push subscriptions; VAPID key stored in a locked table | Low |
 
 ## After the migrations
