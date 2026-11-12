@@ -25,6 +25,7 @@ import hq_ventures
 import hq_capital
 import hq_payments
 import hq_accounts
+import hq_office
 
 logger = logging.getLogger(__name__)
 
@@ -853,6 +854,12 @@ async def hq_account_cmd(update, context) -> None:
     await update.message.reply_text(hq_accounts.open_text() + "\n\nAfter you sign up: /account done <id> <login>")
 
 
+async def hq_office_cmd(update, context) -> None:
+    if not _owner(update):
+        return
+    await update.message.reply_text(hq_office.office_text()[:4000])
+
+
 async def hq_capital_cmd(update, context) -> None:
     """/capital  shows the operating fund. /capital set <field> <value> changes a limit (owner only)."""
     if not _owner(update):
@@ -870,7 +877,7 @@ async def hq_capital_cmd(update, context) -> None:
 
 
 MENU = [
-    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -947,7 +954,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd)):
         app.add_handler(CommandHandler(name, fn))
     try:
         from telegram.ext import MessageHandler, filters
@@ -1048,6 +1055,12 @@ HQ_CHAT_TOOLS = [
         "description": "Full financial review: operating fund and reserve, verified bank balance and reconciliation gaps, profit and loss "
                        "by venture (received cash only; expected revenue is never counted as money). Use for 'review our finances', "
                        "'how much do we have', 'are we on budget'.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "hq_office",
+        "description": "The corporate office: Executive, Business Development, Research, Engineering, Marketing, Sales, Finance, Operations and Agent Management, "
+                       "with who staffs each and real numbers. Use for 'how is the company organised', 'which departments are empty', 'who is on what'.",
         "input_schema": {"type": "object", "properties": {}},
     },
     {
@@ -1177,6 +1190,8 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
             return hq_org.create_agent(tool_input.get("slug", ""), tool_input.get("title", ""), tool_input.get("department", ""), tool_input.get("role", ""),
                                        tool_input.get("tier", "cheap"), tool_input.get("cap_cents") or 15, tool_input.get("charter", ""),
                                        tool_input.get("metric", ""), by="owner-chat")
+        if name == "hq_office":
+            return hq_office.office_text()
         if name == "hq_request_account":
             return hq_accounts.request("jarvis", tool_input.get("vendor", ""), tool_input.get("purpose", ""), tool_input.get("venture") or None,
                                        tool_input.get("url", ""), int(tool_input.get("monthly_cents") or 0), tool_input.get("needs") or [])

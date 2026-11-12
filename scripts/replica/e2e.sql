@@ -54,7 +54,8 @@ begin
     $q$select public.complete_account(gen_random_uuid(), 'a@b.ca', 'owner:app')$q$,
     $q$select public.set_venture_budget('donna', 100, 'owner:app')$q$,
     $q$select public.queue_opportunity_scans()$q$,
-    $q$select public.expire_payments()$q$] loop
+    $q$select public.expire_payments()$q$,
+    $q$select public.office_data()$q$] loop
     total := total + 1;
     begin execute f; exception when insufficient_privilege then denied := denied + 1; end;
   end loop;

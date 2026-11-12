@@ -17,11 +17,10 @@ language sql immutable set search_path to 'public' as $$
     else 'operations' end)
 $$;
 
-create or replace function public.app_office() returns jsonb
+create or replace function public.office_data() returns jsonb
 language plpgsql stable security definer set search_path to 'public' as $$
 declare v_start timestamptz := date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto'; r jsonb;
 begin
-  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
   with a as (
     select ag.slug, ag.title, ag.status, ag.daily_spend_cap_cents cap, public.office_function_of(ag.slug, ag.office_function) fn,
            (select coalesce(sum(coalesce(c.actual_cents, c.reserved_cents)), 0) from llm_calls c
@@ -61,6 +60,14 @@ begin
       when 'agentmgmt' then format('%s agents, %s paused', (select count(*) from a), (select count(*) from a where status <> 'active'))
     end) order by f.ord) into r from f;
   return r;
+end $$;
+revoke all on function public.office_data() from public, anon, authenticated;
+
+create or replace function public.app_office() returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+begin
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
+  return public.office_data();
 end $$;
 revoke all on function public.app_office() from public, anon;
 grant execute on function public.app_office() to authenticated;
