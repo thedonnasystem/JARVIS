@@ -23,7 +23,7 @@ Status: BUILT = code and tests on `overnight-build`, not live until you apply mi
 | Receive an idea and run the lifecycle | BUILT | hq_start_venture, lifecycle mission, evidence-gated stages. ventures_v1 |
 | Research and validate, competition, demand, costs, revenue | BUILT | Idea Lab agents + independent verifier, forecast-accuracy learning |
 | Business model, venture workspace | BUILT | create_venture, venture_workspace, goals, memory namespace |
-| Build websites, software, automations | PARTLY | Jarvis can open code PRs (hq_propose_code_change). No staging deploy or website hosting pipeline yet: needs a repo-scoped GitHub token and a staging service from you. |
+| Build websites, software, automations | PARTLY | Jarvis can open code PRs (hq_propose_code_change) and static-site PRs under sites/<slug>/ (hq_sites, safety-checked). No staging deploy or website hosting pipeline yet: needs a repo-scoped GitHub token and a staging service from you. |
 | Specialist agents and departments | BUILT | hq_create_agent / hq_create_department with DB-enforced limits (agents_v1) |
 | Operating procedures | BUILT | venture_procedures, versioned (assets_procedures_v1) |
 | Marketing and customer acquisition, leads | BUILT (dry-run) | Donna outreach drafts and approval flow, leads, follow-ups. Sending stays owner-approved. |

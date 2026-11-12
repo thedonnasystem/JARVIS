@@ -20,6 +20,7 @@ import hq_missions
 import hq_policy
 import hq_bank
 import hq_dev
+import hq_sites
 import hq_org
 import hq_ventures
 import hq_capital
@@ -1033,6 +1034,17 @@ HQ_CHAT_TOOLS = [
             "required": ["title", "rationale", "files"]},
     },
     {
+        "name": "hq_propose_site",
+        "description": "Draft a static website for a venture as a GitHub pull request under sites/<venture-slug>/ (index.html required; html/css/svg only, "
+                       "no external scripts, iframes, redirects or password fields). Never published automatically: the owner merges. "
+                       "Use after the owner asks for a site or approves one.",
+        "input_schema": {"type": "object", "properties": {
+            "venture_slug": {"type": "string"}, "title": {"type": "string"}, "rationale": {"type": "string"},
+            "files": {"type": "array", "items": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+                                                  "required": ["path", "content"]}}},
+            "required": ["venture_slug", "title", "rationale", "files"]},
+    },
+    {
         "name": "hq_create_department",
         "description": "Create a new department (e.g. marketing, engineering) when the owner asks for one or the numbers justify it. "
                        "Optionally attach it to a venture slug; otherwise it is a shared company department.",
@@ -1184,6 +1196,10 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
             import asyncio
             return await asyncio.to_thread(hq_dev.propose_change, tool_input.get("title", ""), tool_input.get("rationale", ""),
                                            tool_input.get("files") or [])
+        if name == "hq_propose_site":
+            import asyncio
+            return await asyncio.to_thread(hq_sites.propose_site, tool_input.get("venture_slug", ""), tool_input.get("title", ""),
+                                           tool_input.get("rationale", ""), tool_input.get("files") or [])
         if name == "hq_create_department":
             return hq_org.create_department(tool_input.get("slug", ""), tool_input.get("name", ""), tool_input.get("venture_slug"), by="owner-chat")
         if name == "hq_create_agent":
