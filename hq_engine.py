@@ -798,6 +798,28 @@ def _refresh_capital_mode() -> None:
         _CAPITAL_MODE = "normal"
 
 
+def _tomorrow() -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_OVER_BUDGET_CACHE: dict = {}
+
+
+def _venture_over_budget(venture_id: str) -> bool:
+    """True when a venture has a monthly budget and has used it. Missing function/table = no limit here
+    (the company-wide gateway still applies). Cached for 5 minutes per venture."""
+    now = datetime.now(timezone.utc).timestamp()
+    hit = _OVER_BUDGET_CACHE.get(venture_id)
+    if hit and now - hit[0] < 300:
+        return hit[1]
+    try:
+        over = bool(_rpc("venture_over_budget_id", {"p_id": venture_id}))
+    except Exception:
+        over = False
+    _OVER_BUDGET_CACHE[venture_id] = (now, over)
+    return over
+
+
 def _bank_watch() -> None:
     """Once a day at most: tell the owner (through Jarvis) about stale balances, gaps and unmatched bank rows.
     Silent when there is nothing to say or the bank module is not installed."""
@@ -826,6 +848,9 @@ def _work_tasks() -> bool:
     for t in tasks:
         if not _patch(f"tasks?id=eq.{_q(t['id'])}&status=eq.todo", {"status": "doing", "updated_at": now}, claim=True):
             continue  # another worker claimed it
+        if t.get("venture_id") and _venture_over_budget(t["venture_id"]):
+            _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "todo", "updated_at": _now(), "due_at": _tomorrow()})
+            continue  # this venture used its monthly AI budget: wait, do not spend
         if t["title"].startswith(VALUE_PREFIX) and not hq_wholesale.enabled():
             # No model call needed: the deal-funnel connection is not configured yet.
             _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "cancelled", "updated_at": _now(),

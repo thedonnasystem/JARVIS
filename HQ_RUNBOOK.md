@@ -147,3 +147,10 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - Jarvis's weekly `PROPOSAL:` lines now carry `kind | gain | cost | time | risk | alt | disagree`. Old 4-field lines still work.
 - Approve on a proposal opens a mission for it (budget, evidence and verification apply); Reject closes it and is remembered as an owner decision.
 - Nothing here lets an agent spend or commit beyond limits: external commitments and money still go through approvals and the capital controller.
+
+## Venture factory (Section 11)
+- Migration `20261112_ventures_v1.sql` (tested on local Postgres 16: slug rules, inert-until-owner, stage gates need evidence, workspace JSON, kill).
+- "Start a new venture" in chat (tool `hq_start_venture`) or `/venture new Name | what it does`: creates the venture INACTIVE (manager paused, own department, budget ceiling capped at $50/month by the database), opens a validation mission under Idea Lab (planning only, independent verifier), and sends you one Approve card.
+- Approve (or `/venture activate <slug>`) wakes the manager inside a 25c/day cap. Only the owner can activate; stages move one gate at a time with evidence (`set_venture_stage`); kill pauses everything.
+- `/venture <slug>` shows the workspace: stage, budget used, money, agents, leads, goals. The engine skips tasks of a venture that used its monthly budget (retries next day).
+- Not built yet: venture-specific tools/websites and the sandboxed self-dev environment (needs a repo-per-venture decision and your approval of the deploy path).

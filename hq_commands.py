@@ -19,6 +19,7 @@ import hq
 import hq_missions
 import hq_policy
 import hq_bank
+import hq_ventures
 import hq_capital
 
 logger = logging.getLogger(__name__)
@@ -538,6 +539,8 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         hq._request("PATCH", f"/rest/v1/agents?venture_id=eq.{_q(ref_id)}", {"status": "paused"}, prefer="return=minimal")
         hq._request("PATCH", f"/rest/v1/tasks?venture_id=eq.{_q(ref_id)}&status=eq.todo",
                     {"status": "cancelled", "result": "Cancelled: owner paused this venture."}, prefer="return=minimal")
+    elif ref_table and ref_table.startswith("activate_venture:") and approved:
+        hq_ventures.activate(ref_table.split(":", 1)[1], by="owner:telegram")
     elif ref_table == "org_changes" and ref_id:
         hq._request("PATCH", f"/rest/v1/org_changes?id=eq.{_q(ref_id)}", {"status": verdict, "decided_at": now}, prefer="return=minimal")
         if approved:
@@ -657,6 +660,29 @@ async def hq_policy_cmd(update, context) -> None:
     await update.message.reply_text(text[:4000])
 
 
+async def hq_venture_cmd(update, context) -> None:
+    """/venture list | new <name> | <idea> | activate <slug> | <slug> (workspace)  (owner only)."""
+    if not _owner(update):
+        return
+    args = list(context.args or [])
+    try:
+        sub = args[0].lower() if args else "list"
+        if sub == "list":
+            text = hq_ventures.list_text()
+        elif sub == "activate" and len(args) > 1:
+            text = hq_ventures.activate(args[1].lower())
+        elif sub == "new" and len(args) > 1:
+            name, _, idea = " ".join(args[1:]).partition("|")
+            r = hq_ventures.start(name.strip(), idea.strip(), by="owner")
+            text = r.get("error") or f"Venture {r['slug']} set up (inactive). Validation mission: {r['mission']}"
+        else:
+            text = hq_ventures.workspace_text(sub)
+    except Exception as e:
+        logger.exception("HQ venture command failed")
+        text = f"Venture command failed: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
 async def hq_bank_cmd(update, context) -> None:
     """/bank status | balance <amt> [date] | unmatched | reconcile  (owner only)."""
     if not _owner(update):
@@ -713,7 +739,7 @@ async def hq_capital_cmd(update, context) -> None:
 
 
 MENU = [
-    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("venture", "Ventures: list, new, activate, workspace"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -790,7 +816,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd)):
         app.add_handler(CommandHandler(name, fn))
     try:
         from telegram.ext import MessageHandler, filters
@@ -847,6 +873,21 @@ HQ_CHAT_TOOLS = [
             "required": ["objective"]},
     },
     {
+        "name": "hq_start_venture",
+        "description": "Set up a NEW business inside Fendezy HQ from the owner's idea ('start a new venture', 'build me a business'). "
+                       "Creates an inactive venture (own manager, department, budget ceiling) plus a validation mission; the owner "
+                       "activates it with one tap. Nothing is spent or contacted until then.",
+        "input_schema": {"type": "object", "properties": {
+            "name": {"type": "string"}, "description": {"type": "string", "description": "what it sells, to whom, how it makes money"},
+            "metric": {"type": "string"}, "budget_cents": {"type": "integer", "description": "monthly AI budget ceiling in CAD cents, max 5000"}},
+            "required": ["name", "description"]},
+    },
+    {
+        "name": "hq_venture",
+        "description": "Show one venture's workspace: stage, budget used, money, agents, leads, goals. Use for 'how is X doing'.",
+        "input_schema": {"type": "object", "properties": {"slug": {"type": "string"}}, "required": ["slug"]},
+    },
+    {
         "name": "hq_missions",
         "description": "List Fendezy HQ missions with status, spend, verdict and next action. Use for 'what are you working on', "
                        "'how's the X mission', 'what happened overnight'.",
@@ -898,6 +939,13 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
                                            tool_input.get("title"), tool_input.get("budget_cents"), created_by="owner-chat")
             return r.get("error") or (f"Mission opened: {r['title']} (id {str(r['id'])[:8]}). It's evaluated on the next engine "
                                       "tick (about 5 minutes); the owner gets the verdict and plan by Telegram.")
+        if name == "hq_start_venture":
+            r = hq_ventures.start(tool_input.get("name", ""), tool_input.get("description", ""), tool_input.get("metric"),
+                                  tool_input.get("budget_cents") or 0, by="owner-chat")
+            return r.get("error") or (f"Venture {r['slug']} created inactive. Validation mission: {r['mission']}. "
+                                      "The owner has a card to activate it; nothing is spent before that.")
+        if name == "hq_venture":
+            return hq_ventures.workspace_text((tool_input.get("slug") or "").lower())
         if name == "hq_missions":
             return hq_missions.list_text(include_done=True)
     except Exception as e:
