@@ -174,3 +174,11 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 ## Organizational growth (Section 12)
 - Migration `20261112_agents_v1.sql` (after org_v1). Chat tools `hq_create_department` / `hq_create_agent` ("create a marketing department"). Limits live in the database: cheap/standard tier, cap 50c/day max, cannot contact you, max 3 new agents per rolling week, created ASLEEP if all active agent caps would exceed 3x the daily company cap. Each creation is logged in `org_changes` (built) and `audit_log`.
 - Strong tier, owner contact, bigger caps, external commitments: always you.
+
+
+## Payments (manual approval, spec section 10)
+- Jarvis prepares a payment (`hq_prepare_payment`): the capital controller reserves the funds first (per-transaction and weekly limits, minimum reserve, bank balance cap).
+- You get an Approve/Reject card. Approve means: pay it yourself in RBC.
+- Then `/pay done <id> <amount> <RBC reference>` (or the Money tab, I paid it). The amount cannot exceed what was approved. The ledger records the expense; the bank statement import matches it later.
+- Unanswered requests expire after 3 days and approved-but-unpaid after 14 days past due; reserved funds are released.
+- `/pay` lists open payments. Jarvis never holds credentials, never sees an authenticated bank session, never moves money.

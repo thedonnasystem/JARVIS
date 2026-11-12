@@ -12,5 +12,6 @@
 20261112_webapp_v1.sql
 20261112_venture_view_v1.sql
 20261112_office_v1.sql
+20261112_payments_v1.sql
 20261112_brief_v3.sql
 20261112_push_v1.sql

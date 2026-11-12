@@ -23,6 +23,7 @@ import hq
 import hq_bank
 import hq_commands
 import hq_missions
+import hq_payments
 import hq_ventures
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,17 @@ def _bank(payload: dict) -> str:
     if verb == "reconcile":
         return hq_bank.reconcile()
     return "Unknown bank action."
+
+
+def _payment(payload: dict) -> str:
+    verb, pid = str(payload.get("verb") or ""), str(payload.get("id") or "")
+    # Approve/Reject arrive through the normal Needs-you decision (apply_decision); here the owner only confirms a payment he made.
+    if verb == "done":
+        cents = hq_payments.parse_amount(str(payload.get("amount") or ""))
+        if cents is None:
+            return "Amount must look like 15 or 1,250.50."
+        return hq_payments.confirm(pid[:8], str(payload.get("amount")), str(payload.get("reference") or ""), by="owner:app")
+    return "Unknown payment action."
 
 
 def _lead(payload: dict) -> str:
@@ -136,6 +148,8 @@ async def handle(row: dict, context) -> None:
         _say(_bank(payload), row["id"], "system")
     elif kind == "venture":
         _say(_venture(payload), row["id"], "system")
+    elif kind == "payment":
+        _say(_payment(payload), row["id"], "system")
     elif kind == "lead":
         _say(_lead(payload), row["id"], "system")
     elif kind == "idea":

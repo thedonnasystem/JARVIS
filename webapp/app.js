@@ -68,8 +68,8 @@ function show(k) {
 // ---------- data ----------
 async function refresh() {
   try {
-    const [snap, msgs, office] = await Promise.all([rpc('app_snapshot'), rpc('app_messages', { p_limit: 80 }), rpc('app_office').catch(() => null)]);
-    S.snap = snap; S.office = office; note('');
+    const [snap, msgs, office, pays] = await Promise.all([rpc('app_snapshot'), rpc('app_messages', { p_limit: 80 }), rpc('app_office').catch(() => null), rpc('app_payments').catch(() => null)]);
+    S.snap = snap; S.office = office; S.pays = pays; note('');
     const fresh = msgs.filter((m) => m.role === 'jarvis' && m.kind === 'chat' && !S.seen.has(m.id));
     const first = S.msgs.length === 0;
     S.msgs = msgs;
@@ -317,10 +317,24 @@ function rAgents(s) {
     ...order.flatMap((g) => [h('h3', { style: 'margin:14px 0 4px;color:var(--dim)' }, g), ...groups[g].map(agentCard)]),
     ...(org.length ? [h('h2', {}, 'Proposals and org changes'), ...org] : []));
 }
+function paymentCards(ps) {
+  if (!ps || !ps.length) return [];
+  return [h('h2', {}, 'Payments to make'), ...ps.map((p) => {
+    const amt = h('input', { placeholder: 'Amount paid', inputmode: 'decimal', value: (p.cents / 100).toFixed(2), autocomplete: 'off' });
+    const ref = h('input', { placeholder: 'RBC reference', autocomplete: 'off' });
+    return h('div', { class: 'card' },
+      h('div', { class: 'row' }, h('h3', {}, usd(p.cents) + ' to ' + p.payee), h('span', { class: 'tag' }, p.status === 'approved' ? 'approved' : 'needs your OK')),
+      h('div', { class: 'dim' }, p.purpose + (p.due ? ' · due ' + p.due : '')),
+      p.status === 'approved' ? h('div', {}, h('div', { class: 'dim' }, 'Pay it in RBC yourself, then confirm here. I never move money.'), amt, ref,
+        h('div', { class: 'btns' }, h('button', { onclick: () => { if (ref.value.trim().length >= 3) act('payment', { verb: 'done', id: p.id, amount: amt.value, reference: ref.value.trim() }); else note('Enter the RBC reference.'); } }, 'I paid it')))
+        : h('div', { class: 'dim' }, 'Approve or reject it under Needs you on Home. Funds are reserved meanwhile.'));
+  })];
+}
 function rMoney(s) {
   const c = s.capital || {}; const row = (a, b) => h('div', { class: 'row' }, h('span', { class: 'dim' }, a), h('span', {}, b));
   const days = s.spend_7d || [];
   $('v-money').replaceChildren(
+    ...paymentCards(S.pays),
     h('div', { class: 'card' }, h('div', { class: 'dim' }, 'Available'), h('div', { class: 'big' }, c.available_cents != null ? usd(c.available_cents) : 'Capital controller not live yet'),
       c.fund_cents != null ? [row('Started with', usd(c.fund_cents)), row('Money in (received only)', usd(c.revenue_cents)), row('AI spend', usd(c.ai_spend_cents)), row('Other spend', usd(c.expense_cents)),
         row('Reserved', usd(c.reserved_cents)), row('Recurring / month', usd(c.recurring_monthly_cents)), row('This week', usd(c.week_spend_cents) + ' of ' + usd(c.weekly_limit_cents)),

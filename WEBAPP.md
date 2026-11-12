@@ -22,7 +22,7 @@ Until `20261112_webapp_v1.sql` is applied and your email is in `app_owners`, the
 - Home: day-job quick log (dials, pitches, submissions, paid deal), fund, Follow-ups due (call link, Called +3d / No answer +1d / Close) with an Add lead form, outreach drafts to approve, Needs you (Approve/Reject/answer buttons), ventures (Details: goals, recent work, what it knows), pipeline, systems, kill switch.
 - Missions: idea lab (start a 7-day test or park), open a mission or set up a new venture (inactive until you approve), pause/resume/abandon, budget bar, evidence verdicts. Action results show in a banner within seconds.
 - Agents: Corporate office (Executive, Business Development, Research, Engineering, Marketing, Sales, Finance, Operations, Agent Management; each computed from real agents and data, unstaffed ones say so), then all agents grouped by Company and each venture; status, spend vs cap, scorecard flags, pause/resume; proposals and org changes below.
-- Money: capital snapshot (received cash only), P&L, bank card (type your real balance, import a statement CSV, reconcile), 7-day AI spend, permission tiers.
+- Money: Payments to make (approved instructions: pay in RBC yourself, then confirm with the reference), capital snapshot (received cash only), P&L, bank card (type your real balance, import a statement CSV, reconcile), 7-day AI spend, permission tiers.
 - Feed: live activity. Refreshes every 8s and on app focus.
 
 ## Voice

@@ -170,3 +170,15 @@ class AddLead(unittest.TestCase):
             self.assertEqual((got["name"], got["phone"], got["days"]), ("Jane / Doe", "613-555-0101", 3))
             self.assertIn("Bad lead", W._lead({"new": True, "name": "Jane", "phone": "abc"}))
             self.assertIn("Bad lead", W._lead({"new": True, "name": ""}))
+
+
+class PaymentConfirm(unittest.TestCase):
+    def test_app_only_confirms_and_validates_amount(self):
+        import hq_web as W
+        import hq_payments
+        with mock.patch.object(hq_payments, "confirm", return_value="Recorded.") as c:
+            self.assertEqual(W._payment({"verb": "done", "id": "abc12345-1111-2222-3333-444444444444", "amount": "15.00", "reference": "RBC-1"}), "Recorded.")
+            self.assertEqual(c.call_args[0][0], "abc12345")
+            self.assertEqual(c.call_args[1]["by"], "owner:app")
+            self.assertIn("Amount must", W._payment({"verb": "done", "id": "x", "amount": "lots", "reference": "RBC-1"}))
+            self.assertEqual(W._payment({"verb": "approve", "id": "x"}), "Unknown payment action.")
