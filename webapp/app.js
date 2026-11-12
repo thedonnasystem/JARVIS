@@ -99,8 +99,10 @@ function render() {
   const st = s.state || {};
   const pill = $('pill');
   const paused = st.kill_switch || st.pause_reason;
-  pill.className = 'pill ' + (st.kill_switch ? 'bad' : paused ? 'warn' : 'ok');
-  pill.textContent = st.kill_switch ? 'KILL SWITCH ON' : paused ? 'Paused: ' + st.pause_reason : 'Running · ' + (st.mode || '').replace(/_/g, ' ');
+  const beatMin = st.last_heartbeat ? (Date.now() - new Date(st.last_heartbeat).getTime()) / 60000 : null;
+  const stale = !st.kill_switch && (beatMin == null || beatMin > 20);   // the engine ticks every 5 minutes
+  pill.className = 'pill ' + (st.kill_switch || stale ? 'bad' : paused ? 'warn' : 'ok');
+  pill.textContent = st.kill_switch ? 'KILL SWITCH ON' : stale ? 'No heartbeat' + (beatMin != null ? ' for ' + Math.round(beatMin) + 'm' : '') + ': HQ may be down' : paused ? 'Paused: ' + st.pause_reason : 'Running · ' + (st.mode || '').replace(/_/g, ' ');
   $('stamp').textContent = 'beat ' + ago(st.last_heartbeat);
   // Never rebuild a screen while the owner is typing into it (the 8s refresh would wipe the field).
   const ae = document.activeElement;
