@@ -154,3 +154,8 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - Approve (or `/venture activate <slug>`) wakes the manager inside a 25c/day cap. Only the owner can activate; stages move one gate at a time with evidence (`set_venture_stage`); kill pauses everything.
 - `/venture <slug>` shows the workspace: stage, budget used, money, agents, leads, goals. The engine skips tasks of a venture that used its monthly budget (retries next day).
 - Not built yet: venture-specific tools/websites and the sandboxed self-dev environment (needs a repo-per-venture decision and your approval of the deploy path).
+
+## Learning loop (Phase 7, no model spend)
+- Migration `20261112_learning_v1.sql` (tested on local Postgres 16). Every 6 hours a completed mission whose `days_to_cash + 7` days have passed is measured once: expected CAD vs cash RECEIVED in that venture since completion (approximate attribution, and the lesson says so).
+- Result lands in `mission_outcomes` and as a `lesson` in memory, which every agent prompt already reads (hit / partial / miss / no_forecast, with advice to discount optimistic forecasts).
+- `forecast_bias_text()` feeds the weekly review so Jarvis sees whether past forecasts held.
