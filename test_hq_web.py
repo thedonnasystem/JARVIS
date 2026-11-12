@@ -126,3 +126,13 @@ class Draft(unittest.TestCase):
         self.assertEqual(ad.call_args[0], ("m9", True))
         with mock.patch.object(hq, "_request", lambda *a, **k: []):
             self.assertIn("not waiting", hq_commands.draft_decision("zz", True))
+
+
+class Idea(unittest.TestCase):
+    def test_idea_actions(self):
+        import hq_web as W
+        with mock.patch.object(hq_commands, "set_idea_status_by_id", return_value="ok") as si:
+            W._idea({"verb": "test", "id": "i1"}); self.assertEqual(si.call_args[0], ("i1", "testing"))
+            W._idea({"verb": "park", "id": "i1"}); self.assertEqual(si.call_args[0], ("i1", "parked"))
+            W._idea({"verb": "scale", "id": "i1"}); self.assertEqual(si.call_args[0], ("i1", ""))
+        self.assertEqual(hq_commands.set_idea_status_by_id("i1", ""), "Unknown idea action.")

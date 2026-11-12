@@ -189,6 +189,26 @@ async def hq_ideas(update, context) -> None:
     await update.message.reply_text("Idea lab (best first):\n" + "\n".join(out) + "\n\nStart a 7-day test: /testidea <name>   Park: /parkidea <name>")
 
 
+def set_idea_status_by_id(idea_id: str, status: str) -> str:
+    """Move an idea to testing/parked (the database enforces the gates, e.g. test budget). Shared with the app."""
+    if status not in ("testing", "parked"):
+        return "Unknown idea action."
+    rows = _get(f"ideas?id=eq.{_q(idea_id)}&select=id,name&limit=1")
+    if not rows:
+        return "No such idea."
+    try:
+        hq._request("PATCH", f"/rest/v1/ideas?id=eq.{_q(idea_id)}", {"status": status}, prefer="return=minimal")
+    except Exception as e:
+        msg = str(e)
+        try:
+            import json as _j
+            msg = _j.loads(e.read().decode()).get("message", msg)
+        except Exception:
+            pass
+        return f"Not changed: {msg[:200]}"
+    return f"{rows[0]['name']} is now {status}." + (" 7-day test clock started." if status == "testing" else "")
+
+
 async def _set_idea_status(update, context, status: str) -> None:
     if not _owner(update):
         return

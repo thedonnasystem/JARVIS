@@ -69,6 +69,11 @@ def _bank(payload: dict) -> str:
     return "Unknown bank action."
 
 
+def _idea(payload: dict) -> str:
+    verb = str(payload.get("verb") or "")
+    return hq_commands.set_idea_status_by_id(str(payload.get("id") or ""), {"test": "testing", "park": "parked"}.get(verb, ""))
+
+
 def _draft(payload: dict) -> str:
     verb, oid = str(payload.get("verb") or ""), str(payload.get("id") or "")
     if verb in ("approve", "reject"):
@@ -120,6 +125,8 @@ async def handle(row: dict, context) -> None:
         _say(_bank(payload), row["id"], "system")
     elif kind == "venture":
         _say(_venture(payload), row["id"], "system")
+    elif kind == "idea":
+        _say(_idea(payload), row["id"], "system")
     elif kind == "draft":
         _say(_draft(payload), row["id"], "system")
     elif kind == "day":
