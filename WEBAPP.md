@@ -1,0 +1,41 @@
+# Fendezy HQ web app (private PWA)
+
+Live URL: https://fendezy-hq-app.onrender.com  (static site, free; source: `webapp/`, branch overnight-build)
+Owner-only: the page is public, the data is not. Every read/write goes through `app_*` database functions that check `is_app_owner()`.
+Until `20261112_webapp_v1.sql` is applied and your email is in `app_owners`, the app shows "not authorized". That is intended.
+
+## Install on iPhone
+1. Open the URL in Safari (must be Safari, not Chrome).
+2. Share button -> Add to Home Screen -> Add.
+3. Open from the Home Screen icon (full screen, no browser bar).
+
+## Turn on owner login (needs your green light, one-time)
+1. Apply migrations in order: permissions_v1, chat_meter, capital_v1, webapp_v1 (missions already live).
+2. Supabase dashboard -> Authentication -> Providers -> Email: on. Disable "Allow new users to sign up".
+3. Authentication -> Users -> Add user: your owner email (auto-confirm).
+4. `insert into app_owners(email) values ('<owner email>');`
+5. Authentication -> URL config: Site URL = the app URL. Email template: make sure the 6-digit `{{ .Token }}` is in the magic-link email (the app signs in with the code).
+6. Open the app, enter the email, type the code. A stranger who somehow gets a session is refused by the database.
+
+## What is on each tab
+- Jarvis: chat (same brain as Telegram, metered as 'jarvis-chat'), mic button (browser speech recognition), optional spoken replies.
+- Home: fund, Needs you (Approve/Reject/answer buttons), ventures, pipeline, systems, kill switch.
+- Missions: open a mission, pause/resume/abandon, budget bar, evidence verdicts.
+- Agents: status, spend vs cap, pause/resume.
+- Money: capital snapshot (received cash only), 7-day AI spend, permission tiers.
+- Feed: live activity. Refreshes every 8s and on app focus.
+
+## Voice
+Browser-only: Web Speech API for speaking to Jarvis, speechSynthesis for replies. Works in Safari/iOS; the screen must be open. No cost.
+
+## Push notifications (next step, not built)
+iOS supports web push only for apps installed to the Home Screen (iOS 16.4+). Plan: service worker `push` handler + `push_subscriptions` table + VAPID keys; Jarvis sends only owner-decision messages (the same rule as Telegram). Free (no third-party service). Until then Telegram remains the alert channel.
+
+## Incoming calls (investigation note)
+- A web app cannot ring the phone like a call; iOS PWAs cannot use CallKit.
+- Options, cheapest first: (1) push notification "Jarvis needs you" (free); (2) Twilio/Retell outbound phone call to the owner's number for emergencies only (per-minute cost, ~CAD cents per call; needs Twilio number, owner consent, within budget); (3) in-app WebRTC voice with a realtime model (cost per minute, only while the app is open).
+- Recommendation: push first, phone call only for red-level events, both behind the capital controller.
+
+## Security notes
+- Publishable key in `app.js` is public by design (RLS deny-all; only owner-checked functions are callable).
+- Kill switch is available from Home. Agents cannot change policy or capital limits from the app.
