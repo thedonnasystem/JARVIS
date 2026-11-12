@@ -18,6 +18,7 @@ Exact file order: `migrations/APPLY_ORDER.txt`.
 | 7b | agents_v1 | Jarvis can create departments/agents inside hard limits (cheap/standard, <=50c/day, max 3 a week, asleep if budget full) | Low |
 | 7c | opportunity_v1 | Weekly (Wed) opportunity scan per ACTIVE venture: manager agent sends <=2 structured proposals for your approval (apply after 7) | Low; inert until a venture is active |
 | 8c | venture_view_v1 | Venture Details drill-down in the app (goals, recent work, what it knows); owner-only (apply after 7 and 8) | Low |
+| 8d | office_v1 | Corporate office (spec 11): the nine functions as live views over real agents, tasks, spend and data (apply after 8) | Low; adds one nullable agents column |
 | 8b | brief_v3 | 7pm brief gains P&L, bank alerts, forecast accuracy, pending proposals (apply after 3-7) | Low |
 | 9 | push_v1 | Push subscriptions; VAPID key stored in a locked table | Low |
 

@@ -68,8 +68,8 @@ function show(k) {
 // ---------- data ----------
 async function refresh() {
   try {
-    const [snap, msgs] = await Promise.all([rpc('app_snapshot'), rpc('app_messages', { p_limit: 80 })]);
-    S.snap = snap; note('');
+    const [snap, msgs, office] = await Promise.all([rpc('app_snapshot'), rpc('app_messages', { p_limit: 80 }), rpc('app_office').catch(() => null)]);
+    S.snap = snap; S.office = office; note('');
     const fresh = msgs.filter((m) => m.role === 'jarvis' && m.kind === 'chat' && !S.seen.has(m.id));
     const first = S.msgs.length === 0;
     S.msgs = msgs;
@@ -289,6 +289,14 @@ function rMissions(s) {
       h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => act(m.id, 'pause') }, 'Pause'), h('button', { class: 'ghost', onclick: () => act(m.id, 'resume') }, 'Resume'),
         h('button', { class: 'ghost', onclick: () => { if (confirm('Abandon this mission?')) act(m.id, 'abandon'); } }, 'Abandon')))));
 }
+function officeCards(o) {
+  if (!o || !o.length) return [];
+  return [h('h2', {}, 'Corporate office'), ...o.map((f) => h('div', { class: 'card' },
+    h('div', { class: 'row' }, h('h3', {}, f.name), h('span', { class: 'tag' }, f.staffed ? f.agents.filter((a) => a.status === 'active').length + ' active' : 'unstaffed')),
+    h('div', { class: 'dim' }, f.headline),
+    h('div', { class: 'dim' }, f.open + ' open · ' + f.blocked + ' blocked · ' + f.done_7d + ' done this week · AI 7d ' + usd(f.spent_7d)),
+    f.agents.length ? h('div', { class: 'dim' }, f.agents.map((a) => a.title || a.slug).join(', ')) : h('div', { class: 'dim' }, 'No agents yet.')))];
+}
 function rAgents(s) {
   const sc = s.scorecard || {}; const flagTxt = (f) => ({ 'spending, nothing done': 'spending, nothing done', 'failing more than finishing': 'failing more than finishing', idle: 'idle' })[f];
   const org = (s.org_changes || []).map((o) => h('div', { class: 'card' },
@@ -304,7 +312,9 @@ function rAgents(s) {
     a.last_task ? h('div', { class: 'dim' }, 'Last: ' + a.last_task) : null,
     h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => rpc('app_set_agent', { p_slug: a.slug, p_status: a.status === 'active' ? 'paused' : 'active' }).then(refresh).catch((e) => note(e.message)) }, a.status === 'active' ? 'Pause' : 'Resume')));
   $('v-agents').replaceChildren(
-    ...order.flatMap((g) => [h('h2', {}, g === 'Company' ? 'Company' : g), ...groups[g].map(agentCard)]),
+    ...officeCards(S.office),
+    h('h2', {}, 'All agents'),
+    ...order.flatMap((g) => [h('h3', { style: 'margin:14px 0 4px;color:var(--dim)' }, g), ...groups[g].map(agentCard)]),
     ...(org.length ? [h('h2', {}, 'Proposals and org changes'), ...org] : []));
 }
 function rMoney(s) {
