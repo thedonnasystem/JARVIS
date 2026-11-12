@@ -435,4 +435,28 @@ begin
   if exists (select 1 from public.outbox where status = 'sent') then raise exception 'something was sent'; end if;
 end $$;
 select 'independent_controls_ok';
+-- Credit probe exemption is exactly one agent + one purpose, and still obeys the kill switch and the caps
+do $$ declare mid uuid; ag text; c uuid;
+begin
+  if not exists (select 1 from public.agents where slug = 'jarvis') then
+    insert into public.agents (slug, title, charter, metric, status, daily_spend_cap_cents) values ('jarvis', 'Jarvis', 'owner contact', 'm', 'active', 100);
+  end if;
+  update public.agents set status = 'active', daily_spend_cap_cents = 100000 where slug = 'jarvis';
+  select slug into ag from public.agents where status = 'active' and slug not in ('jarvis', 'jarvis-chat') limit 1;
+  update public.system_state set daily_spend_cap_cents = 100000, kill_switch = false, mode = 'dry_run' where id = 1;
+  insert into public.missions (title, objective, status, budget_cents, created_by) values ('probe', 'probe exemption objective long enough', 'captured', 50, 'owner') returning id into mid;
+  perform public.set_focus_mission(mid, 'owner:test');
+  c := public.reserve_llm_budget('jarvis', 1, 'm', 'credit probe');                 -- allowed in focus
+  begin perform public.reserve_llm_budget('jarvis', 1, 'm', 'anything else'); raise exception 'PROBE1 jarvis spent in focus';
+  exception when raise_exception then if sqlerrm like 'PROBE1%' then raise; end if; end;
+  begin perform public.reserve_llm_budget(ag, 1, 'm', 'credit probe'); raise exception 'PROBE2 other agent used the probe exemption';
+  exception when raise_exception then if sqlerrm like 'PROBE2%' then raise; end if; end;
+  update public.system_state set kill_switch = true where id = 1;
+  begin perform public.reserve_llm_budget('jarvis', 1, 'm', 'credit probe'); raise exception 'PROBE3 probe ran under kill switch';
+  exception when raise_exception then if sqlerrm like 'PROBE3%' then raise; end if; end;
+  update public.system_state set kill_switch = false where id = 1;
+  perform public.set_focus_mission(null, 'owner:test');
+end $$;
+select 'credit_probe_exemption_ok';
+
 

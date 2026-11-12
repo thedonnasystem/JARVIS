@@ -20,7 +20,11 @@ begin
     select mission_id into v_mission from public.tasks where id = substr(p_purpose, 6)::uuid;
   end if;
   -- The owner talking to Jarvis (chat) is never backlog and is not a mission task; it stays metered by the normal daily caps.
-  if v_focus is not null and v_mission is distinct from v_focus and not (p_agent = 'jarvis-chat' and p_purpose !~ '^task ') then
+  -- Two narrow exemptions from focus mode, both tiny and both needed to keep control: owner chat (not backlog), and the
+  -- 1-cent hourly credit probe (without it a paused engine could never notice that credit is back while focus is on).
+  if v_focus is not null and v_mission is distinct from v_focus
+     and not (p_agent = 'jarvis-chat' and p_purpose !~ '^task ')
+     and not (p_agent = 'jarvis' and p_purpose = 'credit probe') then
     raise exception 'Focus mode: only mission % may use AI right now.', left(v_focus::text, 8);
   end if;
   if v_mission is not null then

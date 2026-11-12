@@ -55,3 +55,8 @@ select count(*) from outbox where status='sent' and created_at > now() - interva
 - It proves the pipeline with real model output once. One pass does not prove reliability across mission types.
 - Agents can research (web search/fetch) and write; they cannot execute outside actions. That is intended for this test.
 - Sources are only as good as what the model finds and cites. Verification re-checks that cited pages support the claims; it cannot prove a market exists.
+
+## Spend-control notes added in the third audit pass
+- While `/mission focus <id>` is on, `/build` is refused by the gateway (it is not mission work). Owner chat still works (metered by its own 150c/day cap). Voice notes use the same chat cap.
+- The kill switch (`/kill`) now stops everything that can spend, including owner chat, `/build` and voice. `/resume` restores them.
+- If the database is unreachable the bot answers with a fixed status line and makes no AI call.

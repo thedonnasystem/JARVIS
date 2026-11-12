@@ -14,9 +14,10 @@ class FocusBlocks(unittest.TestCase):
                 with self.assertRaises(MT.MeterBlocked):
                     MT.reserve("claude-haiku-5-5", {"max_tokens": 50, "messages": []}, "chat")
 
-    def test_unknown_gateway_errors_still_fall_through_as_before(self):
+    def test_unknown_gateway_errors_now_block_too(self):
         with mock.patch.object(hq, "hq_enabled", return_value=True), mock.patch.object(hq, "_request", Gate(reserve_exc=http_err("weird database hiccup"))):
-            self.assertIsNone(MT.reserve("claude-haiku-5-5", {"max_tokens": 50, "messages": []}, "chat"))
+            with self.assertRaises(MT.MeterBlocked):
+                MT.reserve("claude-haiku-5-5", {"max_tokens": 50, "messages": []}, "chat")
 
 
 class Gate:
@@ -79,17 +80,21 @@ class T(unittest.TestCase):
             self.run_it(g)
         self.assertIn("cap", str(cm.exception))
 
-    def test_kill_switch_and_missing_agent_run_unmetered(self):
-        for msg in ("Kill switch is on.", "Unknown agent jarvis-chat."):
-            g = Gate(reserve_exc=http_err(msg))
-            r, c = self.run_it(g)
-            self.assertIsNotNone(c.kw)  # the owner's chat still ran
-            self.assertNotIn("settle_llm_call", [n for n, _ in g.calls])
+    def test_kill_switch_and_missing_agent_now_block(self):
+        # Nov 12 2026: the meter fails CLOSED. These used to run the owner's chat unmetered.
+        for msg, kind in (("Kill switch is on.", "kill"), ("Unknown agent jarvis-chat.", "error")):
+            g = Gate(reserve_exc=http_err(msg)); c = Client()
+            with self.assertRaises(MT.MeterBlocked) as cm:
+                self.run_it(g, c)
+            self.assertEqual(cm.exception.kind, kind)
+            self.assertIsNone(c.kw)  # the provider was never touched
 
-    def test_hq_down_runs_unmetered(self):
-        g = Gate(reserve_exc=urllib.error.URLError("down"))
-        r, c = self.run_it(g)
-        self.assertIsNotNone(c.kw)
+    def test_hq_down_blocks_instead_of_running_unmetered(self):
+        g = Gate(reserve_exc=urllib.error.URLError("down")); c = Client()
+        with self.assertRaises(MT.MeterBlocked) as cm:
+            self.run_it(g, c)
+        self.assertEqual(cm.exception.kind, "unreachable")
+        self.assertIsNone(c.kw)
 
     def test_failed_model_call_releases_reservation(self):
         g = Gate()
@@ -107,10 +112,13 @@ class T(unittest.TestCase):
         self.assertIn(MT.PRICE_FALLBACK_MODEL, models)
         self.assertIn("reserve_llm_budget", [n for n, _ in g.calls])
 
-    def test_hq_disabled_is_a_plain_call(self):
+    def test_hq_not_configured_blocks(self):
         g = Gate(); c = Client()
         with mock.patch.object(hq, "_request", g), mock.patch.object(hq, "hq_enabled", return_value=False):
-            MT.metered_create(c, "x", model="m", max_tokens=10, messages=[])
+            with self.assertRaises(MT.MeterBlocked) as cm:
+                MT.metered_create(c, "x", model="m", max_tokens=10, messages=[])
+        self.assertEqual(cm.exception.kind, "unconfigured")
+        self.assertIsNone(c.kw)
         self.assertEqual(g.calls, [])
 
 

@@ -41,6 +41,11 @@ Gate 4: `git push origin <merged sha>:claude/telegram-claude-bot-59nusk` (fast-f
 
 Compatibility (tested): new code on the OLD database keeps the engine alive (focus_mission column missing → tolerated; integration_status missing → warning only; missions stay inert until migrated). New database with the OLD code is safe except the mission-role note above.
 
+Behaviour changes that arrive with gate 4 (code), none of which raise a limit:
+- Kill switch / database outage / unconfigured HQ now stop ALL AI the bot makes, including owner chat, `/build` and voice. The owner gets a plain-text status line instead. `/hq`, `/kill`, `/resume` still work (no AI).
+- `/build` is capped at `BUILD_SESSION_CENTS` (default 50c, equal to the builder agent's daily cap) per session across plan + build, and is refused while mission focus mode is on.
+- Optional env var on Railway: `BUILD_SESSION_CENTS` (lower it to be stricter; raising it cannot exceed the builder agent's daily cap).
+
 ## 4. Verification after each gate
 | Gate | Check | Expected |
 |---|---|---|

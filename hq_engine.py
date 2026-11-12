@@ -781,14 +781,30 @@ def _credits_back(paused_at: str | None) -> bool:
     if _last_probe and now - _last_probe < timedelta(minutes=PROBE_EVERY_MINUTES):
         return False
     _last_probe = now
+    # Metered like every other call: 1 cent reserved at the gateway first. The gateway's focus rule has one narrow exemption
+    # for exactly this probe (agent jarvis, purpose "credit probe"), otherwise focus mode could never notice credit coming back.
+    try:
+        call_id = _rpc("reserve_llm_budget", {"p_agent": "jarvis", "p_est_cents": 1, "p_model": TIER_MODEL["cheap"],
+                                              "p_purpose": "credit probe"})
+    except Exception as e:  # gateway said no (cap, kill switch) or is unreachable: no probe, no spend
+        logger.warning("HQ credit probe not run: %s", str(e)[:200])
+        return False
     try:
         _anthropic().messages.create(model=TIER_MODEL["cheap"], max_tokens=1,
                                      messages=[{"role": "user", "content": "ok"}])
-        return True
     except Exception as e:
+        try:
+            _rpc("settle_llm_call", {"p_id": call_id, "p_actual_cents": 0, "p_status": "failed"})
+        except Exception:
+            pass
         if not is_out_of_credits(e):
             logger.warning("HQ credit probe failed for another reason: %s", str(e)[:200])
         return False
+    try:
+        _rpc("settle_llm_call", {"p_id": call_id, "p_actual_cents": 1, "p_status": "done"})
+    except Exception:
+        pass
+    return True
 
 
 def resume_after_credits() -> int:
