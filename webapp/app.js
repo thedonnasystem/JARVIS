@@ -308,19 +308,19 @@ function officeCards(o) {
 }
 function floorPlan(o) {
   if (!o || !o.length) return [];
-  const dot = (a) => h('i', { class: 'dot ' + (a.status === 'active' ? 'on' : 'off'), title: (a.title || a.slug) + ' · ' + a.status });
+  const dot = (a, f) => h('i', { class: 'dot ' + (a.status === 'active' ? 'on' : 'off') + (a.status === 'active' && f && f.open ? ' work' : ''), title: (a.title || a.slug) + ' · ' + a.status });
   const room = (f) => {
     const live = f.agents.filter((a) => a.status === 'active');
     const cls = 'room' + (f.blocked ? ' hot' : live.length && f.open ? ' busy' : live.length ? '' : ' empty');
     return h('button', { class: cls, onclick: () => { S.openRoom = S.openRoom === f.fn ? null : f.fn; render(); }, 'aria-expanded': String(S.openRoom === f.fn) },
       h('span', { class: 'rn' }, f.name),
-      h('span', { class: 'dots' }, f.agents.length ? f.agents.slice(0, 12).map(dot) : h('span', { class: 'dim' }, 'unstaffed')),
+      h('span', { class: 'dots' }, f.agents.length ? f.agents.slice(0, 12).map((a) => dot(a, f)) : h('span', { class: 'dim' }, 'unstaffed')),
       h('span', { class: 'rs dim' }, f.open + ' open' + (f.blocked ? ' · ' + f.blocked + ' blocked' : '')));
   };
   const sel = o.find((f) => f.fn === S.openRoom);
   return [h('h2', {}, 'Headquarters'), h('div', { class: 'floor' }, o.map(room)),
     sel ? h('div', { class: 'card' }, h('h3', {}, sel.name), h('div', { class: 'dim' }, sel.headline),
-      ...(sel.agents.length ? sel.agents.map((a) => h('div', { class: 'row' }, h('span', {}, a.title || a.slug), h('span', { class: 'dim' }, a.status + ' · ' + usd(a.spent_today) + ' today'))) : [h('div', { class: 'dim' }, 'No agents yet. Jarvis can propose to staff this room.')])) : null];
+      ...(sel.agents.length ? sel.agents.map((a) => { const sa = ((S.snap && S.snap.agents) || []).find((x) => x.slug === a.slug); return h('div', {}, h('div', { class: 'row' }, h('span', {}, a.title || a.slug), h('span', { class: 'dim' }, a.status + ' · ' + usd(a.spent_today) + ' today')), sa && sa.last_task ? h('div', { class: 'dim' }, 'Last: ' + sa.last_task) : null); }) : [h('div', { class: 'dim' }, 'No agents yet. Jarvis can propose to staff this room.')])) : null];
 }
 function rAgents(s) {
   const sc = s.scorecard || {}; const flagTxt = (f) => ({ 'spending, nothing done': 'spending, nothing done', 'failing more than finishing': 'failing more than finishing', idle: 'idle' })[f];

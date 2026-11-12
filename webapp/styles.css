@@ -37,3 +37,4 @@ nav button{flex:1;background:none;color:var(--dim);border-radius:0;font-size:.72
 .room.busy{border-color:var(--gold)}.room.hot{border-color:var(--bad)}.room.empty{opacity:.55;border-style:dashed}
 .dots{display:flex;flex-wrap:wrap;gap:4px;flex:1;align-content:flex-start}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--dim)}.dot.on{background:var(--ok)}
+@media (prefers-reduced-motion:no-preference){.dot.work{animation:p 1.6s ease-in-out infinite}@keyframes p{50%{transform:scale(1.5);opacity:.6}}}
