@@ -22,6 +22,7 @@ import hq_bank
 import hq_dev
 import hq_sites
 import hq_setters
+import hq_verify
 import hq_org
 import hq_ventures
 import hq_capital
@@ -1067,6 +1068,13 @@ HQ_CHAT_TOOLS = [
             "required": ["venture_slug", "title", "rationale", "files"]},
     },
     {
+        "name": "hq_verify_url",
+        "description": "Check that a public https page is really live and says what it should (HTTP status, title, expected phrases). Use it as evidence "
+                       "before claiming a site or page is live or a mission step is done. Public websites only.",
+        "input_schema": {"type": "object", "properties": {"url": {"type": "string"}, "expect": {"type": "array", "items": {"type": "string"}, "description": "phrases that must appear"}},
+                         "required": ["url"]},
+    },
+    {
         "name": "hq_create_department",
         "description": "Create a new department (e.g. marketing, engineering) when the owner asks for one or the numbers justify it. "
                        "Optionally attach it to a venture slug; otherwise it is a shared company department.",
@@ -1222,6 +1230,9 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
             import asyncio
             return await asyncio.to_thread(hq_sites.propose_site, tool_input.get("venture_slug", ""), tool_input.get("title", ""),
                                            tool_input.get("rationale", ""), tool_input.get("files") or [])
+        if name == "hq_verify_url":
+            import asyncio
+            return await asyncio.to_thread(hq_verify.report, tool_input.get("url", ""), tool_input.get("expect") or [])
         if name == "hq_create_department":
             return hq_org.create_department(tool_input.get("slug", ""), tool_input.get("name", ""), tool_input.get("venture_slug"), by="owner-chat")
         if name == "hq_create_agent":
