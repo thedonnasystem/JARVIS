@@ -136,3 +136,26 @@ class Idea(unittest.TestCase):
             W._idea({"verb": "park", "id": "i1"}); self.assertEqual(si.call_args[0], ("i1", "parked"))
             W._idea({"verb": "scale", "id": "i1"}); self.assertEqual(si.call_args[0], ("i1", ""))
         self.assertEqual(hq_commands.set_idea_status_by_id("i1", ""), "Unknown idea action.")
+
+
+class Lead(unittest.TestCase):
+    def test_lead_actions_validate_and_log(self):
+        import hq_web as W
+        with mock.patch.object(hq_commands, "log_contact", return_value="ok") as lc:
+            self.assertEqual(W._lead({"sid": "12", "days": 3, "outcome": "called"}), "ok")
+            self.assertEqual(lc.call_args[0], (12, 3, "called"))
+            W._lead({"sid": 7, "days": 0}); self.assertEqual(lc.call_args[0][:2], (7, 0))
+            W._lead({"sid": 7, "days": 9999}); self.assertEqual(lc.call_args[0][1], 60)
+            self.assertEqual(W._lead({"sid": "x"}), "Bad lead action.")
+
+    def test_log_contact_closes_or_schedules(self):
+        calls = []
+
+        def req(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body))
+            if method == "GET":
+                return [{"id": "L1", "name": "Sam", "notes": "", "contact_count": 1}]
+        with mock.patch.object(hq, "_request", req):
+            self.assertIn("closed", hq_commands.log_contact(5, 0, "signed"))
+            self.assertEqual([b for m, p, b in calls if m == "PATCH"][-1]["status"], "closed")
+            self.assertIn("Next follow-up", hq_commands.log_contact(5, 3, "vm"))

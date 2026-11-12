@@ -496,24 +496,15 @@ async def hq_lead(update, context) -> None:
     await update.message.reply_text(f"Saved #{rows[0].get('short_id', '?')} {lead['name']}. Follow up {due:%a %b %d}.")
 
 
-async def hq_done(update, context) -> None:
-    """/done <#id> [days] [outcome...]  -- logs a contact and sets the next follow-up (0 days = close it)."""
-    if not _owner(update):
-        return
-    args = context.args or []
-    if not args or not args[0].lstrip("#").isdigit():
-        await update.message.reply_text("Use: /done 12 3 left voicemail   (lead #, follow up in N days, note). /done 12 0 signed  closes it.")
-        return
-    sid = int(args[0].lstrip("#"))
-    days = int(args[1]) if len(args) > 1 and args[1].isdigit() else DEFAULT_FOLLOWUP_DAYS
-    outcome = " ".join(args[2:] if len(args) > 1 and args[1].isdigit() else args[1:])[:200]
-    rows = _get(f"leads?short_id=eq.{sid}&select=id,name,notes,contact_count&limit=1")
+def log_contact(sid: int, days: int, outcome: str = "") -> str:
+    """Log a contact on a lead and set the next follow-up (0 days = close). Shared by /done and the app."""
+    rows = _get(f"leads?short_id=eq.{int(sid)}&select=id,name,notes,contact_count&limit=1")
     if not rows:
-        await update.message.reply_text(f"No lead #{sid}.")
-        return
+        return f"No lead #{sid}."
     lead = rows[0]
     from datetime import timedelta
     stamp = _toronto_today().isoformat()
+    outcome = (outcome or "")[:200]
     notes = ((lead.get("notes") or "") + (f"\n{stamp}: {outcome}" if outcome else f"\n{stamp}: contacted")).strip()[-2000:]
     body = {"last_contact_at": datetime.now(timezone.utc).isoformat(), "contact_count": (lead.get("contact_count") or 0) + 1,
             "notes": notes, "status": "contacted"}
@@ -525,7 +516,21 @@ async def hq_done(update, context) -> None:
         body["next_followup_at"] = due.isoformat()
         reply = f"#{sid} {lead['name']} logged. Next follow-up {due:%a %b %d}."
     hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(lead['id'])}", body, prefer="return=minimal")
-    await update.message.reply_text(reply)
+    return reply
+
+
+async def hq_done(update, context) -> None:
+    """/done <#id> [days] [outcome...]  -- logs a contact and sets the next follow-up (0 days = close it)."""
+    if not _owner(update):
+        return
+    args = context.args or []
+    if not args or not args[0].lstrip("#").isdigit():
+        await update.message.reply_text("Use: /done 12 3 left voicemail   (lead #, follow up in N days, note). /done 12 0 signed  closes it.")
+        return
+    sid = int(args[0].lstrip("#"))
+    days = int(args[1]) if len(args) > 1 and args[1].isdigit() else DEFAULT_FOLLOWUP_DAYS
+    outcome = " ".join(args[2:] if len(args) > 1 and args[1].isdigit() else args[1:])[:200]
+    await update.message.reply_text(log_contact(sid, days, outcome))
 
 
 async def hq_due(update, context) -> None:

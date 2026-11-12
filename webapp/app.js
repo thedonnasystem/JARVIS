@@ -125,6 +125,7 @@ function rHome(s) {
     h('div', { class: 'card' }, h('div', { class: 'dim' }, 'Operating fund'), h('div', { class: 'big' }, c.available_cents != null ? usd(c.available_cents) : '—'),
       h('div', { class: 'dim' }, (c.mode ? String(c.mode).toUpperCase() + ' · ' : '') + 'AI today ' + usd(s.spend_today_cents) + ' of ' + usd((s.state || {}).cap_cents))),
     dayCard(s.dayjob),
+    leadCards(s.due_leads || []),
     draftCards(s.drafts || []),
     h('h2', {}, 'Needs you'), ...(need.length ? need : [h('p', { class: 'dim' }, 'Nothing waiting on you.')]),
     h('h2', {}, 'Ventures'), ...(s.ventures || []).map((x) => h('div', { class: 'card' },
@@ -203,6 +204,16 @@ function bankCard(c) {
       h('button', { onclick: () => { if (amt.value.trim()) { act('bank', { verb: 'balance', amount: amt.value.trim() }); amt.value = ''; } } }, 'Save balance'),
       h('button', { class: 'ghost', onclick: () => file.click() }, 'Import statement CSV'),
       h('button', { class: 'ghost', onclick: () => act('bank', { verb: 'reconcile' }) }, 'Reconcile')), file));
+}
+function leadCards(ls) {
+  if (!ls.length) return null;
+  return h('div', {}, h('h2', {}, 'Follow-ups due'), ...ls.map((l) => h('div', { class: 'card' },
+    h('div', { class: 'row' }, h('h3', {}, '#' + l.sid + ' ' + (l.name || 'Lead')), h('span', { class: 'dim' }, l.due)),
+    l.phone ? h('div', {}, h('a', { href: 'tel:' + l.phone, style: 'color:var(--gold)' }, l.phone)) : null,
+    l.notes ? h('div', { class: 'dim' }, l.notes) : null,
+    h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => act('lead', { sid: l.sid, days: 3, outcome: 'called' }) }, 'Called +3d'),
+      h('button', { class: 'ghost', onclick: () => act('lead', { sid: l.sid, days: 1, outcome: 'no answer' }) }, 'No answer +1d'),
+      h('button', { class: 'ghost', onclick: () => { if (confirm('Close this lead?')) act('lead', { sid: l.sid, days: 0, outcome: 'closed' }); } }, 'Close')))));
 }
 function draftCards(ds) {
   if (!ds.length) return null;

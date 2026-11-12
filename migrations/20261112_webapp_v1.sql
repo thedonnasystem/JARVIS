@@ -9,7 +9,7 @@ alter table public.app_owners enable row level security;
 create table if not exists public.web_messages (
   id uuid primary key default gen_random_uuid(),
   role text not null check (role in ('owner','jarvis')),
-  kind text not null default 'chat' check (kind in ('chat','decision','answer','mission','bank','venture','day','draft','idea','system')),
+  kind text not null default 'chat' check (kind in ('chat','decision','answer','mission','bank','venture','day','draft','idea','lead','system')),
   body text not null default '' check (length(body) <= 12000),
   payload jsonb not null default '{}'::jsonb,
   status text not null default 'new' check (status in ('new','processing','done','failed')),
@@ -129,6 +129,8 @@ begin
                 'blocked', count(*) filter (where status='blocked'), 'done_24h', count(*) filter (where status='done' and updated_at > now() - interval '24 hours')) from tasks),
     'leads', (select jsonb_build_object('total', count(*), 'new_24h', count(*) filter (where created_at > now() - interval '24 hours'),
                 'due', count(*) filter (where next_followup_at <= now() and not do_not_contact)) from leads),
+    'due_leads', (select coalesce(jsonb_agg(jsonb_build_object('sid', short_id, 'name', name, 'phone', phone, 'notes', left(notes, 160), 'due', next_followup_at) order by next_followup_at), '[]'::jsonb)
+                  from (select * from leads where next_followup_at <= (now() at time zone 'America/Toronto')::date and not do_not_contact and status <> 'closed' order by next_followup_at limit 15) l),
     'drafts', (select coalesce(jsonb_agg(jsonb_build_object('id', o.id, 'to', o.to_ref, 'body', left(o.body, 900), 'agent', o.agent, 'status', o.status, 'created_at', o.created_at)
                  order by o.created_at desc), '[]'::jsonb) from (select * from outbox where status in ('draft','qa_passed','approved') order by created_at desc limit 20) o),
     'ideas', (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'name', name, 'status', status, 'score', score, 'verdict', verdict, 'cost_cents', startup_cost_cents, 'kill_metric', kill_metric, 'test_ends_on', test_ends_on) order by score desc nulls last), '[]'::jsonb)
@@ -161,7 +163,7 @@ language plpgsql security definer set search_path to 'public' as $$
 declare v_id uuid;
 begin
   if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
-  if p_kind not in ('chat','decision','answer','mission','bank','venture','day','draft','idea') then raise exception 'bad kind'; end if;
+  if p_kind not in ('chat','decision','answer','mission','bank','venture','day','draft','idea','lead') then raise exception 'bad kind'; end if;
   if pg_column_size(coalesce(p_payload, '{}'::jsonb)) > 400000 then raise exception 'payload too large'; end if;
   if p_kind = 'chat' and length(trim(coalesce(p_body, ''))) = 0 then raise exception 'empty message'; end if;
   if (select count(*) from web_messages where role = 'owner' and created_at > now() - interval '1 minute') >= 30 then

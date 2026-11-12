@@ -69,6 +69,14 @@ def _bank(payload: dict) -> str:
     return "Unknown bank action."
 
 
+def _lead(payload: dict) -> str:
+    try:
+        sid, days = int(payload.get("sid")), max(0, min(int(payload.get("days") if payload.get("days") is not None else 3), 60))
+    except (TypeError, ValueError):
+        return "Bad lead action."
+    return hq_commands.log_contact(sid, days, str(payload.get("outcome") or "")[:200])
+
+
 def _idea(payload: dict) -> str:
     verb = str(payload.get("verb") or "")
     return hq_commands.set_idea_status_by_id(str(payload.get("id") or ""), {"test": "testing", "park": "parked"}.get(verb, ""))
@@ -125,6 +133,8 @@ async def handle(row: dict, context) -> None:
         _say(_bank(payload), row["id"], "system")
     elif kind == "venture":
         _say(_venture(payload), row["id"], "system")
+    elif kind == "lead":
+        _say(_lead(payload), row["id"], "system")
     elif kind == "idea":
         _say(_idea(payload), row["id"], "system")
     elif kind == "draft":
