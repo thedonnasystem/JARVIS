@@ -40,6 +40,7 @@ import hq
 import hq_engine
 import hq_commands
 import hq_meter
+import hq_web
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -2033,126 +2034,88 @@ async def dispatch_tool_call(
 NON_OWNER_REPLY = "This is a private assistant."
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    user_text = update.message.text
-
-    # Security: every chat turn costs a Claude call on the owner's API key. Strangers who find the
-    # bot get one line and nothing else: no model call, no history saved.
-    if not _is_owner(update.effective_user.id):
-        await update.message.reply_text(NON_OWNER_REPLY)
-        return
-
+async def jarvis_reply(chat_id: int, user_text: str, context, typing: bool = True) -> str:
+    """One owner turn with Jarvis: same brain, tools, memory and history for Telegram and the web app.
+    Returns the reply text. Only call this for the owner."""
+    owner_id = int(JARVIS_OWNER_ID) if JARVIS_OWNER_ID and str(JARVIS_OWNER_ID).isdigit() else 0
     history = load_history(chat_id)
     messages = history + [{"role": "user", "content": user_text}]
 
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    async def _typing():
+        if typing:
+            try:
+                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            except Exception:
+                pass
+
+    await _typing()
 
     tools = []
-    if _should_offer_make_tool(update.effective_user.id):
+    if _should_offer_make_tool(owner_id):
         tools.append(MAKE_SCENARIO_TOOL)
-    if _should_offer_n8n_tools(update.effective_user.id):
+    if _should_offer_n8n_tools(owner_id):
         tools.extend([BUILD_N8N_WORKFLOW_TOOL, TRIGGER_N8N_WORKFLOW_TOOL, LIST_N8N_WORKFLOWS_TOOL])
-    if _is_owner(update.effective_user.id):
-        # The five agents are always available to the owner - they're core
-        # Jarvis capabilities, not optional integrations like n8n/Make.
-        tools.extend(
-            [
-                RESEARCH_AGENT_TOOL,
-                RECALL_MEMORY_TOOL,
-                CONTENT_AGENT_TOOL,
-                OPERATIONS_AGENT_TOOL,
-                SOCIAL_AGENT_TOOL,
-            ]
-        )
-        if hq.hq_enabled():
-            tools.extend(hq_commands.HQ_CHAT_TOOLS)
+    tools.extend([RESEARCH_AGENT_TOOL, RECALL_MEMORY_TOOL, CONTENT_AGENT_TOOL, OPERATIONS_AGENT_TOOL, SOCIAL_AGENT_TOOL])
+    if hq.hq_enabled():
+        tools.extend(hq_commands.HQ_CHAT_TOOLS)
     kwargs = {"tools": tools} if tools else {}
 
-    # Cap on tool round-trips per user message, so a confused model can't
-    # loop forever - five is generous for e.g. "build this, then trigger it".
-    MAX_TOOL_ROUNDS = 5
+    MAX_TOOL_ROUNDS = 5  # a confused model can't loop forever
 
+    def _call(purpose: str, msgs: list):
+        return hq_meter.metered_create(anthropic_client, purpose, model=CLAUDE_MODEL, max_tokens=2048,
+                                       system=SYSTEM_PROMPT, messages=msgs, **kwargs)
+
+    # Credential values that pass through store_credential/get_credential are scrubbed before the turn
+    # is saved to history, so a fetched secret never sits in plaintext in the messages table.
+    redact_values: list[str] = []
     try:
-        response = hq_meter.metered_create(
-            anthropic_client, "owner chat",
-            model=CLAUDE_MODEL,
-            max_tokens=2048,
-            system=SYSTEM_PROMPT,
-            messages=messages,
-            **kwargs,
-        )
-
-        # Credential values that pass through store_credential/get_credential -
-        # delivered to Moe over Telegram as normal, but scrubbed before this
-        # turn is persisted to conversation history (see save_message calls
-        # below), so a fetched secret never ends up sitting in plaintext in
-        # the messages table.
-        redact_values: list[str] = []
-
+        response = await asyncio.to_thread(_call, "owner chat", messages)
         for _ in range(MAX_TOOL_ROUNDS):
             if response.stop_reason != "tool_use":
                 break
-
             assistant_content = response.content
             tool_results = []
             for block in assistant_content:
                 if block.type != "tool_use":
                     continue
-                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-                result_text = await dispatch_tool_call(
-                    block.name, block.input, context, chat_id, redact_values
-                )
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    }
-                )
-
+                await _typing()
+                result_text = await dispatch_tool_call(block.name, block.input, context, chat_id, redact_values)
+                tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result_text})
             messages = messages + [
                 {"role": "assistant", "content": assistant_content},
                 {"role": "user", "content": tool_results},
             ]
-            response = hq_meter.metered_create(
-                anthropic_client, "owner chat (tool round)",
-                model=CLAUDE_MODEL,
-                max_tokens=2048,
-                system=SYSTEM_PROMPT,
-                messages=messages,
-                **kwargs,
-            )
+            response = await asyncio.to_thread(_call, "owner chat (tool round)", messages)
     except hq_meter.MeterBlocked as e:
-        await update.message.reply_text(
-            f"Today's AI budget is used up ({e}). Commands like /hq still work; "
-            "raise the cap by approving a budget proposal or with /nightshift."
-        )
-        return
+        return (f"Today's AI budget is used up ({e}). Commands like /hq still work; "
+                "raise the cap by approving a budget proposal or with /nightshift.")
     except APIError as e:
         logger.exception("Anthropic API error")
-        await update.message.reply_text(
-            f"Sorry, I hit an error talking to Claude: {e.message}"
-        )
-        return  # don't persist the failed turn
+        return f"Sorry, I hit an error talking to Claude: {e.message}"  # failed turn is not saved
 
-    reply_text = "".join(
-        block.text for block in response.content if block.type == "text"
-    )
+    reply_text = "".join(block.text for block in response.content if block.type == "text")
     if not reply_text:
         reply_text = "(Claude returned no text - it may have refused this request.)"
 
-    persisted_user_text = user_text
-    persisted_reply_text = reply_text
+    persisted_user_text, persisted_reply_text = user_text, reply_text
     for secret_value in redact_values:
         if not secret_value:
             continue
         persisted_user_text = persisted_user_text.replace(secret_value, "[credential redacted]")
         persisted_reply_text = persisted_reply_text.replace(secret_value, "[credential redacted]")
-
     save_message(chat_id, "user", persisted_user_text)
     save_message(chat_id, "assistant", persisted_reply_text)
+    return reply_text
 
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Security: every chat turn costs a Claude call on the owner's API key. Strangers who find the
+    # bot get one line and nothing else: no model call, no history saved.
+    if not _is_owner(update.effective_user.id):
+        await update.message.reply_text(NON_OWNER_REPLY)
+        return
+    reply_text = await jarvis_reply(update.effective_chat.id, update.message.text, context)
     for chunk in split_for_telegram(reply_text):
         await update.message.reply_text(chunk)
 
@@ -2490,6 +2453,9 @@ def main() -> None:
     if hq.hq_enabled():
         app.job_queue.run_repeating(hq.deliver_owner_messages, interval=60, first=15, name="hq-owner-messages")
         app.job_queue.run_repeating(hq_engine.tick, interval=300, first=45, name="hq-engine")
+        hq_web.configure(jarvis_reply)
+        app.job_queue.run_repeating(hq_web.poll, interval=hq_web.POLL_SECONDS, first=20, name="hq-web",
+                                    job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 5})
         logger.info("Fendezy HQ bridge on: owner messages every 60s, task board and escalations every 5 min")
     else:
         logger.warning(
