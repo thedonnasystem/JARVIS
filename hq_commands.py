@@ -24,6 +24,7 @@ import hq_org
 import hq_ventures
 import hq_capital
 import hq_payments
+import hq_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -611,6 +612,10 @@ def apply_decision(msg_id: str, approved: bool) -> str:
                     {"status": "cancelled", "result": "Cancelled: owner paused this venture."}, prefer="return=minimal")
     elif ref_table and ref_table.startswith("activate_venture:") and approved:
         hq_ventures.activate(ref_table.split(":", 1)[1], by="owner:telegram")
+    elif ref_table == "account_requests" and ref_id:
+        out = hq_accounts.decide(ref_id, approved, by="owner:telegram")
+        _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
+        return out
     elif ref_table == "payment_instructions" and ref_id:
         out = hq_payments.decide(ref_id, approved, by="owner:telegram")
         _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
@@ -828,6 +833,20 @@ async def hq_pay_cmd(update, context) -> None:
     await update.message.reply_text(hq_payments.open_text() + "\n\nAfter you pay in RBC: /pay done <id> <amount> <reference>")
 
 
+async def hq_account_cmd(update, context) -> None:
+    """/account  (list)   |   /account done <id> <login email or username>   (never the password)"""
+    if not _owner(update):
+        return
+    a = context.args or []
+    if a and a[0].lower() == "done":
+        if len(a) < 3:
+            await update.message.reply_text("Use: /account done <id> <login email or username>  (never the password)")
+            return
+        await update.message.reply_text(hq_accounts.complete(a[1], " ".join(a[2:])))
+        return
+    await update.message.reply_text(hq_accounts.open_text() + "\n\nAfter you sign up: /account done <id> <login>")
+
+
 async def hq_capital_cmd(update, context) -> None:
     """/capital  shows the operating fund. /capital set <field> <value> changes a limit (owner only)."""
     if not _owner(update):
@@ -845,7 +864,7 @@ async def hq_capital_cmd(update, context) -> None:
 
 
 MENU = [
-    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -922,7 +941,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd)):
         app.add_handler(CommandHandler(name, fn))
     try:
         from telegram.ext import MessageHandler, filters
@@ -1024,6 +1043,16 @@ HQ_CHAT_TOOLS = [
                        "by venture (received cash only; expected revenue is never counted as money). Use for 'review our finances', "
                        "'how much do we have', 'are we on budget'.",
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "hq_request_account",
+        "description": "Ask the owner to create a business software account you need (e.g. a phone/SMS provider, a hosting service). You cannot sign up yourself: "
+                       "he approves, signs up with his business email/number, and confirms the login. Say which steps only he can do. Never ask for passwords.",
+        "input_schema": {"type": "object", "properties": {
+            "vendor": {"type": "string"}, "purpose": {"type": "string"}, "venture": {"type": "string"},
+            "url": {"type": "string", "description": "https sign-up page"}, "monthly_cents": {"type": "integer"},
+            "needs": {"type": "array", "items": {"type": "string", "enum": ["captcha", "email_code", "sms_code", "id", "payment"]}}},
+            "required": ["vendor", "purpose"]},
     },
     {
         "name": "hq_prepare_payment",
@@ -1142,6 +1171,9 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
             return hq_org.create_agent(tool_input.get("slug", ""), tool_input.get("title", ""), tool_input.get("department", ""), tool_input.get("role", ""),
                                        tool_input.get("tier", "cheap"), tool_input.get("cap_cents") or 15, tool_input.get("charter", ""),
                                        tool_input.get("metric", ""), by="owner-chat")
+        if name == "hq_request_account":
+            return hq_accounts.request("jarvis", tool_input.get("vendor", ""), tool_input.get("purpose", ""), tool_input.get("venture") or None,
+                                       tool_input.get("url", ""), int(tool_input.get("monthly_cents") or 0), tool_input.get("needs") or [])
         if name == "hq_prepare_payment":
             return hq_payments.prepare("jarvis", tool_input.get("payee", ""), int(tool_input.get("amount_cents") or 0), tool_input.get("purpose", ""),
                                        tool_input.get("alternatives", ""), tool_input.get("due_on") or None, tool_input.get("venture") or None)

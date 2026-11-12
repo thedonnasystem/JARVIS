@@ -50,7 +50,7 @@ Status: BUILT = code and tests on `overnight-build`, not live until you apply mi
 |---|---|
 | Jarvis edits own code | BUILT (PR-only; you merge) |
 | Creates agents and sub-agents | BUILT inside limits |
-| Creates accounts with the email/number you provide | PARTLY: `create_account` is a Yellow action behind approval; no automated sign-up flow is built |
+| Creates accounts with the email/number you provide | PARTLY: request -> your approval -> you sign up (captcha, codes, ID, payment are always yours) -> `/account done` records the login. Agents have no browser here, so they cannot sign up alone. accounts_v1 |
 | Bypass captcha | NOT BUILT, by decision: it breaks sites' terms and risks bans. Captcha steps park as one tap for you. |
 | Never go over budget | BUILT (DB-enforced) |
 | Limited capital | BUILT (low-cost mode, hard stop, reserve) |

@@ -1,5 +1,5 @@
 # Go-live checklist (what the green light means)
-Everything below is built, tested (167 unit tests; SQL tested on local Postgres 16 and earlier dry-runs on the live DB) and sitting on branch `overnight-build`. Nothing here is live until you say go.
+Everything below is built, tested (172 unit tests; SQL tested on local Postgres 16 and earlier dry-runs on the live DB) and sitting on branch `overnight-build`. Nothing here is live until you say go.
 
 Exact file order: `migrations/APPLY_ORDER.txt`.
 
@@ -21,6 +21,7 @@ Exact file order: `migrations/APPLY_ORDER.txt`.
 | 8d | office_v1 | Corporate office (spec 11): the nine functions as live views over real agents, tasks, spend and data (apply after 8) | Low; adds one nullable agents column |
 | 8e | payments_v1 | Payment instructions: Jarvis reserves funds and asks; YOU pay in RBC and confirm with the bank reference (/pay done). No money movement, no credentials. Needs capital_v1, bank_v1 (apply after 8) | Low |
 | 8f | assets_procedures_v1 | Per-venture websites/assets/integrations and operating procedures (names and URLs only; credentials refused); shown in venture Details | Low |
+| 8g | accounts_v1 | Account requests: Jarvis asks, you approve and sign up yourself (captcha/codes/ID are yours), `/account done` records the login as an asset; no passwords (apply after 8f) | Low |
 | 8b | brief_v3 | 7pm brief gains P&L, bank alerts, forecast accuracy, pending proposals (apply after 3-7) | Low |
 | 9 | push_v1 | Push subscriptions; VAPID key stored in a locked table | Low |
 
