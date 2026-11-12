@@ -214,3 +214,7 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - `/autonomy`: per channel, how many drafts you reviewed and rejected; flags a channel as "could be considered for auto-send" at 20+ reviewed and 5% or fewer rejected. Reports only; you alone change the mode.
 - `/succession`: continuity sheet (ventures, accounts and which vault entry holds each login, tools and monthly cost, assets, runbooks). Never contains secrets. Lawyer/accountant still needed for the trust and will.
 - `/tool`: the recurring-charge registry. `/tool add Retell | api | AI phone calls | 25` (CAD per month, 0 or free allowed), `/tool used <name>`, `/tool idle <name>`, `/tool cancel <name>` (records only; you cancel with the vendor). The list flags tools unused for 30+ days, paid but never used, or past their review date. Active tools feed the capital controller's recurring-cost figure, so fill this in once.
+
+## Voice notes (hq_voice)
+- Send Jarvis a Telegram voice note (up to 3 minutes): it is transcribed ("Heard: ...") and answered like typed text. Owner only.
+- Switched off until `OPENAI_API_KEY` is set in Railway (model `whisper-1`, override with `TRANSCRIBE_MODEL`). Cost is a fraction of a cent per minute.

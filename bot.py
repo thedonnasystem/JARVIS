@@ -2120,6 +2120,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(chunk)
 
 
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner voice notes -> text -> the same chat path as typed messages. Needs OPENAI_API_KEY; otherwise says so."""
+    if not _is_owner(update.effective_user.id):
+        await update.message.reply_text(NON_OWNER_REPLY)
+        return
+    import hq_voice
+    v = update.message.voice or update.message.audio
+    if not hq_voice.configured():
+        await update.message.reply_text("Voice notes are built but switched off: add OPENAI_API_KEY to the bot's environment and I'll transcribe them.")
+        return
+    why = hq_voice.too_long(getattr(v, "duration", 0), getattr(v, "file_size", 0))
+    if why:
+        await update.message.reply_text(why)
+        return
+    f = await context.bot.get_file(v.file_id)
+    data = bytes(await f.download_as_bytearray())
+    text = await asyncio.to_thread(hq_voice.transcribe, data)
+    if not text:
+        await update.message.reply_text("I couldn't make out that voice note. Try again or type it.")
+        return
+    await update.message.reply_text("Heard: " + text[:500])
+    reply_text = await jarvis_reply(update.effective_chat.id, text, context)
+    for chunk in split_for_telegram(reply_text):
+        await update.message.reply_text(chunk)
+
+
 def _is_owner(user_id: int) -> bool:
     return bool(JARVIS_OWNER_ID) and str(user_id) == str(JARVIS_OWNER_ID)
 
@@ -2446,6 +2472,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(build_callback, pattern=r"^build:"))
     app.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^approve:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
 
     reschedule_all_reminders(app)
 

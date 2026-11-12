@@ -77,6 +77,6 @@ Migration green light, Auth setup, merge to the Railway branch, VAPID keys, Anth
 | Deploy-and-verify evidence | BUILT (`hq_verify_url`) |
 | Website drafts as PRs | BUILT (hq_sites); publishing needs your token/host |
 | Day-job lead ranking of the ~14,000 portal leads | NOT BUILT: needs the lead export (and written company permission) |
-| Telegram voice notes in/out | NOT BUILT: needs a transcription provider key |
+| Telegram voice notes in | BUILT, switched off until OPENAI_API_KEY is set (voice replies not built) |
 | Real send provider for outbox | NOT BUILT: needs a provider account and your CASL address |
 | Daily database backup | NOT BUILT: needs storage you own |
