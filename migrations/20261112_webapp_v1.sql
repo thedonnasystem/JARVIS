@@ -31,7 +31,7 @@ $$;
 create or replace function public.app_snapshot_data()
 returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
 declare v_start timestamptz := date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto';
-        v_capital jsonb; v_policy jsonb; v_alerts jsonb := '[]'::jsonb; v_pnl jsonb; v_stage jsonb := '{}'::jsonb; out_ jsonb;
+        v_capital jsonb; v_policy jsonb; v_alerts jsonb := '[]'::jsonb; v_pnl jsonb; v_score jsonb; v_org jsonb; v_stage jsonb := '{}'::jsonb; out_ jsonb;
 begin
   if to_regprocedure('public.capital_snapshot()') is not null then
     execute 'select public.capital_snapshot()' into v_capital;
@@ -41,6 +41,13 @@ begin
   end if;
   if to_regprocedure('public.bank_alerts()') is not null then
     execute 'select public.bank_alerts()' into v_alerts;
+  end if;
+  if to_regclass('public.agent_scorecard') is not null then
+    execute $q$select coalesce(jsonb_object_agg(slug, jsonb_build_object('flag', flag, 'cents_per_done', cents_per_done, 'done_7d', done_7d)), '{}'::jsonb) from public.agent_scorecard$q$ into v_score;
+  end if;
+  if to_regclass('public.org_changes') is not null then
+    execute $q$select coalesce(jsonb_agg(jsonb_build_object('kind', kind, 'change', left(change, 200), 'status', status, 'gain', gain, 'cost', cost, 'at', created_at) order by created_at desc), '[]'::jsonb)
+                from (select * from public.org_changes order by created_at desc limit 12) o$q$ into v_org;
   end if;
   if to_regprocedure('public.holding_pnl(integer)') is not null then
     execute 'select public.holding_pnl(30)' into v_pnl;
@@ -52,6 +59,8 @@ begin
     'now', now(),
     'bank_alerts', coalesce(v_alerts, '[]'::jsonb),
     'pnl', v_pnl,
+    'scorecard', coalesce(v_score, '{}'::jsonb),
+    'org_changes', coalesce(v_org, '[]'::jsonb),
     'venture_stage', v_stage,
     'state', (select jsonb_build_object('mode', mode, 'kill_switch', kill_switch, 'pause_reason', pause_reason,
                 'paused_at', paused_at, 'cap_cents', daily_spend_cap_cents, 'last_heartbeat', last_heartbeat,

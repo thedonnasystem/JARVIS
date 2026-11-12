@@ -223,12 +223,18 @@ function rMissions(s) {
         h('button', { class: 'ghost', onclick: () => { if (confirm('Abandon this mission?')) act(m.id, 'abandon'); } }, 'Abandon')))));
 }
 function rAgents(s) {
+  const sc = s.scorecard || {}; const flagTxt = (f) => ({ 'spending, nothing done': 'spending, nothing done', 'failing more than finishing': 'failing more than finishing', idle: 'idle' })[f];
+  const org = (s.org_changes || []).map((o) => h('div', { class: 'card' },
+    h('div', { class: 'row dim' }, h('span', {}, o.kind), h('span', { class: 'tag' }, o.status)), h('div', {}, o.change),
+    h('div', { class: 'dim' }, [o.gain ? 'Gain: ' + o.gain : '', o.cost ? 'Cost: ' + o.cost : ''].filter(Boolean).join(' · '))));
   $('v-agents').replaceChildren(...(s.agents || []).map((a) => h('div', { class: 'card' },
     h('div', { class: 'row' }, h('h3', {}, a.title || a.slug), h('span', { class: 'tag' }, a.status)),
     h('div', { class: 'dim' }, `${a.role} · ${a.tier || ''} · ${a.venture || 'company'}`),
     h('div', { class: 'dim' }, `Today ${usd(a.spent_today)} of ${usd(a.cap_cents)} · ${a.open} open · ${a.done_7d} done this week`),
+    sc[a.slug] && sc[a.slug].flag && sc[a.slug].flag !== 'ok' ? h('div', { class: 'dim', style: 'color:var(--warn)' }, 'Review: ' + flagTxt(sc[a.slug].flag) + (sc[a.slug].cents_per_done != null ? ' · ' + sc[a.slug].cents_per_done + 'c per finished task' : '')) : null,
     a.last_task ? h('div', { class: 'dim' }, 'Last: ' + a.last_task) : null,
-    h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => rpc('app_set_agent', { p_slug: a.slug, p_status: a.status === 'active' ? 'paused' : 'active' }).then(refresh).catch((e) => note(e.message)) }, a.status === 'active' ? 'Pause' : 'Resume')))));
+    h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => rpc('app_set_agent', { p_slug: a.slug, p_status: a.status === 'active' ? 'paused' : 'active' }).then(refresh).catch((e) => note(e.message)) }, a.status === 'active' ? 'Pause' : 'Resume')))),
+    ...(org.length ? [h('h2', {}, 'Proposals and org changes'), ...org] : []));
 }
 function rMoney(s) {
   const c = s.capital || {}; const row = (a, b) => h('div', { class: 'row' }, h('span', { class: 'dim' }, a), h('span', {}, b));
