@@ -20,7 +20,7 @@ def reqf(reply, log=None):
 class Accounts(unittest.TestCase):
     def test_request_validates_and_filters_needs(self):
         log = []
-        with mock.patch.object(hq, "_request", reqf({"decision": "ask_owner"}, log)):
+        with mock.patch.object(hq, "_request", reqf({"decision": "ask_owner"}, log)), mock.patch("hq_waterfall.coast", return_value=False):
             self.assertIn("needs a vendor", A.request("jarvis", "", "Phone numbers"))
             self.assertIn("https://", A.request("jarvis", "Twilio", "Phone number for Donna", url="http://x"))
             self.assertEqual(log, [])

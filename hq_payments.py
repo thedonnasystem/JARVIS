@@ -35,6 +35,9 @@ def prepare(actor: str, payee: str, cents: int, purpose: str, alternatives: str 
     """Reserve funds and ask the owner. Returns a plain sentence for the caller to relay."""
     if not (payee or "").strip() or len(purpose or "") < 5 or int(cents or 0) <= 0:
         return "A payment needs a payee, a purpose (5+ characters) and an amount above zero."
+    import hq_waterfall
+    if hq_waterfall.coast():
+        return hq_waterfall.COAST_REFUSAL
     try:
         r = _rpc("prepare_payment", {"p_actor": actor, "p_payee": payee.strip()[:120], "p_cents": int(cents), "p_purpose": purpose.strip()[:300],
                                      "p_alternatives": (alternatives or "")[:300], "p_due": due_on, "p_venture_slug": venture})

@@ -25,6 +25,9 @@ def request(actor: str, vendor: str, purpose: str, venture: str | None = None, u
     if url and not re.match(r"^https://[^\s]+$", url):
         return "Sign-up URL must start with https://."
     needs = [n for n in (needs or []) if n in NEEDS]
+    import hq_waterfall
+    if hq_waterfall.coast():
+        return hq_waterfall.COAST_REFUSAL
     try:
         r = _rpc("request_account", {"p_actor": actor, "p_vendor": vendor.strip()[:80], "p_purpose": purpose.strip()[:300], "p_venture_slug": venture or None,
                                      "p_url": url or None, "p_monthly_cents": max(int(monthly_cents or 0), 0), "p_needs": needs})

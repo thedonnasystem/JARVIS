@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 import logging
 import os
 import re
@@ -23,6 +25,7 @@ import hq_dev
 import hq_sites
 import hq_setters
 import hq_verify
+import hq_waterfall
 import hq_org
 import hq_ventures
 import hq_capital
@@ -42,7 +45,10 @@ VENTURE_ALIASES = {
 
 def _owner(update) -> bool:
     owner = os.environ.get("JARVIS_OWNER_ID")
-    return bool(owner) and str(update.effective_user.id) == str(owner)
+    ok = bool(owner) and str(update.effective_user.id) == str(owner)
+    if ok:
+        hq_waterfall.touch()
+    return ok
 
 
 def _q(v: str) -> str:
@@ -864,6 +870,15 @@ async def hq_setter_cmd(update, context) -> None:
         await update.message.reply_text("Use: /setter  |  /setter add Name | contact | niche  |  /setter booked Name | client  |  /setter closed Name | client  |  /setter paid Name close|recurring|bonus amount ref")
 
 
+async def hq_waterfall_cmd(update, context) -> None:
+    """/waterfall [days]: where received cash goes (tax, costs, buffer, draw, reinvestment) and the HST watch."""
+    if not _owner(update):
+        return
+    a = context.args or []
+    days = int(a[0]) if a and a[0].isdigit() else 30
+    await update.message.reply_text(await asyncio.to_thread(hq_waterfall.text, days))
+
+
 async def hq_account_cmd(update, context) -> None:
     """/account  (list)   |   /account done <id> <login email or username>   (never the password)"""
     if not _owner(update):
@@ -901,7 +916,7 @@ async def hq_capital_cmd(update, context) -> None:
 
 
 MENU = [
-    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -978,7 +993,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("setter", hq_setter_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd)):
         app.add_handler(CommandHandler(name, fn))
     try:
         from telegram.ext import MessageHandler, filters

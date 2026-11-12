@@ -4,7 +4,7 @@ insert into public.app_owners (email) values ('owner@example.com');
 select set_config('app.uid', '11111111-1111-1111-1111-111111111111', false), set_config('app.email', 'owner@example.com', false);
 select 'is_owner', public.is_app_owner();
 select 'snapshot keys', jsonb_object_keys(public.app_snapshot()) k order by 2 limit 40;
-select 'create_venture', public.create_venture('acme','Acme Cleaning','revenue','paying customers',3000,'owner:test');
+select 'create_venture', public.create_venture('acme','Acme Cleaning','lab','paying customers',3000,'owner:test');
 select 'activate', public.activate_venture('acme','owner:test');
 select 'opp scans', public.queue_opportunity_scans();
 select 'office', jsonb_array_length(public.app_office());
@@ -84,3 +84,30 @@ do $$ declare r record; j jsonb; begin
   if r.owed_close_cents <> 0 or r.owed_recurring_cents <> 0 then raise exception 'owed not cleared'; end if;
 end $$;
 select 'setters_ok';
+
+-- finance_rules_v1
+do $$ declare w jsonb; i int; begin
+  insert into public.ledger (kind, amount_cents, status, note) values ('revenue', 100000, 'received', 'waterfall test');
+  insert into public.ledger (kind, amount_cents, status, note) values ('revenue', 50000, 'expected', 'not cash');
+  w := public.waterfall(30);
+  if (w->>'tax_setaside_cents')::int <> round(((w->>'revenue_cents')::numeric) * 0.33) then raise exception 'tax wrong %', w; end if;
+  if (w->>'pool_cents')::int < 0 then raise exception 'negative pool %', w; end if;
+  if (w->>'pool_best_cents')::int + (w->>'pool_research_cents')::int + (w->>'pool_deal_cents')::int <> (w->>'pool_cents')::int then raise exception 'pool split %', w; end if;
+  if (w->>'revenue_cents')::int < 100000 or (w->>'revenue_cents')::int >= 150000 then raise exception 'expected money counted %', w; end if;
+  begin update public.waterfall_policy set tax_pct = 5 where id = 1; raise exception 'agent changed policy'; exception when others then if sqlerrm like 'agent changed%' then raise; end if; end;
+  update public.waterfall_policy set tax_pct = 30, updated_by = 'owner:test' where id = 1;
+  perform public.owner_seen();
+  if (public.coast_state()->>'coast')::boolean then raise exception 'coast too early'; end if;
+  update public.system_state set owner_last_seen = now() - interval '5 days' where id = 1;
+  if not (public.coast_state()->>'coast')::boolean then raise exception 'coast not detected'; end if;
+  update public.system_state set owner_last_seen = now() where id = 1;
+  -- slot cap: with max 1, a second revenue venture cannot be activated
+  update public.waterfall_policy set max_revenue_ventures = 1, updated_by = 'owner:test' where id = 1;
+  perform public.create_venture('slot-a','Slot A','revenue','m',0,'d','jarvis');
+  perform public.create_venture('slot-b','Slot B','revenue','m',0,'d','jarvis');
+  update public.ventures set status = 'proposed' where status = 'active' and kind = 'revenue';
+  perform public.activate_venture('slot-a','owner:test');
+  begin perform public.activate_venture('slot-b','owner:test'); raise exception 'slot cap not enforced'; exception when others then if sqlerrm like 'slot cap%' then raise; end if; end;
+  update public.waterfall_policy set max_revenue_ventures = 3, updated_by = 'owner:test' where id = 1;
+end $$;
+select 'finance_rules_ok';

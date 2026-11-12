@@ -25,6 +25,7 @@ import hq_wholesale
 import hq_systems
 import hq_missions
 import hq_bank
+import hq_waterfall
 
 logger = logging.getLogger(__name__)
 
@@ -1109,6 +1110,22 @@ def unblock_task_for(summary: str) -> int:
     return n
 
 
+_coast_told = False
+
+
+def _coast_notice() -> None:
+    """One check-in per coast episode. It is the owner-silence rule from the Master Plan, not a nag."""
+    global _coast_told
+    if _coast_told:
+        return
+    _coast_told = True
+    try:
+        _insert("owner_messages", {"from_agent": "jarvis", "kind": "brief", "channel": "telegram",
+                                 "body": "I haven't heard from you in a few days, so I'm in coast mode: current work finishes, but I start no new missions, payments or account requests until you check in. Any message to me ends it."})
+    except Exception:
+        logger.exception("HQ coast notice failed")
+
+
 def tick_sync() -> None:
     state = _get("system_state?id=eq.1&select=kill_switch,pause_reason,paused_at,night_until,night_started_at,day_cap_cents")
     if state and state[0].get("kill_switch"):
@@ -1138,10 +1155,13 @@ def tick_sync() -> None:
         _triage_escalations()
     except Exception:
         logger.exception("HQ triage failed")
-    try:  # database-only: moves missions along and puts their next steps on the board
-        hq_missions.advance()
-    except Exception:
-        logger.exception("HQ mission advance failed")
+    if hq_waterfall.coast():  # owner away: finish queued work, start nothing new
+        _coast_notice()
+    else:
+        try:  # database-only: moves missions along and puts their next steps on the board
+            hq_missions.advance()
+        except Exception:
+            logger.exception("HQ mission advance failed")
     _work_tasks()
 
 

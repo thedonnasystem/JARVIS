@@ -205,3 +205,9 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - A setter's first logged booking makes them active (add to the group chat, send your personal contact).
 - You pay in RBC (Fridays); `/setter paid` refuses more than is owed, never pays a recurring month twice, and logs a Donna expense.
 - Not built: public self-serve signup form (needs a safe intake endpoint) and the monthly top-setter bonus pick (record bonuses with `/setter paid ... bonus`).
+
+## Master Plan money rules (finance_rules_v1)
+- `/waterfall [days]`: received cash -> tax set-aside (default 33%, you/accountant set it) -> running costs -> living buffer (1.5 months) -> your draw (default $0, you name it) -> reinvestment pool 60/25/15. Only received cash counts. Includes the HST watch (warns at 80% of $30,000 trailing 12 months).
+- Revenue venture slots: at most 3 revenue ventures active at once (policy `max_revenue_ventures`); activating a 4th is refused until you park or cut one. Lab ventures are not limited by this.
+- Coast mode: if you have not used Telegram or the app for 3 days (`coast_after_days`), HQ finishes queued work but starts no new missions, payments or account requests, and tells you once. Any message to Jarvis ends it.
+- Policy edits are owner-only (`updated_by` must start with `owner`). Defaults are proposals from the Master Plan.
