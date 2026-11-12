@@ -111,3 +111,20 @@ class AssetsProcedures(unittest.TestCase):
         calls2 = []
         with mock.patch.object(hq, "_request", self._req(calls2, [{"id": "p1", "version": 2}])):
             self.assertIn("v3", V.save_procedure("donna", "Follow up a lead", "1. Call within 24h. 2. Log it. 3. Book the next step."))
+
+
+class Allocation(unittest.TestCase):
+    def test_set_budget_parses_and_passes_owner(self):
+        import hq_ventures as V
+        got = {}
+
+        def req(method, path, body=None, timeout=30, prefer=None):
+            got.update(path=path, body=body)
+            return "ok"
+        with mock.patch.object(hq, "_request", req):
+            self.assertEqual(V.set_budget("Acme!", "$1,250.50"), "ok")
+            self.assertEqual((got["body"]["p_slug"], got["body"]["p_cents"], got["body"]["p_by"]), ("acme", 125050, "owner:telegram"))
+            self.assertIn("Amount must", V.set_budget("acme", "lots"))
+        with mock.patch.object(hq, "_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("404"))):
+            self.assertIn("Could not set", V.set_budget("acme", "50"))
+            self.assertIn("not installed", V.allocation_text())

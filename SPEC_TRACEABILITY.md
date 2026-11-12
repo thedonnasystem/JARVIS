@@ -8,7 +8,7 @@ Status: BUILT = code and tests on `overnight-build`, not live until you apply mi
 | 2 Retrieve balances and transactions | BUILT (manual) | `/bank balance`, statement CSV import (Telegram + app). bank_v1 |
 | 3 Sync real balance with ledger | BUILT | `available = min(ledger, bank - reserve)`; the lower number rules. bank_v1 |
 | 4 Track deposits, withdrawals, expenses, transfers, commitments | BUILT | bank_transactions, ledger, payment_instructions, tool_registry renewals |
-| 5 Allocate capital across ventures and expenses | PARTLY | Per-venture monthly budget ceilings and fund/reserve/limits exist; no automatic reallocation between ventures (proposals only, you approve). |
+| 5 Allocate capital across ventures and expenses | BUILT | `/venture budget`: you set each venture's monthly ceiling; the database refuses totals above real available money; shown in the finance review. Reallocation is your call (Jarvis can propose). allocation_v1 |
 | 6 Reserve before spending | BUILT | `reserve_spend` for every purchase and payment instruction |
 | 7 Prepare payment instructions; execute permitted transactions | PARTLY | Instructions are prepared, reserved and approved (payments_v1). You pay in RBC and confirm; Jarvis never moves money. This is the specified manual path until an authorized API exists. |
 | 8 Reconcile and report discrepancies | BUILT | `/bank reconcile`, unmatched list, brief |

@@ -743,7 +743,7 @@ async def hq_policy_cmd(update, context) -> None:
 
 
 async def hq_venture_cmd(update, context) -> None:
-    """/venture list | new <name> | <idea> | activate <slug> | <slug> (workspace)  (owner only)."""
+    """/venture list | new <name> | <idea> | activate <slug> | budget [<slug> <dollars>] | <slug> (workspace)  (owner only)."""
     if not _owner(update):
         return
     args = list(context.args or [])
@@ -751,6 +751,12 @@ async def hq_venture_cmd(update, context) -> None:
         sub = args[0].lower() if args else "list"
         if sub == "list":
             text = hq_ventures.list_text()
+        elif sub == "budget" and len(args) == 1:
+            text = hq_ventures.allocation_text()
+        elif sub == "budget" and len(args) == 3:
+            text = hq_ventures.set_budget(args[1], args[2])
+        elif sub == "budget":
+            text = "Use: /venture budget   (show)   or   /venture budget <slug> <dollars per month>"
         elif sub == "activate" and len(args) > 1:
             text = hq_ventures.activate(args[1].lower())
         elif sub == "new" and len(args) > 1:
@@ -1134,7 +1140,7 @@ def _assign(agent: str, task: str) -> str:
 def finances_text() -> str:
     """Capital + bank + P&L in one answer. Each part fails soft (its migration may not be applied yet)."""
     parts = []
-    for label, fn in (("Capital", hq_capital.status_text), ("Bank", hq_bank.status_text), ("Profit and loss", hq_capital.pnl_text), ("Payments waiting", hq_payments.open_text)):
+    for label, fn in (("Capital", hq_capital.status_text), ("Bank", hq_bank.status_text), ("Profit and loss", hq_capital.pnl_text), ("Payments waiting", hq_payments.open_text), ("Venture budgets", hq_ventures.allocation_text)):
         try:
             parts.append(f"{label}:\n{fn()}")
         except Exception:

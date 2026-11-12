@@ -176,6 +176,25 @@ def save_procedure(venture: str | None, title: str, steps: str, owner_agent: str
     return f"Procedure '{title.strip()}' saved" + (f" for {vslug}." if vslug else " (company-wide).")
 
 
+def set_budget(slug: str, amount_text: str, by: str = "owner:telegram") -> str:
+    """Owner sets a venture's monthly ceiling. The database refuses totals above real, available money."""
+    m = re.fullmatch(r"\$?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)", (amount_text or "").strip())
+    if not m:
+        return "Amount must look like 50 or 1,250.50 (dollars per month)."
+    try:
+        return str(_rpc("set_venture_budget", {"p_slug": re.sub(r"[^a-z0-9-]", "", (slug or "").lower()),
+                                               "p_cents": round(float(m.group(1).replace(",", "")) * 100), "p_by": by}))
+    except Exception as e:
+        return f"Could not set the budget: {str(e)[:160]}"
+
+
+def allocation_text() -> str:
+    try:
+        return str(_rpc("allocation_text", {}))
+    except Exception:
+        return "Allocation view is not installed yet (migration pending)."
+
+
 def list_text() -> str:
     rows = hq._request("GET", "/rest/v1/ventures?order=created_at.asc&select=slug,name,status,stage") or []
     return "\n".join(f"{r['slug']}: {r['status']}" + (f" / {r.get('stage')}" if r.get("stage") else "") + f" - {r['name']}" for r in rows) or "No ventures."
