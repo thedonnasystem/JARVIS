@@ -183,3 +183,18 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - Then `/pay done <id> <amount> <RBC reference>` (or the Money tab, I paid it). The amount cannot exceed what was approved. The ledger records the expense; the bank statement import matches it later.
 - Unanswered requests expire after 3 days and approved-but-unpaid after 14 days past due; reserved funds are released.
 - `/pay` lists open payments. Jarvis never holds credentials, never sees an authenticated bank session, never moves money.
+
+## Accounts (you sign up, Jarvis records)
+- Jarvis asks for a business account (`hq_request_account`): vendor, purpose, which steps are only yours (captcha, email/SMS code, ID, payment). Cost above $0 also needs a payment instruction.
+- Approve the card, sign up with your business email/number, then `/account done <id> <login email or username>`. It is saved as a venture asset. Passwords are refused everywhere.
+- `/account` lists open requests. Agents have no browser here, so they cannot sign up alone; captchas are never bypassed.
+
+## Venture budgets (capital allocation)
+- `/venture budget` shows every venture's monthly ceiling, AI used in 30 days and the total against real available money.
+- `/venture budget <slug> <dollars>` (or Details in the app) sets one. The database refuses totals above available money. A venture over its ceiling is paused until you raise it, and the 7pm brief says so.
+
+## Corporate office
+- `/office` (or ask Jarvis "how is the company organised") lists the nine functions with who staffs them and real numbers. Empty ones say UNSTAFFED; the weekly review can propose filling them.
+
+## Testing the migrations before go-live
+- `scripts/replica/run.sh` rebuilds a copy of the live schema in a scratch Postgres, applies every migration twice in `migrations/APPLY_ORDER.txt` order, then runs an end-to-end script as a fake owner (venture, payment, account, allocation, office, app snapshot) and proves a non-owner is refused by every app function. CI runs it on every push.
