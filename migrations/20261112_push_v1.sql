@@ -25,14 +25,14 @@ alter table public.push_subscriptions enable row level security;
 create or replace function public.app_push_public_key() returns text
 language plpgsql stable security definer set search_path to 'public' as $$
 begin
-  if not public.is_app_owner() then raise exception 'Not authorized'; end if;
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
   return (select vapid_public from public.push_config where id = 1);
 end $$;
 
 create or replace function public.app_save_push(p_sub jsonb, p_ua text default null) returns void
 language plpgsql security definer set search_path to 'public' as $$
 begin
-  if not public.is_app_owner() then raise exception 'Not authorized'; end if;
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
   if coalesce(p_sub->>'endpoint', '') !~ '^https://' or coalesce(p_sub#>>'{keys,p256dh}', '') = '' or coalesce(p_sub#>>'{keys,auth}', '') = '' then
     raise exception 'Bad subscription';
   end if;

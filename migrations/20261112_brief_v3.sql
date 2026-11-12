@@ -68,6 +68,19 @@ begin
       v_ext := v_ext || E'\n\nVentures waiting for activation: ' || (select string_agg(slug, ', ') from public.ventures where status = 'proposed') || '.';
     end if;
   exception when others then null; end;
+  begin
+    if to_regclass('public.account_requests') is not null then
+      execute $q$select count(*) from public.account_requests where status = 'awaiting_owner'$q$ into v_n;
+      if v_n > 0 then v_ext := v_ext || format(E'\n\n%s account request(s) waiting for your OK.', v_n); end if;
+      execute $q$select count(*) from public.account_requests where status = 'approved'$q$ into v_n;
+      if v_n > 0 then v_ext := v_ext || format(E'\n%s approved account(s) waiting for you to sign up (/account).', v_n); end if;
+    end if;
+  exception when others then null; end;
+  begin
+    if to_regprocedure('public.venture_over_budget(text)') is not null and exists (select 1 from public.ventures where status = 'active' and public.venture_over_budget(slug)) then
+      v_ext := v_ext || E'\n\nOver their monthly AI ceiling (paused until you raise it): ' || (select string_agg(slug, ', ') from public.ventures where status = 'active' and public.venture_over_budget(slug)) || '.';
+    end if;
+  exception when others then null; end;
   return v_core
     || coalesce(E'\n\n' || public.capital_brief_text(), '')
     || coalesce(E'\n\n' || public.missions_brief_text(), '')
