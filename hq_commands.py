@@ -1037,6 +1037,23 @@ HQ_CHAT_TOOLS = [
             "required": ["payee", "amount_cents", "purpose", "alternatives"]},
     },
     {
+        "name": "hq_register_asset",
+        "description": "Record a venture's website, domain, account, integration or repo (name and URL only; passwords, keys and tokens are refused). "
+                       "Omit venture for a company-wide asset.",
+        "input_schema": {"type": "object", "properties": {
+            "venture": {"type": "string"}, "kind": {"type": "string", "enum": ["website", "domain", "account", "integration", "asset", "repo"]},
+            "name": {"type": "string"}, "url": {"type": "string"}, "status": {"type": "string", "enum": ["planned", "live", "retired"]},
+            "notes": {"type": "string"}}, "required": ["kind", "name"]},
+    },
+    {
+        "name": "hq_save_procedure",
+        "description": "Write or update an operating procedure (a real step-by-step SOP) for a venture or the whole company; updating bumps the version. "
+                       "Never include credentials.",
+        "input_schema": {"type": "object", "properties": {
+            "venture": {"type": "string"}, "title": {"type": "string"}, "steps": {"type": "string"}, "owner_agent": {"type": "string"}},
+            "required": ["title", "steps"]},
+    },
+    {
         "name": "hq_venture",
         "description": "Show one venture's workspace: stage, budget used, money, agents, leads, goals. Use for 'how is X doing'.",
         "input_schema": {"type": "object", "properties": {"slug": {"type": "string"}}, "required": ["slug"]},
@@ -1128,6 +1145,11 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
         if name == "hq_prepare_payment":
             return hq_payments.prepare("jarvis", tool_input.get("payee", ""), int(tool_input.get("amount_cents") or 0), tool_input.get("purpose", ""),
                                        tool_input.get("alternatives", ""), tool_input.get("due_on") or None, tool_input.get("venture") or None)
+        if name == "hq_register_asset":
+            return hq_ventures.register_asset(tool_input.get("venture"), tool_input.get("kind", ""), tool_input.get("name", ""), tool_input.get("url", ""),
+                                              tool_input.get("status", "planned"), tool_input.get("notes", ""))
+        if name == "hq_save_procedure":
+            return hq_ventures.save_procedure(tool_input.get("venture"), tool_input.get("title", ""), tool_input.get("steps", ""), tool_input.get("owner_agent", ""))
         if name == "hq_finances":
             return finances_text()
         if name == "hq_venture":

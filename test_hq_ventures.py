@@ -74,3 +74,40 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AssetsProcedures(unittest.TestCase):
+    def _req(self, store, existing=None):
+        def req(method, path, body=None, timeout=30, prefer=None):
+            store.append((method, path, body))
+            if method == "GET" and "ventures?slug" in path:
+                return [{"id": "v1", "slug": "donna"}]
+            if method == "GET" and "venture_procedures" in path:
+                return existing or []
+            return []
+        return req
+
+    def test_asset_refuses_secrets_bad_kind_bad_url_and_unknown_venture(self):
+        import hq_ventures as V
+        calls = []
+        with mock.patch.object(hq, "_request", self._req(calls)):
+            self.assertIn("Kind must", V.register_asset("donna", "vault", "x"))
+            self.assertIn("Refused", V.register_asset("donna", "account", "Twilio", notes="password: hunter2"))
+            self.assertIn("Refused", V.register_asset("donna", "integration", "Stripe", notes="key sk-abcdefghijklmnop"))
+            self.assertIn("http", V.register_asset("donna", "website", "Landing", url="ftp://x"))
+            self.assertFalse([c for c in calls if c[0] == "POST"])
+            self.assertIn("Recorded website", V.register_asset("donna", "website", "Landing", url="https://donna.example.ca"))
+            post = [c for c in calls if c[0] == "POST"][0]
+            self.assertEqual((post[2]["venture_id"], post[2]["kind"]), ("v1", "website"))
+
+    def test_procedure_new_then_version_bump(self):
+        import hq_ventures as V
+        calls = []
+        with mock.patch.object(hq, "_request", self._req(calls)):
+            self.assertIn("saved", V.save_procedure("donna", "Follow up a lead", "1. Call within 24h. 2. Log it. 3. Book the next step."))
+            self.assertEqual([c for c in calls if c[0] == "POST"][0][2]["venture_id"], "v1")
+            self.assertIn("real steps", V.save_procedure("donna", "Follow up", "short"))
+            self.assertIn("Refused", V.save_procedure("donna", "Login flow", "1. Use token: abc123def456 to sign in to the portal"))
+        calls2 = []
+        with mock.patch.object(hq, "_request", self._req(calls2, [{"id": "p1", "version": 2}])):
+            self.assertIn("v3", V.save_procedure("donna", "Follow up a lead", "1. Call within 24h. 2. Log it. 3. Book the next step."))

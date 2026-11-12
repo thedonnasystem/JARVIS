@@ -210,7 +210,10 @@ function bankCard(c) {
 const ventureOpen = {};
 async function toggleVenture(slug) {
   if (ventureOpen[slug]) { delete ventureOpen[slug]; return refresh(); }
-  try { ventureOpen[slug] = (await rpc('app_venture', { p_slug: slug })) || { name: slug, goals: [], memory: [], tasks: [] }; } catch (e) { note(e.message); return; }
+  try {
+    const [d, x] = await Promise.all([rpc('app_venture', { p_slug: slug }), rpc('app_venture_extras', { p_slug: slug }).catch(() => ({}))]);
+    ventureOpen[slug] = { ...(d || { name: slug, goals: [], memory: [], tasks: [] }), ...x };
+  } catch (e) { note(e.message); return; }
   refresh();
 }
 function ventureDetail(d) {
@@ -219,6 +222,8 @@ function ventureDetail(d) {
     d.metric ? h('div', { class: 'dim' }, 'Metric: ' + d.metric + (d.budget_cents ? ' · Budget ' + usd(d.budget_cents) + '/mo' : '')) : null,
     list('Goals', d.goals, (g) => g.metric + ' — target ' + (g.target ?? '?') + ', now ' + (g.now ?? '?') + ' (' + g.status + ')'),
     list('Recent work', d.tasks, (t) => t.agent + ': ' + t.title + ' [' + t.status + ']'),
+    list('Websites and assets', d.assets, (a) => a.kind + ': ' + a.name + (a.url ? ' ' + a.url : '') + ' [' + a.status + ']'),
+    list('Procedures', d.procedures, (p) => p.title + ' (v' + p.version + ')'),
     list('What it knows', d.memory, (m) => m.content));
 }
 function addLeadCard() {
