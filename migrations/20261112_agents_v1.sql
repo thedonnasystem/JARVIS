@@ -6,6 +6,8 @@
 --   * every creation is logged in org_changes (status 'built') and audit_log, and the owner is told in the next brief
 -- Depends on org_v1 (org_changes).
 
+alter table public.org_changes add column if not exists target text;
+
 create or replace function public.create_department(p_slug text, p_name text, p_venture_slug text default null, p_by text default 'jarvis')
 returns text language plpgsql set search_path to 'public' as $$
 declare v_vid uuid;
