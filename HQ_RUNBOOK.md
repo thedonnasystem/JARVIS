@@ -123,7 +123,7 @@ CAPTURED → EVALUATED → PLANNED → EXECUTING → VERIFYING → COMPLETED, pl
   until the permissions engine (Phase 4) exists. Real-estate house sourcing steps are dropped (funnel's job).
 - Verify: an agent that did none of the steps returns `VERIFIED: YES|NO`, `EVIDENCE: claim | source`, `GAP:` lines.
   COMPLETED is impossible without evidence (database trigger). NO → re-plan with the gaps; 3 failed verifications → FAILED.
-- Guards: max 5 live missions; AI budget per mission (default 200c USD, max 1000c) measured from `llm_calls`, over budget → PAUSED
+- Guards: max 5 live missions; AI budget per mission (default 200c CAD, max 1000c) measured from `llm_calls`, over budget → PAUSED
   and queued steps cancelled; blocked step → mission BLOCKED, owner told once; Task Brief questions wait instead of blocking;
   no progress for 48h → owner told once, mission stays open.
 - Mission steps skip the per-task auditor and NEXT chains (the mission verifier replaces them).

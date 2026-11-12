@@ -39,6 +39,7 @@ from dotenv import load_dotenv
 import hq
 import hq_engine
 import hq_commands
+import hq_meter
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import (
@@ -1726,7 +1727,8 @@ async def handle_research_agent(tool_input: dict) -> str:
         kwargs = {}
         if use_web_search:
             kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
-        return anthropic_client.messages.create(
+        return hq_meter.metered_create(
+            anthropic_client, "chat research agent",
             model=CLAUDE_MODEL,
             max_tokens=1500,
             system="You are the Research Agent, a focused research assistant.",
@@ -1771,7 +1773,8 @@ async def handle_content_agent(tool_input: dict) -> str:
         return "No content brief was given."
 
     response = await asyncio.to_thread(
-        anthropic_client.messages.create,
+        hq_meter.metered_create,
+        anthropic_client, "chat content agent",
         model=CLAUDE_MODEL,
         max_tokens=800,
         system=(
@@ -2071,7 +2074,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     MAX_TOOL_ROUNDS = 5
 
     try:
-        response = anthropic_client.messages.create(
+        response = hq_meter.metered_create(
+            anthropic_client, "owner chat",
             model=CLAUDE_MODEL,
             max_tokens=2048,
             system=SYSTEM_PROMPT,
@@ -2111,13 +2115,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 {"role": "assistant", "content": assistant_content},
                 {"role": "user", "content": tool_results},
             ]
-            response = anthropic_client.messages.create(
+            response = hq_meter.metered_create(
+                anthropic_client, "owner chat (tool round)",
                 model=CLAUDE_MODEL,
                 max_tokens=2048,
                 system=SYSTEM_PROMPT,
                 messages=messages,
                 **kwargs,
             )
+    except hq_meter.MeterBlocked as e:
+        await update.message.reply_text(
+            f"Today's AI budget is used up ({e}). Commands like /hq still work; "
+            "raise the cap by approving a budget proposal or with /nightshift."
+        )
+        return
     except APIError as e:
         logger.exception("Anthropic API error")
         await update.message.reply_text(
@@ -2224,8 +2235,11 @@ async def run_plan_phase(
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         plan_text_parts.append(block.text)
-            elif isinstance(message, ResultMessage) and message.subtype != "success":
-                logger.error("Plan phase failed: %s", message.error_code)
+            elif isinstance(message, ResultMessage):
+                hq_meter.record_spent_usd("builder", getattr(message, "total_cost_usd", None),
+                                          f"/build plan: {task_text[:80]}")
+                if message.subtype != "success":
+                    logger.error("Plan phase failed: %s", message.error_code)
     except Exception:
         logger.exception("Plan phase crashed")
         build_sessions.pop(chat_id, None)
@@ -2355,6 +2369,8 @@ async def run_build_phase(
                             final_text_parts.append(block.text)
                 elif isinstance(message, ResultMessage):
                     result_summary = message
+                    hq_meter.record_spent_usd("builder", getattr(message, "total_cost_usd", None),
+                                              f"/build: {str(state.get('task', ''))[:80]}")
     except Exception:
         logger.exception("Build phase crashed")
         build_sessions.pop(chat_id, None)

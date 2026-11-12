@@ -35,7 +35,7 @@ MAX_STEPS = 8
 MAX_ATTEMPTS = 3
 STALE_HOURS = 48
 MAX_LIVE_MISSIONS = 5
-DEFAULT_BUDGET_CENTS = 200  # USD cents of AI spend, same unit as the spend gateway
+DEFAULT_BUDGET_CENTS = 200  # CAD cents of AI spend, same unit as the spend gateway
 MAX_BUDGET_CENTS = 1000
 LIVE = ("captured", "evaluated", "planned", "executing", "verifying", "blocked")
 
@@ -232,7 +232,7 @@ def _set(m: dict, **fields) -> None:
 
 
 def _active_agents() -> list[str]:
-    return [a["slug"] for a in _get("agents?status=eq.active&select=slug") if a.get("slug") not in ("jarvis",)]
+    return [a["slug"] for a in _get("agents?status=eq.active&select=slug") if a.get("slug") not in ("jarvis", "jarvis-chat")]
 
 
 def _venture_slug(m: dict) -> str | None:
@@ -448,7 +448,7 @@ def _check_budget(m: dict) -> bool:
                 _patch(f"tasks?id=eq.{_q(t['id'])}&status=eq.todo", {"status": "cancelled", "updated_at": _now(),
                        "result": "Cancelled: mission budget used up."})
         _set(m, status="paused", next_action=f"Paused: AI budget used ({spent}/{m['budget_cents']}c)")
-        _tell_owner(f"Mission paused at its budget: {m['title']} spent {spent}c of {m['budget_cents']}c (USD). "
+        _tell_owner(f"Mission paused at its budget: {m['title']} spent {spent}c of {m['budget_cents']}c (CAD). "
                     "Raise the budget in chat to continue.", kind="money")
         return False
     return True
@@ -540,7 +540,7 @@ def detail_text(prefix: str) -> str:
     ev = "\n".join(f"  - {e.get('claim')} ({e.get('source')})" for e in (m.get("evidence") or [])) or "  (none yet)"
     return (f"{m['title']}  [{m['status'].upper()}]\nObjective: {m['objective'][:600]}\n"
             f"Verdict: {m.get('verdict') or '-'} {m.get('verdict_reason') or ''}\nSuccess = {m.get('success_definition') or '-'}\n"
-            f"Risks: {m.get('risks') or '-'}\nBudget: {m['budget_cents']}c USD AI spend | attempts {m.get('attempts', 0)}\n"
+            f"Risks: {m.get('risks') or '-'}\nBudget: {m['budget_cents']}c CAD AI spend | attempts {m.get('attempts', 0)}\n"
             f"Plan:\n{steps}\nEvidence:\n{ev}\nNext: {m.get('next_action') or '-'}")
 
 
@@ -581,4 +581,4 @@ def set_budget(prefix: str, cents: int) -> str:
         return "No mission with that id."
     cents = max(0, min(int(cents), MAX_BUDGET_CENTS))
     _patch(f"missions?id=eq.{_q(rows[0]['id'])}", {"budget_cents": cents})
-    return f"{rows[0]['title']}: budget set to {cents}c USD." + (" Use /mission resume to restart it." if rows[0]["status"] == "paused" else "")
+    return f"{rows[0]['title']}: budget set to {cents}c CAD." + (" Use /mission resume to restart it." if rows[0]["status"] == "paused" else "")

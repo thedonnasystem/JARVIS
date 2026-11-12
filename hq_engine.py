@@ -386,7 +386,7 @@ def _queue_next(t: dict, text: str) -> int:
     if len(todo) >= MAX_TODO_QUEUE:
         return 0
     titles = {(r.get("title") or "").strip().lower() for r in todo}
-    active = {a["slug"]: a.get("venture_id") for a in _get("agents?status=eq.active&select=slug,venture_id")}
+    active = {a["slug"]: a.get("venture_id") for a in _get("agents?status=eq.active&slug=neq.jarvis-chat&select=slug,venture_id")}
     made = 0
     for slug, title, detail in items:
         slug, title = slug.strip().lower(), title.strip()
@@ -900,7 +900,7 @@ def _apply_plan(text: str, planner: str) -> int:
         return 0
     if not isinstance(items, list):
         return 0
-    active = {a["slug"]: a.get("venture_id") for a in _get("agents?status=eq.active&select=slug,venture_id")}
+    active = {a["slug"]: a.get("venture_id") for a in _get("agents?status=eq.active&slug=neq.jarvis-chat&select=slug,venture_id")}
     room = MAX_TODO_QUEUE - len(_get("tasks?status=eq.todo&select=id"))
     made = 0
     for it in items[:MAX_NEW_PER_PLAN]:

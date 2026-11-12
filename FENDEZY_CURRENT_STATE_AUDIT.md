@@ -55,7 +55,7 @@ Station:   Claude artifact → Supabase connector → station_snapshot()
 
 ## 3. What works [verified]
 
-- **Spend gateway.** `reserve_llm_budget` takes an advisory lock and checks the kill switch, agent status, the per-agent daily cap and the company daily cap (330¢). It reserves before every engine call and `settle_llm_call` records the actual cost. Cost is estimated from `model_prices` (USD per million tokens), so **caps are in USD cents**. `usd_to_cad` = 1.45 is marked **unverified**.
+- **Spend gateway.** `reserve_llm_budget` takes an advisory lock and checks the kill switch, agent status, the per-agent daily cap and the company daily cap (330¢). It reserves before every engine call and `settle_llm_call` records the actual cost. Cost is estimated from `model_prices` (USD per million tokens) × `usd_to_cad`, so **caps are in CAD cents**. The rate is 1.45 and marked **unverified**: if the real rate is about 1.38, real spend is about 5% under what HQ counts (the error is on the safe side).
 - **Kill switch.** It's enforced in three places: the engine tick, the gateway, and the outbox trigger.
 - **Dry-run mode.** It's enforced in a database trigger: the outbox can't move to `sent` while `mode = dry_run`, which is the current mode.
 - **Outbox state machine** (database trigger). Messages go draft → qa_passed → approved → sent. QA must be done by a different agent from the writer, the do-not-contact list is enforced, and there's at most one send per lead per day.
@@ -106,7 +106,7 @@ Station:   Claude artifact → Supabase connector → station_snapshot()
 
 1. **HQ has been paused since Nov 8: the Anthropic API credit is empty.** No agent work has finished since Nov 5. The engine is alive and will resume on its own after a top-up **[verified]**.
 2. **The daily brief said "GREEN, all clear" while paused.** Fixed Nov 11: the brief now leads with "RED, HQ PAUSED, reason, fix" **[verified]**.
-3. **Spend overran the cap on Nov 2** ($12.45 against $3.30), before the measured-cost fix. Reservations are estimates, so one call can still settle above its reservation **[verified]**.
+3. **Spend overran the cap on Nov 2** ($12.45 CAD against $3.30 CAD), before the measured-cost fix. Reservations are estimates, so one call can still settle above its reservation **[verified]**.
 4. **The deal funnel has nothing past "Sourced"**: 3,451 Sourced, 5,041 Dead, 0 opportunities, 0 buyers. The scrape itself is fresh (Nov 11) **[verified]**.
 5. **The Donna outbox has 15 drafts stuck.** There's no CASL mailing address (`/setaddress`) and no send provider **[verified]**.
 6. **Retell test calls cost $2.18–$2.66 each** (about $0.25/min), and the Retell credit balance was flagged low **[verified on dashboard]**.
@@ -129,7 +129,7 @@ Station:   Claude artifact → Supabase connector → station_snapshot()
 
 ## 8. Financial picture
 
-- **AI spend to date:** $18.19 USD, all Nov 2–6. Nov 2 alone was $12.45. Since Nov 6 there have been 199 failed calls at $0.
+- **AI spend to date:** $18.19 CAD as HQ counts it, all Nov 2–6. Nov 2 alone was $12.45. Since Nov 6 there have been 199 failed calls at $0.
 - **Retell:** about $0.25/min. Every 10-minute test call costs about $2.50.
 - **Fixed infrastructure [unverified amounts]:** Railway (bot + bot Postgres), Render (free tier, sleeps), Supabase (2 projects, probably free tier), Retell pay-as-you-go, Anthropic API.
 - **Revenue recorded:** $0 (the ledger is empty).

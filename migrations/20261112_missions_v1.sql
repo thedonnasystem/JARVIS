@@ -11,7 +11,7 @@ create table if not exists public.missions (
     'captured','evaluated','planned','executing','verifying','completed',
     'blocked','paused','rejected','abandoned','failed')),
   priority int not null default 3 check (priority between 1 and 5),
-  budget_cents int not null default 200 check (budget_cents between 0 and 2000),  -- AI spend, USD cents (same unit as llm_calls)
+  budget_cents int not null default 200 check (budget_cents between 0 and 2000),  -- AI spend, CAD cents (same unit as llm_calls)
   expected_cad numeric,          -- agent estimate, never actual money
   days_to_cash int,
   verdict text check (verdict in ('GO','TEST','DEFER','REJECT')),

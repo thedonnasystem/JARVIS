@@ -610,7 +610,7 @@ async def hq_mission_cmd(update, context) -> None:
     args = list(context.args or [])
     if not args:
         await update.message.reply_text("Usage:\n/mission new <objective>\n/mission <id>\n/mission pause|resume|abandon <id>\n"
-                                        "/mission budget <id> <cents USD>\nOr just tell me the goal in chat.")
+                                        "/mission budget <id> <cents CAD>\nOr just tell me the goal in chat.")
         return
     try:
         verb = args[0].lower()
@@ -771,7 +771,7 @@ HQ_CHAT_TOOLS = [
             "venture": {"type": "string", "enum": ["idea-lab", "donna", "real-estate", "day-job-sales"],
                         "description": "existing venture it belongs to; idea-lab for new businesses"},
             "title": {"type": "string", "description": "short name, under 60 characters"},
-            "budget_cents": {"type": "integer", "description": "AI spend budget in USD cents (default 200, max 1000)"}},
+            "budget_cents": {"type": "integer", "description": "AI spend budget in CAD cents (default 200, max 1000)"}},
             "required": ["objective"]},
     },
     {
@@ -801,7 +801,7 @@ def _search_knowledge(query: str) -> str:
 
 
 def _assign(agent: str, task: str) -> str:
-    rows = _get(f"agents?slug=eq.{_q((agent or '').lower())}&status=eq.active&select=slug,venture_id&limit=1")
+    rows = [] if (agent or "").lower() == "jarvis-chat" else _get(f"agents?slug=eq.{_q((agent or '').lower())}&status=eq.active&select=slug,venture_id&limit=1")
     if not rows:
         return f"No active agent called {agent}."
     hq._request("POST", "/rest/v1/tasks", {
