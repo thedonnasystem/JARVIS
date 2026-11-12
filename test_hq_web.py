@@ -182,3 +182,12 @@ class PaymentConfirm(unittest.TestCase):
             self.assertEqual(c.call_args[1]["by"], "owner:app")
             self.assertIn("Amount must", W._payment({"verb": "done", "id": "x", "amount": "lots", "reference": "RBC-1"}))
             self.assertEqual(W._payment({"verb": "approve", "id": "x"}), "Unknown payment action.")
+
+
+class VentureBudget(unittest.TestCase):
+    def test_budget_verb_uses_owner_app(self):
+        import hq_web as W
+        import hq_ventures
+        with mock.patch.object(hq_ventures, "set_budget", return_value="ok") as sb:
+            self.assertEqual(W._venture({"verb": "budget", "slug": "donna", "amount": "50"}), "ok")
+            self.assertEqual((sb.call_args[0], sb.call_args[1]), (("donna", "50"), {"by": "owner:app"}))

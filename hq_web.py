@@ -126,6 +126,8 @@ def _venture(payload: dict) -> str:
         return r.get("error") or f"Venture {r['slug']} set up inactive. Validation mission: {r['mission']}. Approve it under Needs you when ready."
     if verb == "activate":
         return hq_ventures.activate(str(payload.get("slug") or "").lower(), by="owner:app")
+    if verb == "budget":
+        return hq_ventures.set_budget(str(payload.get("slug") or ""), str(payload.get("amount") or ""), by="owner:app")
     return "Unknown venture action."
 
 

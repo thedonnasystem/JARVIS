@@ -218,8 +218,10 @@ async function toggleVenture(slug) {
 }
 function ventureDetail(d) {
   const list = (title, items, fmt) => items && items.length ? h('div', {}, h('div', { class: 'dim', style: 'margin-top:10px;font-weight:600' }, title), ...items.map((i) => h('div', { class: 'dim' }, fmt(i)))) : null;
+  const amt = h('input', { placeholder: 'Monthly ceiling, $', inputmode: 'decimal', value: d.budget_cents ? (d.budget_cents / 100).toFixed(2) : '', autocomplete: 'off' });
   return h('div', {},
     d.metric ? h('div', { class: 'dim' }, 'Metric: ' + d.metric + (d.budget_cents ? ' · Budget ' + usd(d.budget_cents) + '/mo' : '')) : null,
+    d.slug ? h('div', {}, amt, h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => { if (amt.value.trim()) act('venture', { verb: 'budget', slug: d.slug, amount: amt.value.trim() }); } }, 'Set monthly ceiling'))) : null,
     list('Goals', d.goals, (g) => g.metric + ' — target ' + (g.target ?? '?') + ', now ' + (g.now ?? '?') + ' (' + g.status + ')'),
     list('Recent work', d.tasks, (t) => t.agent + ': ' + t.title + ' [' + t.status + ']'),
     list('Websites and assets', d.assets, (a) => a.kind + ': ' + a.name + (a.url ? ' ' + a.url : '') + ' [' + a.status + ']'),
