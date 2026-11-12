@@ -72,6 +72,11 @@ WORKSPACE_DIR = Path(
     )
 ).resolve()
 
+# /build spending: every session reserves its whole ceiling at the HQ spend gateway first (kill switch, caps, focus mode all apply).
+# The gateway will never grant more than the builder agent's remaining daily cap, so raising this number cannot raise real spend.
+BUILD_SESSION_CENTS = int(os.environ.get("BUILD_SESSION_CENTS", "50"))
+BUILD_PLAN_SHARE = 0.3  # the plan phase may use up to 30% of the session ceiling; the build phase gets the rest
+
 # Webhook Jarvis calls when you ask it to kick off your Make.com scenario.
 MAKE_WEBHOOK_URL = os.environ.get("MAKE_WEBHOOK_URL")
 
@@ -785,8 +790,11 @@ async def build_permission_gate(tool_name, input_data, context):
 
     Runs on every Write/Edit/Bash call once a build is approved and enforces:
     file writes must stay inside WORKSPACE_DIR, and Bash can't push to GitHub,
-    run as root, or pipe a download into a shell.
+    run as root, or pipe a download into a shell. The global kill switch also applies
+    here: once it is on, no further tool call is allowed and the session is interrupted.
     """
+    if await asyncio.to_thread(hq_meter.kill_switch_on):
+        return PermissionResultDeny(message="Kill switch is ON: no further tool use.", interrupt=True)
     if tool_name in ("Write", "Edit", "NotebookEdit"):
         file_path = input_data.get("file_path", "")
         if _resolve_within_workspace(file_path) is None:
@@ -2088,8 +2096,7 @@ async def jarvis_reply(chat_id: int, user_text: str, context, typing: bool = Tru
             ]
             response = await asyncio.to_thread(_call, "owner chat (tool round)", messages)
     except hq_meter.MeterBlocked as e:
-        return (f"Today's AI budget is used up ({e}). Commands like /hq still work; "
-                "raise the cap by approving a budget proposal or with /nightshift.")
+        return hq_meter.status_reply(e)  # deterministic text, no AI
     except APIError as e:
         logger.exception("Anthropic API error")
         return f"Sorry, I hit an error talking to Claude: {e.message}"  # failed turn is not saved
@@ -2136,7 +2143,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     f = await context.bot.get_file(v.file_id)
     data = bytes(await f.download_as_bytearray())
-    text = await asyncio.to_thread(hq_voice.transcribe, data)
+    est = hq_voice.estimate_cents(getattr(v, "duration", 0))
+    try:
+        text = await asyncio.to_thread(
+            hq_meter.metered_call, hq_meter.CHAT_AGENT, est, hq_voice.MODEL_LABEL, "voice transcription",
+            lambda: hq_voice.transcribe(data))
+    except hq_meter.MeterBlocked as e:
+        await update.message.reply_text(hq_meter.status_reply(e))
+        return
     if not text:
         await update.message.reply_text("I couldn't make out that voice note. Try again or type it.")
         return
@@ -2196,6 +2210,16 @@ async def run_plan_phase(
 ) -> None:
     session_id = None
     plan_text_parts: list[str] = []
+    plan_usd = None
+    stopped_by_kill = False
+    try:
+        sess = await asyncio.to_thread(
+            hq_meter.begin_session, "builder", f"/build plan: {task_text[:80]}",
+            max(1, int(BUILD_SESSION_CENTS * BUILD_PLAN_SHARE)))
+    except hq_meter.MeterBlocked as e:
+        build_sessions.pop(chat_id, None)
+        await context.bot.send_message(chat_id, hq_meter.status_reply(e))
+        return
 
     plan_prompt = (
         f"{task_text}\n\n"
@@ -2216,8 +2240,12 @@ async def run_plan_phase(
                 permission_mode="plan",
                 allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch"],
                 disallowed_tools=["Write", "Edit", "Bash", "NotebookEdit", "AskUserQuestion"],
+                max_budget_usd=sess.max_usd,
             ),
         ):
+            if await asyncio.to_thread(hq_meter.kill_switch_on):
+                stopped_by_kill = True
+                break
             if isinstance(message, SystemMessage) and message.subtype == "init":
                 session_id = message.data.get("session_id")
             elif isinstance(message, AssistantMessage):
@@ -2225,16 +2253,23 @@ async def run_plan_phase(
                     if isinstance(block, TextBlock):
                         plan_text_parts.append(block.text)
             elif isinstance(message, ResultMessage):
-                hq_meter.record_spent_usd("builder", getattr(message, "total_cost_usd", None),
-                                          f"/build plan: {task_text[:80]}")
+                plan_usd = getattr(message, "total_cost_usd", None)
                 if message.subtype != "success":
-                    logger.error("Plan phase failed: %s", message.error_code)
+                    logger.error("Plan phase failed: %s", message.subtype)
     except Exception:
         logger.exception("Plan phase crashed")
+        await asyncio.to_thread(hq_meter.end_session, sess, plan_usd)
         build_sessions.pop(chat_id, None)
         await context.bot.send_message(
             chat_id, "Sorry, I hit an error while planning. Try /build again."
         )
+        return
+
+    # Settle what it really cost (unknown cost settles at the full reservation, never at 0).
+    plan_cents = await asyncio.to_thread(hq_meter.end_session, sess, plan_usd)
+    if stopped_by_kill:
+        build_sessions.pop(chat_id, None)
+        await context.bot.send_message(chat_id, hq_meter.status_reply(hq_meter.MeterBlocked("", "kill")))
         return
 
     state = build_sessions.get(chat_id)
@@ -2244,6 +2279,7 @@ async def run_plan_phase(
     plan_text = "\n".join(plan_text_parts).strip() or "(No plan text returned.)"
     state["status"] = "awaiting_approval"
     state["session_id"] = session_id
+    state["plan_cents"] = plan_cents
 
     for chunk in split_for_telegram(plan_text):
         await context.bot.send_message(chat_id, chunk)
@@ -2309,6 +2345,16 @@ async def run_build_phase(
 
     result_summary = None
     final_text_parts: list[str] = []
+    build_usd = None
+    stopped_by_kill = False
+    try:
+        sess = await asyncio.to_thread(
+            hq_meter.begin_session, "builder", f"/build: {str(state.get('task', ''))[:80]}",
+            BUILD_SESSION_CENTS - int(state.get("plan_cents") or 0))
+    except hq_meter.MeterBlocked as e:
+        build_sessions.pop(chat_id, None)
+        await update_status(hq_meter.status_reply(e))
+        return
     build_prompt = (
         "Go ahead and build the plan you just proposed. Create and edit every "
         f"file using its full absolute path starting with exactly "
@@ -2334,10 +2380,15 @@ async def run_build_phase(
                 permission_mode="default",
                 disallowed_tools=["AskUserQuestion"],
                 can_use_tool=build_permission_gate,
+                max_budget_usd=sess.max_usd,
             )
         ) as client:
             await client.query(build_prompt)
             async for message in client.receive_response():
+                if await asyncio.to_thread(hq_meter.kill_switch_on):
+                    stopped_by_kill = True
+                    await client.interrupt()
+                    break
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, ToolUseBlock):
@@ -2358,17 +2409,20 @@ async def run_build_phase(
                             final_text_parts.append(block.text)
                 elif isinstance(message, ResultMessage):
                     result_summary = message
-                    hq_meter.record_spent_usd("builder", getattr(message, "total_cost_usd", None),
-                                              f"/build: {str(state.get('task', ''))[:80]}")
+                    build_usd = getattr(message, "total_cost_usd", None)
     except Exception:
         logger.exception("Build phase crashed")
+        await asyncio.to_thread(hq_meter.end_session, sess, build_usd)
         build_sessions.pop(chat_id, None)
         await context.bot.send_message(
             chat_id, "Something went wrong while building. Check the logs."
         )
         return
 
+    await asyncio.to_thread(hq_meter.end_session, sess, build_usd)
     build_sessions.pop(chat_id, None)
+    if stopped_by_kill:
+        await update_status("⚠️ " + hq_meter.status_reply(hq_meter.MeterBlocked("", "kill")) + " The workspace may be partly changed.")
 
     # Ground truth: what actually changed on disk, not what was requested.
     after_snapshot = _snapshot_workspace()
@@ -2400,7 +2454,7 @@ async def run_build_phase(
         else "n/a"
     )
     status_prefix = "✅ Done." if (result_summary and result_summary.subtype == "success") else (
-        f"⚠️ Finished with an error ({result_summary.error_code if result_summary else 'unknown'}), "
+        f"⚠️ Finished with an error ({result_summary.subtype if result_summary else 'unknown'}), "
         "but some files did change:"
     )
     await update_status(

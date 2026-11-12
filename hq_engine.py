@@ -141,6 +141,32 @@ def _insert(table: str, row: dict) -> None:
     hq._request("POST", f"/rest/v1/{table}", row, prefer="return=minimal")
 
 
+_FOCUS: str | None = None  # set by the owner (focus mode): only this mission's tasks run; the database enforces the same rule
+
+
+def sync_integrations() -> None:
+    """Tell the database which optional integrations are configured, so recurring work for a missing one is not created
+    (the value-fixer task used to be created daily and cancelled when the funnel key was missing)."""
+    checks = {
+        "wholesale": (hq_wholesale.enabled(), "WHOLESALE_SUPABASE_SERVICE_KEY"),
+        "mail": (hq_mail.configured(), "RESEND_API_KEY + MAIL_FROM"),
+        "backup": (hq_backup.configured(), "BACKUP_KEY + BACKUP_PUT_URL"),
+    }
+    rows = [{"key": k, "ok": bool(ok), "detail": "configured" if ok else f"missing: {need}", "checked_at": _now()}
+            for k, (ok, need) in checks.items()]
+    # What code is actually running: Railway sets these for GitHub-triggered deploys. Read-only proof for ops/verify_live.sql.
+    sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("GIT_COMMIT") or ""
+    rows.append({"key": "engine_build", "ok": bool(sha),
+                 "detail": (f"commit {sha[:12]} branch {os.environ.get('RAILWAY_GIT_BRANCH', '?')} "
+                            f"deployment {(os.environ.get('RAILWAY_DEPLOYMENT_ID') or '?')[:8]}") if sha else "unknown: no commit variable in this runtime",
+                 "checked_at": _now()})
+    try:
+        hq._request("POST", "/rest/v1/integration_status?on_conflict=key", rows,
+                    prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # never block the engine on a status write
+        logger.warning("HQ integration status write failed: %s", e)
+
+
 def _audit(actor: str, action: str, target: str | None, detail: dict) -> None:
     try:
         _insert("audit_log", {"actor": actor, "action": action, "target": target, "detail": detail})
@@ -318,9 +344,16 @@ def _store_drafts(t: dict, text: str) -> int:
         if _get(f"outbox?to_ref=eq.{_q(lead[0]['email'])}&status=neq.rejected&select=id&limit=1"):
             _patch(f"leads?id=eq.{_q(lead[0]['id'])}&status=eq.new", {"status": "drafted"})
             continue  # one live draft per inbox, even if the business was saved twice
-        _insert("outbox", {"venture_id": t["venture_id"], "agent": t["assigned_agent"], "channel": "email",
-                           "to_ref": lead[0]["email"], "lead_id": lead[0]["id"], "status": "draft", "needs_owner": True,
-                           "body": f"Subject: {subject}\n\n{body}", "idempotency_key": f"draft-{t['id']}-{sid}"})
+        try:
+            _insert("outbox", {"venture_id": t["venture_id"], "agent": t["assigned_agent"], "channel": "email",
+                               "to_ref": lead[0]["email"], "lead_id": lead[0]["id"], "status": "draft", "needs_owner": True,
+                               "body": f"Subject: {subject}\n\n{body}", "idempotency_key": f"draft-{t['id']}-{sid}"})
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                raise
+            # The database already holds an unsent draft for this lead (unique index): keep that one, do not stack a second.
+            _patch(f"leads?id=eq.{_q(lead[0]['id'])}&status=eq.new", {"status": "drafted"})
+            continue
         _patch(f"leads?id=eq.{_q(lead[0]['id'])}&status=eq.new", {"status": "drafted"})
         saved += 1
     if saved:
@@ -748,14 +781,30 @@ def _credits_back(paused_at: str | None) -> bool:
     if _last_probe and now - _last_probe < timedelta(minutes=PROBE_EVERY_MINUTES):
         return False
     _last_probe = now
+    # Metered like every other call: 1 cent reserved at the gateway first. The gateway's focus rule has one narrow exemption
+    # for exactly this probe (agent jarvis, purpose "credit probe"), otherwise focus mode could never notice credit coming back.
+    try:
+        call_id = _rpc("reserve_llm_budget", {"p_agent": "jarvis", "p_est_cents": 1, "p_model": TIER_MODEL["cheap"],
+                                              "p_purpose": "credit probe"})
+    except Exception as e:  # gateway said no (cap, kill switch) or is unreachable: no probe, no spend
+        logger.warning("HQ credit probe not run: %s", str(e)[:200])
+        return False
     try:
         _anthropic().messages.create(model=TIER_MODEL["cheap"], max_tokens=1,
                                      messages=[{"role": "user", "content": "ok"}])
-        return True
     except Exception as e:
+        try:
+            _rpc("settle_llm_call", {"p_id": call_id, "p_actual_cents": 0, "p_status": "failed"})
+        except Exception:
+            pass
         if not is_out_of_credits(e):
             logger.warning("HQ credit probe failed for another reason: %s", str(e)[:200])
         return False
+    try:
+        _rpc("settle_llm_call", {"p_id": call_id, "p_actual_cents": 1, "p_status": "done"})
+    except Exception:
+        pass
+    return True
 
 
 def resume_after_credits() -> int:
@@ -849,7 +898,8 @@ def _work_tasks() -> bool:
     tasks = _get(
         "tasks?status=eq.todo&assigned_agent=not.is.null"
         f"&or=(due_at.is.null,due_at.lte.{now})"
-        f"&order=priority.asc,created_at.asc&limit={MAX_TASKS_PER_TICK}"
+        + (f"&mission_id=eq.{_q(_FOCUS)}" if _FOCUS else "")
+        + f"&order=priority.asc,created_at.asc&limit={MAX_TASKS_PER_TICK}"
         "&select=id,assigned_agent,title,detail,venture_id,result"
     )
     for t in tasks:
@@ -872,8 +922,14 @@ def _work_tasks() -> bool:
         try:
             text = run_turn_sync(t["assigned_agent"], prompt, TASK_MAX_OUTPUT, f"task {t['id']}")
         except GatewayBlocked as e:
+            if str(e).startswith("Mission budget"):
+                # This mission's own AI budget is used up: stop its task (the mission engine blocks the mission and tells the owner)
+                # and carry on with the rest of the board. It must never stall every other task.
+                _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked", "updated_at": _now(), "result": f"Stopped: {str(e)[:200]}"})
+                logger.info("HQ mission budget refusal for task %s: %s", t["id"], e)
+                continue
             _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "todo", "updated_at": _now()})
-            if str(e).startswith("Agent "):
+            if str(e).startswith(("Agent ", "Focus mode")):
                 logger.info("HQ agent-level block (%s); skipping this task, continuing the board", e)
                 continue
             logger.info("HQ gateway blocked (%s); pausing the task board until it clears", e)
@@ -1129,13 +1185,22 @@ def _coast_notice() -> None:
 
 
 def tick_sync() -> None:
-    state = _get("system_state?id=eq.1&select=kill_switch,pause_reason,paused_at,night_until,night_started_at,day_cap_cents")
+    cols = "kill_switch,pause_reason,paused_at,night_until,night_started_at,day_cap_cents"
+    try:
+        state = _get(f"system_state?id=eq.1&select={cols},focus_mission")
+    except urllib.error.HTTPError as e:
+        if e.code != 400:
+            raise
+        state = _get(f"system_state?id=eq.1&select={cols}")  # focus_mission not migrated yet: no focus mode, never a dead engine
+    global _FOCUS
+    _FOCUS = (state[0].get("focus_mission") if state else None) or None
     if state and state[0].get("kill_switch"):
         return
     try:
         _patch("system_state?id=eq.1", {"last_heartbeat": _now()})
     except Exception:
         logger.exception("HQ heartbeat write failed")
+    sync_integrations()
     if state and state[0].get("night_until"):
         try:
             end_night_shift_if_due(state[0])
@@ -1158,7 +1223,8 @@ def tick_sync() -> None:
         logger.exception("HQ system health checks failed")
     # Triage first: it is quick and cheap, and long research tasks must never starve it.
     try:
-        _triage_escalations()
+        if not _FOCUS:  # focus mode: nothing but the chosen mission may use AI
+            _triage_escalations()
     except Exception:
         logger.exception("HQ triage failed")
     if hq_waterfall.coast():  # owner away: finish queued work, start nothing new

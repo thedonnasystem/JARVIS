@@ -230,3 +230,7 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - Set in Railway: `BACKUP_KEY` (generate one: `python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"` and KEEP A COPY OFFLINE, without it backups cannot be read) and `BACKUP_PUT_URL` (an HTTPS endpoint that accepts a PUT; `{name}` becomes the file name). Optional `BACKUP_AUTH` header value.
 - Put the backup somewhere that is not this Supabase project. Runs nightly 02:00-05:00 Toronto, encrypts, then decrypts and recounts every table before uploading. A failure messages you once.
 - Not exported: `push_config` (private keys) and push subscriptions.
+
+
+## Releases
+See DEPLOY_RUNBOOK.md (gates, exact order, verification, rollback), SECURITY_REVIEW_PHASE1.md, and the read-only tools in `ops/` (`verify_deploy.sh`, `verify_live.sql`, `rollback_phase1.sql`).

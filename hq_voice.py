@@ -13,6 +13,16 @@ logger = logging.getLogger(__name__)
 API = "https://api.openai.com/v1/audio/transcriptions"
 MAX_SECONDS = 180
 MAX_BYTES = 10_000_000
+MODEL_LABEL = "whisper-1"      # label recorded at the spend gateway (flat per-minute price, no token estimate)
+USD_PER_MINUTE = 0.006
+FX_CONSERVATIVE = 1.5          # CAD per USD, deliberately high so the reservation over- rather than under-states cost
+
+
+def estimate_cents(seconds) -> int:
+    """CAD cents to reserve at the spend gateway BEFORE the provider is called. Unknown length is priced as the maximum."""
+    s = float(seconds or 0)
+    s = MAX_SECONDS if s <= 0 else min(s, MAX_SECONDS)
+    return max(1, int(-(-(s / 60.0 * USD_PER_MINUTE * FX_CONSERVATIVE * 100) // 1)))
 
 
 def configured() -> bool:

@@ -100,8 +100,10 @@ create function public.night_shift_report(p_since timestamptz) returns text lang
 create function public.post_daily_brief() returns void language sql as $$ select 1 $$;
 create function public.queue_daily_planning() returns void language sql as $$ select 1 $$;
 create function public.queue_followup_digest() returns void language sql as $$ select 1 $$;
-create function public.queue_outreach_drafts() returns void language sql as $$ select 1 $$;
+create function public.queue_outreach_drafts() returns integer language sql as $$ select 0 $$;
 create function public.queue_prospect_task() returns void language sql as $$ select 1 $$;
-create function public.queue_valuation_task() returns void language sql as $$ select 1 $$;
+create function public.queue_valuation_task() returns uuid language sql as $$ select null::uuid $$;
 create function public.estimate_call_cents(p_model text, p_input_tokens int, p_max_output_tokens int) returns int language sql as $$ select 1 $$;
-create function public.mission_spent_cents(p_mission uuid) returns int language sql as $$ select 0 $$;
+create function public.mission_spent_cents(p_mission uuid) returns int language sql stable set search_path to 'public' as $$
+  select coalesce(sum(coalesce(c.actual_cents, c.reserved_cents)), 0)::int from public.llm_calls c
+  join public.tasks t on c.purpose = 'task ' || t.id::text where t.mission_id = p_mission and c.status in ('reserved','done') $$;

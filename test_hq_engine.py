@@ -248,6 +248,21 @@ class T(unittest.TestCase):
         self.assertTrue(row["body"].startswith("Subject: Missed calls"))
         self.assertEqual(row["to_ref"], "info@coolair.example.ca")
 
+    def test_second_draft_for_same_lead_is_dropped_not_crashed(self):
+        class B(Board):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                if method == "GET" and path.startswith("/rest/v1/leads"):
+                    return [{"id": "L7", "source": "https://coolair.example.ca", "email": "info@coolair.example.ca"}]
+                if method == "POST" and "/outbox" in path:
+                    raise http_err(409, "duplicate key value violates unique constraint outbox_one_draft_per_lead")
+                return Board.__call__(s, method, path, body, timeout, prefer)
+        b = B()
+        t = {"id": "d1", "assigned_agent": "donna-division", "title": "Draft outreach for 5 HVAC leads", "venture_id": "vd"}
+        text = "DRAFT #7\nSubject: Missed calls cost you jobs\nBody:\nHi team,\nWe answer every lead in 60 seconds.\nReply STOP to opt out.\nEND DRAFT\n"
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_drafts(t, text), 0)
+        self.assertFalse([i for i in b.inserts if "owner_messages" in i[0]])
+
     def test_ideas_parsed_and_clamped(self):
         b = Board()
         t = {"id": "i1", "assigned_agent": "new-ventures-researcher", "title": "Shortlist"}
@@ -407,6 +422,61 @@ class T(unittest.TestCase):
             E.tick_sync()
         work.assert_not_called(); tri.assert_not_called()
 
+    def test_focus_mode_only_fetches_the_focused_missions_tasks(self):
+        seen = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            seen.append(path); return []
+        E._FOCUS = "11111111-2222-3333-4444-555555555555"
+        try:
+            with mock.patch.object(hq, "_request", fake):
+                E._work_tasks()
+        finally:
+            E._FOCUS = None
+        q = [p for p in seen if p.startswith("/rest/v1/tasks?status=eq.todo")]
+        self.assertTrue(q and "mission_id=eq.11111111-2222-3333-4444-555555555555" in q[0])
+        seen.clear()
+        with mock.patch.object(hq, "_request", fake):
+            E._work_tasks()
+        self.assertNotIn("mission_id=eq.", [p for p in seen if p.startswith("/rest/v1/tasks?status=eq.todo")][0])
+
+    def test_integration_status_is_reported_even_while_paused(self):
+        calls = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body))
+            if path.startswith("/rest/v1/system_state"):
+                return [{"kill_switch": False, "pause_reason": E.CREDITS_PAUSE, "paused_at": "2026-11-06T05:30:00Z"}]
+            return []
+        E._last_probe = None
+        with mock.patch.object(hq, "_request", fake), mock.patch.object(E, "_credits_back", return_value=False), \
+             mock.patch.object(E.hq_wholesale, "enabled", return_value=False), \
+             mock.patch.object(E.hq_mail, "configured", return_value=False), mock.patch.object(E.hq_backup, "configured", return_value=True):
+            E.tick_sync()
+        posts = [c for c in calls if c[0] == "POST" and "integration_status" in c[1]]
+        self.assertEqual(len(posts), 1)
+        by = {r["key"]: r for r in posts[0][2]}
+        self.assertFalse(by["wholesale"]["ok"]); self.assertIn("WHOLESALE_SUPABASE_SERVICE_KEY", by["wholesale"]["detail"])
+        self.assertTrue(by["backup"]["ok"]); self.assertFalse(by["mail"]["ok"])
+
+    def test_engine_build_row_reports_the_running_commit(self):
+        sent = []
+        env = {"RAILWAY_GIT_COMMIT_SHA": "a3d7d7d4d69fc6545e2d184259bd98497ed8b5c8", "RAILWAY_GIT_BRANCH": "claude/telegram-claude-bot-59nusk",
+               "RAILWAY_DEPLOYMENT_ID": "575ed1d2-415a"}
+        with mock.patch.dict(E.os.environ, env, clear=False), mock.patch.object(hq, "_request", lambda m, p, b=None, **k: sent.append(b)):
+            E.sync_integrations()
+        row = {r["key"]: r for r in sent[0]}["engine_build"]
+        self.assertTrue(row["ok"]); self.assertIn("a3d7d7d4d69f", row["detail"]); self.assertIn("575ed1d2", row["detail"])
+        with mock.patch.dict(E.os.environ, {}, clear=True), mock.patch.object(hq, "_request", lambda m, p, b=None, **k: sent.append(b)):
+            E.sync_integrations()
+        row = {r["key"]: r for r in sent[1]}["engine_build"]
+        self.assertFalse(row["ok"]); self.assertIn("unknown", row["detail"])
+
+    def test_integration_status_write_failure_never_blocks_the_engine(self):
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            if method == "POST": raise RuntimeError("db down")
+            return []
+        with mock.patch.object(hq, "_request", fake):
+            E.sync_integrations()  # must not raise
+
     def test_resume_requeues_credit_failures_and_drops_stale_plans(self):
         dead = [{"id": "a", "title": "Find Donna prospects: HVAC"}, {"id": "b", "title": "Daily planning 2026-11-06"}]
         b = Board()
@@ -455,6 +525,102 @@ class T(unittest.TestCase):
         self.run_tick(b, '{"action":"close","message":"fine"}')
         self.assertTrue(any(p[1].get("status") == "closed" for p in b.patches))
         self.assertFalse(any("owner_messages" in i[0] for i in b.inserts))
+
+
+class FocusIsolationTests(unittest.TestCase):
+    """Focus mode end to end at the engine level: backlog, triage, credit recovery, cleanup."""
+    MISSION = "11111111-2222-3333-4444-555555555555"
+
+    def _world(self, focus, paused=False):
+        backlog = {"id": "b1", "assigned_agent": "x", "title": "Daily planning 2026-11-08", "detail": "", "venture_id": None, "result": None}
+        mission = {"id": "m1", "assigned_agent": "x", "title": "Mission: Step one", "detail": "", "venture_id": None, "result": None, "mission_id": self.MISSION}
+        log = {"paths": [], "ran": [], "triage": 0, "patches": [], "inserts": []}
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            log["paths"].append((method, path))
+            if method == "GET" and path.startswith("/rest/v1/system_state"):
+                row = {"kill_switch": False, "pause_reason": E.CREDITS_PAUSE if paused else None,
+                       "paused_at": "2026-11-08T02:39:00Z" if paused else None}
+                if focus: row["focus_mission"] = self.MISSION
+                return [row]
+            if method == "GET" and path.startswith("/rest/v1/tasks?status=eq.todo"):
+                rows = [backlog, mission]
+                if f"mission_id=eq.{self.MISSION}" in path:
+                    rows = [mission]
+                return rows
+            if method == "GET" and "credit%20balance" in path:
+                return [{"id": "blk", "title": "Find Donna prospects: HVAC"}]
+            if method == "PATCH": log["patches"].append((path, body)); return [{"id": 1}] if prefer == "return=representation" else None
+            if method == "POST": log["inserts"].append((path, body))
+            return []
+        return fake, log
+
+    def _tick(self, fake, log, credits_back=True):
+        def run(slug, prompt, mx, purpose):
+            log["ran"].append(purpose); return "ok"
+        with mock.patch.object(hq, "_request", fake), mock.patch.object(E, "_credits_back", return_value=credits_back), \
+             mock.patch.object(E, "run_turn_sync", side_effect=run), \
+             mock.patch.object(E, "_triage_escalations", side_effect=lambda: log.__setitem__("triage", log["triage"] + 1)), \
+             mock.patch.object(E.hq_waterfall, "coast", return_value=False), mock.patch.object(E.hq_missions, "advance", return_value=0), \
+             mock.patch.object(E.hq_mail, "deliver_approved"), mock.patch.object(E.hq_backup, "run"), mock.patch.object(E.hq_systems, "run_due_checks"), \
+             mock.patch.object(E, "_bank_watch"), mock.patch.object(E, "_refresh_capital_mode"), mock.patch.object(E, "_recover_stale"):
+            E._last_probe = None
+            E.tick_sync()
+
+    def test_backlog_does_not_run_and_triage_is_skipped_in_focus(self):
+        fake, log = self._world(focus=True)
+        self._tick(fake, log)
+        self.assertEqual(log["ran"], ["task m1"])
+        self.assertEqual(log["triage"], 0)
+
+    def test_credit_recovery_requeues_backlog_but_only_the_mission_runs(self):
+        fake, log = self._world(focus=True, paused=True)
+        self._tick(fake, log, credits_back=True)
+        requeued = [p for p in log["patches"] if p[1].get("status") == "todo" and "tasks?id=eq.blk" in p[0]]
+        self.assertTrue(requeued)                      # recovery still repairs the board (no spend)
+        self.assertEqual(log["ran"], ["task m1"])      # but nothing outside the mission runs
+        self.assertEqual(log["triage"], 0)
+
+    def test_still_paused_in_focus_runs_nothing(self):
+        fake, log = self._world(focus=True, paused=True)
+        self._tick(fake, log, credits_back=False)
+        self.assertEqual(log["ran"], []); self.assertEqual(log["triage"], 0)
+
+    def test_cleanup_restores_normal_work(self):
+        fake, log = self._world(focus=True)
+        self._tick(fake, log)
+        self.assertEqual(E._FOCUS, self.MISSION)
+        fake2, log2 = self._world(focus=False)         # owner ran /mission focus off
+        self._tick(fake2, log2)
+        self.assertIsNone(E._FOCUS)
+        self.assertEqual(log2["ran"], ["task b1", "task m1"])
+        self.assertEqual(log2["triage"], 1)
+
+    def test_mission_budget_refusal_stops_that_task_but_not_the_board(self):
+        t1 = {"id": "t1", "assigned_agent": "x", "title": "Mission: Step", "detail": "", "venture_id": None, "result": None}
+        t2 = {"id": "t2", "assigned_agent": "x", "title": "Other work", "detail": "", "venture_id": None, "result": None}
+        b = Board(tasks=[t1, t2]); ran = []
+        def run(slug, prompt, mx, purpose):
+            if purpose == "task t1": raise E.GatewayBlocked("Mission budget would be exceeded (190 of 200 cents used).")
+            ran.append(purpose); return "ok"
+        with mock.patch.object(hq, "_request", b), mock.patch.object(E, "run_turn_sync", side_effect=run):
+            self.assertTrue(E._work_tasks())             # True = the board was not paused
+        self.assertEqual(ran, ["task t2"])
+        last = [p[1] for p in b.patches if "tasks?id=eq.t1" in p[0]][-1]
+        self.assertEqual(last["status"], "blocked"); self.assertIn("Mission budget", last["result"])
+
+    def test_engine_survives_a_database_without_the_focus_column(self):
+        calls = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            calls.append(path)
+            if method == "GET" and path.startswith("/rest/v1/system_state") and "focus_mission" in path:
+                raise http_err(400, "column system_state.focus_mission does not exist")
+            if method == "GET" and path.startswith("/rest/v1/system_state"):
+                return [{"kill_switch": True}]
+            return []
+        with mock.patch.object(hq, "_request", fake):
+            E.tick_sync()                              # must not raise
+        self.assertIsNone(E._FOCUS)
+        self.assertTrue(any("focus_mission" not in p and p.startswith("/rest/v1/system_state?id=eq.1&select=kill") for p in calls))
 
 
 if __name__ == "__main__":

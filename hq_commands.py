@@ -719,7 +719,7 @@ async def hq_mission_cmd(update, context) -> None:
     args = list(context.args or [])
     if not args:
         await update.message.reply_text("Usage:\n/mission new <objective>\n/mission <id>\n/mission pause|resume|abandon <id>\n"
-                                        "/mission budget <id> <cents CAD>\nOr just tell me the goal in chat.")
+                                        "/mission budget <id> <cents CAD>\n/mission steps <id> <n>\n/mission focus <id>|off\nOr just tell me the goal in chat.")
         return
     try:
         verb = args[0].lower()
@@ -728,6 +728,10 @@ async def hq_mission_cmd(update, context) -> None:
             text = r.get("error") or f"Mission opened: {r['title']} ({str(r['id'])[:8]}). Evaluation starts on the next tick."
         elif verb in ("pause", "resume", "abandon") and len(args) >= 2:
             text = hq_missions.set_status(args[1], verb)
+        elif verb == "steps" and len(args) >= 3 and args[2].isdigit():
+            text = hq_missions.set_steps(args[1], int(args[2]))
+        elif verb == "focus" and len(args) >= 2:
+            text = hq_missions.set_focus(args[1])
         elif verb == "budget" and len(args) >= 3 and args[2].isdigit():
             text = hq_missions.set_budget(args[1], int(args[2]))
         else:
