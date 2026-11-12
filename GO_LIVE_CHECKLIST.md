@@ -1,6 +1,8 @@
 # Go-live checklist (what the green light means)
 Everything below is built, tested (156 unit tests; SQL tested on local Postgres 16 and earlier dry-runs on the live DB) and sitting on branch `overnight-build`. Nothing here is live until you say go.
 
+Exact file order: `migrations/APPLY_ORDER.txt`.
+
 ## Order (each step is reversible by dropping what it added; none deletes existing data)
 | # | Migration | What changes | Risk |
 |---|-----------|--------------|------|

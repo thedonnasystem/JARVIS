@@ -1,0 +1,15 @@
+# Apply in this order on the HQ Supabase project (ihxzvpwbqydqtblvazbq). Already live: missions_v1, brief_missions.
+20261112_permissions_v1.sql
+20261112_chat_meter.sql
+20261112_capital_v1.sql
+20261112_bank_v1.sql
+20261112_learning_v1.sql
+20261112_org_v1.sql
+20261112_holding_v1.sql
+20261112_ventures_v1.sql
+20261112_agents_v1.sql
+20261112_opportunity_v1.sql
+20261112_webapp_v1.sql
+20261112_venture_view_v1.sql
+20261112_brief_v3.sql
+20261112_push_v1.sql
