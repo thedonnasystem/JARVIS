@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import hq
 import hq_missions
 import hq_policy
+import hq_capital
 
 logger = logging.getLogger(__name__)
 
@@ -645,8 +646,24 @@ async def hq_policy_cmd(update, context) -> None:
     await update.message.reply_text(text[:4000])
 
 
+async def hq_capital_cmd(update, context) -> None:
+    """/capital  shows the operating fund. /capital set <field> <value> changes a limit (owner only)."""
+    if not _owner(update):
+        return
+    args = list(context.args or [])
+    try:
+        if len(args) >= 3 and args[0].lower() == "set":
+            text = hq_capital.set_field(args[1], args[2])
+        else:
+            text = hq_capital.status_text()
+    except Exception as e:
+        logger.exception("HQ capital command failed")
+        text = f"Capital command failed: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
 MENU = [
-    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -723,7 +740,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))

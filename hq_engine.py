@@ -613,7 +613,10 @@ def run_turn_sync(slug: str, task: str, max_out: int, purpose: str) -> str:
     agent = rows[0]
     hb = _get("handbook?active=eq.true&order=version.desc&limit=1&select=content")
     system = system_prompt(agent, hb[0]["content"] if hb else None)
-    model = TIER_MODEL.get(agent.get("model_tier"), TIER_MODEL["cheap"])
+    tier = agent.get("model_tier") or "cheap"
+    if _CAPITAL_MODE == "low_cost":  # capital survival: one tier cheaper until the fund recovers
+        tier = {"strong": "standard", "standard": "cheap"}.get(tier, "cheap")
+    model = TIER_MODEL.get(tier, TIER_MODEL["cheap"])
     search = can_search(slug)
     fetches = fetch_budget(task)
     est_in = math.ceil((len(system) + len(task)) / 3) + (25000 + (fetches * FETCH_MAX_TOKENS if FETCH_ENABLED else 0) if search else 0)  # search results add a lot of input tokens (measured: ~17c per search task)
@@ -735,6 +738,20 @@ def _recover_stale() -> None:
     if not _started:
         _patch(f"llm_calls?status=eq.reserved&started_at=lt.{cutoff}", {"status": "released", "finished_at": _now()})
         _started = True
+
+
+_CAPITAL_MODE = "normal"
+
+
+def _refresh_capital_mode() -> None:
+    """Read the capital controller's mode once per tick (normal / low_cost / hard_stop). Missing = normal;
+    the database gateway enforces hard stop on its own either way."""
+    global _CAPITAL_MODE
+    try:
+        m = _rpc("capital_mode", {})
+        _CAPITAL_MODE = m if m in ("normal", "low_cost", "hard_stop") else "normal"
+    except Exception:
+        _CAPITAL_MODE = "normal"
 
 
 def _work_tasks() -> bool:
@@ -1021,6 +1038,7 @@ def tick_sync() -> None:
             return  # paused: no AI calls, no new work, until a probe succeeds
         resume_after_credits()
     _recover_stale()
+    _refresh_capital_mode()
     try:
         hq_systems.run_due_checks()
     except Exception:
