@@ -1,5 +1,5 @@
 # Go-live checklist (what the green light means)
-Everything below is built, tested (136 unit tests; SQL tested on local Postgres 16 and earlier dry-runs on the live DB) and sitting on branch `overnight-build`. Nothing here is live until you say go.
+Everything below is built, tested (152 unit tests; SQL tested on local Postgres 16 and earlier dry-runs on the live DB) and sitting on branch `overnight-build`. Nothing here is live until you say go.
 
 ## Order (each step is reversible by dropping what it added; none deletes existing data)
 | # | Migration | What changes | Risk |
@@ -12,7 +12,7 @@ Everything below is built, tested (136 unit tests; SQL tested on local Postgres 
 | 6 | org_v1 | Structured proposals, scorecard, richer weekly review | Low |
 | 6b | holding_v1 | Holding P&L (received cash only), weekly earn-your-keep review proposing to pause costly idle agents (you approve) | Low |
 | 7 | ventures_v1 | Venture factory (inert until you approve) | Low |
-| 8 | webapp_v1 | Owner-only app functions | Medium until owner list is set: apply, then add your email BEFORE sharing the URL |
+| 8 | webapp_v1 | Owner-only app functions (incl. follow-ups-due card, day-job log, drafts, idea lab) | Medium until owner list is set: apply, then add your email BEFORE sharing the URL |
 | 7b | agents_v1 | Jarvis can create departments/agents inside hard limits (cheap/standard, <=50c/day, max 3 a week, asleep if budget full) | Low |
 | 8b | brief_v3 | 7pm brief gains P&L, bank alerts, forecast accuracy, pending proposals (apply after 3-7) | Low |
 | 9 | push_v1 | Push subscriptions; VAPID key stored in a locked table | Low |
