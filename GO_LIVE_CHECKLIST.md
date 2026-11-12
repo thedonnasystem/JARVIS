@@ -46,7 +46,7 @@ Sending email, spending money, signing, contacting leads, any call. Ventures sta
 - For Jarvis to edit his own code: a GitHub token limited to this repo with pull-request-only rights (design in ROADMAP_SECTIONS_10_12.md).
 
 ## One-paste go-live (Nov 12)
-- `dist/APPLY_ALL.sql` = all 19 migrations in order (140 KB, idempotent; tested on the live-schema replica, applied on top of itself).
+- `dist/APPLY_ALL.sql` = all 23 migrations in order (idempotent; tested on the live-schema replica). **LIVE STATUS (Nov 12, 2026): all 23 applied to production Supabase, owner emails registered, anon/authenticated lockdown verified (0 anon-callable functions; only the 12 owner-checked app_* functions open to signed-in users). Still dry_run, paused for api_credits.**
 - `dist/POST_APPLY.sql` = registers owner emails in `app_owners`.
 - Supabase dashboard -> SQL editor -> paste APPLY_ALL -> Run -> paste POST_APPLY -> Run.
 - The assistant's own attempt to apply to production was blocked by the permission system; it needs the owner's explicit approval.
