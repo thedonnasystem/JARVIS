@@ -108,3 +108,29 @@ The daily planner must give every task an `expected_cad` and a `days_to_cash`, o
 2. **Tasks stuck in `doing`:** they requeue after a restart or after 15 minutes. Stuck spend holds release after 30 minutes.
 3. **Agents not running but the heartbeat is fine:** check the caps. Look at `llm_calls` for today versus `system_state.daily_spend_cap_cents` and `agents.daily_spend_cap_cents`.
 4. **Tests:** `python3 -m unittest test_hq test_hq_engine test_hq_commands`
+
+## Missions (Mission Manager v1, Nov 12 2026)
+
+A mission is a broad objective HQ pursues on its own across ticks, restarts and nights. State lives in
+`missions` + `tasks.mission_id` (same task queue, same spend gateway). Code: `hq_missions.py`, run every tick by
+`hq_engine.tick_sync` (database-only, no model calls of its own).
+
+Lifecycle (enforced by the `missions_lifecycle` trigger):
+CAPTURED → EVALUATED → PLANNED → EXECUTING → VERIFYING → COMPLETED, plus BLOCKED / PAUSED / REJECTED / ABANDONED / FAILED.
+- Evaluate: the venture's researcher returns `MISSION_VERDICT: GO|TEST|DEFER|REJECT`, `NUMBERS`, `SUCCESS`, `RISKS`, `STEP:` lines.
+  DEFER/REJECT stop the mission and tell the owner why.
+- Execute: plan steps become `Mission: …` tasks, one new step per tick, max 3 open per mission. Steps are research/drafting only
+  until the permissions engine (Phase 4) exists. Real-estate house sourcing steps are dropped (funnel's job).
+- Verify: an agent that did none of the steps returns `VERIFIED: YES|NO`, `EVIDENCE: claim | source`, `GAP:` lines.
+  COMPLETED is impossible without evidence (database trigger). NO → re-plan with the gaps; 3 failed verifications → FAILED.
+- Guards: max 5 live missions; AI budget per mission (default 200c USD, max 1000c) measured from `llm_calls`, over budget → PAUSED
+  and queued steps cancelled; blocked step → mission BLOCKED, owner told once; Task Brief questions wait instead of blocking;
+  no progress for 48h → owner told once, mission stays open.
+- Mission steps skip the per-task auditor and NEXT chains (the mission verifier replaces them).
+
+Owner: say a goal in chat ("I want to start X") → Jarvis calls `hq_create_mission`. Commands: `/missions [all]`,
+`/mission <id>`, `/mission new <objective>`, `/mission pause|resume|abandon <id>`, `/mission budget <id> <cents>`.
+The 7pm brief has a Missions section.
+
+Security (Nov 12): Jarvis chat answers only JARVIS_OWNER_ID; anyone else gets one line and no model call.
+Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_brief_missions.sql`.

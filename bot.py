@@ -2027,9 +2027,18 @@ async def dispatch_tool_call(
     return f"Unknown tool: {tool_name}"
 
 
+NON_OWNER_REPLY = "This is a private assistant."
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     user_text = update.message.text
+
+    # Security: every chat turn costs a Claude call on the owner's API key. Strangers who find the
+    # bot get one line and nothing else: no model call, no history saved.
+    if not _is_owner(update.effective_user.id):
+        await update.message.reply_text(NON_OWNER_REPLY)
+        return
 
     history = load_history(chat_id)
     messages = history + [{"role": "user", "content": user_text}]

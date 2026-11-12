@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 import hq
 import hq_wholesale
 import hq_systems
+import hq_missions
 
 logger = logging.getLogger(__name__)
 
@@ -372,8 +373,8 @@ CHAIN_TAG = re.compile(r"\[chain (\d+)\]")
 def _queue_next(t: dict, text: str) -> int:
     """Agents queue their own follow-up work. Guards: active agents only, queue cap, chain depth, no duplicate titles,
     nothing for audits or planning (those have their own flows)."""
-    if t["title"].startswith((AUDIT_PREFIX, PLAN_PREFIX, REVIEW_TITLE)):
-        return 0
+    if t["title"].startswith((AUDIT_PREFIX, PLAN_PREFIX, REVIEW_TITLE, hq_missions.TITLE_PREFIX)):
+        return 0  # mission steps follow the mission plan, not ad-hoc chains
     m = CHAIN_TAG.search(t.get("detail") or "")
     depth = int(m.group(1)) if m else 0
     if depth >= MAX_CHAIN_DEPTH:
@@ -864,7 +865,8 @@ def _log_prediction(agent: str, task_id: str, text: str, searched: bool) -> None
 
 def _queue_audit(task: dict, text: str) -> None:
     auditor = AUDITOR_FOR.get(task["assigned_agent"])
-    if not auditor or task["title"].startswith((AUDIT_PREFIX, PLAN_PREFIX)):
+    # Mission steps get one independent verification at the end of the mission instead of an audit per step.
+    if not auditor or task["title"].startswith((AUDIT_PREFIX, PLAN_PREFIX, hq_missions.TITLE_PREFIX)):
         return
     if len(_get("tasks?status=eq.todo&select=id")) >= MAX_TODO_QUEUE + 4:
         return
@@ -1028,6 +1030,10 @@ def tick_sync() -> None:
         _triage_escalations()
     except Exception:
         logger.exception("HQ triage failed")
+    try:  # database-only: moves missions along and puts their next steps on the board
+        hq_missions.advance()
+    except Exception:
+        logger.exception("HQ mission advance failed")
     _work_tasks()
 
 

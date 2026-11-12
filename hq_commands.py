@@ -16,6 +16,7 @@ import urllib.parse
 from datetime import datetime, timezone
 
 import hq
+import hq_missions
 
 logger = logging.getLogger(__name__)
 
@@ -576,8 +577,45 @@ async def hq_decision_callback(update, context) -> None:
         pass
 
 
+async def hq_missions_cmd(update, context) -> None:
+    if not _owner(update):
+        return
+    show_all = bool(context.args) and context.args[0].lower() == "all"
+    try:
+        text = hq_missions.list_text(include_done=show_all)
+    except Exception as e:
+        text = f"Missions unavailable: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
+async def hq_mission_cmd(update, context) -> None:
+    """/mission <id> | /mission new <objective> | /mission pause|resume|abandon <id> | /mission budget <id> <cents>"""
+    if not _owner(update):
+        return
+    args = list(context.args or [])
+    if not args:
+        await update.message.reply_text("Usage:\n/mission new <objective>\n/mission <id>\n/mission pause|resume|abandon <id>\n"
+                                        "/mission budget <id> <cents USD>\nOr just tell me the goal in chat.")
+        return
+    try:
+        verb = args[0].lower()
+        if verb == "new":
+            r = hq_missions.create_mission(" ".join(args[1:]), created_by="owner")
+            text = r.get("error") or f"Mission opened: {r['title']} ({str(r['id'])[:8]}). Evaluation starts on the next tick."
+        elif verb in ("pause", "resume", "abandon") and len(args) >= 2:
+            text = hq_missions.set_status(args[1], verb)
+        elif verb == "budget" and len(args) >= 3 and args[2].isdigit():
+            text = hq_missions.set_budget(args[1], int(args[2]))
+        else:
+            text = hq_missions.detail_text(args[0])
+    except Exception as e:
+        logger.exception("HQ mission command failed")
+        text = f"Mission command failed: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
 MENU = [
-    ("hq", "Company status"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -653,7 +691,8 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
     for name, fn in (("hq", hq_status), ("kill", hq_kill), ("resume", hq_resume), ("money", hq_money),
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
-                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift)):
+                     ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))
@@ -689,6 +728,26 @@ HQ_CHAT_TOOLS = [
                        "where venture is day-job-sales, donna, real-estate or new-ventures; plus jarvis.",
         "input_schema": {"type": "object", "properties": {"agent": {"type": "string"}, "task": {"type": "string"}},
                          "required": ["agent", "task"]},
+    },
+    {
+        "name": "hq_create_mission",
+        "description": "Open a Fendezy HQ MISSION: a broad objective HQ pursues on its own over many ticks (evaluate GO/TEST/"
+                       "DEFER/REJECT with numbers, plan, run the steps, independently verify). Use when the owner gives a goal "
+                       "or business idea ('I want to start X', 'get us into Y', 'figure out Z'), not for a single quick task. "
+                       "Confirm the objective in one line in your reply.",
+        "input_schema": {"type": "object", "properties": {
+            "objective": {"type": "string", "description": "the owner's goal in full, with any constraints he gave"},
+            "venture": {"type": "string", "enum": ["idea-lab", "donna", "real-estate", "day-job-sales"],
+                        "description": "existing venture it belongs to; idea-lab for new businesses"},
+            "title": {"type": "string", "description": "short name, under 60 characters"},
+            "budget_cents": {"type": "integer", "description": "AI spend budget in USD cents (default 200, max 1000)"}},
+            "required": ["objective"]},
+    },
+    {
+        "name": "hq_missions",
+        "description": "List Fendezy HQ missions with status, spend, verdict and next action. Use for 'what are you working on', "
+                       "'how's the X mission', 'what happened overnight'.",
+        "input_schema": {"type": "object", "properties": {}},
     },
 ]
 HQ_CHAT_TOOL_NAMES = {t["name"] for t in HQ_CHAT_TOOLS}
@@ -731,6 +790,13 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
             return _search_knowledge(tool_input.get("query", ""))
         if name == "hq_assign_task":
             return _assign(tool_input.get("agent", ""), tool_input.get("task", ""))
+        if name == "hq_create_mission":
+            r = hq_missions.create_mission(tool_input.get("objective", ""), tool_input.get("venture"),
+                                           tool_input.get("title"), tool_input.get("budget_cents"), created_by="owner-chat")
+            return r.get("error") or (f"Mission opened: {r['title']} (id {str(r['id'])[:8]}). It's evaluated on the next engine "
+                                      "tick (about 5 minutes); the owner gets the verdict and plan by Telegram.")
+        if name == "hq_missions":
+            return hq_missions.list_text(include_done=True)
     except Exception as e:
         logger.exception("HQ chat tool failed")
         return f"HQ tool error: {str(e)[:200]}"
