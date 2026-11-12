@@ -24,6 +24,7 @@ import hq
 import hq_wholesale
 import hq_systems
 import hq_missions
+import hq_mail
 import hq_bank
 import hq_waterfall
 
@@ -1158,6 +1159,10 @@ def tick_sync() -> None:
     if hq_waterfall.coast():  # owner away: finish queued work, start nothing new
         _coast_notice()
     else:
+        try:  # dormant until a send provider is configured; only owner-approved drafts, never in dry_run
+            hq_mail.deliver_approved()
+        except Exception:
+            logger.exception("HQ mail delivery failed")
         try:  # database-only: moves missions along and puts their next steps on the board
             hq_missions.advance()
         except Exception:
