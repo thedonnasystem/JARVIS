@@ -27,3 +27,5 @@ jobs:
         env:
           REPLICA_URL: postgresql://postgres:pw@localhost:5432/postgres
         run: scripts/replica/run.sh
+      - name: Go-live bundle matches the migrations
+        run: scripts/build_bundle.sh --check

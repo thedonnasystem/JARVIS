@@ -1,4 +1,4 @@
--- Fendezy HQ: all 19 migrations in order. Paste into Supabase SQL editor and Run. Idempotent.
+-- Fendezy HQ: all migrations in order. Paste into Supabase SQL editor and Run. Idempotent.
 
 -- ===== 20261112_permissions_v1.sql =====
 -- Phase 4: permissions engine (Green / Yellow / Red / Prohibited), enforced in the database.
