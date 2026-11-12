@@ -159,3 +159,7 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - Migration `20261112_learning_v1.sql` (tested on local Postgres 16). Every 6 hours a completed mission whose `days_to_cash + 7` days have passed is measured once: expected CAD vs cash RECEIVED in that venture since completion (approximate attribution, and the lesson says so).
 - Result lands in `mission_outcomes` and as a `lesson` in memory, which every agent prompt already reads (hit / partial / miss / no_forecast, with advice to discount optimistic forecasts).
 - `forecast_bias_text()` feeds the weekly review so Jarvis sees whether past forecasts held.
+
+## Holding company and earn-your-keep
+- Migration `20261112_holding_v1.sql` (after org_v1; tested locally). `/pnl [days]` and the app's Money tab show per-venture and total P&L: received cash only, intercompany excluded, company-level AI cost counted as overhead; signed/qualified pipeline and forecasts are shown apart and never added to cash.
+- Every Monday the review flags agents older than 14 days that spent 50+ cents and finished nothing, or cost over 3x the median per finished task. Each becomes a 'shutdown' proposal with Approve/Reject. Approve pauses that one agent (reversible); Jarvis himself is never flagged. Nothing is paused without your tap.

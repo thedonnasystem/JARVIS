@@ -10,6 +10,7 @@ Everything below is built, tested (136 unit tests; SQL tested on local Postgres 
 | 4 | bank_v1 | Bank balance caps spendable cash; statement import | Low; with no balance recorded it only alerts |
 | 5 | learning_v1 | Measures mission forecasts, writes lessons (no AI cost) | Low |
 | 6 | org_v1 | Structured proposals, scorecard, richer weekly review | Low |
+| 6b | holding_v1 | Holding P&L (received cash only), weekly earn-your-keep review proposing to pause costly idle agents (you approve) | Low |
 | 7 | ventures_v1 | Venture factory (inert until you approve) | Low |
 | 8 | webapp_v1 | Owner-only app functions | Medium until owner list is set: apply, then add your email BEFORE sharing the URL |
 | 9 | push_v1 | Push subscriptions; VAPID key stored in a locked table | Low |

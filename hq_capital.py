@@ -105,3 +105,23 @@ def set_field(field: str, value: str) -> str:
         return "Give a number."
     hq._request("PATCH", "/rest/v1/capital_policy?id=eq.1", {col: v, "updated_by": "owner:telegram"}, prefer="return=minimal")
     return f"Capital {field} set to {value}."
+
+
+def pnl_text(days: int = 30) -> str:
+    try:
+        r = _rpc("holding_pnl", {"p_days": int(days)})
+    except Exception:
+        return "P&L not installed yet (migration pending)."
+    if not isinstance(r, dict):
+        return "P&L unavailable."
+    t = r.get("total") or {}
+    lines = [f"Holding company, last {r.get('days', days)} days (CAD)"]
+    for v in r.get("ventures") or []:
+        lines.append(f"{v['name']}: in {_d(v['revenue_cents'])}, out {_d(v['expense_cents'])}, AI {_d(v['ai_cents'])}, net {_d(v['net_cents'])}"
+                     + (f" | pipeline {_d(v['pipeline_cents'])}" if v.get("pipeline_cents") else "")
+                     + (f" | forecast {_d(v['forecast_cents'])}" if v.get("forecast_cents") else ""))
+    lines.append(f"TOTAL cash in {_d(t.get('revenue_cents'))}, out {_d(t.get('expense_cents'))}, venture AI {_d(t.get('ai_cents'))}, "
+                 f"company overhead AI {_d(t.get('holding_ai_cents'))}")
+    lines.append(f"NET after overhead: {_d(t.get('net_after_overhead_cents', t.get('net_cents')))}")
+    lines.append(f"Not cash: pipeline {_d(t.get('pipeline_cents'))}, forecasts {_d(t.get('forecast_cents'))}")
+    return "\n".join(lines)

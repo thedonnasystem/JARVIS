@@ -544,8 +544,11 @@ def apply_decision(msg_id: str, approved: bool) -> str:
     elif ref_table == "org_changes" and ref_id:
         hq._request("PATCH", f"/rest/v1/org_changes?id=eq.{_q(ref_id)}", {"status": verdict, "decided_at": now}, prefer="return=minimal")
         if approved:
-            oc = _get(f"org_changes?id=eq.{_q(ref_id)}&select=kind,change,gain,cost,time_to_results,risk&limit=1")
-            if oc:
+            oc = _get(f"org_changes?id=eq.{_q(ref_id)}&select=kind,change,gain,cost,time_to_results,risk,target&limit=1")
+            if oc and oc[0].get("kind") == "shutdown" and oc[0].get("target"):
+                # Earn-your-keep: approving pauses that one agent. Reversible any time (/agents or the app).
+                hq._request("PATCH", f"/rest/v1/agents?slug=eq.{_q(oc[0]['target'])}&role=neq.owner_contact", {"status": "paused"}, prefer="return=minimal")
+            elif oc:
                 c = oc[0]
                 made = hq_missions.create_mission(
                     f"Implement approved {c['kind']} change: {c['change']} Expected gain: {c.get('gain') or 'unstated'}. "
@@ -683,6 +686,21 @@ async def hq_venture_cmd(update, context) -> None:
     await update.message.reply_text(text[:4000])
 
 
+async def hq_pnl_cmd(update, context) -> None:
+    """/pnl [days]  holding-company P&L: received cash only; pipeline and forecasts shown apart."""
+    if not _owner(update):
+        return
+    days = 30
+    if context.args and str(context.args[0]).isdigit():
+        days = max(1, min(int(context.args[0]), 365))
+    try:
+        text = hq_capital.pnl_text(days)
+    except Exception as e:
+        logger.exception("HQ pnl failed")
+        text = f"P&L failed: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
 async def hq_bank_cmd(update, context) -> None:
     """/bank status | balance <amt> [date] | unmatched | reconcile  (owner only)."""
     if not _owner(update):
@@ -739,7 +757,7 @@ async def hq_capital_cmd(update, context) -> None:
 
 
 MENU = [
-    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("venture", "Ventures: list, new, activate, workspace"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -816,7 +834,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd)):
         app.add_handler(CommandHandler(name, fn))
     try:
         from telegram.ext import MessageHandler, filters

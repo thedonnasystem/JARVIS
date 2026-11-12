@@ -64,3 +64,37 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Keep(unittest.TestCase):
+    def test_shutdown_proposal_pauses_only_that_agent_when_approved(self):
+        for approved in (True, False):
+            calls = []
+
+            def req(method, path, body=None, timeout=30, prefer=None):
+                calls.append((method, path, body))
+                if "owner_messages" in path and method == "PATCH":
+                    return [{"id": "m1", "ref_table": "org_changes", "ref_id": "oc-9", "body": "x"}]
+                if path.startswith("/rest/v1/org_changes") and method == "GET":
+                    return [{"kind": "shutdown", "change": "Pause agent burner", "target": "burner"}]
+            with mock.patch.object(hq, "_request", req), mock.patch.object(C.hq_missions, "create_mission") as cm:
+                C.apply_decision("m1", approved)
+            paused = [(p, b) for m, p, b in calls if m == "PATCH" and p.startswith("/rest/v1/agents")]
+            self.assertEqual(len(paused), 1 if approved else 0)
+            if approved:
+                self.assertIn("slug=eq.burner", paused[0][0]); self.assertIn("role=neq.owner_contact", paused[0][0])
+            self.assertFalse(cm.called)  # a shutdown is not a mission
+
+
+class Pnl(unittest.TestCase):
+    def test_pnl_text_keeps_cash_and_pipeline_apart(self):
+        import hq_capital as K
+        r = {"days": 30, "ventures": [{"name": "Donna", "revenue_cents": 100000, "expense_cents": 2500, "ai_cents": 424, "net_cents": 97076,
+                                       "pipeline_cents": 500000, "forecast_cents": 900000}],
+             "total": {"revenue_cents": 100000, "expense_cents": 2500, "ai_cents": 424, "holding_ai_cents": 500,
+                       "net_after_overhead_cents": 96576, "pipeline_cents": 500000, "forecast_cents": 900000}}
+        with mock.patch.object(hq, "_request", lambda *a, **k: r):
+            t = K.pnl_text(30)
+        self.assertIn("NET after overhead: $965.76", t); self.assertIn("Not cash: pipeline $5,000.00", t)
+        with mock.patch.object(hq, "_request", side_effect=RuntimeError("x")):
+            self.assertIn("not installed", K.pnl_text())

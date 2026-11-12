@@ -176,6 +176,11 @@ function rMoney(s) {
         c.bank_balance_cents != null ? row('Bank balance (source of truth)', usd(c.bank_balance_cents) + ' · ' + c.bank_age_days + 'd ago') : row('Bank balance', 'not recorded'),
         c.ledger_available_cents != null ? row('Ledger says', usd(c.ledger_available_cents)) : null] : null,
       (s.bank_alerts || []).map((a) => h('div', { class: 'dim', style: 'color:var(--warn)' }, '! ' + a))),
+    s.pnl && s.pnl.total ? [h('h2', {}, 'Profit and loss, 30 days'), h('div', { class: 'card' },
+      (s.pnl.ventures || []).map((v) => row(v.name, 'net ' + usd(v.net_cents) + ' (in ' + usd(v.revenue_cents) + ')')),
+      row('Total cash in', usd(s.pnl.total.revenue_cents)), row('Overhead AI', usd(s.pnl.total.holding_ai_cents)),
+      row('Net after overhead', usd(s.pnl.total.net_after_overhead_cents)),
+      h('div', { class: 'dim' }, 'Not cash: pipeline ' + usd(s.pnl.total.pipeline_cents) + ', forecasts ' + usd(s.pnl.total.forecast_cents)))] : null,
     h('h2', {}, 'AI spend, last 7 days'), h('div', { class: 'card' }, days.length ? days.map((d) => row(d.d, usd(d.c))) : h('span', { class: 'dim' }, 'No spend recorded.')),
     h('h2', {}, 'Permissions'), h('div', { class: 'card' }, (s.policy || []).length ? s.policy.map((p) => row(p.action, p.tier)) : h('span', { class: 'dim' }, 'Policy table not live yet.')),
     h('p', { class: 'dim' }, 'Limits are changed in Telegram with /capital and /policy. Agents cannot change them.'));
