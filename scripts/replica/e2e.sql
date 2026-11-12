@@ -122,3 +122,14 @@ do $$ declare r jsonb; begin
   if not exists (select 1 from jsonb_array_elements(r) e where e->>'channel' = 'email' and (e->>'eligible')::boolean) then raise exception 'eligibility wrong %', r; end if;
 end $$;
 select 'autonomy_ok';
+
+-- lockdown_v1 regression: after every migration, only the owner-checked app_* functions may be callable by anon/authenticated.
+do $$ declare bad text; begin
+  select string_agg(p.proname, ',') into bad from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.prokind = 'f'
+     and (has_function_privilege('anon', p.oid, 'execute')
+          or (has_function_privilege('authenticated', p.oid, 'execute')
+              and p.proname not in ('is_app_owner','app_snapshot','app_messages','app_send','app_set_kill','app_set_agent','app_venture','app_venture_extras','app_office','app_payments','app_push_public_key','app_save_push')));
+  if bad is not null then raise exception 'callable by anon/authenticated: %', bad; end if;
+end $$;
+select 'lockdown_ok';
