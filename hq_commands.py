@@ -20,6 +20,7 @@ import hq_missions
 import hq_policy
 import hq_bank
 import hq_dev
+import hq_org
 import hq_ventures
 import hq_capital
 
@@ -913,6 +914,24 @@ HQ_CHAT_TOOLS = [
             "required": ["title", "rationale", "files"]},
     },
     {
+        "name": "hq_create_department",
+        "description": "Create a new department (e.g. marketing, engineering) when the owner asks for one or the numbers justify it. "
+                       "Optionally attach it to a venture slug; otherwise it is a shared company department.",
+        "input_schema": {"type": "object", "properties": {"slug": {"type": "string"}, "name": {"type": "string"}, "venture_slug": {"type": "string"}},
+                         "required": ["slug", "name"]},
+    },
+    {
+        "name": "hq_create_agent",
+        "description": "Create a new HQ agent in an existing department. Hard limits (enforced by the database): cheap or standard tier, cap at most 50 "
+                       "cents/day, cannot contact the owner, max 3 new agents per week, created asleep if the company agent budget is full. "
+                       "Roles: researcher, specialist, ops, finance, auditor, builder, compliance, gm. Give a real charter and a measurable metric.",
+        "input_schema": {"type": "object", "properties": {
+            "slug": {"type": "string"}, "title": {"type": "string"}, "department": {"type": "string"},
+            "role": {"type": "string"}, "tier": {"type": "string", "enum": ["cheap", "standard"]}, "cap_cents": {"type": "integer"},
+            "charter": {"type": "string"}, "metric": {"type": "string"}},
+            "required": ["slug", "title", "department", "role", "tier", "charter", "metric"]},
+    },
+    {
         "name": "hq_venture",
         "description": "Show one venture's workspace: stage, budget used, money, agents, leads, goals. Use for 'how is X doing'.",
         "input_schema": {"type": "object", "properties": {"slug": {"type": "string"}}, "required": ["slug"]},
@@ -978,6 +997,12 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
             import asyncio
             return await asyncio.to_thread(hq_dev.propose_change, tool_input.get("title", ""), tool_input.get("rationale", ""),
                                            tool_input.get("files") or [])
+        if name == "hq_create_department":
+            return hq_org.create_department(tool_input.get("slug", ""), tool_input.get("name", ""), tool_input.get("venture_slug"), by="owner-chat")
+        if name == "hq_create_agent":
+            return hq_org.create_agent(tool_input.get("slug", ""), tool_input.get("title", ""), tool_input.get("department", ""), tool_input.get("role", ""),
+                                       tool_input.get("tier", "cheap"), tool_input.get("cap_cents") or 15, tool_input.get("charter", ""),
+                                       tool_input.get("metric", ""), by="owner-chat")
         if name == "hq_venture":
             return hq_ventures.workspace_text((tool_input.get("slug") or "").lower())
         if name == "hq_missions":
