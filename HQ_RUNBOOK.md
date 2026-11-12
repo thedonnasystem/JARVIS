@@ -167,6 +167,7 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 
 ## Self-development (Section 11), pull requests only
 - `hq_dev.py` + chat tool `hq_propose_code_change`. Needs `GITHUB_TOKEN` (fine-grained, this repo only, contents + pull requests) and `GITHUB_REPO` on Railway; without them it says "not set up".
+- Dependencies: a PR that edits requirements.txt is refused unless every package is on the approved list in `hq_dev.APPROVED_DEPS` (no git or URL installs). Add a package by editing that list yourself.
 - Jarvis branches off the base branch, commits 1-5 files (60 KB max each), opens a PR. He cannot merge or push to the deploy branch. You merge; Railway redeploys; rollback is reverting the PR.
 - Refused outright: secrets (key patterns scanned), `.env`, key files, path traversal. PRs touching money/permissions/spend/bank/migrations/requirements are labelled PROTECTED in the PR body.
 - Tests must pass before you merge. Next step when you are ready: a GitHub Action that runs the tests on every `jarvis/*` branch and posts the result on the PR.

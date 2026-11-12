@@ -48,6 +48,26 @@ def _call(method: str, path: str, body: dict | None = None):
         return json.loads(raw) if raw else None
 
 
+# Dependencies Jarvis may add (spec 11: approved dependencies only). Anything else needs the owner to edit requirements.txt himself.
+APPROVED_DEPS = {"anthropic", "python-telegram-bot", "python-dotenv", "claude-agent-sdk", "psycopg2-binary", "bitwarden-sdk", "pywebpush",
+                 "requests", "httpx", "aiohttp", "pydantic", "python-dateutil", "pytz", "tzdata", "beautifulsoup4", "lxml", "jinja2",
+                 "pandas", "numpy", "openpyxl", "pypdf", "pillow", "feedparser", "markdown", "tenacity", "cachetools"}
+
+
+def bad_dependencies(content: str) -> list[str]:
+    out = []
+    for line in content.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or line.startswith(("-", "git+", "http")):
+            if line:
+                out.append(line[:60])  # options, VCS and URL installs are never approved
+            continue
+        name = re.split(r"[\[<>=~!;\s@]", line, 1)[0].lower().replace("_", "-")
+        if name not in APPROVED_DEPS:
+            out.append(name)
+    return out
+
+
 def check_files(files: list[dict]) -> tuple[list[dict], list[str], list[str]]:
     """-> (clean files, problems, protected paths touched). Any problem means nothing is committed."""
     problems: list[str] = []
@@ -70,6 +90,11 @@ def check_files(files: list[dict]) -> tuple[list[dict], list[str], list[str]]:
         if any(p.search(content) for p in SECRET_PATTERNS):
             problems.append(f"{path}: looks like it contains a secret. Refused.")
             continue
+        if path == "requirements.txt":
+            bad = bad_dependencies(content)
+            if bad:
+                problems.append(f"requirements.txt: not on the approved dependency list: {', '.join(bad)}.")
+                continue
         if any(path == p or (p.endswith("/") and path.startswith(p)) for p in PROTECTED):
             touched.append(path)
         clean.append({"path": path, "content": content})

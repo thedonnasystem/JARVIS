@@ -65,3 +65,13 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Dependencies(unittest.TestCase):
+    def test_only_approved_dependencies(self):
+        import hq_dev as D
+        ok, problems, touched = D.check_files([{"path": "requirements.txt", "content": "anthropic>=0.40.0\nrequests>=2\npython-telegram-bot[job-queue]>=21.0\n"}])
+        self.assertEqual(problems, []); self.assertEqual(touched, ["requirements.txt"])
+        for bad in ("evil-package==1.0\n", "git+https://github.com/x/y.git\n", "-r other.txt\n", "requests\nleftpad\n"):
+            _, problems, _ = D.check_files([{"path": "requirements.txt", "content": bad}])
+            self.assertTrue(problems, bad)
