@@ -218,3 +218,15 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 ## Voice notes (hq_voice)
 - Send Jarvis a Telegram voice note (up to 3 minutes): it is transcribed ("Heard: ...") and answered like typed text. Owner only.
 - Switched off until `OPENAI_API_KEY` is set in Railway (model `whisper-1`, override with `TRANSCRIBE_MODEL`). Cost is a fraction of a cent per minute.
+
+
+## Email sending (dormant until you add a provider)
+- Set in Railway: `RESEND_API_KEY`, `MAIL_FROM` (e.g. `Moe <you@yourdomain.com>`), optional `MAIL_REPLY_TO`. Verify the sending domain with the provider first (SPF/DKIM) or mail lands in spam.
+- Only drafts YOU approved are sent. Nothing sends in dry_run or with the kill switch on, in coast mode, to a do-not-contact lead, or without the CASL footer (real mailing address via `/setaddress` plus the unsubscribe line). The policy engine's daily caps still apply.
+- A failed send stays approved and retries next tick. Sent mail is marked `sent_by = system` and the 3-day follow-up is set.
+- Unsubscribe replies are not read automatically yet: when someone replies "unsubscribe", mark the lead do-not-contact.
+
+## Backups (dormant until you add storage)
+- Set in Railway: `BACKUP_KEY` (generate one: `python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"` and KEEP A COPY OFFLINE, without it backups cannot be read) and `BACKUP_PUT_URL` (an HTTPS endpoint that accepts a PUT; `{name}` becomes the file name). Optional `BACKUP_AUTH` header value.
+- Put the backup somewhere that is not this Supabase project. Runs nightly 02:00-05:00 Toronto, encrypts, then decrypts and recounts every table before uploading. A failure messages you once.
+- Not exported: `push_config` (private keys) and push subscriptions.

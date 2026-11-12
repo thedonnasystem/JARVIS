@@ -25,6 +25,7 @@ import hq_wholesale
 import hq_systems
 import hq_missions
 import hq_mail
+import hq_backup
 import hq_bank
 import hq_waterfall
 
@@ -1147,6 +1148,10 @@ def tick_sync() -> None:
     _recover_stale()
     _refresh_capital_mode()
     _bank_watch()
+    try:  # dormant until BACKUP_KEY and BACKUP_PUT_URL are set; runs once a night (02:00-05:00 Toronto)
+        hq_backup.run()
+    except Exception:
+        logger.exception("HQ backup failed")
     try:
         hq_systems.run_due_checks()
     except Exception:
