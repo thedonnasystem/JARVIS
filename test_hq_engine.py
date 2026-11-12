@@ -336,14 +336,18 @@ class T(unittest.TestCase):
         seen = []
         def fake(method, path, body=None, timeout=30, prefer=None):
             seen.append(path)
-            if "kind=in.(decision,lesson)" in path:
+            if "kind=eq.decision" in path:
                 return [{"kind": "decision", "content": "Offer: AI receptionist $297-397/mo", "confidence": "high"}]
+            if "kind=eq.lesson" in path:
+                return [{"kind": "lesson", "content": f"lesson {i}", "confidence": "medium"} for i in range(5)]
             if "kind=eq.fact" in path:
                 return [{"kind": "fact", "content": f"fact {len(seen)}", "source": "https://x", "confidence": "high"}]
             return []
         with mock.patch.object(hq, "_request", fake):
             out = E._company_knowledge("vd")
         self.assertLess(out.index("Offer: AI receptionist"), out.index("fact"))
+        self.assertLess(out.index("Offer: AI receptionist"), out.index("lesson 0"))  # agent lessons never ahead of owner decisions
+        self.assertTrue(any("kind=eq.lesson" in p and "limit=5" in p for p in seen))
         self.assertTrue(all("or=(" not in p for p in seen))  # no duplicate or= params
 
     def test_leads_dedupe_by_email(self):

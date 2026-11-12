@@ -522,7 +522,9 @@ def _company_knowledge(venture_id: str | None) -> str:
     scope = f"or(venture_id.is.null,venture_id.eq.{_q(venture_id)})" if venture_id else "venture_id.is.null"
     sel = "&select=kind,content,source,confidence"
     try:
-        rules = _get(f"memory?and=({scope},{live})&kind=in.(decision,lesson)&order=created_at.desc&limit=20{sel}")
+        # Owner decisions first and on their own: lessons (written by agents) can never crowd them out.
+        rules = (_get(f"memory?and=({scope},{live})&kind=eq.decision&order=created_at.desc&limit=15{sel}")
+                 + _get(f"memory?and=({scope},{live})&kind=eq.lesson&order=created_at.desc&limit=5{sel}"))
         own = (_get(f"memory?and=(venture_id.eq.{_q(venture_id)},{live})&kind=eq.fact&order=created_at.desc&limit=10{sel}")
                if venture_id else [])
         company = _get(f"memory?and=(venture_id.is.null,{live})&kind=eq.fact&order=created_at.desc&limit=5{sel}")
