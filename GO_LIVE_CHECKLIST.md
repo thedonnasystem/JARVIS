@@ -44,3 +44,9 @@ Sending email, spending money, signing, contacting leads, any call. Ventures sta
 - Paste `WHOLESALE_SUPABASE_SERVICE_KEY` into Railway (unlocks the deal funnel numbers).
 - `/setaddress` (unblocks 15 Donna drafts), rotate the Telegram token, make the Jarvis repo private (then reconnect Render to GitHub so the app site can redeploy).
 - For Jarvis to edit his own code: a GitHub token limited to this repo with pull-request-only rights (design in ROADMAP_SECTIONS_10_12.md).
+
+## One-paste go-live (Nov 12)
+- `dist/APPLY_ALL.sql` = all 19 migrations in order (140 KB, idempotent; tested on the live-schema replica, applied on top of itself).
+- `dist/POST_APPLY.sql` = registers owner emails in `app_owners`.
+- Supabase dashboard -> SQL editor -> paste APPLY_ALL -> Run -> paste POST_APPLY -> Run.
+- The assistant's own attempt to apply to production was blocked by the permission system; it needs the owner's explicit approval.
