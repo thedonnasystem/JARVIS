@@ -31,7 +31,7 @@ $$;
 create or replace function public.app_snapshot_data()
 returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
 declare v_start timestamptz := date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto';
-        v_capital jsonb; v_policy jsonb; out_ jsonb;
+        v_capital jsonb; v_policy jsonb; v_alerts jsonb := '[]'::jsonb; v_stage jsonb := '{}'::jsonb; out_ jsonb;
 begin
   if to_regprocedure('public.capital_snapshot()') is not null then
     execute 'select public.capital_snapshot()' into v_capital;
@@ -39,8 +39,16 @@ begin
   if to_regclass('public.action_policy') is not null then
     execute $q$select jsonb_agg(jsonb_build_object('action',action,'tier',tier,'each',max_cents_per_action,'day',max_count_per_day,'week',max_cents_per_week) order by tier, action) from public.action_policy$q$ into v_policy;
   end if;
+  if to_regprocedure('public.bank_alerts()') is not null then
+    execute 'select public.bank_alerts()' into v_alerts;
+  end if;
+  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='ventures' and column_name='stage') then
+    execute $q$select coalesce(jsonb_object_agg(slug, stage), '{}'::jsonb) from public.ventures$q$ into v_stage;
+  end if;
   select jsonb_build_object(
     'now', now(),
+    'bank_alerts', coalesce(v_alerts, '[]'::jsonb),
+    'venture_stage', v_stage,
     'state', (select jsonb_build_object('mode', mode, 'kill_switch', kill_switch, 'pause_reason', pause_reason,
                 'paused_at', paused_at, 'cap_cents', daily_spend_cap_cents, 'last_heartbeat', last_heartbeat,
                 'night_until', night_until) from system_state where id = 1),
@@ -64,7 +72,7 @@ begin
                           sum(amount_cents) filter (where kind='expense' and status='received') exp,
                           sum(amount_cents) filter (where kind='revenue' and status<>'received') pend
                    from ledger where venture_id = v.id) l on true
-                 where v.status = 'active'),
+                 where v.status in ('active','proposed')),
     'missions', (select coalesce(jsonb_agg(jsonb_build_object('id', m.id, 'title', m.title, 'status', m.status,
                    'verdict', m.verdict, 'verdict_reason', m.verdict_reason, 'objective', left(m.objective, 600),
                    'success', m.success_definition, 'risks', m.risks, 'next_action', m.next_action,
