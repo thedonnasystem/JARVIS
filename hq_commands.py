@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import hq
 import hq_missions
 import hq_policy
+import hq_bank
 import hq_capital
 
 logger = logging.getLogger(__name__)
@@ -646,6 +647,45 @@ async def hq_policy_cmd(update, context) -> None:
     await update.message.reply_text(text[:4000])
 
 
+async def hq_bank_cmd(update, context) -> None:
+    """/bank status | balance <amt> [date] | unmatched | reconcile  (owner only)."""
+    if not _owner(update):
+        return
+    args = list(context.args or [])
+    try:
+        sub = args[0].lower() if args else ""
+        if sub == "balance" and len(args) >= 2:
+            text = hq_bank.set_balance(args[1], args[2] if len(args) > 2 else None)
+        elif sub == "unmatched":
+            text = hq_bank.unmatched_text()
+        elif sub == "reconcile":
+            text = hq_bank.reconcile()
+        else:
+            text = hq_bank.status_text()
+    except Exception as e:
+        logger.exception("HQ bank command failed")
+        text = f"Bank command failed: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
+async def hq_bank_file(update, context) -> None:
+    """A statement CSV sent with the caption 'bank' (owner only). The file is read in memory and not kept."""
+    if not _owner(update):
+        return
+    doc = update.message.document
+    try:
+        if doc.file_size and doc.file_size > 1_000_000:
+            text = "That file is too big for a statement (1 MB max)."
+        else:
+            f = await doc.get_file()
+            raw = bytes(await f.download_as_bytearray()).decode("utf-8", errors="replace")
+            text = hq_bank.import_statement(raw)
+    except Exception as e:
+        logger.exception("HQ bank import failed")
+        text = f"Statement import failed: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
 async def hq_capital_cmd(update, context) -> None:
     """/capital  shows the operating fund. /capital set <field> <value> changes a limit (owner only)."""
     if not _owner(update):
@@ -663,7 +703,7 @@ async def hq_capital_cmd(update, context) -> None:
 
 
 MENU = [
-    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -740,8 +780,13 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd)):
         app.add_handler(CommandHandler(name, fn))
+    try:
+        from telegram.ext import MessageHandler, filters
+        app.add_handler(MessageHandler(filters.Document.ALL & filters.CaptionRegex(r"(?i)^/?bank"), hq_bank_file))
+    except Exception:  # never block startup over an optional handler
+        logger.exception("bank file handler not registered")
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))
         app.add_handler(CallbackQueryHandler(hq_answer_callback, pattern=r"^hqq:"))

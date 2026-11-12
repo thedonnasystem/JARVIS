@@ -134,3 +134,10 @@ The 7pm brief has a Missions section.
 
 Security (Nov 12): Jarvis chat answers only JARVIS_OWNER_ID; anyone else gets one line and no model call.
 Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_brief_missions.sql`.
+
+## Bank (Section 10, manual-first)
+- Migration `20261112_bank_v1.sql` (after capital_v1). Tested on a local Postgres 16: balance cap, owner-only guard, CSV re-import dedupe, one-to-one reconcile.
+- `/bank balance 412.50` records the real RBC balance. Spendable cash = lowest of ledger and bank (minus reservations and unsettled spend).
+- Send an RBC CSV export to the bot with caption `bank`: rows are imported, de-duplicated, matched to the ledger and to settled spend. `/bank unmatched` lists the gaps.
+- Daily alert (once/23h) for stale balance (>7d), unmatched rows older than 3 days, ledger above bank, balance under the reserve floor.
+- Only the last 4 account digits are kept. No credentials, ever. Payments stay with the owner in RBC.

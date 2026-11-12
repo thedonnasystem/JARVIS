@@ -10,7 +10,7 @@ Until `20261112_webapp_v1.sql` is applied and your email is in `app_owners`, the
 3. Open from the Home Screen icon (full screen, no browser bar).
 
 ## Turn on owner login (needs your green light, one-time)
-1. Apply migrations in order: permissions_v1, chat_meter, capital_v1, webapp_v1 (missions already live).
+1. Apply migrations in order: permissions_v1, chat_meter, capital_v1, bank_v1, webapp_v1 (missions already live).
 2. Supabase dashboard -> Authentication -> Providers -> Email: on. Disable "Allow new users to sign up".
 3. Authentication -> Users -> Add user: your owner email (auto-confirm).
 4. `insert into app_owners(email) values ('<owner email>');`

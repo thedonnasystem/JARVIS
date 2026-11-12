@@ -24,6 +24,7 @@ import hq
 import hq_wholesale
 import hq_systems
 import hq_missions
+import hq_bank
 
 logger = logging.getLogger(__name__)
 
@@ -756,6 +757,22 @@ def _refresh_capital_mode() -> None:
         _CAPITAL_MODE = "normal"
 
 
+def _bank_watch() -> None:
+    """Once a day at most: tell the owner (through Jarvis) about stale balances, gaps and unmatched bank rows.
+    Silent when there is nothing to say or the bank module is not installed."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=23)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        if _get(f"owner_messages?kind=eq.money&body=like.Bank:*&created_at=gte.{since}&limit=1&select=id"):
+            return
+        items = hq_bank.alerts()
+        if not items:
+            return
+        _insert("owner_messages", {"from_agent": "jarvis", "kind": "money", "channel": "telegram",
+                                   "body": "Bank: " + " | ".join(items)[:3500]})
+    except Exception:
+        logger.exception("HQ bank watch failed")
+
+
 def _work_tasks() -> bool:
     """Run up to MAX_TASKS_PER_TICK todo tasks. Returns False if the gateway blocked (stop for now)."""
     now = _now()
@@ -1041,6 +1058,7 @@ def tick_sync() -> None:
         resume_after_credits()
     _recover_stale()
     _refresh_capital_mode()
+    _bank_watch()
     try:
         hq_systems.run_due_checks()
     except Exception:
