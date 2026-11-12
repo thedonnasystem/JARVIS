@@ -125,6 +125,7 @@ function rHome(s) {
     h('div', { class: 'card' }, h('div', { class: 'dim' }, 'Operating fund'), h('div', { class: 'big' }, c.available_cents != null ? usd(c.available_cents) : '—'),
       h('div', { class: 'dim' }, (c.mode ? String(c.mode).toUpperCase() + ' · ' : '') + 'AI today ' + usd(s.spend_today_cents) + ' of ' + usd((s.state || {}).cap_cents))),
     dayCard(s.dayjob),
+    draftCards(s.drafts || []),
     h('h2', {}, 'Needs you'), ...(need.length ? need : [h('p', { class: 'dim' }, 'Nothing waiting on you.')]),
     h('h2', {}, 'Ventures'), ...(s.ventures || []).map((x) => h('div', { class: 'card' },
       h('div', { class: 'row' }, h('h3', {}, x.name), h('span', { class: 'tag' }, [x.status === 'proposed' ? 'awaiting approval' : (s.venture_stage || {})[x.slug], x.agents + ' agents', x.leads + ' leads'].filter(Boolean).join(' · '))),
@@ -202,6 +203,17 @@ function bankCard(c) {
       h('button', { onclick: () => { if (amt.value.trim()) { act('bank', { verb: 'balance', amount: amt.value.trim() }); amt.value = ''; } } }, 'Save balance'),
       h('button', { class: 'ghost', onclick: () => file.click() }, 'Import statement CSV'),
       h('button', { class: 'ghost', onclick: () => act('bank', { verb: 'reconcile' }) }, 'Reconcile')), file));
+}
+function draftCards(ds) {
+  if (!ds.length) return null;
+  return h('div', {}, h('h2', {}, 'Drafts to review'), ...ds.map((d) => h('div', { class: 'card' },
+    h('div', { class: 'row dim' }, h('span', {}, 'To ' + (d.to || 'unknown') + ' · by ' + (d.agent || '?')), h('span', { class: 'tag' }, d.status === 'approved' ? 'approved: send it, then mark sent' : 'draft')),
+    h('div', { style: 'white-space:pre-wrap;margin:8px 0' }, d.body),
+    d.status === 'approved'
+      ? h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => { try { navigator.clipboard.writeText(d.body); note('Copied. Send it from your business email (address footer: see Jarvis tab).'); } catch (e) {} } }, 'Copy'),
+          h('button', { class: 'ok', onclick: () => act('draft', { verb: 'sent', id: d.id }) }, 'I sent it'))
+      : h('div', { class: 'btns' }, h('button', { class: 'ok', onclick: () => { act('draft', { verb: 'approve', id: d.id }); show('chat'); } }, 'Approve'),
+          h('button', { class: 'bad', onclick: () => act('draft', { verb: 'reject', id: d.id }) }, 'Reject')))));
 }
 function dayCard(d) {
   if (!d) return null;

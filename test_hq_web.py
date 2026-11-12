@@ -98,3 +98,31 @@ class Day(unittest.TestCase):
             self.assertIn("numbers", W._day({"verb": "log", "dials": "abc"}))
             self.assertEqual(W._day({"verb": "paid", "who": "Acme"}), "paid")
             self.assertEqual(W._day({"verb": "wipe"}), "Unknown day-job action.")
+
+
+class Draft(unittest.TestCase):
+    def test_draft_actions_route(self):
+        import hq_web as W
+        with mock.patch.object(W.hq_commands, "draft_decision", return_value="ready") as dd, mock.patch.object(W.hq_commands, "mark_sent", return_value="sent") as ms:
+            self.assertEqual(W._draft({"verb": "approve", "id": "o1"}), "ready")
+            self.assertEqual(dd.call_args[0], ("o1", True))
+            W._draft({"verb": "reject", "id": "o1"}); self.assertEqual(dd.call_args[0], ("o1", False))
+            self.assertEqual(W._draft({"verb": "sent", "id": "o1"}), "sent")
+            self.assertEqual(W._draft({"verb": "send now"}), "Unknown draft action.")
+
+    def test_draft_decision_creates_card_then_applies_owner_decision(self):
+        calls = []
+
+        def req(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body))
+            if method == "GET" and "owner_messages" in path:
+                return []
+            if method == "GET" and "outbox" in path:
+                return [{"id": "o1", "body": "Hi", "to_ref": "a@b.co", "agent": "donna-writer"}]
+            if method == "POST" and path.endswith("owner_messages"):
+                return [{"id": "m9"}]
+        with mock.patch.object(hq, "_request", req), mock.patch.object(hq_commands, "apply_decision", return_value="Approved.") as ad:
+            self.assertEqual(hq_commands.draft_decision("o1", True), "Approved.")
+        self.assertEqual(ad.call_args[0], ("m9", True))
+        with mock.patch.object(hq, "_request", lambda *a, **k: []):
+            self.assertIn("not waiting", hq_commands.draft_decision("zz", True))

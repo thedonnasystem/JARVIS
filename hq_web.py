@@ -7,6 +7,7 @@ app writes to web_messages through owner-only database functions and this poller
   kind 'answer'   -> hq_commands.apply_answer   (Task Brief option)
   kind 'mission'  -> pause / resume / abandon / budget / new
   kind 'bank'     -> record the real bank balance, or import statement rows parsed in the browser
+  kind 'draft'    -> approve / reject a drafted email, or mark an approved one sent (you send it yourself)
   kind 'day'      -> log today's dials/pitches/submissions, or a paid deal (day job)
   kind 'venture'  -> start a new (inactive) venture, or activate one the owner approved
 
@@ -68,6 +69,15 @@ def _bank(payload: dict) -> str:
     return "Unknown bank action."
 
 
+def _draft(payload: dict) -> str:
+    verb, oid = str(payload.get("verb") or ""), str(payload.get("id") or "")
+    if verb in ("approve", "reject"):
+        return hq_commands.draft_decision(oid, verb == "approve")
+    if verb == "sent":
+        return hq_commands.mark_sent(oid)
+    return "Unknown draft action."
+
+
 def _day(payload: dict) -> str:
     verb = str(payload.get("verb") or "")
     if verb == "log":
@@ -110,6 +120,8 @@ async def handle(row: dict, context) -> None:
         _say(_bank(payload), row["id"], "system")
     elif kind == "venture":
         _say(_venture(payload), row["id"], "system")
+    elif kind == "draft":
+        _say(_draft(payload), row["id"], "system")
     elif kind == "day":
         _say(_day(payload), row["id"], "system")
     else:

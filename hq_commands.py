@@ -238,6 +238,46 @@ async def hq_drafts(update, context) -> None:
         await update.message.reply_text(body, reply_markup=hq.decision_buttons(msg["id"]) if msg.get("id") else None)
 
 
+def mark_sent(outbox_id: str) -> str:
+    """The owner sent an approved email himself: record it and set the 3-day follow-up. Shared by /sent and the app."""
+    now = datetime.now(timezone.utc).isoformat()
+    rows = _get(f"outbox?id=eq.{_q(outbox_id)}&status=eq.approved&select=id,lead_id&limit=1")
+    if not rows:
+        return "No approved draft with that id."
+    body = {"status": "sent", "sent_at": now, "sent_by": "owner"}
+    try:
+        hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", body, prefer="return=minimal")
+    except Exception:  # before the sent_by migration: record it the old way
+        body.pop("sent_by")
+        hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", body, prefer="return=minimal")
+    if rows[0].get("lead_id"):
+        from datetime import timedelta
+        due = (_toronto_today() + timedelta(days=3)).isoformat()
+        hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(rows[0]['lead_id'])}",
+                    {"status": "contacted", "last_contact_at": now, "next_followup_at": due}, prefer="return=minimal")
+    return "Marked sent. Follow-up reminder set for 3 days from now."
+
+
+def draft_decision(outbox_id: str, approved: bool) -> str:
+    """Approve or reject a draft from the app: same path as the Telegram buttons (owner is the QA step)."""
+    open_ = _get(f"owner_messages?ref_table=eq.outbox&ref_id=eq.{_q(outbox_id)}&decision=is.null&needs_decision=eq.true&limit=1&select=id")
+    if open_:
+        msg_id = open_[0]["id"]
+    else:
+        d = _get(f"outbox?id=eq.{_q(outbox_id)}&status=in.(draft,qa_passed)&select=id,body,to_ref,agent&limit=1")
+        if not d:
+            return "That draft is not waiting for a decision."
+        r = d[0]
+        made = (hq._request("POST", "/rest/v1/owner_messages", {
+            "from_agent": "jarvis", "kind": "proposal", "channel": "telegram", "needs_decision": True, "ref_table": "outbox", "ref_id": r["id"],
+            "body": f"Draft by {r.get('agent')} to {r.get('to_ref') or 'unknown'}:\n\n{r['body']}"[:3500],
+            "sent_at": datetime.now(timezone.utc).isoformat()}, prefer="return=representation") or [{}])[0]
+        msg_id = made.get("id")
+        if not msg_id:
+            return "Could not record the decision."
+    return apply_decision(msg_id, approved)
+
+
 async def hq_sent(update, context) -> None:
     """/sent <first 8 chars of draft id>: the owner sent an approved email himself."""
     if not _owner(update):
@@ -250,19 +290,7 @@ async def hq_sent(update, context) -> None:
     if len(rows) != 1:
         await update.message.reply_text("No approved draft with that code.")
         return
-    now = datetime.now(timezone.utc).isoformat()
-    body = {"status": "sent", "sent_at": now, "sent_by": "owner"}
-    try:
-        hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", body, prefer="return=minimal")
-    except Exception:  # before the sent_by migration: record it the old way
-        body.pop("sent_by")
-        hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", body, prefer="return=minimal")
-    if rows[0].get("lead_id"):
-        from datetime import timedelta
-        due = (_toronto_today() + timedelta(days=3)).isoformat()
-        hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(rows[0]['lead_id'])}",
-                    {"status": "contacted", "last_contact_at": now, "next_followup_at": due}, prefer="return=minimal")
-    await update.message.reply_text("Marked sent. Follow-up reminder set for 3 days from now.")
+    await update.message.reply_text(mark_sent(rows[0]["id"]))
 
 
 async def hq_systems_cmd(update, context) -> None:
