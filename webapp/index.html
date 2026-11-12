@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0a08"><meta name="robots" content="noindex,nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="HQ">
+<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><link rel="icon" href="icon.svg">
+<title>Fendezy HQ</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+<section id="login" hidden>
+  <h1>Fendezy HQ</h1><p class="dim">Owner access only.</p>
+  <form id="f-email"><input id="email" type="email" inputmode="email" autocomplete="email" placeholder="Your email" required><button>Send code</button></form>
+  <form id="f-code" hidden><input id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code from your email" required><button>Sign in</button></form>
+  <p id="login-msg" class="dim" role="status"></p>
+</section>
+<main id="app" hidden>
+  <header><div id="pill" class="pill">…</div><div id="stamp" class="dim"></div></header>
+  <div id="banner" hidden></div>
+  <div id="views">
+    <section id="v-chat" class="view"><div id="msgs"></div>
+      <form id="f-chat"><button type="button" id="mic" aria-label="Speak">🎙</button><input id="say" autocomplete="off" placeholder="Tell Jarvis…"><button id="sendbtn">Send</button></form>
+      <label class="dim speak"><input type="checkbox" id="speak"> Jarvis speaks replies</label></section>
+    <section id="v-home" class="view"></section>
+    <section id="v-missions" class="view"></section>
+    <section id="v-agents" class="view"></section>
+    <section id="v-money" class="view"></section>
+    <section id="v-feed" class="view"></section>
+  </div>
+  <nav id="tabs"></nav>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="app.js"></script>
+</body></html>
