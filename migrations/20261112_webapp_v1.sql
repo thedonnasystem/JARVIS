@@ -9,7 +9,7 @@ alter table public.app_owners enable row level security;
 create table if not exists public.web_messages (
   id uuid primary key default gen_random_uuid(),
   role text not null check (role in ('owner','jarvis')),
-  kind text not null default 'chat' check (kind in ('chat','decision','answer','mission','bank','venture','system')),
+  kind text not null default 'chat' check (kind in ('chat','decision','answer','mission','bank','venture','day','system')),
   body text not null default '' check (length(body) <= 12000),
   payload jsonb not null default '{}'::jsonb,
   status text not null default 'new' check (status in ('new','processing','done','failed')),
@@ -31,7 +31,7 @@ $$;
 create or replace function public.app_snapshot_data()
 returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
 declare v_start timestamptz := date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto';
-        v_capital jsonb; v_policy jsonb; v_alerts jsonb := '[]'::jsonb; v_pnl jsonb; v_score jsonb; v_org jsonb; v_stage jsonb := '{}'::jsonb; out_ jsonb;
+        v_capital jsonb; v_policy jsonb; v_alerts jsonb := '[]'::jsonb; v_pnl jsonb; v_score jsonb; v_org jsonb; v_day jsonb; v_stage jsonb := '{}'::jsonb; out_ jsonb;
 begin
   if to_regprocedure('public.capital_snapshot()') is not null then
     execute 'select public.capital_snapshot()' into v_capital;
@@ -41,6 +41,12 @@ begin
   end if;
   if to_regprocedure('public.bank_alerts()') is not null then
     execute 'select public.bank_alerts()' into v_alerts;
+  end if;
+  if to_regclass('public.dayjob_days') is not null and to_regclass('public.dayjob_targets') is not null then
+    execute $q$select jsonb_build_object(
+        'today', (select to_jsonb(d) from public.dayjob_days d where d.day = (now() at time zone 'America/Toronto')::date),
+        'targets', (select to_jsonb(t) from public.dayjob_targets t where t.id = 1),
+        'week', public.dayjob_week_text())$q$ into v_day;
   end if;
   if to_regclass('public.agent_scorecard') is not null then
     execute $q$select coalesce(jsonb_object_agg(slug, jsonb_build_object('flag', flag, 'cents_per_done', cents_per_done, 'done_7d', done_7d)), '{}'::jsonb) from public.agent_scorecard$q$ into v_score;
@@ -59,6 +65,7 @@ begin
     'now', now(),
     'bank_alerts', coalesce(v_alerts, '[]'::jsonb),
     'pnl', v_pnl,
+    'dayjob', v_day,
     'scorecard', coalesce(v_score, '{}'::jsonb),
     'org_changes', coalesce(v_org, '[]'::jsonb),
     'venture_stage', v_stage,
@@ -154,7 +161,7 @@ language plpgsql security definer set search_path to 'public' as $$
 declare v_id uuid;
 begin
   if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
-  if p_kind not in ('chat','decision','answer','mission','bank','venture') then raise exception 'bad kind'; end if;
+  if p_kind not in ('chat','decision','answer','mission','bank','venture','day') then raise exception 'bad kind'; end if;
   if pg_column_size(coalesce(p_payload, '{}'::jsonb)) > 400000 then raise exception 'payload too large'; end if;
   if p_kind = 'chat' and length(trim(coalesce(p_body, ''))) = 0 then raise exception 'empty message'; end if;
   if (select count(*) from web_messages where role = 'owner' and created_at > now() - interval '1 minute') >= 30 then

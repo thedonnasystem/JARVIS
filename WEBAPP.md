@@ -19,7 +19,7 @@ Until `20261112_webapp_v1.sql` is applied and your email is in `app_owners`, the
 
 ## What is on each tab
 - Jarvis: chat (same brain as Telegram, metered as 'jarvis-chat'), mic button (browser speech recognition), optional spoken replies.
-- Home: fund, Needs you (Approve/Reject/answer buttons), ventures, pipeline, systems, kill switch.
+- Home: day-job quick log (dials, pitches, submissions, paid deal), fund, Needs you (Approve/Reject/answer buttons), ventures, pipeline, systems, kill switch.
 - Missions: open a mission or set up a new venture (inactive until you approve), pause/resume/abandon, budget bar, evidence verdicts. Action results show in a banner within seconds.
 - Agents: status, spend vs cap, pause/resume.
 - Money: capital snapshot (received cash only), P&L, bank card (type your real balance, import a statement CSV, reconcile), 7-day AI spend, permission tiers.

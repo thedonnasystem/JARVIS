@@ -85,3 +85,16 @@ class BankVenture(unittest.TestCase):
             self.assertEqual(W._venture({"verb": "activate", "slug": "X-Y"}), "on")
             self.assertEqual(ac.call_args.kwargs["by"], "owner:app")
             self.assertEqual(W._venture({"verb": "delete"}), "Unknown venture action.")
+
+
+class Day(unittest.TestCase):
+    def test_day_actions_validate_and_route(self):
+        import hq_web as W
+        with mock.patch.object(W.hq_commands, "log_day", return_value="ok") as ld, mock.patch.object(W.hq_commands, "log_paid", return_value="paid") as lp:
+            self.assertEqual(W._day({"verb": "log", "dials": "280", "pitches": 6, "submissions": "2"}), "ok")
+            self.assertEqual(ld.call_args[0], (280, 6, 2))
+            W._day({"verb": "log", "dials": "999999", "pitches": "-4", "submissions": ""})
+            self.assertEqual(ld.call_args[0], (5000, 0, 0))  # clamped, never trusted
+            self.assertIn("numbers", W._day({"verb": "log", "dials": "abc"}))
+            self.assertEqual(W._day({"verb": "paid", "who": "Acme"}), "paid")
+            self.assertEqual(W._day({"verb": "wipe"}), "Unknown day-job action.")

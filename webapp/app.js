@@ -124,6 +124,7 @@ function rHome(s) {
   v.replaceChildren(
     h('div', { class: 'card' }, h('div', { class: 'dim' }, 'Operating fund'), h('div', { class: 'big' }, c.available_cents != null ? usd(c.available_cents) : '—'),
       h('div', { class: 'dim' }, (c.mode ? String(c.mode).toUpperCase() + ' · ' : '') + 'AI today ' + usd(s.spend_today_cents) + ' of ' + usd((s.state || {}).cap_cents))),
+    dayCard(s.dayjob),
     h('h2', {}, 'Needs you'), ...(need.length ? need : [h('p', { class: 'dim' }, 'Nothing waiting on you.')]),
     h('h2', {}, 'Ventures'), ...(s.ventures || []).map((x) => h('div', { class: 'card' },
       h('div', { class: 'row' }, h('h3', {}, x.name), h('span', { class: 'tag' }, [x.status === 'proposed' ? 'awaiting approval' : (s.venture_stage || {})[x.slug], x.agents + ' agents', x.leads + ' leads'].filter(Boolean).join(' · '))),
@@ -201,6 +202,18 @@ function bankCard(c) {
       h('button', { onclick: () => { if (amt.value.trim()) { act('bank', { verb: 'balance', amount: amt.value.trim() }); amt.value = ''; } } }, 'Save balance'),
       h('button', { class: 'ghost', onclick: () => file.click() }, 'Import statement CSV'),
       h('button', { class: 'ghost', onclick: () => act('bank', { verb: 'reconcile' }) }, 'Reconcile')), file));
+}
+function dayCard(d) {
+  if (!d) return null;
+  const t = d.today || {}, g = d.targets || {};
+  const mk = (ph, val) => h('input', { type: 'text', inputmode: 'numeric', placeholder: ph, 'aria-label': ph, value: val != null ? String(val) : '', style: 'width:31%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin:8px 1% 8px 0' });
+  const di = mk('Dials', t.dials), pi = mk('Pitches', t.pitches), si = mk('Submits', t.submissions);
+  return h('div', {}, h('h2', {}, 'Day job today'), h('div', { class: 'card' },
+    h('div', { class: 'dim' }, `Targets: ${g.dials_per_day || '-'} dials, ${g.pitches_per_day || '-'} pitches, ${g.submissions_per_day || '-'} submissions. Paid today: ${t.paid_deals || 0}.`),
+    h('div', {}, di, pi, si),
+    h('div', { class: 'btns' }, h('button', { onclick: () => act('day', { verb: 'log', dials: di.value, pitches: pi.value, submissions: si.value }) }, 'Log numbers'),
+      h('button', { class: 'ghost', onclick: () => { if (confirm('Log one paid deal (+ revenue)?')) act('day', { verb: 'paid', who: '' }); } }, 'Paid deal')),
+    d.week ? h('div', { class: 'dim' }, d.week) : null));
 }
 function rMissions(s) {
   const v = $('v-missions');

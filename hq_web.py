@@ -7,6 +7,7 @@ app writes to web_messages through owner-only database functions and this poller
   kind 'answer'   -> hq_commands.apply_answer   (Task Brief option)
   kind 'mission'  -> pause / resume / abandon / budget / new
   kind 'bank'     -> record the real bank balance, or import statement rows parsed in the browser
+  kind 'day'      -> log today's dials/pitches/submissions, or a paid deal (day job)
   kind 'venture'  -> start a new (inactive) venture, or activate one the owner approved
 
 Only rows the database accepted from the verified owner ever land here. Inert until the migration exists.
@@ -67,6 +68,19 @@ def _bank(payload: dict) -> str:
     return "Unknown bank action."
 
 
+def _day(payload: dict) -> str:
+    verb = str(payload.get("verb") or "")
+    if verb == "log":
+        try:
+            d, p, sub = (max(0, min(int(payload.get(k) or 0), 5000)) for k in ("dials", "pitches", "submissions"))
+        except (TypeError, ValueError):
+            return "Dials, pitches and submissions must be numbers."
+        return hq_commands.log_day(d, p, sub)
+    if verb == "paid":
+        return hq_commands.log_paid(str(payload.get("who") or ""))
+    return "Unknown day-job action."
+
+
 def _venture(payload: dict) -> str:
     verb = str(payload.get("verb") or "")
     if verb == "new":
@@ -96,6 +110,8 @@ async def handle(row: dict, context) -> None:
         _say(_bank(payload), row["id"], "system")
     elif kind == "venture":
         _say(_venture(payload), row["id"], "system")
+    elif kind == "day":
+        _say(_day(payload), row["id"], "system")
     else:
         _say("I didn't understand that request.", row["id"], "system")
 

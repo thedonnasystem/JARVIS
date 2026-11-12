@@ -272,15 +272,8 @@ async def hq_systems_cmd(update, context) -> None:
     await update.message.reply_text("Systems:\n" + "\n".join(hq_systems.status_lines()))
 
 
-async def hq_day(update, context) -> None:
-    """/day <dials> <pitches> <submissions>: log today's sales numbers (overwrites today's entry)."""
-    if not _owner(update):
-        return
-    args = context.args or []
-    if len(args) != 3 or not all(a.isdigit() for a in args):
-        await update.message.reply_text("Use: /day 280 6 2   (dials pitches submissions for today)")
-        return
-    d, p, sub = (int(a) for a in args)
+def log_day(d: int, p: int, sub: int) -> str:
+    """Today's sales numbers (overwrites today's entry). Shared by /day and the app."""
     today = _toronto_today().isoformat()
     hq._request("POST", "/rest/v1/dayjob_days?on_conflict=day",
                 {"day": today, "dials": d, "pitches": p, "submissions": sub, "updated_at": datetime.now(timezone.utc).isoformat()},
@@ -289,14 +282,23 @@ async def hq_day(update, context) -> None:
     marks = [f"dials {d}/{t.get('dials_per_day', 250)}", f"pitches {p}/{t.get('pitches_per_day', 6)}",
              f"submissions {sub}/{t.get('submissions_per_day', 2)}"]
     week = hq._request("POST", "/rest/v1/rpc/dayjob_week_text", {}) or ""
-    await update.message.reply_text("Logged: " + ", ".join(marks) + f"\n{week}")
+    return "Logged: " + ", ".join(marks) + f"\n{week}"
 
 
-async def hq_paid(update, context) -> None:
-    """/paid [name]: a deal paid out after install. Counts toward the weekly target and logs revenue."""
+async def hq_day(update, context) -> None:
+    """/day <dials> <pitches> <submissions>: log today's sales numbers (overwrites today's entry)."""
     if not _owner(update):
         return
-    who = " ".join(context.args or [])[:120]
+    args = context.args or []
+    if len(args) != 3 or not all(a.isdigit() for a in args):
+        await update.message.reply_text("Use: /day 280 6 2   (dials pitches submissions for today)")
+        return
+    await update.message.reply_text(log_day(*(int(a) for a in args)))
+
+
+def log_paid(who: str = "") -> str:
+    """A deal paid out after install: counts toward the weekly target and logs revenue. Shared by /paid and the app."""
+    who = (who or "")[:120]
     t = (_get("dayjob_targets?id=eq.1&select=payout_cents_per_deal") or [{}])[0]
     cents = int(t.get("payout_cents_per_deal") or 100000)
     today = _toronto_today().isoformat()
@@ -310,7 +312,14 @@ async def hq_paid(update, context) -> None:
                                             "status": "received", "note": f"Paid deal {who}".strip(),
                                             "occurred_on": today}, prefer="return=minimal")
     week = hq._request("POST", "/rest/v1/rpc/dayjob_week_text", {}) or ""
-    await update.message.reply_text(f"Paid deal logged (+${cents/100:,.0f}).\n{week}")
+    return f"Paid deal logged (+${cents/100:,.0f}).\n{week}"
+
+
+async def hq_paid(update, context) -> None:
+    """/paid [name]: a deal paid out after install."""
+    if not _owner(update):
+        return
+    await update.message.reply_text(log_paid(" ".join(context.args or [])))
 
 
 NIGHT_MAX_CENTS = 2000  # $20 hard ceiling, same as budget proposals
