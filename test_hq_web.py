@@ -159,3 +159,14 @@ class Lead(unittest.TestCase):
             self.assertIn("closed", hq_commands.log_contact(5, 0, "signed"))
             self.assertEqual([b for m, p, b in calls if m == "PATCH"][-1]["status"], "closed")
             self.assertIn("Next follow-up", hq_commands.log_contact(5, 3, "vm"))
+
+
+class AddLead(unittest.TestCase):
+    def test_new_lead_validates_and_saves(self):
+        import hq_web as W
+        with mock.patch.object(hq_commands, "add_lead", return_value="saved") as al:
+            self.assertEqual(W._lead({"new": True, "name": "Jane | Doe", "phone": "613-555-0101", "note": "x|y", "days": 3}), "saved")
+            got = al.call_args[0][0]
+            self.assertEqual((got["name"], got["phone"], got["days"]), ("Jane / Doe", "613-555-0101", 3))
+            self.assertIn("Bad lead", W._lead({"new": True, "name": "Jane", "phone": "abc"}))
+            self.assertIn("Bad lead", W._lead({"new": True, "name": ""}))

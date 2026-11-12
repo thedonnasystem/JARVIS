@@ -70,6 +70,9 @@ def _bank(payload: dict) -> str:
 
 
 def _lead(payload: dict) -> str:
+    if payload.get("new"):
+        lead = hq_commands.parse_lead(" | ".join(str(payload.get(k) or "").replace("|", "/") for k in ("name", "phone", "note", "days")).rstrip(" |"))
+        return hq_commands.add_lead(lead) if lead else "Bad lead: need a name and a valid phone."
     try:
         sid, days = int(payload.get("sid")), max(0, min(int(payload.get("days") if payload.get("days") is not None else 3), 60))
     except (TypeError, ValueError):

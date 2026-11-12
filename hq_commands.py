@@ -478,13 +478,8 @@ def parse_lead(text: str) -> dict | None:
     return {"name": parts[0][:120], "phone": phone or None, "note": (parts[2] if len(parts) > 2 else "")[:300], "days": min(days, 90)}
 
 
-async def hq_lead(update, context) -> None:
-    if not _owner(update):
-        return
-    lead = parse_lead(" ".join(context.args or []))
-    if not lead:
-        await update.message.reply_text("Use: /lead Jane Doe | 613-555-0101 | wants fixed rate | 3\n(name | phone | note | follow up in N days)")
-        return
+def add_lead(lead: dict) -> str:
+    """Save an owner-entered dayjob lead. Shared by /lead and the app."""
     vid, _ = _venture_id("dayjob")
     from datetime import timedelta
     due = _toronto_today() + timedelta(days=lead["days"])
@@ -493,7 +488,17 @@ async def hq_lead(update, context) -> None:
         "consent_basis": "owner-entered; owner dials personally", "do_not_contact": False,
         "notes": lead["note"] or None, "next_followup_at": due.isoformat(),
     }, prefer="return=representation") or [{}]
-    await update.message.reply_text(f"Saved #{rows[0].get('short_id', '?')} {lead['name']}. Follow up {due:%a %b %d}.")
+    return f"Saved #{rows[0].get('short_id', '?')} {lead['name']}. Follow up {due:%a %b %d}."
+
+
+async def hq_lead(update, context) -> None:
+    if not _owner(update):
+        return
+    lead = parse_lead(" ".join(context.args or []))
+    if not lead:
+        await update.message.reply_text("Use: /lead Jane Doe | 613-555-0101 | wants fixed rate | 3\n(name | phone | note | follow up in N days)")
+        return
+    await update.message.reply_text(add_lead(lead))
 
 
 def log_contact(sid: int, days: int, outcome: str = "") -> str:

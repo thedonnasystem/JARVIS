@@ -205,9 +205,19 @@ function bankCard(c) {
       h('button', { class: 'ghost', onclick: () => file.click() }, 'Import statement CSV'),
       h('button', { class: 'ghost', onclick: () => act('bank', { verb: 'reconcile' }) }, 'Reconcile')), file));
 }
+function addLeadCard() {
+  const name = h('input', { placeholder: 'Name', autocomplete: 'off' });
+  const phone = h('input', { placeholder: 'Phone', type: 'tel', autocomplete: 'off' });
+  const note = h('input', { placeholder: 'Note (optional)', autocomplete: 'off' });
+  return h('div', { class: 'card' }, h('h3', {}, 'Add lead'), name, phone, note,
+    h('div', { class: 'btns' }, h('button', { onclick: () => {
+      if (!name.value.trim()) return;
+      act('lead', { new: true, name: name.value, phone: phone.value, note: note.value, days: 3 });
+      name.value = phone.value = note.value = '';
+    } }, 'Save, follow up in 3 days')));
+}
 function leadCards(ls) {
-  if (!ls.length) return null;
-  return h('div', {}, h('h2', {}, 'Follow-ups due'), ...ls.map((l) => h('div', { class: 'card' },
+  return h('div', {}, h('h2', {}, 'Follow-ups due'), addLeadCard(), ...ls.map((l) => h('div', { class: 'card' },
     h('div', { class: 'row' }, h('h3', {}, '#' + l.sid + ' ' + (l.name || 'Lead')), h('span', { class: 'dim' }, l.due)),
     l.phone ? h('div', {}, h('a', { href: 'tel:' + l.phone, style: 'color:var(--gold)' }, l.phone)) : null,
     l.notes ? h('div', { class: 'dim' }, l.notes) : null,
