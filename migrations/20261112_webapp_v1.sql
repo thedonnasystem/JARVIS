@@ -9,7 +9,7 @@ alter table public.app_owners enable row level security;
 create table if not exists public.web_messages (
   id uuid primary key default gen_random_uuid(),
   role text not null check (role in ('owner','jarvis')),
-  kind text not null default 'chat' check (kind in ('chat','decision','answer','mission','system')),
+  kind text not null default 'chat' check (kind in ('chat','decision','answer','mission','bank','venture','system')),
   body text not null default '' check (length(body) <= 12000),
   payload jsonb not null default '{}'::jsonb,
   status text not null default 'new' check (status in ('new','processing','done','failed')),
@@ -145,7 +145,8 @@ language plpgsql security definer set search_path to 'public' as $$
 declare v_id uuid;
 begin
   if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
-  if p_kind not in ('chat','decision','answer','mission') then raise exception 'bad kind'; end if;
+  if p_kind not in ('chat','decision','answer','mission','bank','venture') then raise exception 'bad kind'; end if;
+  if pg_column_size(coalesce(p_payload, '{}'::jsonb)) > 400000 then raise exception 'payload too large'; end if;
   if p_kind = 'chat' and length(trim(coalesce(p_body, ''))) = 0 then raise exception 'empty message'; end if;
   if (select count(*) from web_messages where role = 'owner' and created_at > now() - interval '1 minute') >= 30 then
     raise exception 'Slow down: 30 messages a minute max.';

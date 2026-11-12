@@ -6,6 +6,8 @@ app writes to web_messages through owner-only database functions and this poller
   kind 'decision' -> hq_commands.apply_decision (Approve / Reject)
   kind 'answer'   -> hq_commands.apply_answer   (Task Brief option)
   kind 'mission'  -> pause / resume / abandon / budget / new
+  kind 'bank'     -> record the real bank balance, or import statement rows parsed in the browser
+  kind 'venture'  -> start a new (inactive) venture, or activate one the owner approved
 
 Only rows the database accepted from the verified owner ever land here. Inert until the migration exists.
 """
@@ -16,8 +18,10 @@ import urllib.error
 import urllib.parse
 
 import hq
+import hq_bank
 import hq_commands
 import hq_missions
+import hq_ventures
 
 logger = logging.getLogger(__name__)
 POLL_SECONDS = 3
@@ -52,6 +56,27 @@ def _mission(payload: dict) -> str:
     return "Unknown mission action."
 
 
+def _bank(payload: dict) -> str:
+    verb = str(payload.get("verb") or "")
+    if verb == "balance":
+        return hq_bank.set_balance(str(payload.get("amount") or ""), payload.get("date") or None, by="owner:app")
+    if verb == "rows":
+        return hq_bank.import_rows(hq_bank.clean_rows(payload.get("rows")))
+    if verb == "reconcile":
+        return hq_bank.reconcile()
+    return "Unknown bank action."
+
+
+def _venture(payload: dict) -> str:
+    verb = str(payload.get("verb") or "")
+    if verb == "new":
+        r = hq_ventures.start(str(payload.get("name") or ""), str(payload.get("idea") or ""), by="owner")
+        return r.get("error") or f"Venture {r['slug']} set up inactive. Validation mission: {r['mission']}. Approve it under Needs you when ready."
+    if verb == "activate":
+        return hq_ventures.activate(str(payload.get("slug") or "").lower(), by="owner:app")
+    return "Unknown venture action."
+
+
 async def handle(row: dict, context) -> None:
     kind, payload, body = row.get("kind"), row.get("payload") or {}, row.get("body") or ""
     if kind == "chat":
@@ -67,6 +92,10 @@ async def handle(row: dict, context) -> None:
         _say(hq_commands.apply_answer(str(payload.get("msg_id")), int(payload.get("idx") or 0)), row["id"], "system")
     elif kind == "mission":
         _say(_mission(payload), row["id"], "system")
+    elif kind == "bank":
+        _say(_bank(payload), row["id"], "system")
+    elif kind == "venture":
+        _say(_venture(payload), row["id"], "system")
     else:
         _say("I didn't understand that request.", row["id"], "system")
 

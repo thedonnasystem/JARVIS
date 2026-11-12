@@ -127,8 +127,27 @@ def set_balance(amount_text: str, as_of: str | None = None, by: str = "owner:tel
     return f"Bank balance recorded: {_d(cents)} as of {d}. Spending is now capped at what the bank supports."
 
 
+def clean_rows(rows) -> list[dict]:
+    """Rows from the app (already parsed in the browser). Anything odd is dropped, never trusted."""
+    out = []
+    for r in (rows if isinstance(rows, list) else [])[:MAX_ROWS]:
+        try:
+            d = _parse_date(str(r.get("date")))
+            c = int(r.get("cents"))
+            if d and abs(c) < 10_000_000_00:
+                out.append({"date": d, "description": re.sub(r"\s+", " ", str(r.get("description") or ""))[:200] or "(no description)", "cents": c})
+        except Exception:
+            continue
+    return out
+
+
 def import_statement(raw: str, by: str = "owner:telegram") -> str:
     rows, last4, problems = parse_statement(raw)
+    return import_rows(rows, last4, problems)
+
+
+def import_rows(rows: list[dict], last4: str | None = None, problems: list[str] | None = None) -> str:
+    problems = problems or []
     if not rows:
         return "No transactions found. " + (problems[0] if problems else "")
     acct = ensure_account(last4)

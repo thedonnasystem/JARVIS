@@ -64,3 +64,24 @@ class T(unittest.TestCase):
         db = DB(missing=True)
         run(db)
         self.assertEqual(db.said(), [])
+
+
+class BankVenture(unittest.TestCase):
+    def test_bank_and_venture_actions_route_to_owner_functions(self):
+        import hq_web as W
+        with mock.patch.object(W.hq_bank, "set_balance", return_value="ok") as sb, \
+                mock.patch.object(W.hq_bank, "import_rows", return_value="imp") as ir, \
+                mock.patch.object(W.hq_bank, "reconcile", return_value="rec"), \
+                mock.patch.object(W.hq_ventures, "start", return_value={"slug": "x-y", "mission": "m"}) as st, \
+                mock.patch.object(W.hq_ventures, "activate", return_value="on") as ac:
+            self.assertEqual(W._bank({"verb": "balance", "amount": "412.50"}), "ok")
+            self.assertEqual(sb.call_args.kwargs["by"], "owner:app")
+            rows = [{"date": "2026-11-03", "description": "a  b", "cents": 5}, {"date": "junk", "cents": 1}, {"date": "2026-11-04", "cents": "x"}]
+            W._bank({"verb": "rows", "rows": rows})
+            self.assertEqual(ir.call_args[0][0], [{"date": "2026-11-03", "description": "a b", "cents": 5}])  # junk rows never reach the database
+            self.assertEqual(W._bank({"verb": "reconcile"}), "rec")
+            self.assertEqual(W._bank({"verb": "wire money"}), "Unknown bank action.")
+            self.assertIn("x-y", W._venture({"verb": "new", "name": "X Y", "idea": "a long enough idea text"}))
+            self.assertEqual(W._venture({"verb": "activate", "slug": "X-Y"}), "on")
+            self.assertEqual(ac.call_args.kwargs["by"], "owner:app")
+            self.assertEqual(W._venture({"verb": "delete"}), "Unknown venture action.")

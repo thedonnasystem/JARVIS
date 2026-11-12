@@ -79,8 +79,18 @@ async function refresh() {
   } catch (e) { note('Offline or signed out. Retrying…'); }
 }
 async function send(body, kind, payload) {
-  try { await rpc('app_send', { p_body: body || '', p_kind: kind || 'chat', p_payload: payload || {} }); setTimeout(refresh, 600); }
-  catch (e) { note(String(e.message || e)); }
+  try { const id = await rpc('app_send', { p_body: body || '', p_kind: kind || 'chat', p_payload: payload || {} }); setTimeout(refresh, 600); return id; }
+  catch (e) { note(String(e.message || e)); return null; }
+}
+// Send an action and show Jarvis's one-line answer in the banner (he replies within seconds).
+async function act(kind, payload) {
+  note('Sent. Waiting for Jarvis…');
+  const id = await send('', kind, payload); if (!id) return;
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try { const m = (await rpc('app_messages', { p_limit: 20 })).find((x) => x.reply_to === id); if (m) { note(m.body); setTimeout(() => note(''), 12000); refresh(); return; } } catch (e) {}
+  }
+  note('Still working. Check the Jarvis tab.');
 }
 
 // ---------- render ----------
@@ -92,6 +102,9 @@ function render() {
   pill.className = 'pill ' + (st.kill_switch ? 'bad' : paused ? 'warn' : 'ok');
   pill.textContent = st.kill_switch ? 'KILL SWITCH ON' : paused ? 'Paused: ' + st.pause_reason : 'Running · ' + (st.mode || '').replace(/_/g, ' ');
   $('stamp').textContent = 'beat ' + ago(st.last_heartbeat);
+  // Never rebuild a screen while the owner is typing into it (the 8s refresh would wipe the field).
+  const ae = document.activeElement;
+  if (S.tab !== 'chat' && ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && $('v-' + S.tab).contains(ae)) return;
   ({ chat: rChat, home: rHome, missions: rMissions, agents: rAgents, money: rMoney, feed: rFeed })[S.tab](s);
 }
 function rChat() {
@@ -141,12 +154,64 @@ function pushCard() {
   } }, 'Turn on notifications')) : null;
   return h('div', { class: 'card' }, msg, btn);
 }
+// ---------- bank statement CSV (parsed here; only date, description, amount leave the phone; account numbers never do) ----------
+function csvRows(text) {
+  const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; }
+    else if (c === '"') q = true; else if (c === ',') { row.push(cur); cur = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cur); cur = ''; if (row.some((x) => x.trim())) rows.push(row); row = []; }
+    else cur += c;
+  }
+  row.push(cur); if (row.some((x) => x.trim())) rows.push(row);
+  return rows;
+}
+function parseDate(t) {
+  t = (t || '').trim(); let m;
+  if ((m = t.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/))) return m[1] + '-' + m[2].padStart(2, '0') + '-' + m[3].padStart(2, '0');
+  if ((m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) { let a = +m[1], b = +m[2]; if (a > 12) [a, b] = [b, a]; return m[3] + '-' + String(a).padStart(2, '0') + '-' + String(b).padStart(2, '0'); }
+  return null;
+}
+function toCents(t) { t = (t || '').replace(/[$,\s]/g, ''); if (!t) return null; const neg = /^\(.*\)$/.test(t); const v = Math.round(parseFloat(t.replace(/[()]/g, '')) * 100); return isNaN(v) ? null : (neg ? -v : v); }
+function parseStatement(text) {
+  const all = csvRows(text.replace(/^\ufeff/, '')); let hi = all.findIndex((r) => r.some((c) => /date/i.test(c)) && r.some((c) => /cad|amount|debit|credit/i.test(c)));
+  if (hi < 0) return [];
+  const H = all[hi].map((c) => c.trim().toLowerCase()); const col = (r, ...names) => { for (const n of names) { const i = H.findIndex((h) => h.includes(n)); if (i >= 0 && r[i] != null) return r[i]; } return ''; };
+  const out = [];
+  for (const r of all.slice(hi + 1)) {
+    const d = parseDate(col(r, 'transaction date', 'date')); if (!d) continue;
+    let c = toCents(col(r, 'cad$', 'amount'));
+    if (c == null) { const deb = toCents(col(r, 'debit', 'withdraw')), cred = toCents(col(r, 'credit', 'deposit')); if (deb == null && cred == null) continue; c = (cred || 0) - Math.abs(deb || 0); }
+    const desc = [col(r, 'description 1'), col(r, 'description 2')].map((x) => x.trim()).filter(Boolean).join(' ') || col(r, 'description').trim();
+    out.push({ date: d, description: desc.replace(/\s+/g, ' ').slice(0, 200), cents: c });
+  }
+  return out.slice(0, 2000);
+}
+function bankCard(c) {
+  const amt = h('input', { type: 'text', inputmode: 'decimal', placeholder: 'Bank balance, e.g. 412.50', style: 'width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin:8px 0' });
+  const file = h('input', { type: 'file', accept: '.csv,text/csv', style: 'display:none', onchange: async (e) => {
+    const f = e.target.files[0]; if (!f) return; if (f.size > 1000000) { note('That file is too big for a statement.'); return; }
+    const rows = parseStatement(await f.text()); if (!rows.length) { note('No transactions found in that file.'); return; }
+    act('bank', { verb: 'rows', rows }); e.target.value = '';
+  } });
+  return h('div', {}, h('h2', {}, 'Bank (source of truth)'), h('div', { class: 'card' },
+    h('div', { class: 'dim' }, c.bank_balance_cents != null ? 'Last recorded ' + usd(c.bank_balance_cents) + ', ' + c.bank_age_days + ' days ago. Spending is capped at what the bank supports.' : 'No balance recorded yet. Spending is limited by the internal ledger only.'),
+    amt, h('div', { class: 'btns' },
+      h('button', { onclick: () => { if (amt.value.trim()) { act('bank', { verb: 'balance', amount: amt.value.trim() }); amt.value = ''; } } }, 'Save balance'),
+      h('button', { class: 'ghost', onclick: () => file.click() }, 'Import statement CSV'),
+      h('button', { class: 'ghost', onclick: () => act('bank', { verb: 'reconcile' }) }, 'Reconcile')), file));
+}
 function rMissions(s) {
   const v = $('v-missions');
   const act = (id, verb) => send('', 'mission', { verb, id });
   const ta = h('textarea', { rows: 3, placeholder: 'New mission: what outcome do you want?', style: 'width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px' });
+  const vn = h('input', { type: 'text', placeholder: 'New venture name', style: 'width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin:8px 0' });
+  const vi = h('textarea', { rows: 2, placeholder: 'What it sells, to whom, how it makes money', style: 'width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px' });
   v.replaceChildren(
     h('div', {}, ta, h('div', { class: 'btns' }, h('button', { onclick: () => { if (ta.value.trim()) { send('', 'mission', { verb: 'new', objective: ta.value.trim() }); ta.value = ''; } } }, 'Open mission'))),
+    h('div', { class: 'card' }, h('div', { class: 'dim' }, 'Start a venture: created inactive, validated first, you approve before anything is spent.'), vn, vi,
+      h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: () => { if (vn.value.trim().length >= 3 && vi.value.trim().length >= 15) { act('venture', { verb: 'new', name: vn.value.trim(), idea: vi.value.trim() }); vn.value = ''; vi.value = ''; } else note('Give a name and at least a sentence.'); } }, 'Set up venture'))),
     ...(s.missions || []).map((m) => h('details', { class: 'card' },
       h('summary', {}, h('b', {}, (m.title || '').replace(/^Mission: /, '')), ' ', h('span', { class: 'tag' }, m.status + (m.verdict ? ' · ' + m.verdict : ''))),
       h('div', { class: 'dim' }, 'Budget ' + usd(m.spent_cents) + ' of ' + usd(m.budget_cents) + (m.expected_cad ? ' · expected $' + m.expected_cad + ' CAD' : '') + (m.days_to_cash ? ' in ' + m.days_to_cash + 'd' : '')),
@@ -181,6 +246,7 @@ function rMoney(s) {
       row('Total cash in', usd(s.pnl.total.revenue_cents)), row('Overhead AI', usd(s.pnl.total.holding_ai_cents)),
       row('Net after overhead', usd(s.pnl.total.net_after_overhead_cents)),
       h('div', { class: 'dim' }, 'Not cash: pipeline ' + usd(s.pnl.total.pipeline_cents) + ', forecasts ' + usd(s.pnl.total.forecast_cents)))] : null,
+    bankCard(c),
     h('h2', {}, 'AI spend, last 7 days'), h('div', { class: 'card' }, days.length ? days.map((d) => row(d.d, usd(d.c))) : h('span', { class: 'dim' }, 'No spend recorded.')),
     h('h2', {}, 'Permissions'), h('div', { class: 'card' }, (s.policy || []).length ? s.policy.map((p) => row(p.action, p.tier)) : h('span', { class: 'dim' }, 'Policy table not live yet.')),
     h('p', { class: 'dim' }, 'Limits are changed in Telegram with /capital and /policy. Agents cannot change them.'));
