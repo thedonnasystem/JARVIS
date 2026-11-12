@@ -49,7 +49,7 @@ begin
         'week', public.dayjob_week_text())$q$ into v_day;
   end if;
   if to_regclass('public.agent_scorecard') is not null then
-    execute $q$select coalesce(jsonb_object_agg(slug, jsonb_build_object('flag', flag, 'cents_per_done', cents_per_done, 'done_7d', done_7d)), '{}'::jsonb) from public.agent_scorecard$q$ into v_score;
+    execute $q$select coalesce(jsonb_object_agg(slug, jsonb_build_object('flag', flag, 'cents_per_done', cents_per_done_task, 'done_7d', done_7d)), '{}'::jsonb) from public.agent_scorecard$q$ into v_score;
   end if;
   if to_regclass('public.org_changes') is not null then
     execute $q$select coalesce(jsonb_agg(jsonb_build_object('kind', kind, 'change', left(change, 200), 'status', status, 'gain', gain, 'cost', cost, 'at', created_at) order by created_at desc), '[]'::jsonb)

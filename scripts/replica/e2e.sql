@@ -1,0 +1,25 @@
+\set ON_ERROR_STOP on
+insert into auth.users (id, email) values ('11111111-1111-1111-1111-111111111111', 'owner@example.com');
+insert into public.app_owners (email) values ('owner@example.com');
+select set_config('app.uid', '11111111-1111-1111-1111-111111111111', false), set_config('app.email', 'owner@example.com', false);
+select 'is_owner', public.is_app_owner();
+select 'snapshot keys', jsonb_object_keys(public.app_snapshot()) k order by 2 limit 40;
+select 'create_venture', public.create_venture('acme','Acme Cleaning','revenue','paying customers',3000,'owner:test');
+select 'activate', public.activate_venture('acme','owner:test');
+select 'opp scans', public.queue_opportunity_scans();
+select 'office', jsonb_array_length(public.app_office());
+select 'venture view', public.app_venture('acme')->>'name', jsonb_array_length(public.app_venture_extras('acme')->'assets');
+select 'alloc', public.allocation_text();
+select 'budget', public.set_venture_budget('acme', 2500, 'owner:test');
+select 'prepare', public.prepare_payment('jarvis','Twilio',1500,'Phone number for Donna','none considered',current_date+3,'acme');
+select 'app_payments', public.app_payments();
+select 'decide', public.decide_payment((select id from payment_instructions limit 1), true, 'owner:app');
+select 'confirm', public.confirm_payment((select id from payment_instructions limit 1), 1500, 'RBC-TEST-1', 'owner:app');
+select 'ledger', kind, amount_cents from ledger order by created_at desc limit 1;
+select 'account req', public.request_account('jarvis','Twilio','Phone number for Donna','acme','https://twilio.com',0,array['sms_code']);
+select 'account decide', public.decide_account((select id from account_requests limit 1), true, 'owner:app');
+select 'account done', public.complete_account((select id from account_requests limit 1), 'moe@biz.ca', 'owner:app');
+select 'bank alerts', public.bank_alerts();
+select 'capital', public.capital_snapshot()->>'available_cents', public.capital_snapshot()->>'mode';
+select 'msgs', kind, ref_table, needs_decision from owner_messages order by created_at;
+select 'create_agent', public.create_agent('acme-scout','Acme Scout','acme','researcher','cheap',15,'Find local cleaning customers within Ottawa.','leads found','owner-chat');

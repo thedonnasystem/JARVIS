@@ -37,10 +37,10 @@ begin
   insert into payment_instructions (payee, amount_cents, purpose, venture_id, due_on, reservation_id, requested_by)
     values (p_payee, p_cents, p_purpose, v_v, p_due, (r->>'reservation_id')::uuid, p_actor) returning id into v_id;
   insert into owner_messages (from_agent, kind, channel, body, needs_decision, ref_table, ref_id)
-    values ('jarvis', 'payment', 'telegram',
+    values ('jarvis', 'money', 'telegram',
             format(E'Payment to approve: $%s to %s\nFor: %s%s\nFunds are reserved. If you approve, pay it yourself in RBC, then send the bank reference (/pay done %s <amount> <reference>). I never move money.',
                    to_char(p_cents / 100.0, 'FM999,990.00'), p_payee, p_purpose, case when p_due is null then '' else E'\nDue: ' || p_due end, left(v_id::text, 8)),
-            true, 'payment_instructions', v_id::text);
+            true, 'payment_instructions', v_id);
   return jsonb_build_object('decision', 'allow', 'instruction_id', v_id, 'reason', 'Reserved; waiting for the owner.');
 end $$;
 

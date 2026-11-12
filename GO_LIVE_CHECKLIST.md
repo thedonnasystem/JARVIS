@@ -26,6 +26,9 @@ Exact file order: `migrations/APPLY_ORDER.txt`.
 | 8b | brief_v3 | 7pm brief gains P&L, bank alerts, forecast accuracy, pending proposals (apply after 3-7) | Low |
 | 9 | push_v1 | Push subscriptions; VAPID key stored in a locked table | Low |
 
+## Verified
+All migrations apply cleanly in order to a replica of the live schema, and an end-to-end script (venture, payment, account, allocation, office, app snapshot as the owner) passes: `scripts/replica/run.sh` (also runs in CI).
+
 ## After the migrations
 1. Supabase Auth: email provider on, signups OFF, add your user, insert your email in `app_owners`.
 2. Merge `overnight-build` into the deploy branch; Railway redeploys Jarvis (new: /bank, /venture, push, web poller).

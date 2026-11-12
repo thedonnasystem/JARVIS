@@ -12,3 +12,18 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -q
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: pw }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply every migration to a copy of the live schema, then run the end-to-end script
+        env:
+          REPLICA_URL: postgresql://postgres:pw@localhost:5432/postgres
+        run: scripts/replica/run.sh
