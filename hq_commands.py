@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 import hq
 import hq_missions
+import hq_policy
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,12 @@ async def hq_sent(update, context) -> None:
         await update.message.reply_text("No approved draft with that code.")
         return
     now = datetime.now(timezone.utc).isoformat()
-    hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", {"status": "sent", "sent_at": now}, prefer="return=minimal")
+    body = {"status": "sent", "sent_at": now, "sent_by": "owner"}
+    try:
+        hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", body, prefer="return=minimal")
+    except Exception:  # before the sent_by migration: record it the old way
+        body.pop("sent_by")
+        hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", body, prefer="return=minimal")
     if rows[0].get("lead_id"):
         from datetime import timedelta
         due = (_toronto_today() + timedelta(days=3)).isoformat()
@@ -530,7 +536,16 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         hq._request("PATCH", f"/rest/v1/agents?venture_id=eq.{_q(ref_id)}", {"status": "paused"}, prefer="return=minimal")
         hq._request("PATCH", f"/rest/v1/tasks?venture_id=eq.{_q(ref_id)}&status=eq.todo",
                     {"status": "cancelled", "result": "Cancelled: owner paused this venture."}, prefer="return=minimal")
+    elif ref_table == "approval_requests" and ref_id:
+        # Red action (or approve-first Yellow): the tap approves this one action, once. authorize_action consumes it.
+        hq_policy.decide_approval(ref_id, approved)
     elif ref_table == "outbox" and ref_id:
+        if approved:
+            # The owner is a reviewer independent of the writing agent, so his approval is the QA step too.
+            # The database requires draft -> qa_passed -> approved; before this, Approve on a draft was refused.
+            hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=eq.draft",
+                        {"status": "qa_passed", "qa_agent": "owner", "qa_notes": "Reviewed by the owner on Telegram"},
+                        prefer="return=minimal")
         hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=in.(draft,qa_passed)",
                     {"status": verdict, "decided_at": now}, prefer="return=minimal")
         if approved:
@@ -614,8 +629,24 @@ async def hq_mission_cmd(update, context) -> None:
     await update.message.reply_text(text[:4000])
 
 
+async def hq_policy_cmd(update, context) -> None:
+    """/policy  shows the tiers. /policy <action> tier|each|week|day <value> changes one (owner only)."""
+    if not _owner(update):
+        return
+    args = list(context.args or [])
+    try:
+        if len(args) >= 3:
+            text = hq_policy.set_policy(args[0], args[1].lower(), args[2])
+        else:
+            text = hq_policy.policy_text() + "\n\nChange one: /policy <action> tier|each|week|day <value>"
+    except Exception as e:
+        logger.exception("HQ policy command failed")
+        text = f"Policy command failed: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
 MENU = [
-    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -692,7 +723,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd)):
         app.add_handler(CommandHandler(name, fn))
     if CallbackQueryHandler is not None:
         app.add_handler(CallbackQueryHandler(hq_decision_callback, pattern=r"^hqd:"))
