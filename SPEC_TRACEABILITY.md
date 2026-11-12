@@ -72,11 +72,11 @@ Migration green light, Auth setup, merge to the Railway branch, VAPID keys, Anth
 | Autonomy ladder promoted by measured error rate | BUILT as evidence (`/autonomy`); you alone change the mode |
 | Monthly audit of recurring charges | BUILT (`/tool`; you must enter the charges once) |
 | Succession document, vault pointers, runbooks | BUILT as a sheet (`/succession`); trust, will and trustee need a lawyer |
-| Donna setter program (pay ladder, Friday payouts) | BUILT (setters_v1); public self-signup NOT BUILT |
+| Donna setter program (pay ladder, Friday payouts) | BUILT and LIVE (setters_v1, public apply page at /apply/ with rate limit, bot trap, owner review). Lawyer should check the pay-terms wording before you share the link. |
 | Visual HQ with rooms | BUILT (PWA floor plan; the Station artifact already exists) |
 | Deploy-and-verify evidence | BUILT (`hq_verify_url`) |
 | Website drafts as PRs | BUILT (hq_sites); publishing needs your token/host |
-| Day-job lead ranking of the ~14,000 portal leads | NOT BUILT: needs the lead export (and written company permission) |
+| Day-job lead ranking of the ~14,000 portal leads | BUILT as a local script (`scripts/rank_leads.py`, nothing uploaded); NEEDS the lead export and written company permission to use |
 | Telegram voice notes in | BUILT, switched off until OPENAI_API_KEY is set (voice replies not built) |
-| Real send provider for outbox | NOT BUILT: needs a provider account and your CASL address |
-| Daily database backup | NOT BUILT: needs storage you own |
+| Real send provider for outbox | BUILT, dormant (`hq_mail.py`, Resend): needs RESEND_API_KEY, MAIL_FROM, a verified domain and your CASL address |
+| Daily database backup | BUILT, dormant (`hq_backup.py`, encrypted, restore-checked): needs BACKUP_KEY and a storage endpoint outside this Supabase project |
