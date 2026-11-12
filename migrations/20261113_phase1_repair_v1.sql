@@ -5,11 +5,16 @@
 -- 4) ops_alerts(): actionable owner alerts with per-alert cooldowns.
 -- 5) Reconciliation: captures the live-only enforce_build_rules function + trigger, and the live queue_outreach_drafts body.
 
+-- focus mode column lives here too (also added by mission_guard_v1) so ops_alerts can reference it in either apply order
+alter table public.system_state add column if not exists focus_mission uuid;
+
 -- ---------- 1) idempotency ----------
 alter table public.tasks add column if not exists dedupe_key text;
--- Only rows that carry a key are constrained, so historical rows are untouched. A key is "open" while todo/doing/blocked.
+-- Only rows that carry a key are constrained, so historical rows are untouched. A key is "open" while todo/doing. (A blocked task does not hold
+-- the key forever; the function below applies a 12 h cool-down after a failure and a daily circuit breaker instead.)
+drop index if exists public.tasks_open_dedupe_key;
 create unique index if not exists tasks_open_dedupe_key
-  on public.tasks (dedupe_key) where dedupe_key is not null and status in ('todo','doing','blocked');
+  on public.tasks (dedupe_key) where dedupe_key is not null and status in ('todo','doing');
 -- One unsent draft per lead, enforced by the database (verified: the 15 live drafts are 15 distinct leads).
 create unique index if not exists outbox_one_draft_per_lead
   on public.outbox (lead_id) where lead_id is not null and status = 'draft';
@@ -27,6 +32,8 @@ begin
   loop
     if exists (select 1 from tasks where venture_id = r.venture_id and title like 'Draft outreach%' and status in ('todo','doing')) then continue; end if;
     if exists (select 1 from tasks where venture_id = r.venture_id and title like 'Draft outreach%' and status = 'blocked' and updated_at > now() - interval '12 hours') then continue; end if;
+    -- circuit breaker: never more than 3 draft tasks per venture per day, whatever their status (the Nov 2026 storm made 91)
+    if (select count(*) from tasks where venture_id = r.venture_id and title like 'Draft outreach%' and created_at > now() - interval '24 hours') >= 3 then continue; end if;
     if not exists (select 1 from agents where slug = r.slug || '-division' and status = 'active') then continue; end if;
     -- The unique dedupe_key makes a second concurrent/repeated cron run a no-op instead of a duplicate task.
     insert into tasks (venture_id, assigned_agent, created_by, title, detail, status, priority, dedupe_key)
@@ -153,6 +160,15 @@ begin
   select count(*) into c from llm_calls where status = 'reserved' and started_at < now() - interval '30 minutes';
   if c > 0 then
     n := n + public._queue_alert('unsettled_budget', interval '12 hours', c || ' AI budget reservation(s) were never settled (older than 30 minutes). Spend accounting may be off.');
+  end if;
+  -- 8b) focus mode left on: it halts all other AI work, so a stale one must not go unnoticed
+  if s.focus_mission is not null then
+    if not exists (select 1 from missions where id = s.focus_mission and status in ('captured','evaluated','planned','executing','verifying')) then
+      n := n + public._queue_alert('focus_finished', interval '12 hours',
+        'Focus mode is still ON but its mission is no longer running. All other AI work is held. Send /mission focus off to resume normal work.');
+    elsif exists (select 1 from missions where id = s.focus_mission and created_at < now() - interval '24 hours') then
+      n := n + public._queue_alert('focus_long', interval '24 hours', 'Focus mode has been on for over 24 hours. Everything except that mission is held.');
+    end if;
   end if;
   -- 9) security anomaly: the guard blocked things repeatedly
   select count(*) into c from audit_log where at > now() - interval '1 hour' and action in ('permission_denied', 'policy_denied', 'auth_failed');

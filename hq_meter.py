@@ -81,8 +81,9 @@ def reserve(model: str, kwargs: dict, purpose: str) -> str | None:
         if "Kill switch" in msg or "Unknown agent" in msg:
             logger.info("meter: running unmetered (%s)", msg)
             return None
-        if "cap" in msg.lower() or "paused" in msg.lower():
-            raise MeterBlocked(msg) from None
+        low = msg.lower()
+        if "cap" in low or "paused" in low or "focus mode" in low or "mission budget" in low:
+            raise MeterBlocked(msg) from None  # focus-mode and mission-budget refusals must never fall through to "unmetered"
         logger.warning("meter: gateway error, running unmetered: %s", msg)
         return None
     except Exception as e:

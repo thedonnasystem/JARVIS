@@ -8,16 +8,17 @@ migrations, (3) lets the bot redeploy, (4) creates the mission and sets focus mo
 | Objective | Research three niche markets for a digital service that can be started with $0 upfront capital in Ottawa and recommend the strongest opportunity. |
 | Venture | idea-lab (kind=lab, active, no monthly budget; no contact channel, no money) |
 | Mission budget | 200 cents CAD ($2.00). Hard cap enforced inside `reserve_llm_budget` via `mission_guard`; a call that would pass 200c is refused before it is reserved |
-| Steps | at most 4 (the engine's plan limit is 8; the objective text asks for 4) |
+| Steps | **at most 4, enforced three ways**: the evaluation prompt asks for 2 to 4; the engine truncates any longer plan to 4; the database refuses a 5th step task or a 5-step plan (`strict_steps`: 4 for the mission's whole life, so a failed verification cannot re-plan itself into more steps; it blocks and asks you) |
 | Mode | dry_run stays ON (database-enforced). No email, purchases, accounts, bank actions |
 | Global limits | unchanged: daily cap 330c, capital limits, kill switch |
-| Isolation | focus mode: `system_state.focus_mission` = this mission. The gateway refuses every other AI call; the engine only fetches this mission's tasks and skips triage |
+| Isolation | focus mode: `system_state.focus_mission` = this mission. The spend gateway refuses every AI call that is not one of this mission's tasks; the engine only fetches this mission's tasks and skips triage. Your own Telegram chat with Jarvis still works (metered by its own 150c/day cap, not counted against the mission) |
 | Credits | owner adds them by hand. No auto-reload. The hourly credit probe is a 1-token call (well under 1 cent) |
 
 ## Safe run order (the order matters)
-1. Owner approves and merges PR `phase1-repair`; applies `20261113_phase1_repair_v1.sql` then `20261113_mission_guard_v1.sql`; Railway redeploys.
+1. Follow DEPLOY_RUNBOOK.md gates 1–4 (approve, merge, migrate, deploy) and confirm its verification table. Do not create the mission before gate 4 finishes.
 2. While HQ is still paused for credits, in Telegram:
    - `/mission new Research three niche markets for a digital service that can be started with $0 upfront capital in Ottawa and recommend the strongest opportunity.`
+   - `/mission steps <id> 4`
    - `/mission budget <id> 200`
    - `/mission focus <id>`   (confirm the reply says Focus mode ON)
 3. Only then add credit in the Anthropic console (suggest $5). Adding credit BEFORE step 2 would let the 13 blocked and 8 todo backlog tasks run on resume.
@@ -46,6 +47,9 @@ select count(*) from outbox where status='sent' and created_at > now() - interva
 - Parser miss: the task result will not contain `MISSION_VERDICT` / `STEP` / `VERIFIED` lines. The mission blocks with the reason; we read the raw result and fix that one regex or prompt.
 - Budget stop: the mission pauses with "Mission budget would be exceeded"; owner decides whether to raise it.
 - Provider error: the task retries once, then blocks; the alert job tells the owner.
+
+## What has already been tested without spending anything
+`scripts/replica/run_integration.py` runs the real engine and mission code against a copy of the live schema with a scripted model: a 4-step mission (model proposes 6) completes with evidence; spend stays under 200c; a backlog task does not run in focus mode and does after cleanup; a 60c mission is stopped by the gateway while the rest of the board keeps working; the database refuses a 5th step; no outbox row is sent. This proves the plumbing, not the real model's output format.
 
 ## Known limits of this test
 - It proves the pipeline with real model output once. One pass does not prove reliability across mission types.

@@ -154,6 +154,12 @@ def sync_integrations() -> None:
     }
     rows = [{"key": k, "ok": bool(ok), "detail": "configured" if ok else f"missing: {need}", "checked_at": _now()}
             for k, (ok, need) in checks.items()]
+    # What code is actually running: Railway sets these for GitHub-triggered deploys. Read-only proof for ops/verify_live.sql.
+    sha = os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("GIT_COMMIT") or ""
+    rows.append({"key": "engine_build", "ok": bool(sha),
+                 "detail": (f"commit {sha[:12]} branch {os.environ.get('RAILWAY_GIT_BRANCH', '?')} "
+                            f"deployment {(os.environ.get('RAILWAY_DEPLOYMENT_ID') or '?')[:8]}") if sha else "unknown: no commit variable in this runtime",
+                 "checked_at": _now()})
     try:
         hq._request("POST", "/rest/v1/integration_status?on_conflict=key", rows,
                     prefer="resolution=merge-duplicates,return=minimal")
@@ -900,8 +906,14 @@ def _work_tasks() -> bool:
         try:
             text = run_turn_sync(t["assigned_agent"], prompt, TASK_MAX_OUTPUT, f"task {t['id']}")
         except GatewayBlocked as e:
+            if str(e).startswith("Mission budget"):
+                # This mission's own AI budget is used up: stop its task (the mission engine blocks the mission and tells the owner)
+                # and carry on with the rest of the board. It must never stall every other task.
+                _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked", "updated_at": _now(), "result": f"Stopped: {str(e)[:200]}"})
+                logger.info("HQ mission budget refusal for task %s: %s", t["id"], e)
+                continue
             _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "todo", "updated_at": _now()})
-            if str(e).startswith("Agent "):
+            if str(e).startswith(("Agent ", "Focus mode")):
                 logger.info("HQ agent-level block (%s); skipping this task, continuing the board", e)
                 continue
             logger.info("HQ gateway blocked (%s); pausing the task board until it clears", e)
@@ -1157,7 +1169,13 @@ def _coast_notice() -> None:
 
 
 def tick_sync() -> None:
-    state = _get("system_state?id=eq.1&select=kill_switch,pause_reason,paused_at,night_until,night_started_at,day_cap_cents,focus_mission")
+    cols = "kill_switch,pause_reason,paused_at,night_until,night_started_at,day_cap_cents"
+    try:
+        state = _get(f"system_state?id=eq.1&select={cols},focus_mission")
+    except urllib.error.HTTPError as e:
+        if e.code != 400:
+            raise
+        state = _get(f"system_state?id=eq.1&select={cols}")  # focus_mission not migrated yet: no focus mode, never a dead engine
     global _FOCUS
     _FOCUS = (state[0].get("focus_mission") if state else None) or None
     if state and state[0].get("kill_switch"):

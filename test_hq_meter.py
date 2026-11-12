@@ -7,6 +7,18 @@ def http_err(msg, code=400):
     return urllib.error.HTTPError("u", code, msg, {}, io.BytesIO(json.dumps({"message": msg}).encode()))
 
 
+class FocusBlocks(unittest.TestCase):
+    def test_focus_and_mission_budget_refusals_are_hard_blocks_not_unmetered(self):
+        for msg in ("Focus mode: only mission 1111 may use AI right now.", "Mission budget would be exceeded (190 of 200 cents used)."):
+            with mock.patch.object(hq, "hq_enabled", return_value=True), mock.patch.object(hq, "_request", Gate(reserve_exc=http_err(msg))):
+                with self.assertRaises(MT.MeterBlocked):
+                    MT.reserve("claude-haiku-5-5", {"max_tokens": 50, "messages": []}, "chat")
+
+    def test_unknown_gateway_errors_still_fall_through_as_before(self):
+        with mock.patch.object(hq, "hq_enabled", return_value=True), mock.patch.object(hq, "_request", Gate(reserve_exc=http_err("weird database hiccup"))):
+            self.assertIsNone(MT.reserve("claude-haiku-5-5", {"max_tokens": 50, "messages": []}, "chat"))
+
+
 class Gate:
     def __init__(self, reserve_exc=None, price_missing=()):
         self.calls = []; self.reserve_exc = reserve_exc; self.price_missing = set(price_missing)

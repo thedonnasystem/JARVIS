@@ -70,6 +70,14 @@ class FakeDB:
                 m.update(body); self.missions[m["id"]] = m
                 return [dict(m)]
             if table == "tasks":
+                mm = self.missions.get(body.get("mission_id"))
+                if mm and body.get("mission_role", "step") == "step":   # mirrors enforce_mission_step_limit()
+                    n = sum(1 for x in self.tasks.values() if x.get("mission_id") == mm["id"] and x["status"] != "cancelled"
+                            and x.get("mission_role", "step") == "step")
+                    allowed = mm.get("max_steps", 8) * (1 if mm.get("strict_steps") else 1 + mm.get("attempts", 0))
+                    if n >= allowed:
+                        import urllib.error, io
+                        raise urllib.error.HTTPError("u", 400, "step limit", {}, io.BytesIO(b'{"message":"Mission step limit reached"}'))
                 t = {"id": str(uuid.uuid4()), "result": None}; t.update(body); self.tasks[t["id"]] = t
                 return [dict(t)]
             if table == "owner_messages":
@@ -286,9 +294,6 @@ class T(unittest.TestCase):
             self.assertEqual(M.advance(), 0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class FocusAndBudgetTests(unittest.TestCase):
     def test_budget_check_fails_closed_when_spend_unreadable(self):
@@ -305,3 +310,73 @@ class FocusAndBudgetTests(unittest.TestCase):
             self.assertIn("off", M.set_focus("off").lower())
         self.assertEqual(calls[0], ("set_focus_mission", {"p_mission": "abcd1234-0000", "p_by": "owner:telegram"}))
         self.assertEqual(calls[1][1]["p_mission"], None)
+
+
+class StepLimitTests(unittest.TestCase):
+    tick = T.tick
+    new = T.new
+
+    EVAL_SIX = ("MISSION_VERDICT: GO — worth a cheap test\nNUMBERS: startup cost CAD 0 | expected profit CAD 1000 | days to first cash 20 | confidence low\n"
+                "SUCCESS: three markets compared with sources and one recommendation\nRISKS: thin data\n"
+                + "".join(f"STEP: new-ventures-researcher | Step {i} | do part {i}\n" for i in range(1, 7)))
+
+    def test_four_step_limit_caps_the_plan_and_the_prompt(self):
+        db = FakeDB(); mid = self.new(db, max_steps=4)["id"]
+        self.assertEqual((db.missions[mid]["max_steps"], db.missions[mid]["strict_steps"]), (4, True))
+        self.tick(db)
+        ev = db.open_tasks()[0]
+        self.assertEqual(ev["mission_role"], "eval")
+        self.assertIn("2 to 4 steps", ev["detail"])
+        db.finish("Evaluate", self.EVAL_SIX); self.tick(db)
+        self.assertEqual(len(db.missions[mid]["plan"]), 4)
+
+    def test_step_cap_helper(self):
+        self.assertEqual(M.step_cap(None), M.MAX_STEPS)
+        self.assertEqual(M.step_cap(4), 4)
+        self.assertEqual(M.step_cap(99), M.MAX_STEPS)
+        self.assertEqual(M.step_cap(0), 1)
+        self.assertEqual(M.step_cap("junk"), M.MAX_STEPS)
+        self.assertEqual(len(M.parse_evaluation(self.EVAL_SIX, 4)["steps"]), 4)
+        self.assertEqual(len(M.parse_evaluation(self.EVAL_SIX)["steps"]), 6)
+
+    def test_database_refusal_blocks_the_mission_instead_of_crashing(self):
+        db = FakeDB(); mid = self.new(db, max_steps=4)["id"]
+        self.tick(db); db.finish("Evaluate", self.EVAL_SIX); self.tick(db)
+        db.missions[mid]["max_steps"] = 1            # simulate the limit being hit while steps are still pending
+        for _ in range(4): self.tick(db)             # first step launches; the second is refused by the database
+        steps = [t for t in db.tasks.values() if t.get("mission_role") == "step"]
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(db.missions[mid]["status"], "blocked")
+        self.assertIn("step limit", db.missions[mid]["next_action"])
+
+    def test_other_database_errors_are_not_mislabelled_as_the_step_limit(self):
+        import urllib.error, io
+        db = FakeDB(); mid = self.new(db, max_steps=4)["id"]
+        self.tick(db); db.finish("Evaluate", self.EVAL_SIX); self.tick(db)
+        orig = db.__call__
+        def boom(method, path, body=None, timeout=30, prefer=None):
+            if method == "POST" and path.endswith("/tasks"):
+                raise urllib.error.HTTPError("u", 400, "bad", {}, io.BytesIO(b'{"message":"invalid input syntax"}'))
+            return orig(method, path, body, timeout, prefer)
+        with mock.patch.object(hq, "_request", boom):
+            M.advance()                                   # the per-mission error handler logs it; the mission is not blocked as "step limit"
+        self.assertNotIn("step limit", str(db.missions[mid].get("next_action")))
+        self.assertNotEqual(db.missions[mid]["status"], "blocked")
+
+    def test_verification_task_is_not_a_step(self):
+        db = FakeDB(); mid = self.new(db, max_steps=2)["id"]
+        self.tick(db)
+        db.finish("Evaluate", "MISSION_VERDICT: GO — ok\nSUCCESS: x\nSTEP: new-ventures-researcher | Alpha step | do the alpha research\nSTEP: new-ventures-researcher | Bravo step | do the bravo research\n")
+        self.tick(db, 2); db.finish("Alpha", "done a"); self.tick(db, 2); db.finish("Bravo", "done b"); self.tick(db, 2)
+        ver = [t for t in db.tasks.values() if t["title"].startswith(M.TITLE_PREFIX + "Verify")]
+        self.assertTrue(ver and ver[0]["mission_role"] == "verify")
+
+    def test_steps_command(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        with mock.patch.object(hq, "_request", db):
+            self.assertIn("at most 4", M.set_steps(mid[:8], 4))
+        self.assertEqual((db.missions[mid]["max_steps"], db.missions[mid]["strict_steps"]), (4, True))
+
+
+if __name__ == "__main__":
+    unittest.main()

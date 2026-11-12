@@ -93,7 +93,8 @@ def team_for(venture_slug: str | None) -> tuple[str, str]:
 # ---------------------------------------------------------------- creation
 
 def create_mission(objective: str, venture: str | None = None, title: str | None = None,
-                   budget_cents: int | None = None, created_by: str = "owner", priority: int = 2) -> dict:
+                   budget_cents: int | None = None, created_by: str = "owner", priority: int = 2,
+                   max_steps: int | None = None) -> dict:
     """Capture a new mission. Returns {"id", "title"} or {"error"}."""
     objective = (objective or "").strip()
     if len(objective) < 10:
@@ -112,6 +113,9 @@ def create_mission(objective: str, venture: str | None = None, title: str | None
         "budget_cents": budget, "created_by": created_by, "priority": max(1, min(int(priority), 5)),
         "next_action": "Evaluate: is it worth doing, and what does it take?",
     }
+    if max_steps is not None:
+        row["max_steps"] = step_cap(max_steps)
+        row["strict_steps"] = True  # an explicit ceiling is a hard one
     if len(row["title"]) < 3:
         row["title"] = "Mission " + row["title"]
     m = _insert("missions", row, returning=True) or {}
@@ -141,7 +145,16 @@ def _num(s: str) -> float | None:
         return None
 
 
-def parse_evaluation(text: str) -> dict:
+def step_cap(max_steps) -> int:
+    """The most plan steps a mission may have: its own max_steps, never above the engine-wide MAX_STEPS."""
+    try:
+        n = int(max_steps) if max_steps is not None else MAX_STEPS
+    except (TypeError, ValueError):
+        n = MAX_STEPS
+    return max(1, min(n, MAX_STEPS))
+
+
+def parse_evaluation(text: str, max_steps: int | None = None) -> dict:
     out: dict = {"verdict": None, "reason": "", "steps": [], "success": None, "risks": None,
                  "expected_cad": None, "days_to_cash": None}
     m = VERDICT_RE.search(text or "")
@@ -161,7 +174,8 @@ def parse_evaluation(text: str) -> dict:
     out["success"] = s.group(1).strip() if s else None
     r = RISKS_RE.search(text or "")
     out["risks"] = r.group(1).strip() if r else None
-    for agent, title, detail in STEP_RE.findall(text or "")[:MAX_STEPS]:
+    cap = step_cap(max_steps)
+    for agent, title, detail in STEP_RE.findall(text or "")[:cap]:
         out["steps"].append({"agent": agent.strip().lower(), "title": title.strip(), "detail": detail.strip()})
     return out
 
@@ -174,6 +188,11 @@ def parse_verification(text: str) -> dict:
 
 
 # ---------------------------------------------------------------- prompts
+
+def _step_words(m: dict) -> str:
+    n = step_cap(m.get("max_steps"))
+    return "exactly 1 step" if n == 1 else f"2 to {n} steps"
+
 
 def evaluation_detail(m: dict, agents: list[str], replan_gaps: list[str] | None = None) -> str:
     head = ("Re-plan this mission. The last attempt did not pass verification. Gaps the verifier found:\n- "
@@ -189,7 +208,7 @@ def evaluation_detail(m: dict, agents: list[str], replan_gaps: list[str] | None 
         "NUMBERS: startup cost CAD <n> | expected profit CAD <n> | days to first cash <n> | confidence low|medium|high\n"
         "SUCCESS: <the concrete, checkable result that means this mission is done>\n"
         "RISKS: <top risks in one line>\n"
-        f"STEP: <agent> | <short title> | <what exactly to do and what to deliver>   (2 to {MAX_STEPS} steps, in order)\n"
+        f"STEP: <agent> | <short title> | <what exactly to do and what to deliver>   ({_step_words(m)}, in order; more than {step_cap(m.get('max_steps'))} will be discarded)\n"
         f"Agents you may assign: {', '.join(agents)}.\n"
         "Steps must be research, analysis, planning or drafting that can be done from a desk with web research "
         "(no contacting anyone, no spending, no account creation yet: those need permissions HQ does not have yet). "
@@ -217,10 +236,17 @@ def _mission_tasks(mid: str) -> list[dict]:
     return _get(f"tasks?mission_id=eq.{_q(mid)}&select=id,title,status,result,assigned_agent,updated_at&order=created_at.asc")
 
 
-def _new_task(m: dict, agent: str, title: str, detail: str, priority: int = 2) -> str | None:
+def _http_message(e: urllib.error.HTTPError) -> str:
+    try:
+        return str(json.loads(e.read().decode()).get("message", ""))
+    except Exception:
+        return ""
+
+
+def _new_task(m: dict, agent: str, title: str, detail: str, priority: int = 2, role: str = "step") -> str | None:
     row = _insert("tasks", {
         "assigned_agent": agent, "created_by": "mission-manager", "venture_id": m.get("venture_id"),
-        "mission_id": m["id"], "priority": priority, "status": "todo",
+        "mission_id": m["id"], "mission_role": role, "priority": priority, "status": "todo",
         "title": (TITLE_PREFIX + title)[:140], "detail": detail[:12000],
     }, returning=True) or {}
     return row.get("id")
@@ -245,7 +271,8 @@ def _venture_slug(m: dict) -> str | None:
 def _start_evaluation(m: dict, gaps: list[str] | None = None) -> None:
     researcher, _ = team_for(_venture_slug(m))
     kind = "Re-plan" if gaps else "Evaluate"
-    _new_task(m, researcher, f"{kind} {m['title']}", evaluation_detail(m, _active_agents(), gaps), priority=1)
+    _new_task(m, researcher, f"{kind} {m['title']}", evaluation_detail(m, _active_agents(), gaps), priority=1,
+              role="replan" if gaps else "eval")
     cp = dict(m.get("checkpoint") or {})
     cp["eval_pending"] = True
     _set(m, checkpoint=cp, next_action=f"{kind} running ({researcher})")
@@ -269,7 +296,7 @@ def _handle_captured(m: dict, tasks: list[dict]) -> None:
 
 
 def _apply_evaluation(m: dict, text: str) -> None:
-    ev = parse_evaluation(text)
+    ev = parse_evaluation(text, m.get("max_steps"))
     cp = dict(m.get("checkpoint") or {})
     cp.pop("eval_pending", None)
     if not ev["verdict"]:
@@ -306,6 +333,8 @@ def _apply_evaluation(m: dict, text: str) -> None:
         if agent.startswith("real-estate") and SOURCING_RE.search(f"{s['title']} {s['detail']}"):
             continue  # owner decision: the deal funnel finds houses; HQ never sources them
         plan.append({"agent": agent, "title": s["title"][:120], "detail": s["detail"], "status": "pending", "task_id": None})
+    if len(plan) > step_cap(m.get("max_steps")):  # defence in depth; the database enforces the same limit
+        plan = plan[:step_cap(m.get("max_steps"))]
     if not plan:
         _set(m, status=stop, result="Every proposed step was outside HQ's rules.", next_action=None)
         _tell_owner(f"Mission: {m['title']} — every proposed step was outside HQ's rules, so it's stopped.")
@@ -342,8 +371,14 @@ def _launch_steps(m: dict, plan: list[dict]) -> int:
             break
         if s.get("status") != "pending":
             continue
-        tid = _new_task(m, s["agent"], s["title"], f"Part of mission '{m['title']}'.\nObjective: {m['objective'][:1500]}\n\n"
-                        f"Your step: {s['detail']}{STEP_SUFFIX}")
+        try:
+            tid = _new_task(m, s["agent"], s["title"], f"Part of mission '{m['title']}'.\nObjective: {m['objective'][:1500]}\n\n"
+                            f"Your step: {s['detail']}{STEP_SUFFIX}")
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 409) and "step limit" in _http_message(e).lower():  # the database refused: the step limit is used up
+                _block(m, f"step limit reached ({step_cap(m.get('max_steps'))}); owner can raise it with /mission steps")
+                return launched
+            raise
         s["status"], s["task_id"] = "todo", tid
         launched += 1
         break  # one new step per tick keeps order and spend smooth
@@ -381,7 +416,7 @@ def _start_verification(m: dict, plan: list[dict], tasks: list[dict]) -> None:
     workers = {s["agent"] for s in plan}
     if auditor in workers:
         auditor = "compliance-qa"  # the verifier must not have done the work
-    _new_task(m, auditor, f"Verify {m['title']}", verification_detail(m, results), priority=1)
+    _new_task(m, auditor, f"Verify {m['title']}", verification_detail(m, results), priority=1, role="verify")
     cp = dict(m.get("checkpoint") or {})
     cp["verify_pending"] = True
     _set(m, status="verifying", checkpoint=cp, next_action=f"Independent verification ({auditor})")
@@ -472,7 +507,7 @@ def advance() -> int:
     """One pass over every live mission. Database-only, no model calls. Returns missions touched."""
     try:
         missions = _get("missions?status=in.(" + ",".join(LIVE) + ")&order=priority.asc,created_at.asc"
-                        "&select=id,title,objective,status,venture_id,plan,next_step,checkpoint,attempts,budget_cents,"
+                        "&select=id,title,objective,status,venture_id,plan,next_step,checkpoint,attempts,budget_cents,max_steps,"
                         "success_definition,next_action,last_progress_at,updated_at")
     except urllib.error.HTTPError as e:
         if e.code in (400, 404):  # table not there yet (migration not applied): stay inert
@@ -596,3 +631,14 @@ def set_focus(arg: str) -> str:
         return "No mission with that id."
     _rpc("set_focus_mission", {"p_mission": rows[0]["id"], "p_by": "owner:telegram"})
     return f"Focus mode ON: only '{rows[0]['title']}' may use AI. Everything else waits. Clear it with /mission focus off."
+
+
+def set_steps(prefix: str, n: int) -> str:
+    """Owner: /mission steps <id> <n> sets how many plan steps the mission may have (1 to MAX_STEPS)."""
+    p = re.sub(r"[^0-9a-f-]", "", (prefix or "").lower())
+    rows = [r for r in _get("missions?order=created_at.desc&limit=200&select=id,title,status") if str(r["id"]).startswith(p)] if len(p) >= 4 else []
+    if not rows:
+        return "No mission with that id."
+    n = step_cap(n)
+    _patch(f"missions?id=eq.{_q(rows[0]['id'])}", {"max_steps": n, "strict_steps": True})
+    return f"{rows[0]['title']}: at most {n} steps in total (a re-plan needs you to raise it)."
