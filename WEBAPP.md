@@ -40,5 +40,6 @@ Browser-only: Web Speech API for speaking to Jarvis, speechSynthesis for replies
 - Recommendation: push first, phone call only for red-level events, both behind the capital controller.
 
 ## Security notes
+- No third-party scripts: supabase-js is self-hosted in `webapp/vendor/`, and a Content-Security-Policy limits scripts to the app itself and network calls to your Supabase project. The app never uses innerHTML (all text is set as text).
 - Publishable key in `app.js` is public by design (RLS deny-all; only owner-checked functions are callable).
 - Kill switch is available from Home. Agents cannot change policy or capital limits from the app.
