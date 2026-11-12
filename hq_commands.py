@@ -941,7 +941,8 @@ HQ_CHAT_TOOLS = [
         "name": "hq_assign_task",
         "description": "Put a research or drafting task on a Fendezy HQ agent's board (runs within ~5 minutes, dry-run only). "
                        "Only when the owner asks for it. Agents: <venture>-researcher, <venture>-auditor, <venture>-division "
-                       "where venture is day-job-sales, donna, real-estate or new-ventures; plus jarvis.",
+                       "where venture is day-job-sales, donna, real-estate or new-ventures; plus jarvis and research "
+                       "(Research & Intelligence: use for 'research this industry').",
         "input_schema": {"type": "object", "properties": {"agent": {"type": "string"}, "task": {"type": "string"}},
                          "required": ["agent", "task"]},
     },
@@ -949,7 +950,7 @@ HQ_CHAT_TOOLS = [
         "name": "hq_create_mission",
         "description": "Open a Fendezy HQ MISSION: a broad objective HQ pursues on its own over many ticks (evaluate GO/TEST/"
                        "DEFER/REJECT with numbers, plan, run the steps, independently verify). Use when the owner gives a goal "
-                       "or business idea ('I want to start X', 'get us into Y', 'figure out Z'), not for a single quick task. "
+                       "or business idea ('I want to start X', 'get us into Y', 'figure out Z', 'find another revenue opportunity'), not for a single quick task. "
                        "Confirm the objective in one line in your reply.",
         "input_schema": {"type": "object", "properties": {
             "objective": {"type": "string", "description": "the owner's goal in full, with any constraints he gave"},
@@ -997,6 +998,13 @@ HQ_CHAT_TOOLS = [
             "role": {"type": "string"}, "tier": {"type": "string", "enum": ["cheap", "standard"]}, "cap_cents": {"type": "integer"},
             "charter": {"type": "string"}, "metric": {"type": "string"}},
             "required": ["slug", "title", "department", "role", "tier", "charter", "metric"]},
+    },
+    {
+        "name": "hq_finances",
+        "description": "Full financial review: operating fund and reserve, verified bank balance and reconciliation gaps, profit and loss "
+                       "by venture (received cash only; expected revenue is never counted as money). Use for 'review our finances', "
+                       "'how much do we have', 'are we on budget'.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "hq_venture",
@@ -1047,6 +1055,17 @@ def _assign(agent: str, task: str) -> str:
     return f"Queued for {rows[0]['slug']}; it runs within about 5 minutes."
 
 
+def finances_text() -> str:
+    """Capital + bank + P&L in one answer. Each part fails soft (its migration may not be applied yet)."""
+    parts = []
+    for label, fn in (("Capital", hq_capital.status_text), ("Bank", hq_bank.status_text), ("Profit and loss", hq_capital.pnl_text)):
+        try:
+            parts.append(f"{label}:\n{fn()}")
+        except Exception:
+            parts.append(f"{label}: not available yet.")
+    return "\n\n".join(parts)
+
+
 async def handle_chat_tool(name: str, tool_input: dict) -> str:
     try:
         if name == "hq_company_status":
@@ -1076,6 +1095,8 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
             return hq_org.create_agent(tool_input.get("slug", ""), tool_input.get("title", ""), tool_input.get("department", ""), tool_input.get("role", ""),
                                        tool_input.get("tier", "cheap"), tool_input.get("cap_cents") or 15, tool_input.get("charter", ""),
                                        tool_input.get("metric", ""), by="owner-chat")
+        if name == "hq_finances":
+            return finances_text()
         if name == "hq_venture":
             return hq_ventures.workspace_text((tool_input.get("slug") or "").lower())
         if name == "hq_missions":

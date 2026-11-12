@@ -115,6 +115,14 @@ class ChatTools(unittest.TestCase):
         with mock.patch.object(hq, "_request", boom):
             self.assertIn("Nothing in HQ memory", C._search_knowledge("HVAC"))
 
+    def test_finances_tool_combines_parts_and_fails_soft(self):
+        with mock.patch.object(C.hq_capital, "status_text", return_value="fund $250"), \
+             mock.patch.object(C.hq_bank, "status_text", side_effect=RuntimeError("no table")), \
+             mock.patch.object(C.hq_capital, "pnl_text", return_value="net $0"):
+            out = asyncio.run(C.handle_chat_tool("hq_finances", {}))
+        self.assertIn("fund $250", out); self.assertIn("Bank: not available yet.", out); self.assertIn("net $0", out)
+        self.assertIn("hq_finances", [t["name"] for t in C.HQ_CHAT_TOOLS])
+
     def test_assign_rejects_unknown_agent(self):
         with mock.patch.object(hq, "_request", lambda *a, **k: []):
             self.assertIn("No active agent", C._assign("nobody", "x"))
