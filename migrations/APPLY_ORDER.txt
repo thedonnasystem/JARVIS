@@ -20,3 +20,4 @@
 20261112_push_v1.sql
 20261112_setters_v1.sql
 20261112_finance_rules_v1.sql
+20261112_autonomy_v1.sql

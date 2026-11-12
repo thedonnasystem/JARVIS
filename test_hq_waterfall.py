@@ -37,6 +37,15 @@ class T(unittest.TestCase):
             self.assertIn("Coast mode", hq_payments.prepare("jarvis", "Twilio", 1000, "phone number"))
             self.assertIn("Coast mode", hq_accounts.request("jarvis", "Vendor", "need an account"))
 
+    def test_autonomy_text(self):
+        rows = [{"channel": "email", "reviewed": 30, "accepted": 29, "rejected": 1, "error_rate": 0.033, "eligible": True},
+                {"channel": "sms", "reviewed": 3, "accepted": 3, "rejected": 0, "error_rate": 0.0, "eligible": False}]
+        with mock.patch("hq._request", return_value=rows):
+            t = W.autonomy_text()
+        self.assertIn("email: 30 reviewed", t); self.assertIn("auto-send", t); self.assertIn("keep approve-first", t); self.assertIn("Only you", t)
+        with mock.patch("hq._request", side_effect=RuntimeError("x")):
+            self.assertIn("not available", W.autonomy_text())
+
 
 if __name__ == "__main__":
     unittest.main()

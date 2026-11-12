@@ -111,3 +111,14 @@ do $$ declare w jsonb; i int; begin
   update public.waterfall_policy set max_revenue_ventures = 3, updated_by = 'owner:test' where id = 1;
 end $$;
 select 'finance_rules_ok';
+
+-- autonomy_v1
+do $$ declare r jsonb; begin
+  insert into public.outbox (channel, to_ref, body, status, decided_at) select 'email', 'x'||g||'@e.com', 'b', case when g <= 3 then 'rejected' else 'approved' end, now() from generate_series(1, 25) g;
+  r := public.autonomy_report(0.05, 20);
+  if not exists (select 1 from jsonb_array_elements(r) e where e->>'channel' = 'email' and (e->>'reviewed')::int >= 25 and (e->>'rejected')::int = 3 and (e->>'eligible')::boolean = false) then
+    raise exception 'autonomy report wrong %', r; end if;
+  r := public.autonomy_report(0.15, 20);
+  if not exists (select 1 from jsonb_array_elements(r) e where e->>'channel' = 'email' and (e->>'eligible')::boolean) then raise exception 'eligibility wrong %', r; end if;
+end $$;
+select 'autonomy_ok';

@@ -211,3 +211,5 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - Revenue venture slots: at most 3 revenue ventures active at once (policy `max_revenue_ventures`); activating a 4th is refused until you park or cut one. Lab ventures are not limited by this.
 - Coast mode: if you have not used Telegram or the app for 3 days (`coast_after_days`), HQ finishes queued work but starts no new missions, payments or account requests, and tells you once. Any message to Jarvis ends it.
 - Policy edits are owner-only (`updated_by` must start with `owner`). Defaults are proposals from the Master Plan.
+- `/autonomy`: per channel, how many drafts you reviewed and rejected; flags a channel as "could be considered for auto-send" at 20+ reviewed and 5% or fewer rejected. Reports only; you alone change the mode.
+- `/succession`: continuity sheet (ventures, accounts and which vault entry holds each login, tools and monthly cost, assets, runbooks). Never contains secrets. Lawyer/accountant still needed for the trust and will.

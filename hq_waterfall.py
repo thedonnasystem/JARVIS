@@ -65,3 +65,20 @@ def text(days: int = 30) -> str:
     lines.append(f"- HST: {w['hst']} (trailing 12 months {_d(w['trailing_12m_revenue_cents'])})")
     lines.append("A structure to test, not financial advice; your accountant confirms tax and HST.")
     return "\n".join(lines)
+
+
+def autonomy_text(limit: float = 0.05, minimum: int = 20) -> str:
+    """Evidence for the autonomy ladder. Reports only; the owner alone changes the mode."""
+    try:
+        rows = _rpc("autonomy_report", {"p_limit": limit, "p_min": minimum})
+    except Exception as e:
+        logger.warning("autonomy_report failed: %s", str(e)[:100])
+        return "Autonomy report is not available yet (migration autonomy_v1 may not be applied)."
+    if not rows:
+        return "No reviewed messages yet. Evidence builds as you approve or reject drafts."
+    out = [f"Autonomy ladder evidence (limit {limit:.0%} rejected, at least {minimum} reviewed):"]
+    for r in rows:
+        rate = "n/a" if r.get("error_rate") is None else f"{float(r['error_rate']):.1%}"
+        out.append(f"- {r['channel']}: {r['reviewed']} reviewed, {r['rejected']} rejected ({rate}) -> " + ("could be considered for auto-send" if r.get("eligible") else "keep approve-first"))
+    out.append("Nothing is promoted automatically. Only you change the mode.")
+    return "\n".join(out)
