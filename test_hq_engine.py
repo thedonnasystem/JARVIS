@@ -248,6 +248,21 @@ class T(unittest.TestCase):
         self.assertTrue(row["body"].startswith("Subject: Missed calls"))
         self.assertEqual(row["to_ref"], "info@coolair.example.ca")
 
+    def test_second_draft_for_same_lead_is_dropped_not_crashed(self):
+        class B(Board):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                if method == "GET" and path.startswith("/rest/v1/leads"):
+                    return [{"id": "L7", "source": "https://coolair.example.ca", "email": "info@coolair.example.ca"}]
+                if method == "POST" and "/outbox" in path:
+                    raise http_err(409, "duplicate key value violates unique constraint outbox_one_draft_per_lead")
+                return Board.__call__(s, method, path, body, timeout, prefer)
+        b = B()
+        t = {"id": "d1", "assigned_agent": "donna-division", "title": "Draft outreach for 5 HVAC leads", "venture_id": "vd"}
+        text = "DRAFT #7\nSubject: Missed calls cost you jobs\nBody:\nHi team,\nWe answer every lead in 60 seconds.\nReply STOP to opt out.\nEND DRAFT\n"
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_drafts(t, text), 0)
+        self.assertFalse([i for i in b.inserts if "owner_messages" in i[0]])
+
     def test_ideas_parsed_and_clamped(self):
         b = Board()
         t = {"id": "i1", "assigned_agent": "new-ventures-researcher", "title": "Shortlist"}
@@ -406,6 +421,31 @@ class T(unittest.TestCase):
              mock.patch.object(E, "_work_tasks") as work, mock.patch.object(E, "_triage_escalations") as tri:
             E.tick_sync()
         work.assert_not_called(); tri.assert_not_called()
+
+    def test_integration_status_is_reported_even_while_paused(self):
+        calls = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body))
+            if path.startswith("/rest/v1/system_state"):
+                return [{"kill_switch": False, "pause_reason": E.CREDITS_PAUSE, "paused_at": "2026-11-06T05:30:00Z"}]
+            return []
+        E._last_probe = None
+        with mock.patch.object(hq, "_request", fake), mock.patch.object(E, "_credits_back", return_value=False), \
+             mock.patch.object(E.hq_wholesale, "enabled", return_value=False), \
+             mock.patch.object(E.hq_mail, "configured", return_value=False), mock.patch.object(E.hq_backup, "configured", return_value=True):
+            E.tick_sync()
+        posts = [c for c in calls if c[0] == "POST" and "integration_status" in c[1]]
+        self.assertEqual(len(posts), 1)
+        by = {r["key"]: r for r in posts[0][2]}
+        self.assertFalse(by["wholesale"]["ok"]); self.assertIn("WHOLESALE_SUPABASE_SERVICE_KEY", by["wholesale"]["detail"])
+        self.assertTrue(by["backup"]["ok"]); self.assertFalse(by["mail"]["ok"])
+
+    def test_integration_status_write_failure_never_blocks_the_engine(self):
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            if method == "POST": raise RuntimeError("db down")
+            return []
+        with mock.patch.object(hq, "_request", fake):
+            E.sync_integrations()  # must not raise
 
     def test_resume_requeues_credit_failures_and_drops_stale_plans(self):
         dead = [{"id": "a", "title": "Find Donna prospects: HVAC"}, {"id": "b", "title": "Daily planning 2026-11-06"}]

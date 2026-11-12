@@ -22,4 +22,5 @@
 20261112_finance_rules_v1.sql
 20261112_autonomy_v1.sql
 20261112_setter_apply_v1.sql
+20261113_phase1_repair_v1.sql
 20261112_lockdown_v1.sql

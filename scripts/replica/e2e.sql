@@ -152,3 +152,50 @@ do $$ declare r jsonb; n0 int; begin
   if (select count(*) from public.setters where notes like 'self-signup%' and created_at > now() - interval '1 hour') > 15 then raise exception 'rate limit broken'; end if;
 end $$;
 select 'setter_apply_ok';
+
+-- Phase 1 repair: idempotency, bulk audit, alerts, integration gate
+do $$ declare k text := 'test-key-' || gen_random_uuid(); n0 int; ids uuid[]; a int; r text;
+begin
+  insert into public.tasks (title, status, dedupe_key) values ('dup test', 'todo', k);
+  begin
+    insert into public.tasks (title, status, dedupe_key) values ('dup test 2', 'todo', k);
+    raise exception 'duplicate open dedupe_key accepted';
+  exception when unique_violation then null; end;
+  update public.tasks set status = 'done' where dedupe_key = k;            -- closed: the key frees up again
+  insert into public.tasks (title, status, dedupe_key) values ('dup test 3', 'todo', k);
+  delete from public.tasks where dedupe_key = k;
+
+  -- small change: no audit; bulk change: one identifiable audit row with reason
+  insert into public.tasks (title, status) select 'bulk ' || g, 'todo' from generate_series(1, 8) g;
+  select count(*) into n0 from public.audit_log where action = 'bulk_task_status_change';
+  update public.tasks set status = 'cancelled' where title in ('bulk 1', 'bulk 2');
+  if (select count(*) from public.audit_log where action = 'bulk_task_status_change') <> n0 then raise exception 'small change audited'; end if;
+  perform set_config('hq.reason', 'phase1 test cleanup', true);
+  update public.tasks set status = 'cancelled' where title like 'bulk %' and status = 'todo';
+  select count(*) into a from public.audit_log where action = 'bulk_task_status_change';
+  if a <> n0 + 0 then null; end if;
+  r := (select detail->>'reason' from public.audit_log where action = 'bulk_task_status_change' order by id desc limit 1);
+  if r is distinct from 'phase1 test cleanup' then raise exception 'bulk audit reason missing: %', r; end if;
+  if (select (detail->>'rows_changed')::int from public.audit_log where action = 'bulk_task_status_change' order by id desc limit 1) <> 6 then raise exception 'bulk audit count wrong'; end if;
+  perform set_config('hq.reason', 'phase1 test delete', true);
+  delete from public.tasks where title like 'bulk %';
+  if not exists (select 1 from public.audit_log where action = 'task_delete' and detail->>'reason' = 'phase1 test delete') then raise exception 'delete not audited'; end if;
+end $$;
+select 'idempotency_and_audit_ok';
+
+do $$ declare n int; m0 int;
+begin
+  update public.system_state set pause_reason = 'api_credits', paused_at = now() - interval '2 hours', last_heartbeat = now() where id = 1;
+  select count(*) into m0 from public.owner_messages where body like 'ALERT:%';
+  n := public.ops_alerts();
+  if n < 1 or (select count(*) from public.owner_messages where body like 'ALERT:%') <= m0 then raise exception 'no credit alert'; end if;
+  if public.ops_alerts() <> 0 then raise exception 'alert repeated inside cooldown'; end if;
+  delete from public.alert_state;
+  update public.system_state set pause_reason = null, paused_at = null where id = 1;
+  delete from public.alert_state;
+  if public.ops_alerts() <> 0 then raise exception 'alert fired on a healthy system'; end if;
+  -- value-fixer gate: no integration row means no task
+  delete from public.integration_status where key = 'wholesale';
+  if public.queue_valuation_task() is not null then raise exception 'valuation task created without integration'; end if;
+end $$;
+select 'alerts_and_gate_ok';

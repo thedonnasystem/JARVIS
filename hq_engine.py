@@ -141,6 +141,23 @@ def _insert(table: str, row: dict) -> None:
     hq._request("POST", f"/rest/v1/{table}", row, prefer="return=minimal")
 
 
+def sync_integrations() -> None:
+    """Tell the database which optional integrations are configured, so recurring work for a missing one is not created
+    (the value-fixer task used to be created daily and cancelled when the funnel key was missing)."""
+    checks = {
+        "wholesale": (hq_wholesale.enabled(), "WHOLESALE_SUPABASE_SERVICE_KEY"),
+        "mail": (hq_mail.configured(), "RESEND_API_KEY + MAIL_FROM"),
+        "backup": (hq_backup.configured(), "BACKUP_KEY + BACKUP_PUT_URL"),
+    }
+    rows = [{"key": k, "ok": bool(ok), "detail": "configured" if ok else f"missing: {need}", "checked_at": _now()}
+            for k, (ok, need) in checks.items()]
+    try:
+        hq._request("POST", "/rest/v1/integration_status?on_conflict=key", rows,
+                    prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # never block the engine on a status write
+        logger.warning("HQ integration status write failed: %s", e)
+
+
 def _audit(actor: str, action: str, target: str | None, detail: dict) -> None:
     try:
         _insert("audit_log", {"actor": actor, "action": action, "target": target, "detail": detail})
@@ -318,9 +335,16 @@ def _store_drafts(t: dict, text: str) -> int:
         if _get(f"outbox?to_ref=eq.{_q(lead[0]['email'])}&status=neq.rejected&select=id&limit=1"):
             _patch(f"leads?id=eq.{_q(lead[0]['id'])}&status=eq.new", {"status": "drafted"})
             continue  # one live draft per inbox, even if the business was saved twice
-        _insert("outbox", {"venture_id": t["venture_id"], "agent": t["assigned_agent"], "channel": "email",
-                           "to_ref": lead[0]["email"], "lead_id": lead[0]["id"], "status": "draft", "needs_owner": True,
-                           "body": f"Subject: {subject}\n\n{body}", "idempotency_key": f"draft-{t['id']}-{sid}"})
+        try:
+            _insert("outbox", {"venture_id": t["venture_id"], "agent": t["assigned_agent"], "channel": "email",
+                               "to_ref": lead[0]["email"], "lead_id": lead[0]["id"], "status": "draft", "needs_owner": True,
+                               "body": f"Subject: {subject}\n\n{body}", "idempotency_key": f"draft-{t['id']}-{sid}"})
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                raise
+            # The database already holds an unsent draft for this lead (unique index): keep that one, do not stack a second.
+            _patch(f"leads?id=eq.{_q(lead[0]['id'])}&status=eq.new", {"status": "drafted"})
+            continue
         _patch(f"leads?id=eq.{_q(lead[0]['id'])}&status=eq.new", {"status": "drafted"})
         saved += 1
     if saved:
@@ -1136,6 +1160,7 @@ def tick_sync() -> None:
         _patch("system_state?id=eq.1", {"last_heartbeat": _now()})
     except Exception:
         logger.exception("HQ heartbeat write failed")
+    sync_integrations()
     if state and state[0].get("night_until"):
         try:
             end_night_shift_if_due(state[0])
