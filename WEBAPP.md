@@ -10,7 +10,7 @@ Until `20261112_webapp_v1.sql` is applied and your email is in `app_owners`, the
 3. Open from the Home Screen icon (full screen, no browser bar).
 
 ## Turn on owner login (needs your green light, one-time)
-1. Apply migrations in order: permissions_v1, chat_meter, capital_v1, bank_v1, org_v1, ventures_v1, webapp_v1 (missions already live).
+1. Apply migrations in order: permissions_v1, chat_meter, capital_v1, bank_v1, org_v1, ventures_v1, webapp_v1, push_v1 (missions already live).
 2. Supabase dashboard -> Authentication -> Providers -> Email: on. Disable "Allow new users to sign up".
 3. Authentication -> Users -> Add user: your owner email (auto-confirm).
 4. `insert into app_owners(email) values ('<owner email>');`
@@ -28,8 +28,11 @@ Until `20261112_webapp_v1.sql` is applied and your email is in `app_owners`, the
 ## Voice
 Browser-only: Web Speech API for speaking to Jarvis, speechSynthesis for replies. Works in Safari/iOS; the screen must be open. No cost.
 
-## Push notifications (next step, not built)
-iOS supports web push only for apps installed to the Home Screen (iOS 16.4+). Plan: service worker `push` handler + `push_subscriptions` table + VAPID keys; Jarvis sends only owner-decision messages (the same rule as Telegram). Free (no third-party service). Until then Telegram remains the alert channel.
+## Push notifications (built, needs keys at apply time)
+- Code is in: service worker `push` handler, Home > Notifications > "Turn on notifications", `hq_push.py` (sent right after each Telegram delivery; fails silent), migration `20261112_push_v1.sql`.
+- iPhone needs iOS 16.4+, the app added to the Home Screen and opened from the icon, then tap the button (iOS only asks on a tap).
+- At apply time: generate a VAPID key pair, store it in `push_config` (the private key goes only into that locked table, never into git or env), set the contact address, apply push_v1 after webapp_v1. `pywebpush` is added to requirements.txt.
+- Telegram stays the reliable channel; push is the faster extra.
 
 ## Incoming calls (investigation note)
 - A web app cannot ring the phone like a call; iOS PWAs cannot use CallKit.

@@ -113,13 +113,33 @@ function rHome(s) {
       h('div', { class: 'dim' }, (c.mode ? String(c.mode).toUpperCase() + ' · ' : '') + 'AI today ' + usd(s.spend_today_cents) + ' of ' + usd((s.state || {}).cap_cents))),
     h('h2', {}, 'Needs you'), ...(need.length ? need : [h('p', { class: 'dim' }, 'Nothing waiting on you.')]),
     h('h2', {}, 'Ventures'), ...(s.ventures || []).map((x) => h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('h3', {}, x.name), h('span', { class: 'tag' }, (x.status === 'proposed' ? 'awaiting approval' : ((s.venture_stage || {})[x.slug] || '')) + ' · ' + x.agents + ' agents · ' + x.leads + ' leads')),
+      h('div', { class: 'row' }, h('h3', {}, x.name), h('span', { class: 'tag' }, [x.status === 'proposed' ? 'awaiting approval' : (s.venture_stage || {})[x.slug], x.agents + ' agents', x.leads + ' leads'].filter(Boolean).join(' · '))),
       h('div', { class: 'dim' }, 'In ' + usd(x.in_cents) + ' · Out ' + usd(x.out_cents) + ' · Expected ' + usd(x.expected_cents) + ' (not cash) · AI 7d ' + usd(x.ai_cents_7d)))),
     h('h2', {}, 'Pipeline'), h('div', { class: 'card dim' },
       `Tasks: ${s.tasks.todo} todo, ${s.tasks.doing} doing, ${s.tasks.blocked} blocked, ${s.tasks.done_24h} done today. Leads: ${s.leads.total} (${s.leads.due} due). Drafts waiting: ${(s.drafts || []).length}.`),
     h('h2', {}, 'Systems'), ...(s.systems || []).map((x) => h('div', { class: 'row dim' }, h('span', {}, x.name), h('span', {}, x.status || '?'))),
+    h('h2', {}, 'Notifications'), pushCard(),
     h('h2', {}, 'Emergency'), h('div', { class: 'btns' },
       h('button', { class: s.state.kill_switch ? 'ok' : 'bad', onclick: () => { if (confirm(s.state.kill_switch ? 'Turn the kill switch off?' : 'Stop everything now?')) rpc('app_set_kill', { p_on: !s.state.kill_switch }).then(refresh).catch((e) => note(e.message)); } }, s.state.kill_switch ? 'Kill switch OFF: resume' : 'KILL SWITCH')));
+}
+// ---------- web push (installed app, iOS 16.4+; the key and subscription never leave the owner-checked functions) ----------
+const b64 = (t) => { const p = '='.repeat((4 - t.length % 4) % 4); const r = atob((t + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from([...r].map((c) => c.charCodeAt(0))); };
+function pushCard() {
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const ok = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const msg = h('div', { class: 'dim' }, !ok ? (standalone ? 'This browser does not support push.' : 'On iPhone: Share, Add to Home Screen, open from the icon, then turn this on.')
+    : Notification.permission === 'granted' ? 'On. Decisions and emergencies reach you here and on Telegram.' : Notification.permission === 'denied' ? 'Blocked in system settings.' : 'Off.');
+  const btn = ok && Notification.permission !== 'granted' && Notification.permission !== 'denied' ? h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: async () => {
+    try {
+      const perm = await Notification.requestPermission(); if (perm !== 'granted') { msg.textContent = 'Permission not given.'; return; }
+      const key = await rpc('app_push_public_key'); if (!key) { msg.textContent = 'Push is not set up on the server yet.'; return; }
+      const reg = await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(key) });
+      await rpc('app_save_push', { p_sub: sub.toJSON(), p_ua: navigator.userAgent });
+      msg.textContent = 'On. Decisions and emergencies reach you here and on Telegram.';
+    } catch (e) { msg.textContent = 'Could not turn on: ' + String(e.message || e); }
+  } }, 'Turn on notifications')) : null;
+  return h('div', { class: 'card' }, msg, btn);
 }
 function rMissions(s) {
   const v = $('v-missions');

@@ -112,6 +112,11 @@ async def deliver_owner_messages(context) -> None:
             else:
                 markup = decision_buttons(msg["id"]) if msg.get("needs_decision") else None
             await context.bot.send_message(int(JARVIS_OWNER_ID), format_owner_message(msg), reply_markup=markup)
+            try:
+                import hq_push
+                await hq_push.notify(msg)
+            except Exception:  # push is a bonus channel; Telegram already delivered
+                pass
         except Exception as e:  # leave unsent so it is retried next minute
             logger.warning("HQ: Telegram send failed for %s: %s", msg.get("id"), e)
             return

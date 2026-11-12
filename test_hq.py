@@ -33,8 +33,11 @@ class HQBridge(unittest.TestCase):
             calls.append((method, path, body))
             return rows if method == "GET" else None
 
-        with mock.patch.object(hq, "_request", side_effect=fake), mock.patch.object(hq, "in_quiet_hours", return_value=False):
+        import hq_push
+        with mock.patch.object(hq, "_request", side_effect=fake), mock.patch.object(hq, "in_quiet_hours", return_value=False), \
+                mock.patch.object(hq_push, "notify", mock.AsyncMock()) as push:
             asyncio.run(hq.deliver_owner_messages(Ctx(bot)))
+        self.pushed = push.await_count
         return calls
 
     def test_sends_to_owner_only_then_marks_sent(self):
@@ -44,6 +47,7 @@ class HQBridge(unittest.TestCase):
         self.assertEqual(bot.sent, [(12345, "Money\n\nProfit: $0")])
         self.assertEqual(calls[1][0], "PATCH")
         self.assertIn("sent_at", calls[1][2])
+        self.assertEqual(self.pushed, 1)  # push goes out after Telegram, once per delivered message
 
     def test_emergency_on_unwired_call_channel_is_flagged(self):
         text = hq.format_owner_message({"kind": "emergency", "channel": "call", "body": "Smoke alarm"})
