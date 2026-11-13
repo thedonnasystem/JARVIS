@@ -353,6 +353,51 @@ def rebuild_constraints(cur, schema: dict, rep: dict):
     rep["constraint_warnings"] = warnings
 
 
+def _acl_grants(entries) -> list:
+    """['role=UC/grantor', ...] -> ['role:USAGE', 'role:CREATE'] (PUBLIC for an empty role; the owner's own entry is implicit and skipped)."""
+    out = []
+    for e in entries or []:
+        who, _, rest = str(e).partition("=")
+        privs = rest.split("/")[0]
+        if who == "pg_database_owner":
+            continue
+        for ch, word in (("U", "USAGE"), ("C", "CREATE")):
+            if ch in privs:
+                out.append(f"{who or 'PUBLIC'}:{word}")
+    return out
+
+
+def replay_schema_acl_and_comments(cur, schema: dict, rep: dict) -> None:
+    missing = []
+    cur.execute("REVOKE ALL ON SCHEMA public FROM PUBLIC")     # a fresh database starts with PUBLIC USAGE; the snapshot decides, not the template
+    for g in sorted(set(_acl_grants(schema.get("schema_acl")))):
+        who, word = g.split(":")
+        target = "PUBLIC" if who == "PUBLIC" else qi(who)
+        if _try(cur, f"GRANT {word} ON SCHEMA public TO {target}"):
+            missing.append(who)
+    cur.execute("select current_setting('server_version_num')")
+    for c in schema.get("comments") or []:
+        text = c.get("text")
+        if text is None:
+            continue
+        if c["kind"] == "column":
+            obj = f'COLUMN public.{qi(c["name"])}.{qi(c["column"])}'
+        elif c["kind"] == "function":
+            if not re.fullmatch(r"[A-Za-z0-9_\"., ()\[\]]+", c["name"]):
+                continue
+            obj = f'FUNCTION {c["name"]}'
+        else:
+            word = {"table": "TABLE", "view": "VIEW", "matview": "MATERIALIZED VIEW", "sequence": "SEQUENCE"}[c["kind"]]
+            obj = f'{word} public.{qi(c["name"])}'
+        cur.execute("select quote_literal(%s)", (text,))
+        _try(cur, f"COMMENT ON {obj} IS {cur.fetchone()[0]}")
+    uns = schema.get("unsupported") or {}
+    warn = {k: v for k, v in (("column_acls", uns.get("column_acls")), ("nondefault_owners", uns.get("nondefault_owners"))) if v}
+    if warn or missing:
+        rep.setdefault("not_restored", {}).update({**{k: f"{v} present in the source and NOT replayed" for k, v in warn.items()},
+                                                   **({"schema_acl_roles_missing": sorted(set(missing))} if missing else {})})
+
+
 def rebuild_rest(cur, schema: dict, rep: dict):
     for t in schema.get("triggers", []):
         cur.execute(t["def"])
@@ -468,7 +513,7 @@ def verify_rows(cur, data: dict, rep: dict) -> bool:
     return ok
 
 
-COMPARE = ("tables", "constraints", "indexes", "triggers", "functions", "views", "policies", "table_grants", "sequences", "enums", "domains")
+COMPARE = ("tables", "constraints", "indexes", "triggers", "functions", "views", "policies", "table_grants", "sequences", "enums", "domains", "comments", "schema_acl")
 
 
 def _norm(cat, items):
@@ -476,6 +521,8 @@ def _norm(cat, items):
         return sorted((f["sig"], f["md5"], tuple(sorted(f.get("acl", [])))) for f in items)
     if cat == "sequences":
         return sorted((s["name"], s["type"], s["start"], s["increment"], s["min"], s["max"], s["cycle"]) for s in items)
+    if cat == "schema_acl":
+        return sorted(_acl_grants(items))
     if cat == "tables":
         return sorted(json.dumps(t, sort_keys=True) for t in items)
     return sorted(json.dumps(i, sort_keys=True) for i in items)
@@ -571,7 +618,7 @@ def main():
             cur.execute("set time zone 'UTC'")
             skipped = rebuild_schema(cur, schema, rep); rep["steps"]["schema_rebuilt"] = "PASS"
             load_data(cur, schema, data, rep); rep["steps"]["data_loaded"] = "PASS"
-            rebuild_constraints(cur, schema, rep); rebuild_rest(cur, schema, rep)
+            rebuild_constraints(cur, schema, rep); rebuild_rest(cur, schema, rep); replay_schema_acl_and_comments(cur, schema, rep)
             rep["steps"]["constraints_indexes_triggers_views_policies_grants"] = "PASS" if not rep["views_failed"] else "FAIL"
             rep.setdefault("not_restored", {}).update(dict(skipped))
             conn.commit()

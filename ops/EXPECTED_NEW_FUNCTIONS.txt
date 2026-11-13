@@ -2,6 +2,7 @@
 _queue_alert(text,interval,text)
 audit_task_bulk_delete()
 backup_schema()
+backup_snapshot(text[])
 audit_task_bulk_update()
 enforce_mission_plan_limit()
 enforce_mission_step_limit()

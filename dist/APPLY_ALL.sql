@@ -2648,7 +2648,21 @@ base := jsonb_build_object(
                    where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm', 'S') and c.relacl is not null),
   'default_privileges', (select coalesce(jsonb_agg(jsonb_build_object('role', pg_get_userbyid(d.defaclrole), 'objtype', d.defaclobjtype::text, 'acl', d.defaclacl::text) order by d.defaclobjtype::text, d.defaclacl::text), '[]'::jsonb)
                          from pg_default_acl d where d.defaclnamespace = 'public'::regnamespace),
+  'schema_acl', (select coalesce(to_jsonb(n.nspacl::text[]), '[]'::jsonb) from pg_namespace n where n.nspname = 'public'),
+  'comments', (select coalesce(jsonb_agg(x order by x->>'kind', x->>'name', x->>'column'), '[]'::jsonb) from (
+      select jsonb_build_object('kind', case c.relkind when 'v' then 'view' when 'm' then 'matview' when 'S' then 'sequence' else 'table' end, 'name', c.relname, 'column', null, 'text', d.description) x
+        from pg_description d join pg_class c on c.oid = d.objoid and d.classoid = 'pg_class'::regclass and d.objsubid = 0 where c.relnamespace = 'public'::regnamespace
+      union all
+      select jsonb_build_object('kind', 'column', 'name', c.relname, 'column', a.attname, 'text', d.description)
+        from pg_description d join pg_class c on c.oid = d.objoid and d.classoid = 'pg_class'::regclass and d.objsubid > 0
+        join pg_attribute a on a.attrelid = c.oid and a.attnum = d.objsubid where c.relnamespace = 'public'::regnamespace
+      union all
+      select jsonb_build_object('kind', 'function', 'name', p.oid::regprocedure::text, 'column', null, 'text', d.description)
+        from pg_description d join pg_proc p on p.oid = d.objoid and d.classoid = 'pg_proc'::regclass where p.pronamespace = 'public'::regnamespace) q),
   'unsupported', jsonb_build_object(
+      'column_acls', (select count(*) from pg_attribute a join pg_class c on c.oid = a.attrelid where c.relnamespace = 'public'::regnamespace and a.attacl is not null),
+      'nondefault_owners', (select (select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm', 'S') and pg_get_userbyid(c.relowner) <> 'postgres')
+                                 + (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace and pg_get_userbyid(p.proowner) <> 'postgres')),
       'composite_types', (select count(*) from pg_type t join pg_class c on c.oid = t.typrelid where t.typnamespace = 'public'::regnamespace and t.typtype = 'c' and c.relkind = 'c'),
       'rules', (select count(*) from pg_rewrite w join pg_class c on c.oid = w.ev_class where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'),
       'inherited_tables', (select count(*) from pg_inherits i join pg_class c on c.oid = i.inhrelid where c.relnamespace = 'public'::regnamespace)));
@@ -2663,6 +2677,25 @@ return base || jsonb_build_object('migration_ledger', ledger, 'cron', jobs);
 end $$;
 revoke all on function public.backup_schema() from public, anon, authenticated;
 grant execute on function public.backup_schema() to service_role;
+
+-- One-statement consistent snapshot of every table (except the secret-bearing ones) plus the schema description.
+-- A single SQL statement sees one database snapshot, and STABLE functions called from it use that same snapshot, so rows of all tables and the
+-- schema are mutually consistent (no half-finished transaction can show in one table and not another). Read-only. Service role only.
+create or replace function public.backup_snapshot(skip text[] default array['push_config', 'push_subscriptions']) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog', 'public' set statement_timeout to '60s' as $$
+declare q text; res jsonb;
+begin
+  -- UNION ALL of per-table subselects (jsonb_build_object cannot take more than 100 arguments, i.e. about 49 tables)
+  select 'select jsonb_build_object(''data'', (select coalesce(jsonb_object_agg(k, v), ''{}''::jsonb) from (' ||
+         string_agg(format('select %L::text as k, (select coalesce(jsonb_agg(to_jsonb(t)), ''[]''::jsonb) from public.%I t) as v', c.relname, c.relname), ' union all ' order by c.relname) ||
+         ') s), ''schema'', public.backup_schema(), ''method'', ''single statement snapshot'')'
+    into q
+    from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p') and c.relname <> all (skip);
+  execute q into res;
+  return res;
+end $$;
+revoke all on function public.backup_snapshot(text[]) from public, anon, authenticated;
+grant execute on function public.backup_snapshot(text[]) to service_role;
 
 -- ===== 20261112_lockdown_v1.sql =====
 -- Security lockdown (found on first live apply): functions made with plain CREATE FUNCTION are executable by anon/authenticated by default.

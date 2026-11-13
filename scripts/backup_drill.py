@@ -60,7 +60,12 @@ def seed(conn):
                    create table public.drill_child (id serial primary key, ref_id int references public.drill_ref (id));
                    create view public.drill_ref_v with (security_invoker = true) as select id, label from public.drill_ref;
                    insert into public.drill_ref (id, label) select g, 'ref ' || g from generate_series(1, 25) g;
-                   insert into public.drill_child (ref_id) select g from generate_series(1, 25) g;""")
+                   insert into public.drill_child (ref_id) select g from generate_series(1, 25) g;
+                   comment on table public.drill_ref is 'Reference table: it''s "quoted" 美味';
+                   comment on column public.drill_ref.label is 'human label';
+                   comment on view public.drill_ref_v is 'view comment';
+                   comment on function public.capital_mode() is 'returns the capital mode';
+                   grant usage on schema public to anon, authenticated, service_role;""")
     conn.commit()
 
 
@@ -138,6 +143,41 @@ def main():
             dcur.execute("select option_value from pg_options_to_table((select reloptions from pg_class where relname = 'drill_ref_v'))")
             opts = dcur.fetchall()
             dc.rollback()
+        with psycopg2.connect(DST) as dc, dc.cursor() as dcur:
+            dcur.execute("select obj_description('public.drill_ref'::regclass), col_description('public.drill_ref'::regclass, 2), obj_description('public.drill_ref_v'::regclass), obj_description('public.capital_mode()'::regprocedure)")
+            cm = dcur.fetchone()
+            dcur.execute("select has_schema_privilege('anon','public','USAGE'), has_schema_privilege('service_role','public','USAGE')")
+            sp = dcur.fetchone()
+        check("14 comments (table, column, view, function) and schema USAGE grants are restored", cm == ("Reference table: it's \"quoted\" 美味", "human label", "view comment", "returns the capital mode") and sp == (True, True), f"{cm} {sp}")
+        import io as _io, tarfile as _tf
+        mf = json.loads(_tf.open(fileobj=_io.BytesIO(Fernet(key.encode()).decrypt(enc)), mode="r:gz").extractfile("manifest.json").read())
+        check("2b the backup used the single-statement database snapshot (consistent=True)", mf["consistency"]["consistent"] and "single SQL statement" in mf["consistency"]["method"], json.dumps(mf["consistency"]))
+        # live-concurrency proof: a writer commits paired rows into two tables (one transaction each) while snapshots are taken; every snapshot must show matching pairs
+        import threading, time
+        ddl = psycopg2.connect(SRC); ddl.autocommit = True
+        ddl.cursor().execute("create table if not exists public.drill_pair_a (id int primary key); create table if not exists public.drill_pair_b (id int primary key); truncate public.drill_pair_a, public.drill_pair_b")
+        stop = threading.Event(); wrote = {"n": 0}
+        def writer():
+            w = psycopg2.connect(SRC)
+            i = 0
+            while not stop.is_set():
+                i += 1
+                with w.cursor() as wc:
+                    wc.execute("insert into public.drill_pair_a values (%s)", (i,)); wc.execute("insert into public.drill_pair_b values (%s)", (i,))
+                w.commit(); wrote["n"] = i
+            w.close()
+        th = threading.Thread(target=writer); th.start()
+        bad, taken = 0, 0
+        try:
+            time.sleep(0.3)
+            for _ in range(25):
+                snap = adapter("POST", "/rest/v1/rpc/backup_snapshot", {}, exact=True)
+                a = {r["id"] for r in snap["data"]["drill_pair_a"]}; b = {r["id"] for r in snap["data"]["drill_pair_b"]}
+                taken += 1; bad += (a != b)
+        finally:
+            stop.set(); th.join()
+        ddl.cursor().execute("drop table public.drill_pair_a, public.drill_pair_b"); ddl.close()
+        check("2c under concurrent two-table transactions, every snapshot is internally consistent", bad == 0 and wrote["n"] > 50, f"{taken} snapshots while {wrote['n']} paired transactions committed; inconsistent snapshots: {bad}")
         check("13 restored sequences continue after the data (next serial id does not collide) and view keeps security_invoker", nid > 25 and ("true",) in opts, f"next id {nid}, view options {opts}")
         # ---- negative controls: the checks must be able to fail
         bad = bytearray(enc); bad[len(bad) // 2] ^= 1

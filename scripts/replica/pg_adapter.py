@@ -129,6 +129,11 @@ class PgAdapter:
                 args = body or {}
                 names = ", ".join(f'"{k}" := %s' for k in args)
                 vals = [json.dumps(v) if isinstance(v, (dict, list)) else v for v in args.values()]
+                if exact:      # keep numeric scale: take the JSON text as the database produced it and parse numbers as Decimal (what PostgREST + hq._request(exact=True) does)
+                    with self.conn.cursor() as cur:
+                        cur.execute(f"select public.{name}({names})::text" if names else f"select public.{name}()::text", vals)
+                        txt = cur.fetchone()[0]
+                    return json.loads(txt, parse_float=decimal.Decimal) if txt is not None else None
                 rows = self.sql(f"select * from public.{name}({names})" if names else f"select * from public.{name}()", vals)
                 if not rows:
                     return None

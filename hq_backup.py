@@ -149,23 +149,54 @@ def _read_consistent(names, schema) -> tuple[dict, dict]:
     return second, {"consistent": False, "method": "two identical full reads", "attempts": CONSISTENCY_ATTEMPTS, "changing_tables": moved[:10]}
 
 
+def _encode_rows(rows: list) -> tuple[bytes, int]:
+    lines = sorted(row_json(r) for r in rows)          # deterministic order: the same data always gives the same file hash
+    return "\n".join(lines).encode(), len(rows)
+
+
+def _try_snapshot() -> tuple[dict | None, str]:
+    """One database call that returns every table AND the schema from a single SQL statement, so they are mutually consistent.
+    Returns (snapshot, "") or (None, reason). Any problem falls back to the two-read method rather than failing the backup."""
+    try:
+        snap = hq._request("POST", "/rest/v1/rpc/backup_snapshot", {}, timeout=180, exact=True)
+    except urllib.error.HTTPError as e:
+        return None, ("backup_snapshot() not installed" if e.code == 404 else f"backup_snapshot() failed (HTTP {e.code})")
+    except Exception as e:
+        return None, f"backup_snapshot() failed ({type(e).__name__})"
+    if not isinstance(snap, dict) or not isinstance(snap.get("data"), dict) or not isinstance(snap.get("schema"), dict) or not snap["schema"].get("tables"):
+        return None, "backup_snapshot() returned an unexpected result"
+    want = sorted(t["name"] for t in snap["schema"]["tables"] if t["name"] not in SKIP)
+    if sorted(snap["data"]) != want or SKIP & set(snap["data"]):
+        return None, "backup_snapshot() table list does not match its own schema"
+    return snap, ""
+
+
 def dump() -> tuple[bytes, dict]:
     """Returns (plain tar.gz bytes, manifest). Raises if any table cannot be read completely."""
-    schema = get_schema()
-    names = [t["name"] for t in schema["tables"]] if schema else list(TABLES)
-    names = [t for t in names if t not in SKIP]
     manifest = {"format": FORMAT, "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "engine_build": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("GIT_COMMIT") or "unknown")[:40],
-                "skipped": sorted(SKIP), "tables": {}, "schema": None,
-                "table_list_source": "database" if schema else "built-in list (backup_schema() not installed)"}
-    data_by_table, manifest["consistency"] = _read_consistent(names, schema)
-    if schema:
-        # Read the schema AGAIN after the data: sequence positions must not be older than the rows we saved (a restored sequence behind the
-        # data would hand out ids that already exist). If the table list changed while we were reading, refuse: tomorrow's run starts clean.
-        after = get_schema()
-        if not after or sorted(t["name"] for t in after["tables"]) != sorted(t["name"] for t in schema["tables"]):
-            raise BackupError("tables were added or removed while the backup was being read; will retry later")
-        schema = after
+                "skipped": sorted(SKIP), "tables": {}, "schema": None}
+    snap, why = _try_snapshot()
+    if snap:
+        schema = snap["schema"]
+        data_by_table = {t: _encode_rows(rows) for t, rows in sorted(snap["data"].items())}
+        manifest["table_list_source"] = "database"
+        manifest["consistency"] = {"consistent": True, "method": "single SQL statement snapshot (all tables + schema)", "attempts": 1}
+        names = list(data_by_table)
+    else:
+        schema = get_schema()
+        names = [t["name"] for t in schema["tables"]] if schema else list(TABLES)
+        names = [t for t in names if t not in SKIP]
+        manifest["table_list_source"] = "database" if schema else "built-in list (backup_schema() not installed)"
+        data_by_table, manifest["consistency"] = _read_consistent(names, schema)
+        manifest["consistency"]["snapshot_unavailable"] = why
+        if schema:
+            # Read the schema AGAIN after the data: sequence positions must not be older than the rows we saved (a restored sequence behind the
+            # data would hand out ids that already exist). If the table list changed while we were reading, refuse: tomorrow's run starts clean.
+            after = get_schema()
+            if not after or sorted(t["name"] for t in after["tables"]) != sorted(t["name"] for t in schema["tables"]):
+                raise BackupError("tables were added or removed while the backup was being read; will retry later")
+            schema = after
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for t in names:

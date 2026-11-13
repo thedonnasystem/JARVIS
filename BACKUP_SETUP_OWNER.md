@@ -44,6 +44,5 @@ Do not paste any of the values. Claude will tell you what to type in the Jarvis 
 2. After you separately approve the production deploy and the read-only migration: `/backup now`.
 Note: `/backup check` and `/backup now` only exist after PR #2 is merged and deployed (your separate approval). Until then the check cannot run in production.
 
-## F. For the real restore proof (your choice)
-- Option 1: send Claude key B (keyID + applicationKey) and BACKUP_KEY through the secure channel you choose, Claude runs the restore drill, then you delete key B and rotate BACKUP_KEY.
-- Option 2: you run `ops/restore_backup.py` yourself (commands in BACKUP_RECOVERY.md) and send the report JSON (it contains no secrets).
+## F. The real restore proof (you run one command; nothing secret goes to chat)
+On your computer with Docker installed (and `pip install cryptography psycopg2-binary`): `ops/restore_local.sh --b2-latest --expect-sha256 <the hash /backup showed>`. It asks for BACKUP_KEY and the READ-ONLY B2 key at hidden prompts, restores into a throwaway database, verifies everything, and deletes it. Send Claude only the two output files it writes (restore_report_*.json and restore_fingerprint_*.txt; they contain no secrets) plus the output of `ops/table_fingerprint.sql` run on production, and Claude compares them independently. Do not send keys to Claude, Telegram or any chat.

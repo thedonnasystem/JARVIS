@@ -152,7 +152,8 @@ class Consistency(unittest.TestCase):
     def test_stable_data_is_consistent(self):
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=fake_request):
             _, m = B.dump()
-        self.assertEqual(m["consistency"], {"consistent": True, "method": "two identical full reads", "attempts": 1})
+        self.assertTrue(m["consistency"]["consistent"]); self.assertEqual(m["consistency"]["method"], "two identical full reads")
+        self.assertEqual(m["consistency"]["attempts"], 1); self.assertIn("snapshot_unavailable", m["consistency"])
 
     def test_data_that_settles_is_retried_then_consistent(self):
         req, calls = self._moving(stop_after=2)
@@ -224,6 +225,63 @@ class Preflight(unittest.TestCase):
             self.assertEqual(self.status(res, "valid encryption key"), "fail")
             res = self.check(fake, {**b2_env(fake), "BACKUP_PUT_URL": "b2://0000000000000000aaaa/hq"})
             self.assertEqual(self.status(res, "limited to the backup bucket"), "fail")
+
+
+class Snapshot(unittest.TestCase):
+    """backup_snapshot(): every table + schema from ONE SQL statement (mutually consistent)."""
+    TABLES = ["leads", "ledger", "tasks"]
+
+    def snap_req(self, data=None, fail=None, calls=None):
+        from decimal import Decimal
+        data = data if data is not None else {"leads": [{"id": 2, "n": "b"}, {"id": 1, "n": "a"}], "ledger": [{"id": 1, "amt": Decimal("30.00")}], "tasks": []}
+        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if calls is not None:
+                calls.append(path)
+            if path.endswith("/rpc/backup_snapshot"):
+                if fail:
+                    raise fail
+                return {"data": data, "schema": {**SCHEMA, "tables": [{"name": n} for n in self.TABLES + ["push_config"]], "sequences": [{"name": "s", "last_value": 7}]}, "method": "x"}
+            return fake_request(method, path, body, prefer, exact=exact)
+        return req
+
+    def test_snapshot_is_used_once_with_no_table_reads(self):
+        calls = []
+        with mock.patch("hq._request", side_effect=self.snap_req(calls=calls)):
+            blob, m = B.dump()
+        self.assertEqual([c for c in calls if "/rest/v1/leads" in c or "/rest/v1/backup_schema" in c or c.endswith("rpc/backup_schema")], [])
+        self.assertTrue(m["consistency"]["consistent"]); self.assertIn("single SQL statement", m["consistency"]["method"])
+        self.assertEqual(sorted(m["tables"]), self.TABLES); self.assertTrue(m["complete"])
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+            self.assertIn(b"30.00", tar.extractfile("data/ledger.jsonl").read())            # exact decimal scale survives
+            lines = tar.extractfile("data/leads.jsonl").read().decode().split("\n")
+            self.assertEqual(len(lines), 2); self.assertEqual(lines, sorted(lines))          # deterministic order
+            self.assertEqual(json.loads(tar.extractfile("schema.json").read())["sequences"][0]["last_value"], 7)
+
+    def test_same_data_gives_same_file_hash(self):
+        with mock.patch("hq._request", side_effect=self.snap_req()):
+            _, m1 = B.dump()
+        rev = {"leads": [{"id": 1, "n": "a"}, {"id": 2, "n": "b"}], "ledger": [{"id": 1, "amt": __import__("decimal").Decimal("30.00")}], "tasks": []}
+        with mock.patch("hq._request", side_effect=self.snap_req(data=rev)):
+            _, m2 = B.dump()
+        self.assertEqual({t: v["sha256"] for t, v in m1["tables"].items()}, {t: v["sha256"] for t, v in m2["tables"].items()})
+
+    def test_snapshot_errors_fall_back_to_two_reads_with_a_reason(self):
+        for err, text in ((urllib.error.HTTPError("u", 500, "x", {}, None), "HTTP 500"), (urllib.error.HTTPError("u", 404, "x", {}, None), "not installed"), (TimeoutError(), "TimeoutError")):
+            with mock.patch("hq._request", side_effect=self.snap_req(fail=err)):
+                _, m = B.dump()
+            self.assertIn(text, m["consistency"]["snapshot_unavailable"]); self.assertEqual(m["consistency"]["method"], "two identical full reads")
+
+    def test_inconsistent_snapshot_content_is_rejected_not_trusted(self):
+        bad = {"leads": [], "ledger": []}                                    # missing "tasks"
+        with mock.patch("hq._request", side_effect=self.snap_req(data=bad)):
+            _, m = B.dump()
+        self.assertIn("does not match", m["consistency"]["snapshot_unavailable"])
+        leaked = {"leads": [], "ledger": [], "tasks": [], "push_config": [{"vapid_private": "SECRET"}]}
+        with mock.patch("hq._request", side_effect=self.snap_req(data=leaked)):
+            blob, m = B.dump()
+        self.assertNotIn("push_config", m["tables"])
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+            self.assertFalse([n for n in tar.getnames() if "push" in n])
 
 
 class ReviewFixes(unittest.TestCase):
