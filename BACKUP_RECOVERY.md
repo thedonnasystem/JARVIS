@@ -26,14 +26,14 @@ Every table in `public` except `push_config` and `push_subscriptions` (private k
 Exact click-by-click steps: **BACKUP_SETUP_OWNER.md**. Summary:
 1. Create a free Backblaze B2 account (email only; stop if a card is demanded). Create a **private** bucket.
 2. Add the lifecycle rule above.
-3. Create two application keys scoped to that bucket: **A** listFiles+writeFiles (bot), **B** listFiles+readFiles (restore).
+3. Create two application keys scoped to that bucket: **A** writeFiles only (bot; listFiles is tolerated, anything more makes `/backup check` WARN), **B** listFiles+readFiles (restore; owner-only, never in Railway, never given to any AI).
 4. Generate the encryption key yourself and store it offline in a password manager: `python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"`. Losing it makes every backup unreadable.
 5. In Railway set `BACKUP_KEY`, `BACKUP_PUT_URL=b2://<bucketId>/hq`, `BACKUP_AUTH=<keyIdA>:<appKeyA>`.
 6. Approve: merge/deploy of this branch and the read-only migration `20261113_backup_schema_v1.sql`.
 
 ## Recovery procedure
 Restore only into a **new** Postgres (never over production without a deliberate decision).
-1. Set `BACKUP_KEY` and (for B2) `RESTORE_B2_AUTH=<keyIdB>:<appKeyB>`, `RESTORE_B2_BUCKET_ID`, `RESTORE_B2_PREFIX=hq`.
+1. Set `BACKUP_KEY` and (for B2) `RESTORE_B2_AUTH=<keyIdB>:<appKeyB>`, `RESTORE_B2_BUCKET_ID`, `RESTORE_B2_PREFIX=hq/` (trailing slash; `ops/restore_local.sh` prompts for these locally, so nothing is set in Railway or sent to chat).
 2. `python ops/restore_backup.py --target postgresql://postgres:...@localhost:5432/restore_x --b2-latest [--wipe] [--expect-sha256 <hash from /backup>]` (or set `RESTORE_DB_URL`; `--file` for a local copy, `--list` to list, `--b2-name <file>` for an older backup). Exit codes: 0 clean pass, 1 verification failed, 2 refused/bad input, 3 unexpected error, 4 restored but foreign-key violations exist.
 3. The tool checks sidecar/expected checksum, decrypts, verifies the manifest, rebuilds roles/extensions/types/functions/tables, loads rows, restores constraints, indexes, triggers, views, RLS, policies, grants, then compares every row and the full schema snapshot, and runs smoke tests (capital_mode(); spend gateway refuses with kill switch). Exit 0 only if everything matches.
 4. The tool refuses any target that is not an explicitly local scratch DB: host must be written out (localhost/127.0.0.1/::1/socket dir), name must start `restore_`, `drill_`, `scratch_` or `tmp`, `hostaddr`/`service`/`options` are rejected, `PGHOST`-style environment redirects are cleared, and after connecting it refuses a server that looks like Supabase (auth/storage/realtime schemas or Supabase roles) before dropping anything. **Run it inside a throwaway container or VM**: a backup file is executable SQL (function bodies, defaults), so a backup produced by a compromised bot could run arbitrary SQL as the restoring user. Take `--expect-sha256` from the `/backup` audit entry, not from the bucket. To restore to a new hosted project, run it against a local scratch DB first, then `pg_dump` that into the new project by hand.
@@ -60,6 +60,6 @@ Found 10 defects; all fixed and regression-tested: real Backblaze upload hosts (
 
 ## Go-live proof (required before claiming production recovery works)
 1. After setup and approvals, `/backup now`.
-2. Claude lists the object with key B, checks its size and sha256 against the sidecar and `/backup`.
+2. You (not Claude) confirm in the Backblaze web console that the object and its `.sha256` sidecar exist, and compare size and sha256 with `/backup`. Key B is never given to Claude.
 3. Restore into a throwaway local database with `ops/restore_local.sh` (you run it; the key never goes to chat), then compare the report and fingerprint with production. Claude never needs your keys.
 4. Compare restored row counts and content hashes with live read-only fingerprints. Only if all pass is production recovery proven.
