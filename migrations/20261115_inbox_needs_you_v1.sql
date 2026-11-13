@@ -3,7 +3,7 @@
 --   app_needs_you()         owner-checked wrapper for the PWA (same pattern as app_snapshot -> app_snapshot_data). It is created CLOSED
 --                           (service role only): opening a function to the signed-in owner means adding its name to the lockdown keep-open
 --                           list, which edits an applied migration and needs the owner's sign-off. The ready-to-apply change is
---                           ops/pending_signoff/inbox_open_app_needs_you.patch (see WEBAPP.md). Until then the PWA Inbox falls back to the
+--                           ops/pending_signoff/inbox_open_app_needs_you.txt (see WEBAPP.md). Until then the PWA Inbox falls back to the
 --                           data app_snapshot already returns. NEVER callable by anon.
 -- It only READS. Approving/rejecting/answering still goes through the existing decision path (app_send kind decision/answer/mission
 -- -> hq_commands.apply_decision / apply_answer / hq_missions.set_status). Nothing here changes spend controls, caps, policy or kill switch.

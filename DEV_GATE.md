@@ -13,6 +13,8 @@ CI runs the identical script (`.github/workflows/tests.yml`: job `migrations` = 
 | scripts-tests | tests of the lint and the function manifest | python |
 | lint | `scripts/lint_migrations.py`: order list, naming, lockdown last, explicit REVOKE on new functions, no edits to applied migrations (rules in MIGRATIONS.md) | git history of `origin/overnight-build` (else R6 prints a NOTE and is skipped) |
 | bundle | `dist/APPLY_ALL.sql` matches `migrations/` | - |
+| appcheck | PWA vs database drift (`scripts/check_app_rpcs.py`): RPC names in 6 places, message kinds, offline cache list | - |
+| webjs | PWA smoke tests (`webtests/`, node + jsdom, no browser) | `(optional)` SKIPPED without node/jsdom |
 | replica | every migration twice on a copy of the live schema, e2e, real-engine integration, rollback drill (`scripts/replica/run.sh`) | Postgres at `REPLICA_URL` |
 | manifest | generated function added/changed/removed report equals `ops/EXPECTED_NEW_FUNCTIONS.txt` | the replica step |
 | backup | `scripts/backup_drill.sh` if the branch has it | Postgres, `pip install cryptography psycopg2-binary` |

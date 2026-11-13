@@ -3,7 +3,7 @@
 #
 #   scripts/gate.sh                 run everything; SKIPPED steps are loud and the verdict says so
 #   scripts/gate.sh --strict        any SKIPPED step (except '(optional)' ones, e.g. no backup drill on the branch) is a failure (CI uses this; use it before a deploy)
-#   scripts/gate.sh --only lint,bundle   run only the named steps (unit scripts-tests lint bundle replica manifest backup)
+#   scripts/gate.sh --only lint,bundle   run only the named steps (unit scripts-tests lint bundle appcheck webjs replica manifest backup)
 #
 # Environment
 #   REPLICA_URL   scratch Postgres, e.g. postgresql://postgres:pw@localhost:5432/infra_scratch. THE `public` SCHEMA OF THAT
@@ -33,6 +33,14 @@ run unit "python3 -m unittest discover -q (repo tests)" python3 -m unittest disc
 run scripts-tests "lint + manifest tests (scripts/test_*.py)" python3 -m unittest discover -q -s scripts -p 'test_*.py'
 run lint "migration lint (scripts/lint_migrations.py)" python3 scripts/lint_migrations.py --base "${LINT_BASE:-origin/overnight-build}"
 run bundle "dist/APPLY_ALL.sql matches migrations/ (build_bundle.sh --check)" scripts/build_bundle.sh --check
+run appcheck "PWA vs database drift: RPC names, message kinds, offline cache (scripts/check_app_rpcs.py)" python3 scripts/check_app_rpcs.py
+# OPTIONAL: browser-less PWA smoke tests (node + jsdom, webtests/). Dev-only dependency, never part of the Python runtime. SKIPPED (not failed) without node/jsdom.
+if want webjs; then
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then skip webjs "(optional) node/npm not installed: PWA smoke tests not run"
+  elif [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -lt 20 ]; then skip webjs "(optional) node >= 20 needed for the PWA smoke tests"
+  elif [ ! -d webtests/node_modules/jsdom ] && ! (cd webtests && npm ci --ignore-scripts --no-audit --no-fund >"$logs/webjs-install.log" 2>&1); then skip webjs "(optional) could not install jsdom (offline? see $logs/webjs-install.log)"
+  else run webjs "PWA smoke tests (webtests/: node --test, jsdom, no browser)" bash -c 'cd webtests && node --test'; fi
+fi
 
 # ---- steps that need a scratch Postgres -------------------------------------------------------------------------------
 replica_ok=0; reason=""; reason_fail=0

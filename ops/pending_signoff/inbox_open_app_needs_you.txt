@@ -1,0 +1,24 @@
+OWNER SIGN-OFF NEEDED: open app_needs_you() to the signed-in owner (unified Needs-you inbox in the PWA)
+
+Why this is pending
+  The PWA Inbox tab reads public.app_needs_you(). A function is only callable by the signed-in owner if its name is in the keep-open list of
+  migrations/20261112_lockdown_v1.sql (an already-applied migration; the lockdown re-run would otherwise revoke it). Editing an applied
+  migration and its lint allowlist is a security-allowlist change, so it was NOT done by the engineer. Until then app_needs_you() is created
+  closed (service role only), the Telegram /needs command and the brief work fully (they use needs_you() with the service key), and the
+  PWA Inbox falls back to approvals, questions and blocked missions from app_snapshot.
+
+What it does NOT change: spend controls, caps, kill switch, policy, capital. It only lets the owner-checked read function be called.
+
+The change (then re-run scripts/gate.sh --strict)
+  1. migrations/20261112_lockdown_v1.sql      add 'app_needs_you' to the `proname not in (...)` list (before 'setter_apply').
+  2. ops/verify_live.sql                      same name in BOTH copies of the list.
+  3. ops/preflight_live.sql                   same name in both lists; "13 functions" -> "14", "allowlist_13_state" -> "allowlist_14_state", "12 app_*" -> "13 app_*".
+  4. scripts/replica/e2e.sql                  same name in the lockdown regression list.
+  5. migrations/20261115_inbox_needs_you_v1.sql (not applied anywhere yet), last two lines become
+         revoke all on function public.app_needs_you() from public, anon;
+         grant execute on function public.app_needs_you() to authenticated;
+     (currently: revoke ... from public, anon, authenticated; grant ... to service_role). Then `bash scripts/build_bundle.sh`.
+  6. scripts/lint_migrations.py               MODIFIED_ALLOWLIST gets {"20261112_lockdown_v1.sql": "adds app_needs_you to the keep-open list (unified Needs-you inbox)"}.
+  7. scripts/check_app_rpcs.py                PENDING_SIGNOFF = {}   and   webtests/smoke.test.mjs  PENDING = new Set([]);  delete this file.
+  Verify: python3 scripts/check_app_rpcs.py (0 problems), scripts/gate.sh --strict, then after deploy ops/verify_live.sql
+  (exec_leak must list nothing; anon must stay false for app_needs_you).

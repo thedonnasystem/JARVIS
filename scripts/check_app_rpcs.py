@@ -26,7 +26,7 @@ ROOT = os.path.normpath(os.path.join(HERE, ".."))
 # {function name: patch that opens it}. The app calls these but the lockdown keep-open list (an applied migration) does not name them yet, so
 # they are deliberately closed until the owner signs off the patch. Anything listed here must be called by the app, defined by a migration,
 # closed in the lockdown, and its patch must exist. Remove the entry when the patch is applied.
-PENDING_SIGNOFF = {"app_needs_you": "ops/pending_signoff/inbox_open_app_needs_you.patch"}
+PENDING_SIGNOFF = {"app_needs_you": "ops/pending_signoff/inbox_open_app_needs_you.txt"}
 # Files under webapp/ that are intentionally not in the offline shell.
 SHELL_EXEMPT = ("sw.js", "vendor/README.txt")
 SHELL_EXEMPT_PREFIX = ("apply/",)   # the public setter-signup page: not part of the owner app, must not be cached into it
@@ -190,9 +190,8 @@ def check(root=ROOT):
     for ref in re.findall(r"""(?:href|src)=["']([^"'#?]+)["']""", html):
         if not re.match(r"^(?:[a-z]+:|/)", ref) and ref not in norm and ref.rstrip("/") not in norm:
             errs.append(f"S4 index.html references {ref} but sw.js does not cache it")
-    mf = os.path.join(root, "webapp/manifest.webmanifest")
-    if os.path.exists(mf):
-        for ic in json.loads(open(mf).read()).get("icons", []):
+    if os.path.exists(os.path.join(root, "webapp/manifest.webmanifest")):
+        for ic in json.loads(_read(root, "webapp/manifest.webmanifest")).get("icons", []):
             if ic["src"] not in norm:
                 errs.append(f"S5 the manifest icon {ic['src']} is not in the sw.js SHELL")
     return errs
