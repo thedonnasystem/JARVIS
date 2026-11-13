@@ -96,6 +96,19 @@ def refusal(row: dict, lead: dict | None = None) -> str | None:
     return None
 
 
+def suppressed(address) -> bool:
+    """True when the address is on the do-not-contact list, or when that cannot be checked (fail closed: never send on doubt)."""
+    a = (address or "").strip().lower()
+    if not a:
+        return False
+    try:
+        return bool(_get(f"contact_suppressions?address=eq.{_q(a)}&select=address&limit=1"))
+    except urllib.error.HTTPError as e:
+        return e.code != 404  # table absent = migration not applied, nothing suppressed yet; any other failure blocks
+    except Exception:
+        return True
+
+
 def _post(row: dict) -> bool:
     payload = {"from": os.environ["MAIL_FROM"], "to": [row["to_ref"].strip()], "subject": (row.get("subject") or "Quick question")[:200],
                "text": row["body"]}
@@ -141,6 +154,8 @@ def deliver_approved(limit: int = 5) -> dict:
                 leads = _get(f"leads?id=eq.{_q(row['lead_id'])}&select=do_not_contact&limit=1")
                 lead = leads[0] if leads else None
             if refusal(row, lead):
+                out["skipped"] += 1; continue
+            if suppressed(row.get("to_ref")):  # opt-out is per ADDRESS, across ventures (CASL); fails closed on any error
                 out["skipped"] += 1; continue
             slug = venture_slug(row.get("venture_id"))
             if profile_refusal(row, profile(slug), slug):

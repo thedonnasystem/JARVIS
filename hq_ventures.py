@@ -219,7 +219,20 @@ def kpis_text(slug: str) -> str:
         f"Leads {k['leads']} ({k['emailable_leads']} emailable)",
         f"Drafted {k['drafted']}, approved {k['approved']}, sent {k['sent']}",
         f"Won deals {k['won_deals']} (all stages: {stages})",
-        f"Revenue received {_d(k['revenue_cents'])}"])
+        f"Revenue received {_d(k['revenue_cents'])}"] + _funnel_kpi_lines(k))
+
+
+def _funnel_kpi_lines(k: dict) -> list[str]:
+    """Funnel + reply lines from the extended venture_kpis (20261115). Empty on a database that does not have it yet."""
+    f = k.get("funnel")
+    if not isinstance(f, dict):
+        return []
+    order = ("new", "drafted", "approved_to_send", "sent", "replied", "booked", "won", "lost", "do_not_contact")
+    lines = ["Funnel: " + " > ".join(f"{n} {int(f.get(n) or 0)}" for n in order) + (f" (other {int(f['other'])})" if f.get("other") else "")]
+    rk = k.get("replies_by_kind") or {}
+    lines.append("Replies: " + (", ".join(f"{a} {b}" for a, b in sorted(rk.items())) if rk else "none") +
+                 f"; over the {k.get('reply_sla_hours', 24)}h SLA: {int(k.get('replies_over_sla') or 0)}")
+    return lines
 
 
 def ensure_agents(slug: str, by: str = "owner:telegram") -> str:

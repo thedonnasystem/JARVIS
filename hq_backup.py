@@ -32,7 +32,7 @@ TABLES = ["departments", "deals", "audit_log", "build_requests", "company_profil
           "system_state", "missions", "agent_runs", "action_policy", "action_log", "approval_requests", "capital_policy",
           "spend_reservations", "bank_accounts", "bank_balances", "bank_transactions", "mission_outcomes", "org_changes", "venture_goals",
           "app_owners", "web_messages", "payment_instructions", "venture_assets", "venture_procedures", "account_requests",
-          "setter_terms", "setters", "setter_events", "setter_payouts", "waterfall_policy", "integration_status", "alert_state"]
+          "setter_terms", "setters", "setter_events", "setter_payouts", "waterfall_policy", "integration_status", "alert_state", "contact_suppressions", "lead_replies", "venture_config"]
 ORDER = {"company_profile": "venture_slug", "departments": "slug", "agents": "slug", "app_owners": "email", "dayjob_days": "day",
          "tool_registry": "slug", "systems": "name", "action_policy": "action", "model_prices": "model", "setters": "id",
          "integration_status": "key", "alert_state": "key"}

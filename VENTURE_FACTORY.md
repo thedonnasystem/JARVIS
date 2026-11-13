@@ -36,3 +36,32 @@ Agents created by step 2 for a venture that is already `active` stay paused unti
 - Approval of a draft stamps `outbox.venture_id` with the venture resolved from the draft's lead (one resolver, `_outbox_venture_id`), so the approval gate and `hq_mail.deliver_approved` always agree.
 - `sqltests/*.sql` now run inside `scripts/replica/run.sh` (so CI), including the service_role-only grant checks for the new functions.
 - Known limit unchanged: Donna's legacy address check is a warning, not a block.
+
+## Deals, replies and do-not-contact (migration `20261115_venture_deals_replies_v1.sql`, code `hq_venture_ops.py`)
+
+Nothing here sends anything. Jarvis still only drafts; the owner approves; every state change below is an owner command and the database also refuses a non-owner actor. No spend, cap, kill-switch, dry-run, permission or capital code is touched.
+
+### Replies and opt-outs
+- `/reply <lead#> <interested|not_interested|question|unsubscribe|booked> [note]` (`<lead#>` is the number `/lead` and `/done` show). Stored in `lead_replies`; lead status moves `interested`/`question` -> `replied`, `booked` -> `booked`, `not_interested` -> `lost`. A later reply never demotes a booked or won lead.
+- **`unsubscribe` is immediate and covers every venture.** `mark_do_not_contact` flags every lead sharing the address (case/whitespace-insensitive, any venture), writes the address to `contact_suppressions` (kept even if the lead is deleted), and rejects every open draft (`draft`, `qa_passed`, `approved`) to that address. Already `sent` drafts are left as the record.
+- No lifting path exists: a reply from an opted-out lead is logged but never clears the flag. Re-consent is a deliberate manual step outside this feature.
+- Enforced in four places so no drafting or approval path can bypass it: (1) `leads_suppression_guard` trigger: a suppressed address cannot be inserted clean or un-flagged; (2) `leads_dnc_cascade` trigger: setting `do_not_contact` by ANY path (raw update, old code) cascades to the address; (3) `outbox_dnc_guard` trigger: no insert, `qa_passed`, `approved` or `sent` for a do-not-contact lead or suppressed address (rejecting is always allowed); (4) Python: `_outbox_casl_gate` -> `hq_venture_ops.dnc_problem` refuses approval and releases the tap, `hq_mail.deliver_approved` skips a suppressed address, and the engine's draft insert already filters `do_not_contact=false`. The Python checks fail closed (an unreadable list blocks); only a 404 (migration not yet applied) is tolerated, and the triggers are the backstop.
+- Limit: matching is by email address only. A phone-only lead (the day-job flow) is flagged on that one lead; there is no phone-number suppression.
+
+### Deals (owner-confirmed; revenue only on confirmation)
+- Stage names: the repo only evidences `pitched` (table default) and the won-like names `venture_kpis` already counts (`won`, `closed`, `closed_won`, `paid`). The pipeline is therefore `pitched -> negotiating -> won | lost` (`negotiating -> pitched` allowed). Legacy won-like names are treated as already won and terminal. No CHECK constraint was added, so existing rows are never invalidated.
+- `/deal new <lead#> [value]`, `/deal move <code> pitched|negotiating|lost [note]`, `/deal list [venture]`, `/deal won <code> <amount> received|expected [note]`. `<code>` is the first 8 characters shown by `/deal list`. A deal cannot be opened for a do-not-contact lead.
+- **`/deal won` is the only thing that records revenue.** `confirm_deal_won` requires the owner as actor, a typed positive amount and an explicit `received` or `expected`, then writes exactly one `ledger` revenue row (the same table `/money in` writes), sets the deal and lead to `won`, and audits it. It refuses a second confirmation (no double revenue) and any deal already won/lost. `set_deal_stage` refuses `won`. Nothing infers or defaults an amount; KPIs still count only `received` revenue.
+
+### Funnel and KPIs (read-only)
+- Lead funnel per venture: `new, drafted, approved_to_send, sent, replied, booked, won, lost, do_not_contact`, plus `other` for any status not in that list (so the buckets always add up to the lead total, and nothing is hidden). `contacted` (what `/sent` and `hq_mail` write today) counts as `sent`; the dayjob `closed` status falls in `other`. `do_not_contact` is decided by the flag, so it overrides status.
+- `/venture funnel <venture>` shows the funnel, replies by kind and replies waiting longer than the reply SLA (a lead still `replied` whose last interested/question reply is older than the SLA). `/venture kpis` and `venture_kpis()` now also carry `funnel`, `replies_by_kind`, `replies_over_sla`, `reply_sla_hours` (existing keys unchanged). `/venture deals [venture]` lists deals.
+
+### Per-venture operating config
+- `/venture config <venture>` shows it; `/venture config <venture> offer|cta|sla <value|clear>` and `... brief <text>` set it. Offer, call to action and reply SLA live in `venture_config` (a short value cannot fit `venture_procedures`, which needs 20+ characters); the **prospecting brief stays a `venture_procedures` row** titled `prospecting brief`, because `queue_prospect_task` already reads it.
+- Fail-closed defaults: no offer or call to action means `drafts_ready` is false and **a draft for that venture cannot be approved** (tap released, draft untouched), checked after the CASL profile gate. Donna keeps its legacy flow. The reply SLA defaults to 24h and is shown as `(default)`. Credential-looking values are refused.
+- Honest scope: the draft-writing prompt itself lives in `hq_engine.py` (another owner) and still reads the offer from company knowledge. The config is enforced at approval, not injected into the prompt; wiring it into the prompt is a small follow-up for whoever owns the engine.
+
+### Rollback and checks
+- `ops/rollback_phase1.sql` drops the triggers and new functions and restores the 20261114 `venture_kpis` body (then the generic block drops it). Tables (`contact_suppressions`, `lead_replies`, `venture_config`) are left in place by design; the suppression list is a legal record.
+- `sqltests/venture_deals_replies_check.sql` (run by `scripts/replica/run.sh`) proves anon/authenticated cannot execute any new function and the do-not-contact, owner-only, revenue-only-on-confirm and funnel rules. Python: `test_hq_venture_ops.py`, plus additions to `test_hq_mail.py`.
