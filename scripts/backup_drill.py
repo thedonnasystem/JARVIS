@@ -267,7 +267,7 @@ def main():
             left = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True).stdout
             check("L1 ops/restore_local.sh: isolated restore passes, writes report + fingerprint, leaks no key, destroys its container",
                   p.returncode == 0 and "RESULT: PASS" in p.stdout and len(files) == 2 and key not in blob_all and "fendezy-restore" not in left,
-                  f"exit {p.returncode}; files {sorted(files)}")
+                  f"exit {p.returncode}; files {sorted(files)}" + ("" if p.returncode == 0 else " | " + p.stdout[-900:].replace(chr(10), " / ")))
         else:
             print("SKIP  L1 ops/restore_local.sh (Docker not available here; CI runs it)")
 

@@ -538,8 +538,17 @@ def verify_schema(cur, schema: dict, rep: dict) -> bool:
     cur.execute("select public.backup_schema()")
     now = cur.fetchone()[0]
     ok, out = True, {}
+    def _major(v):
+        try: return int(str(v).split()[0].split(".")[0])
+        except Exception: return None
+    old_src, new_dst = (_major(schema.get("server_version")) or 99) < 17, (_major(now.get("server_version")) or 0) >= 17
     for cat in COMPARE:
-        a, b = _norm(cat, schema.get(cat, [])), _norm(cat, now.get(cat, []))
+        raw_now = now.get(cat, [])
+        if cat == "table_grants" and old_src and new_dst:
+            # PostgreSQL 17 added the MAINTAIN privilege and gives it to a table's owner when ACLs are rebuilt; a backup taken on PG16 cannot contain it.
+            raw_now = [g for g in raw_now if not (g.get("privilege") == "MAINTAIN" and g.get("grantee") == "postgres")]
+            rep.setdefault("notes", []).append("PG16 backup restored on PG17: owner MAINTAIN privilege ignored in the grant comparison")
+        a, b = _norm(cat, schema.get(cat, [])), _norm(cat, raw_now)
         same = a == b
         ok &= same
         entry = {"backup": len(a), "restored": len(b), "identical": same}
