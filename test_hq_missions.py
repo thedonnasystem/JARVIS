@@ -914,6 +914,15 @@ class FormatResilienceTests(MissionEngineBase):
         self.assertEqual(db.missions[mid]["status"], "planned")                 # old path: re-plan with a gap
         self.assertEqual(len([t for t in db.tasks.values() if "(format repair)" in t["title"]]), 1)
 
+    def test_marker_blocks_a_second_repair_of_the_same_task(self):
+        db = FakeDB(); mid = self.new(db)["id"]; self.tick(db)
+        orig = db.finish("Evaluate", "garbage")
+        with mock.patch.object(hq, "_request", db):
+            m = db.missions[mid]
+            self.assertTrue(M._start_repair(m, dict(orig), "eval"))
+            self.assertFalse(M._start_repair(m, dict(orig), "eval"))
+        self.assertEqual(len([t for t in db.tasks.values() if "(format repair)" in t["title"]]), 1)
+
     def test_readable_no_is_not_repaired(self):
         db = FakeDB(); mid = self.new(db)["id"]
         ver = self.to_verifying(db, mid); ver["status"], ver["result"] = "done", VERIFY_NO; self.tick(db)
