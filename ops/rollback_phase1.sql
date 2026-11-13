@@ -129,3 +129,7 @@ drop function if exists public.ensure_venture_agents(text, text);
 drop function if exists public.queue_prospect_task(text);
 drop function if exists public.queue_all_prospect_tasks();
 drop function if exists public.venture_kpis(text);
+
+-- Unified Needs-you inbox (20261115_inbox_needs_you_v1): new functions only, nothing else changed
+drop function if exists public.app_needs_you();
+drop function if exists public.needs_you(integer);
