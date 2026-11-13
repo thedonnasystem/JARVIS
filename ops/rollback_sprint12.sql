@@ -61,4 +61,9 @@ drop function if exists public.venture_kpis(text);
 -- Unified Needs-you inbox (20261115_inbox_needs_you_v1): new functions only, nothing else changed
 drop function if exists public.app_needs_you();
 drop function if exists public.needs_you(integer);
+
+-- Evidence verification v2 (20261116_evidence_sources_v1): snapshots are derived, re-capturable cache data (not a legal record), so they go with the rollback
+drop table if exists public.evidence_sources;
+drop function if exists public.purge_evidence_sources(integer);
+drop function if exists public.evidence_sources_immutable();
 commit;

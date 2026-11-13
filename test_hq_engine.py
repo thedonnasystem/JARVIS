@@ -31,6 +31,13 @@ class Board:
             self.inserts.append((path, body)); return None
 
 
+def snap(url, text, kind="page"):
+    import hq_evidence
+    row = hq_evidence.make_snapshot({"kind": kind, "url": url, "final_url": url, "text": text}, "m1", "t1")
+    row["id"] = "0123456789abcdef0123456789abcdef"
+    return row
+
+
 class T(unittest.TestCase):
     def run_tick(self, board, reply="done"):
         with mock.patch.object(hq, "_request", board), mock.patch.object(E, "_complete", return_value=(reply, 10, 5, 0)):
@@ -140,7 +147,8 @@ class T(unittest.TestCase):
                 "- RECO registration is required to trade in real estate in Ontario | https://www.reco.on.ca/x | high\n"
                 "- too short | https://a.b | high\n"
                 "- No source on this one at all | medium\n")
-        with mock.patch.object(hq, "_request", b):
+        page = ("RECO registration is required to trade in real estate in Ontario. Other text follows here.")
+        with mock.patch.object(hq, "_request", b), mock.patch.object(E, "_snapshots_for", return_value=[snap("https://www.reco.on.ca/x", page)]):
             self.assertEqual(E._store_facts(t, text), 1)
         row = [i[1] for i in b.inserts if "memory" in i[0]][0]
         self.assertEqual((row["kind"], row["confidence"], row["venture_id"]), ("fact", "high", "v1"))
@@ -566,10 +574,12 @@ class MissionEngineTouchpointTests(unittest.TestCase):
         t = {"id": "v1", "assigned_agent": "compliance-qa", "title": "Mission: Verify Start a business", "venture_id": "v9"}
         text = ("VERIFIED: YES\nEVIDENCE: prices confirmed | https://a.example/x\nFACTS:\n"
                 "- Ottawa requires a business licence for door to door selling | https://ottawa.ca/lic | high\n")
-        with mock.patch.object(hq, "_request", b):
+        page = "Ottawa requires a business licence for door to door selling. Fees vary."
+        with mock.patch.object(hq, "_request", b), mock.patch.object(E, "_snapshots_for", return_value=[snap("https://ottawa.ca/lic", page)]):
             self.assertEqual(E._store_facts(t, text), 1)
         row = [i[1] for i in b.inserts if "memory" in i[0]][0]
         self.assertEqual((row["kind"], row["agent"], row["venture_id"]), ("fact", "compliance-qa", "v9"))
+        self.assertEqual(row["confidence"], "medium")   # legal class, one source: capped from high
 
     def test_mission_verifier_facts_not_saved_when_verification_failed(self):
         b = Board()

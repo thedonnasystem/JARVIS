@@ -22,12 +22,14 @@ done by the task board, through the spend gateway, like every other HQ task.
 
 import json
 import logging
+import os
 import re
 import urllib.error
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 import hq
+import hq_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -268,12 +270,19 @@ _SENSITIVE = ("MISSION_VERDICT", "VERIFIED")
 _STRICT_SENSITIVE_RE = re.compile(r"(?i)^[ \t]*[*_`]*(?:MISSION[\s_-]*VERDICT|VERIFIED)[*_`]*[ \t]*:")
 
 
+_RESTRICTIVE_RE = re.compile(r"(?i)^(?:NO|REJECT|DEFER)\b")
+
+
 def canonicalize(text: str) -> str:
     """Rewrite tolerant variants of the labelled lines into the canonical form the strict regexes expect. Unlabelled text
-    is untouched. For the two verdict labels (MISSION_VERDICT, VERIFIED) the loose forms (bullet, numbering, heading, dash
-    separator) are accepted only when that line is the label's only occurrence: a decorated line inside quoted text can
-    then never compete with the real verdict line. JSON is read only when the whole reply is the JSON object, and never
-    when the reply also has labelled lines."""
+    is untouched. For the two verdict labels (MISSION_VERDICT, VERIFIED) the loose forms (bullet, numbering, heading, dash or
+    equals separator) are accepted only when that line is the label's only occurrence, so a decorated line inside quoted text
+    can never compete with the real verdict line. VERIFIED is stricter still (review R3): a decorated YES is never a verdict,
+    even alone. YES counts only in the canonical label form `VERIFIED: YES` (optional bold/emphasis around the label), so
+    "## Verified - yes" copied out of a page cannot complete a mission. A decorated NO still counts when alone (ignoring a NO
+    would be the unsafe direction). MISSION_VERDICT keeps the tolerant forms (a GO only starts a plan under the budget cap;
+    it cannot complete anything). JSON is read only when the whole reply is the JSON object, and never when the reply also
+    has labelled lines."""
     text = text or ""
     counts: dict[str, int] = {}
     for m in _LABEL_LINE_RE.finditer(text):
@@ -283,8 +292,12 @@ def canonicalize(text: str) -> str:
 
     def repl(m: re.Match) -> str:
         for k in _SENSITIVE:
-            if m.group(k) is not None and counts.get(k, 0) > 1 and not _STRICT_SENSITIVE_RE.match(m.group(0)):
-                return m.group(0)
+            if m.group(k) is None or _STRICT_SENSITIVE_RE.match(m.group(0)):
+                continue
+            if counts.get(k, 0) > 1:
+                return m.group(0)  # another label line exists: a decorated one never competes with it
+            if k == "VERIFIED" and not _RESTRICTIVE_RE.match(_clean_value(m.group("val"))):
+                return m.group(0)  # R3: a lone decorated YES is not the canonical label form, so it is not a verdict
         return _canonical_line(m)
 
     body = _LABEL_LINE_RE.sub(repl, text)
@@ -407,12 +420,16 @@ def _has_phrase(norm_text: str, phrase: str) -> bool:
     return f" {_norm_text(phrase)} " in f" {norm_text} "  # whole words only
 
 
-def check_evidence(evidence: list[dict], plan: list[dict], tasks: list[dict]) -> tuple[list[dict], list[str]]:
+def check_evidence(evidence: list[dict], plan: list[dict], tasks: list[dict], snaps: list[dict] | None = None) -> tuple[list[dict], list[str]]:
     """Returns (traceable evidence, reasons for the rest). Corpus = results of this mission's finished non-verification
     tasks (steps, evaluation, re-plan and any research output attached to them); the verifier's own output is never a source.
     Rules per item: every URL in the source must occur in a result AND the claim must be supported within URL_WINDOW chars of
     that occurrence; every quote (3+ words or 12+ chars) must occur verbatim; a source with neither (task record, step N, a
-    step title) needs TEXT_CLAIM_MIN of the claim's words plus all its numbers and names in that result."""
+    step title) needs TEXT_CLAIM_MIN of the claim's words plus all its numbers and names in that result. `snaps` (stored retrieved
+    page text, evidence v2) is an extra corpus: a quote may trace to a snapshot, and a source `S:<id>` with no quote is checked
+    against that snapshot's text. Snapshots only ADD ways to trace; nothing here is relaxed."""
+    snaps = snaps or []
+    snap_norm = [_norm_text(x.get("text") or "") for x in snaps]
     by_id = {t["id"]: t for t in tasks}
     pool = [t for t in tasks if t.get("status") == "done" and (t.get("result") or "").strip()
             and not str(t.get("title", "")).startswith(TITLE_PREFIX + "Verify")]
@@ -454,11 +471,15 @@ def check_evidence(evidence: list[dict], plan: list[dict], tasks: list[dict]) ->
         if why is None:
             sn = _norm_text(scope)
             for q in quotes:
-                if not _has_phrase(sn, q):
+                if not _has_phrase(sn, q) and not any(_has_phrase(t, q) for t in snap_norm):
                     why = f"quoted text not found in the step results: {q[:80]}"
                     break
         if why is None and not urls and not quotes:
-            if not _supported(claim, scope, TEXT_CLAIM_MIN, entities=True):
+            cited = [hq_evidence.resolve_snapshot(i, snaps) for i in hq_evidence.parse_source(source)["ids"]]
+            if cited and all(c is not None for c in cited):
+                if not all(_supported(claim, c.get("text") or "", TEXT_CLAIM_MIN, entities=True) for c in cited):
+                    why = f"claim not supported by the stored text of {source[:40]}"
+            elif not _supported(claim, scope, TEXT_CLAIM_MIN, entities=True):
                 why = f"source '{source[:60]}' does not trace to a step result"
         if why:
             bad.append(f"{claim[:120]} ({why})")
@@ -496,7 +517,13 @@ def evaluation_detail(m: dict, agents: list[str], replan_gaps: list[str] | None 
     )
 
 
-def verification_detail(m: dict, results: list[dict]) -> str:
+def verification_detail(m: dict, results: list[dict], snaps: list[dict] | None = None) -> str:
+    sources = ""
+    if snaps:  # ids and URLs only: the retrieved TEXT never goes into a prompt (the engine compares it in code)
+        lines = "\n".join(f"S:{str(x['id']).replace('-', '')[:8]} {x.get('kind', 'page')} {str(x.get('final_url', ''))[:110]}" for x in snaps[:20])
+        sources = ("\n\nSTORED SOURCES the engine captured while the steps ran (an id is a handle, not proof):\n<<<\n" + lines + "\n>>>\n"
+                   "Cite evidence as `EVIDENCE: <claim> | S:<id> \"<exact words copied from that page>\"`. The engine compares the claim with the "
+                   "stored page text; a number, name or quote that is not in that text downgrades the verdict.")
     body = "\n\n".join(f"STEP {i + 1}: {r['title']}\n{(r.get('result') or '')[:2500]}" for i, r in enumerate(results))
     return (
         "Independently verify whether this mission's objective has actually been achieved. You did not do this work. "
@@ -509,6 +536,7 @@ def verification_detail(m: dict, results: list[dict]) -> str:
         "FACTS: then one line per fact you re-checked and trust, formatted `- <fact> | <source URL> | high|medium|low` "
         "(at most 8; leave the section out if there are none)\n"
         "A plan is not a result. Only answer YES if the success definition is actually met."
+        + sources
     )
 
 
@@ -912,10 +940,47 @@ def _start_verification(m: dict, plan: list[dict], tasks: list[dict]) -> None:
     workers = {s["agent"] for s in plan}
     if auditor in workers:
         auditor = "compliance-qa"  # the verifier must not have done the work
-    _new_task(m, auditor, f"Verify {m['title']}", verification_detail(m, results), priority=1, role="verify")
+    _new_task(m, auditor, f"Verify {m['title']}", verification_detail(m, results, mission_snapshots(m["id"])), priority=1, role="verify")
     cp = dict(m.get("checkpoint") or {})
     cp["verify_pending"] = True
     _set(m, status="verifying", checkpoint=cp, next_action=f"Independent verification ({auditor})")
+
+
+# ---------------------------------------------------------------- evidence v2 (EVIDENCE_VERIFICATION_DESIGN.md)
+SNAPSHOT_COLS = "id,kind,title,url,final_url,host_norm,published_at,content_sha256,text,flags,task_id"
+JUDGE_CALLER = None  # no judge is wired: a deployment that enables one must route it through hq_meter.metered_create (spend gateway)
+
+
+def evidence_mode() -> str:
+    """HQ_EVIDENCE_V2: off | shadow (default: compute and audit, never downgrade) | enforce (downgrade a YES the stored text does not support)."""
+    v = (os.environ.get("HQ_EVIDENCE_V2") or "shadow").strip().lower()
+    return v if v in ("off", "shadow", "enforce") else "shadow"
+
+
+def mission_snapshots(mid: str) -> list[dict]:
+    try:
+        rows = _get(f"evidence_sources?mission_id=eq.{_q(mid)}&order=created_at.asc&limit=60&select={SNAPSHOT_COLS}")
+    except Exception:
+        return []  # unreadable: no snapshots, so material claims are unsupported (fail closed when enforcing)
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _evidence_v2(m: dict, res: dict, snaps: list[dict]) -> dict | None:
+    """Compare the verifier's EVIDENCE lines with the stored page text. Only ever turns a YES into a NO (res["verified"] = False),
+    never the other way, never touches the plan, budget, permissions or memory. Retrieved text is read by deterministic code
+    only; injection-looking content in it is reported in the audit row and the owner message, nothing more."""
+    mode = evidence_mode()
+    if mode == "off":
+        return None
+    judge = JUDGE_CALLER if os.environ.get("HQ_EVIDENCE_JUDGE") == "1" else None
+    out = hq_evidence.verify_evidence(res["evidence"], snaps, judge=judge)
+    _audit("mission_evidence_v2", m["id"], {"mode": mode, "codes": out["codes"], "would_downgrade": out["downgrade"],
+                                            "gaps": out["gaps"], "injection_flags": out["injection_flags"]})
+    if out["downgrade"] and mode == "enforce" and res["verified"]:
+        res["verified"] = False
+        res["gaps"] = (res["gaps"] + out["gaps"])[:8]
+        _audit("mission_evidence_v2_downgraded", m["id"], {"codes": out["codes"]})
+    return out
 
 
 def _handle_verifying(m: dict, tasks: list[dict]) -> None:
@@ -940,18 +1005,25 @@ def _handle_verifying(m: dict, tasks: list[dict]) -> None:
     cp.pop("verify_pending", None)
     if not res["has_verdict"]:
         res["gaps"] = res["gaps"] or ["verifier output had no readable VERIFIED: YES/NO line"]
+    snaps: list[dict] = []
     if res["verified"] and res["evidence"]:
-        kept, bad = check_evidence(res["evidence"], m.get("plan") or [], tasks)
+        snaps = mission_snapshots(m["id"])
+        kept, bad = check_evidence(res["evidence"], m.get("plan") or [], tasks, snaps)
         if bad:  # A4: a YES whose evidence cannot be traced to the mission's own results is NOT-VERIFIED
             _audit("mission_evidence_downgraded", m["id"], {"untraceable": bad[:6]})
             res["verified"] = False
             res["gaps"] = (res["gaps"] + ["evidence not traceable to the step results: " + b for b in bad])[:8]
             res["evidence"] = kept
+    v2 = None
     if res["verified"] and res["evidence"]:
+        v2 = _evidence_v2(m, res, snaps)   # v2 can only downgrade
+    if res["verified"] and res["evidence"]:
+        note = (f" Note: retrieved text contained instruction-like content ({', '.join(v2['injection_flags'])}); it was treated as data only."
+                if v2 and v2["injection_flags"] else "")
         _set(m, status="completed", evidence=res["evidence"], checkpoint=cp, next_action=None,
-             result=f"Verified with {len(res['evidence'])} pieces of evidence.")
+             result=f"Verified with {len(res['evidence'])} pieces of evidence.{note}")
         _tell_owner(f"Mission complete (verified): {m['title']}\n"
-                    + "\n".join(f"- {e['claim']} ({e['source']})" for e in res["evidence"][:5]))
+                    + "\n".join(f"- {e['claim']} ({e['source']})" for e in res["evidence"][:5]) + (f"\n{note.strip()}" if note else ""))
         _audit("mission_completed", m["id"], {"evidence": len(res["evidence"])})
         _write_lesson(m, "completed")
         return
@@ -1212,6 +1284,34 @@ def set_due(prefix: str, arg: str) -> str:
     cp["due_at"] = d.isoformat()
     _patch(f"missions?id=eq.{_q(m['id'])}", {"checkpoint": cp})
     return f"{m['title']}: due {d.strftime('%Y-%m-%d %H:%M')} UTC. I'll tell you once if it runs late."
+
+
+def unstick_recurrence(prefix: str) -> str:
+    """Owner: /mission unstick <id>. Recovery for a recurrence stuck at spawned="claiming" (the tick crashed between claiming the
+    parent and creating the child). Order matters: look for a child FIRST. A child exists -> only the link is repaired (no second
+    successor can be created). No child -> the claim is released (conditional on it still being "claiming") so a later tick may
+    create exactly one. Idempotent: anything other than "claiming" is reported and left alone."""
+    m = _find(prefix)
+    if not m:
+        return "No mission with that id."
+    rec = (_fresh_cp(m["id"]).get("recurrence") or {})
+    if rec.get("spawned") != "claiming":
+        return f"{m['title']}: its recurrence is not stuck (spawned = {rec.get('spawned') or 'not set'}). Nothing changed."
+    kids = _get(f"missions?checkpoint->recurrence->>parent=eq.{_q(m['id'])}&select=id,status&limit=1")
+    cp = _fresh_cp(m["id"])
+    new_rec = dict(cp.get("recurrence") or {})
+    if kids:
+        new_rec["spawned"] = kids[0]["id"]
+        note = f"the next run already exists ({str(kids[0]['id'])[:8]}); I only repaired the link, nothing new was created."
+    else:
+        new_rec.pop("spawned", None)
+        note = "no next run exists, so I released the claim; the next tick starts exactly one (still gated by the kill switch, pause, focus mode and the live-mission cap)."
+    won = hq._request("PATCH", f"/rest/v1/missions?id=eq.{_q(m['id'])}&checkpoint->recurrence->>spawned=eq.claiming",
+                      {"checkpoint": dict(cp, recurrence=new_rec)}, prefer="return=representation")
+    if not won:
+        return f"{m['title']}: it changed while I was looking (another tick or you). Nothing changed; run /mission unstick again if it is still stuck."
+    _audit("mission_recurrence_unstuck", m["id"], {"child": kids[0]["id"] if kids else None})
+    return f"{m['title']}: recurrence unstuck: {note}"
 
 
 def set_recurrence(prefix: str, arg: str, runs: int | None = None) -> str:
