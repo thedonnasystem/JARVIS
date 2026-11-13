@@ -37,6 +37,7 @@ class T(unittest.TestCase):
         with mock.patch.dict(os.environ, ENV), mock.patch.object(M, "live", return_value=True), \
              mock.patch.object(M, "_get", side_effect=get), \
              mock.patch("hq_policy.authorize", return_value=Decision("send_email", decision, "r")), \
+             mock.patch.object(M, "_claim", return_value=True), mock.patch.object(M, "_release"), \
              mock.patch.object(M, "_post", return_value=posted) as post, mock.patch.object(M, "_mark_sent") as mark:
             return M.deliver_approved(), post, mark
 

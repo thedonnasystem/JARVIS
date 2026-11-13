@@ -1096,6 +1096,25 @@ def _gateway_open() -> bool:
     return not (s.get("kill_switch") or s.get("pause_reason") or s.get("focus_mission"))
 
 
+CLAIM_STALE_MINUTES = 15
+
+
+def _heal_stale_claim(r: dict, cp: dict, rec: dict) -> bool:
+    """spawn_recurring claims a parent (spawned='claiming') before it creates the child and releases the claim itself on any error. A hard
+    crash in between leaves the claim behind with no child, and the recurrence would never run again, silently. Every write to the mission
+    stamps updated_at, so a claim whose mission has not been touched for CLAIM_STALE_MINUTES (and still has no child) is released. Unknown
+    age (no updated_at) is never treated as stale. The release is conditional on the claim still being there."""
+    ts = parse_when(r.get("updated_at"))
+    if ts is None or datetime.now(timezone.utc) - ts < timedelta(minutes=CLAIM_STALE_MINUTES):
+        return False
+    rec = {k: v for k, v in rec.items() if k != "spawned"}
+    won = hq._request("PATCH", f"/rest/v1/missions?id=eq.{_q(r['id'])}&checkpoint->recurrence->>spawned=eq.claiming",
+                      {"checkpoint": dict(cp, recurrence=rec)}, prefer="return=representation")
+    if won:
+        _audit("mission_recurrence_claim_released", r["id"], {"stale_minutes": CLAIM_STALE_MINUTES})
+    return bool(won)
+
+
 def spawn_recurring() -> int:
     """Create the next run of a recurring mission. Every condition must hold: the owner turned recurrence on for that
     mission (checkpoint.recurrence.enabled is True, default absent = off), its previous run is `completed` (verified, so
@@ -1104,7 +1123,7 @@ def spawn_recurring() -> int:
     the previous run and starts at `captured`: nothing is bypassed. At most one successor per run (marker + child lookup)."""
     try:
         rows = _get("missions?status=in.(completed)&checkpoint->recurrence->>enabled=eq.true&order=created_at.desc&limit=50"
-                    "&select=id,title,objective,venture_id,budget_cents,max_steps,priority,checkpoint")
+                    "&select=id,title,objective,venture_id,budget_cents,max_steps,priority,checkpoint,updated_at")
     except urllib.error.HTTPError as e:
         if e.code in (400, 404):
             return 0
@@ -1117,7 +1136,11 @@ def spawn_recurring() -> int:
     for r in cands:
         cp = dict(r.get("checkpoint") or {})
         rec = dict(cp["recurrence"])
-        if rec.get("spawned") or _get(f"missions?checkpoint->recurrence->>parent=eq.{_q(r['id'])}&select=id&limit=1"):
+        has_child = bool(_get(f"missions?checkpoint->recurrence->>parent=eq.{_q(r['id'])}&select=id&limit=1"))
+        if rec.get("spawned") == "claiming" and not has_child:
+            _heal_stale_claim(r, cp, rec)   # a crash between the claim and the child would otherwise stop this recurrence for good
+            continue
+        if rec.get("spawned") or has_child:
             continue
         days = max(RECUR_MIN_DAYS, min(int(rec.get("every_days") or 7), RECUR_MAX_DAYS))
         if int(rec.get("runs_left") or 0) <= 0:

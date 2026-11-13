@@ -1388,6 +1388,46 @@ class RecurrenceClaimTests(DueAndRecurrenceTests):
         self.tick(db, 2)
         self.assertEqual(self.others(db, mid), [])
 
+    # ---- audit hardening (AUDIT_PATHS.md F14): a crash between the claim and the child must not stop a recurrence for good
+    def crashed_claim(self, db, minutes_ago):
+        mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 3, "next_run_at": self.past(), "spawned": "claiming"})
+        db.missions[mid]["updated_at"] = (M.datetime.now(M.timezone.utc) - M.timedelta(minutes=minutes_ago)).isoformat()
+        return mid
+
+    def test_stale_claim_without_a_child_is_released_and_the_run_happens(self):
+        db = FakeDB(); mid = self.crashed_claim(db, M.CLAIM_STALE_MINUTES + 5)
+        self.tick(db)                                                       # releases the dead claim
+        self.assertNotIn("spawned", db.missions[mid]["checkpoint"]["recurrence"])
+        self.assertTrue(any(a.get("action") == "mission_recurrence_claim_released" for a in db.audit))
+        self.tick(db)                                                       # and the next tick spawns exactly once
+        self.assertEqual(len(self.others(db, mid)), 1)
+        self.tick(db, 3)
+        self.assertEqual(len(self.others(db, mid)), 1)
+
+    def test_a_fresh_claim_or_unknown_age_is_never_released(self):
+        db = FakeDB(); mid = self.crashed_claim(db, 1)
+        self.tick(db, 3)
+        self.assertEqual(db.missions[mid]["checkpoint"]["recurrence"]["spawned"], "claiming"); self.assertEqual(self.others(db, mid), [])
+        db2 = FakeDB(); mid2 = self.completed(db2, {"enabled": True, "every_days": 7, "runs_left": 3, "next_run_at": self.past(), "spawned": "claiming"})
+        self.tick(db2, 3)                                                   # no updated_at at all: age unknown, fail safe (no duplicate)
+        self.assertEqual(db2.missions[mid2]["checkpoint"]["recurrence"]["spawned"], "claiming"); self.assertEqual(self.others(db2, mid2), [])
+
+    def test_stale_claim_with_a_child_already_made_is_left_alone(self):
+        db = FakeDB(); mid = self.crashed_claim(db, M.CLAIM_STALE_MINUTES + 5)
+        kid = self.new(db, objective="Child run of the recurring mission here"); db.missions[kid["id"]]["checkpoint"] = {"recurrence": {"enabled": True, "parent": mid}}
+        self.tick(db, 3)
+        self.assertEqual(db.missions[mid]["checkpoint"]["recurrence"]["spawned"], "claiming")
+        self.assertEqual(len([m for m in db.missions.values() if (m.get("checkpoint") or {}).get("recurrence", {}).get("parent") == mid]), 1)
+
+    def test_recurrence_stops_when_runs_are_used_up_and_never_exceeds_the_interval_ceiling(self):
+        db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 0, "next_run_at": self.past()})
+        self.tick(db, 3)
+        self.assertEqual(self.others(db, mid), []); self.assertTrue(db.missions[mid]["checkpoint"]["recurrence"]["ended"])
+        db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 100000, "runs_left": 2})
+        self.tick(db)
+        due = M.parse_when(db.missions[mid]["checkpoint"]["recurrence"]["next_run_at"])
+        self.assertLessEqual(due, M.datetime.now(M.timezone.utc) + M.timedelta(days=M.RECUR_MAX_DAYS, minutes=1))
+
     def test_claim_is_released_when_the_child_cannot_be_created(self):
         db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 3, "next_run_at": self.past()})
         with mock.patch.object(M, "create_mission", return_value={"error": "cap"}):
