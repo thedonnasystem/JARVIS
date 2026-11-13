@@ -180,11 +180,15 @@ def _flat(x) -> str:
 
 
 def _json_candidates(text: str):
-    for m in re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", text or "", re.S | re.I):
+    """Only a reply that IS a JSON object (optionally as its single fenced code block) counts. JSON embedded in prose, such as
+    text quoted from a fetched page, is never read."""
+    t = (text or "").strip()
+    fences = re.findall(r"```", t)
+    m = re.fullmatch(r"```(?:json)?\s*(\{.*\})\s*```", t, re.S | re.I)
+    if m and len(fences) == 2:
         yield m.group(1)
-    a, b = (text or "").find("{"), (text or "").rfind("}")
-    if 0 <= a < b:
-        yield text[a:b + 1]
+    elif t.startswith("{") and t.endswith("}"):
+        yield t
 
 
 def _load_json_obj(text: str) -> dict | None:
@@ -260,12 +264,31 @@ def _json_to_labels(text: str) -> str:
     return "\n".join(out)
 
 
+_SENSITIVE = ("MISSION_VERDICT", "VERIFIED")
+_STRICT_SENSITIVE_RE = re.compile(r"(?i)^[ \t]*[*_`]*(?:MISSION[\s_-]*VERDICT|VERIFIED)[*_`]*[ \t]*:")
+
+
 def canonicalize(text: str) -> str:
     """Rewrite tolerant variants of the labelled lines into the canonical form the strict regexes expect. Unlabelled text
-    is untouched; JSON-carried fields are appended after the original so a well-formed original always wins."""
+    is untouched. For the two verdict labels (MISSION_VERDICT, VERIFIED) the loose forms (bullet, numbering, heading, dash
+    separator) are accepted only when that line is the label's only occurrence: a decorated line inside quoted text can
+    then never compete with the real verdict line. JSON is read only when the whole reply is the JSON object, and never
+    when the reply also has labelled lines."""
     text = text or ""
-    body = _LABEL_LINE_RE.sub(_canonical_line, text)
-    extra = _json_to_labels(text)
+    counts: dict[str, int] = {}
+    for m in _LABEL_LINE_RE.finditer(text):
+        for k in _SENSITIVE:
+            if m.group(k) is not None:
+                counts[k] = counts.get(k, 0) + 1
+
+    def repl(m: re.Match) -> str:
+        for k in _SENSITIVE:
+            if m.group(k) is not None and counts.get(k, 0) > 1 and not _STRICT_SENSITIVE_RE.match(m.group(0)):
+                return m.group(0)
+        return _canonical_line(m)
+
+    body = _LABEL_LINE_RE.sub(repl, text)
+    extra = "" if _LABEL_LINE_RE.search(text) else _json_to_labels(text)
     return body + ("\n" + extra if extra else "")
 
 
@@ -292,9 +315,10 @@ def parse_evaluation(text: str, max_steps: int | None = None) -> dict:
     text = canonicalize(text)
     out: dict = {"verdict": None, "reason": "", "steps": [], "success": None, "risks": None,
                  "expected_cad": None, "days_to_cash": None}
-    m = VERDICT_RE.search(text or "")
-    if m:
-        out["verdict"], out["reason"] = m.group(1).upper(), m.group(2).strip()[:600]
+    ms = VERDICT_RE.findall(text or "")
+    if ms:  # the most restrictive verdict anywhere wins (REJECT > DEFER); otherwise the LAST labelled line
+        pick = next((x for w in ("REJECT", "DEFER") for x in ms if x[0].upper() == w), ms[-1])
+        out["verdict"], out["reason"] = pick[0].upper(), pick[1].strip()[:600]
     n = NUMBERS_RE.search(text or "")
     if n:
         parts = [p.strip() for p in n.group(1).split("|")]
@@ -317,20 +341,24 @@ def parse_evaluation(text: str, max_steps: int | None = None) -> dict:
 
 def parse_verification(text: str) -> dict:
     text = canonicalize(text)
-    m = VERIFIED_RE.search(text or "")
+    vs = [v.upper() for v in VERIFIED_RE.findall(text or "")]  # any NO anywhere wins; otherwise the LAST line decides
     evidence = [{"claim": c.strip(), "source": s.strip()} for c, s in EVIDENCE_RE.findall(text or "")][:12]
     gaps = [g.strip() for g in GAP_RE.findall(text or "")][:8]
-    return {"verified": bool(m and m.group(1).upper() == "YES"), "evidence": evidence, "gaps": gaps, "has_verdict": bool(m)}
+    return {"verified": bool(vs and "NO" not in vs and vs[-1] == "YES"), "evidence": evidence, "gaps": gaps, "has_verdict": bool(vs)}
 
 
 # ---------------------------------------------------------------- evidence check (A4)
 # The verifier's EVIDENCE lines are checked against what the mission's own task results contain. Pure string work: no
-# model call, no network fetch. A cited URL must appear in a step / research result; a quoted source must appear
-# verbatim; a "task record" / "step N" source must be backed by the claim's own words appearing in that result.
+# model call, no network fetch. Every URL and every quote in a source must trace, and the claim itself must be supported
+# by the text around that source. NOTE: step results may contain text fetched from the web, which is untrusted (it can echo
+# a claim next to a real URL), so this check narrows what a verifier can invent; it cannot stand alone as proof.
 _URL_RE = re.compile(r"https?://[^\s<>\"'\])]+", re.I)
-_QUOTE_RE = re.compile(r"[\"“”'‘’]([^\"“”'‘’]{15,300})[\"“”'‘’]")
+_QUOTE_RE = re.compile(r"[\"“”]([^\"“”]{3,300})[\"“”]")  # apostrophes are not quote marks
 _STOP = frozenset("that this with from have been were their there which about would could should these those than then them "
                   "they what when where will into over such also only more most some each both very".split())
+URL_WINDOW = 600           # chars either side of the cited URL in which the claim must be supported
+URL_CLAIM_MIN = 0.60       # share of the claim's key words that must appear near the URL
+TEXT_CLAIM_MIN = 0.75      # same for sources without a URL (task record / step N / title)
 
 
 def _norm_url(u: str) -> str:
@@ -345,31 +373,55 @@ def _norm_text(s: str) -> str:
     return re.sub(r"[^a-z0-9$%.]+", " ", (s or "").lower()).strip()
 
 
-def _tokens(s: str) -> set[str]:
-    return {t for t in re.findall(r"[a-z0-9$%][a-z0-9$%.]{3,}", (s or "").lower()) if t not in _STOP}
+def _words(s: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", (s or "").lower()) if len(t) >= 4 and t not in _STOP}
+
+
+def _numbers(s: str) -> set[str]:
+    return {n.replace(",", "").rstrip(".") for n in re.findall(r"\d[\d,]*(?:\.\d+)?", s or "")}
+
+
+def _entities(claim: str) -> set[str]:
+    """Capitalised words after the first word: names and places the claim relies on."""
+    return {w.lower() for w in re.findall(r"(?<!^)(?<![.!?]\s)\b[A-Z][a-zA-Z]{1,}\b", claim or "")}
+
+
+def _supported(claim: str, text: str, minimum: float, entities: bool = False) -> bool:
+    """The claim's key words (share >= minimum) and EVERY number in it appear in `text`."""
+    ct = _words(claim)
+    if not ct or len(ct & _words(text)) / len(ct) < minimum:
+        return False
+    if not _numbers(claim) <= _numbers(text):
+        return False
+    if entities and not _entities(claim) <= {w.lower() for w in re.findall(r"[A-Za-z]+", text)}:
+        return False
+    return True
+
+
+def _is_quote(q: str) -> bool:
+    q = q.strip()
+    return len(q) >= 12 or len(q.split()) >= 3
+
+
+def _has_phrase(norm_text: str, phrase: str) -> bool:
+    return f" {_norm_text(phrase)} " in f" {norm_text} "  # whole words only
 
 
 def check_evidence(evidence: list[dict], plan: list[dict], tasks: list[dict]) -> tuple[list[dict], list[str]]:
     """Returns (traceable evidence, reasons for the rest). Corpus = results of this mission's finished non-verification
-    tasks (steps, evaluation, re-plan and any research output attached to them)."""
+    tasks (steps, evaluation, re-plan and any research output attached to them); the verifier's own output is never a source.
+    Rules per item: every URL in the source must occur in a result AND the claim must be supported within URL_WINDOW chars of
+    that occurrence; every quote (3+ words or 12+ chars) must occur verbatim; a source with neither (task record, step N, a
+    step title) needs TEXT_CLAIM_MIN of the claim's words plus all its numbers and names in that result."""
     by_id = {t["id"]: t for t in tasks}
     pool = [t for t in tasks if t.get("status") == "done" and (t.get("result") or "").strip()
             and not str(t.get("title", "")).startswith(TITLE_PREFIX + "Verify")]
     all_text = "\n".join(t["result"] for t in pool)
-    all_urls = {_norm_url(u) for u in _URL_RE.findall(all_text)}
-    all_norm = _norm_text(all_text)
     kept, bad = [], []
     for e in evidence:
         claim, source = e.get("claim", ""), e.get("source", "")
         urls = _URL_RE.findall(source)
-        if urls:
-            missing = [u for u in urls if _norm_url(u) not in all_urls]
-            if missing:
-                bad.append(f"{claim[:120]} (cited {missing[0][:120]}, which no step result contains)")
-                continue
-            kept.append(e)
-            continue
-        scope_text, scope_norm = all_text, all_norm
+        quotes = [q for q in _QUOTE_RE.findall(source) if _is_quote(q)]
         ref = re.search(r"\bstep\s*#?(\d{1,2})\b", source, re.I)
         sel = None
         if ref and 0 < int(ref.group(1)) <= len(plan):
@@ -377,21 +429,41 @@ def check_evidence(evidence: list[dict], plan: list[dict], tasks: list[dict]) ->
         else:
             low = source.lower()
             sel = next((s for s in plan if len(str(s.get("title", ""))) >= 5 and str(s["title"]).lower() in low), None)
-        if sel is not None:
-            res = (by_id.get(sel.get("task_id")) or {}).get("result") or ""
-            scope_text, scope_norm = res, _norm_text(res)
-        quotes = [q for q in _QUOTE_RE.findall(source) if len(q.strip()) >= 15]
-        if quotes:
-            if all(_norm_text(q) in scope_norm for q in quotes):
-                kept.append(e)
-            else:
-                bad.append(f"{claim[:120]} (quoted text not found in the step results)")
-            continue
-        ct = _tokens(claim)
-        if len(ct) < 2 or len(ct & _tokens(scope_text)) / len(ct) < 0.5:
-            bad.append(f"{claim[:120]} (source '{source[:60]}' does not trace to a step result)")
-            continue
-        kept.append(e)
+        scope = ((by_id.get(sel.get("task_id")) or {}).get("result") or "") if sel is not None else all_text
+        why = None
+        for u in urls:
+            nu = _norm_url(u)
+            found = ok = False
+            for t in pool:
+                for m in _URL_RE.finditer(t["result"]):
+                    if _norm_url(m.group(0)) != nu:
+                        continue
+                    found = True
+                    window = t["result"][max(0, m.start() - URL_WINDOW):m.end() + URL_WINDOW]
+                    if _supported(claim, window, URL_CLAIM_MIN):
+                        ok = True
+                        break
+                if ok:
+                    break
+            if not found:
+                why = f"cited {u[:120]}, which no step result contains"
+            elif not ok:
+                why = f"claim not supported near {u[:120]} in the step results"
+            if why:
+                break
+        if why is None:
+            sn = _norm_text(scope)
+            for q in quotes:
+                if not _has_phrase(sn, q):
+                    why = f"quoted text not found in the step results: {q[:80]}"
+                    break
+        if why is None and not urls and not quotes:
+            if not _supported(claim, scope, TEXT_CLAIM_MIN, entities=True):
+                why = f"source '{source[:60]}' does not trace to a step result"
+        if why:
+            bad.append(f"{claim[:120]} ({why})")
+        else:
+            kept.append(e)
     return kept, bad
 
 
@@ -1031,8 +1103,8 @@ def spawn_recurring() -> int:
     allows it. The new mission goes through create_mission, so it gets the same budget cap and the same step ceiling as
     the previous run and starts at `captured`: nothing is bypassed. At most one successor per run (marker + child lookup)."""
     try:
-        rows = _get("missions?status=in.(completed)&order=created_at.desc&limit=50&select=id,title,objective,venture_id,"
-                    "budget_cents,max_steps,priority,checkpoint")
+        rows = _get("missions?status=in.(completed)&checkpoint->recurrence->>enabled=eq.true&order=created_at.desc&limit=50"
+                    "&select=id,title,objective,venture_id,budget_cents,max_steps,priority,checkpoint")
     except urllib.error.HTTPError as e:
         if e.code in (400, 404):
             return 0
@@ -1040,14 +1112,12 @@ def spawn_recurring() -> int:
     cands = [r for r in rows if ((r.get("checkpoint") or {}).get("recurrence") or {}).get("enabled") is True]
     if not cands or not _gateway_open():
         return 0
-    seen = {((x.get("checkpoint") or {}).get("recurrence") or {}).get("parent")
-            for x in _get("missions?order=created_at.desc&limit=200&select=id,checkpoint")}
     made = 0
     now = datetime.now(timezone.utc)
     for r in cands:
         cp = dict(r.get("checkpoint") or {})
         rec = dict(cp["recurrence"])
-        if rec.get("spawned") or r["id"] in seen:
+        if rec.get("spawned") or _get(f"missions?checkpoint->recurrence->>parent=eq.{_q(r['id'])}&select=id&limit=1"):
             continue
         days = max(RECUR_MIN_DAYS, min(int(rec.get("every_days") or 7), RECUR_MAX_DAYS))
         if int(rec.get("runs_left") or 0) <= 0:
@@ -1064,12 +1134,23 @@ def spawn_recurring() -> int:
             continue
         if now < due:
             continue
+        # Claim first, atomically: only one tick can flip `spawned` from null; the loser gets no row back and creates nothing.
+        claimed_cp = dict(cp, recurrence=dict(rec, spawned="claiming"))
+        won = hq._request("PATCH", f"/rest/v1/missions?id=eq.{_q(r['id'])}&checkpoint->recurrence->>spawned=is.null",
+                          {"checkpoint": claimed_cp}, prefer="return=representation")
+        if not won:
+            continue
         child_cp = {"recurrence": {"enabled": True, "every_days": days, "runs_left": int(rec["runs_left"]) - 1, "parent": r["id"]}}
-        out = create_mission(r["objective"], _venture_slug(r), title=r["title"], budget_cents=r.get("budget_cents"),
-                             created_by="recurrence", priority=r.get("priority") or 2, max_steps=r.get("max_steps"),
-                             due_at=(now + timedelta(days=days)).isoformat(), checkpoint=child_cp)
+        out = {}
+        try:
+            out = create_mission(r["objective"], _venture_slug(r), title=r["title"], budget_cents=r.get("budget_cents"),
+                                 created_by="recurrence", priority=r.get("priority") or 2, max_steps=r.get("max_steps"),
+                                 due_at=(now + timedelta(days=days)).isoformat(), checkpoint=child_cp)
+        finally:
+            if not out.get("id"):  # no child (live cap, error): release the claim so a later tick can try again
+                _patch(f"missions?id=eq.{_q(r['id'])}", {"checkpoint": cp})
         if not out.get("id"):
-            continue  # e.g. live-mission cap: try again on a later tick
+            continue
         rec["spawned"] = out["id"]
         cp["recurrence"] = rec
         _patch(f"missions?id=eq.{_q(r['id'])}", {"checkpoint": cp})
@@ -1086,18 +1167,25 @@ def _find(prefix: str, select: str = "id,title,status,checkpoint") -> dict | Non
     return rows[0] if rows else None
 
 
+def _fresh_cp(mid: str) -> dict:
+    """Re-read the checkpoint immediately before a read-modify-write, so a concurrent engine write is not overwritten."""
+    rows = _get(f"missions?id=eq.{_q(mid)}&select=checkpoint")
+    return dict((rows[0].get("checkpoint") if rows else None) or {})
+
+
 def set_due(prefix: str, arg: str) -> str:
     """Owner: /mission due <id> <YYYY-MM-DD|+3d|off>. Resetting the date re-arms the one overdue notice."""
     m = _find(prefix)
     if not m:
         return "No mission with that id."
-    cp = {k: v for k, v in (m.get("checkpoint") or {}).items() if k not in ("due_at", "told_overdue")}
     if (arg or "").strip().lower() in ("off", "none", "clear"):
+        cp = {k: v for k, v in _fresh_cp(m["id"]).items() if k not in ("due_at", "told_overdue")}
         _patch(f"missions?id=eq.{_q(m['id'])}", {"checkpoint": cp})
         return f"{m['title']}: no due date."
     d = parse_when(arg)
     if d is None:
         return "Use: /mission due <id> YYYY-MM-DD   or   +3d   or   off"
+    cp = {k: v for k, v in _fresh_cp(m["id"]).items() if k not in ("due_at", "told_overdue")}
     cp["due_at"] = d.isoformat()
     _patch(f"missions?id=eq.{_q(m['id'])}", {"checkpoint": cp})
     return f"{m['title']}: due {d.strftime('%Y-%m-%d %H:%M')} UTC. I'll tell you once if it runs late."
@@ -1108,10 +1196,9 @@ def set_recurrence(prefix: str, arg: str, runs: int | None = None) -> str:
     m = _find(prefix)
     if not m:
         return "No mission with that id."
-    cp = dict(m.get("checkpoint") or {})
     a = (arg or "").strip().lower()
     if a in ("off", "none", "stop"):
-        cp.pop("recurrence", None)
+        cp = _fresh_cp(m["id"]); cp.pop("recurrence", None)
         _patch(f"missions?id=eq.{_q(m['id'])}", {"checkpoint": cp})
         return f"{m['title']}: recurrence off."
     days = {"weekly": 7, "daily": 1, "monthly": 30}.get(a)
@@ -1121,6 +1208,7 @@ def set_recurrence(prefix: str, arg: str, runs: int | None = None) -> str:
     if days is None or not (RECUR_MIN_DAYS <= days <= RECUR_MAX_DAYS):
         return f"Use: /mission repeat <id> weekly|daily|<days {RECUR_MIN_DAYS}-{RECUR_MAX_DAYS}>|off [runs]"
     n = RECUR_DEFAULT_RUNS if runs is None else max(1, min(int(runs), RECUR_MAX_RUNS))
+    cp = _fresh_cp(m["id"])
     cp["recurrence"] = {"enabled": True, "every_days": days, "runs_left": n}
     _patch(f"missions?id=eq.{_q(m['id'])}", {"checkpoint": cp})
     return (f"{m['title']}: will repeat every {days} days, up to {n} more times, each only after the previous run is "

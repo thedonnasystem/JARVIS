@@ -26,7 +26,8 @@ def check(name, cond, extra=""):
 EVAL = ("MISSION_VERDICT: GO — cheap to test, real demand\nNUMBERS: startup cost CAD 0 | expected profit CAD 1500 | days to first cash 21 | confidence low\n"
         "SUCCESS: three markets compared with sources and one recommendation\nRISKS: thin local data\n"
         + "".join(f"STEP: new-ventures-researcher | Research part {i} | investigate part {i} and cite sources\n" for i in range(1, 7)))
-STEP = "Findings with sources: https://example.ca/a and https://example.ca/b. Recommendation: option 2."
+STEP = ("Findings with sources: three markets compared with prices https://example.ca/a and options compared with prices; "
+        "recommendation supported by https://example.ca/b. Recommendation: option 2.")
 VERIFY = "VERIFIED: YES\nEVIDENCE: three markets compared with prices | https://example.ca/a\nEVIDENCE: recommendation supported | https://example.ca/b\n"
 script_log = []
 
