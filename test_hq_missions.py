@@ -23,6 +23,7 @@ class FakeDB:
         self.missions, self.tasks, self.msgs, self.audit = {}, {}, [], []
         self.spent = spent
         self.memory = []
+        self.state = {"kill_switch": False, "pause_reason": None, "focus_mission": None}
         self.ventures = [{"id": "v-idea", "slug": "idea-lab"}, {"id": "v-donna", "slug": "donna"}]
         self.agents = ["new-ventures-researcher", "new-ventures-auditor", "donna-researcher", "donna-auditor",
                        "compliance-qa", "growth", "jarvis"]
@@ -63,6 +64,8 @@ class FakeDB:
                     return [v for v in self.ventures if v["id"] == f["id"][3:]]
             if table == "agents":
                 return [{"slug": a} for a in self.agents]
+            if table == "system_state":
+                return [dict(self.state)] if self.state is not None else []
             return []
         if method == "POST":
             if table == "missions":
@@ -79,6 +82,10 @@ class FakeDB:
                     if n >= allowed:
                         import urllib.error, io
                         raise urllib.error.HTTPError("u", 400, "step limit", {}, io.BytesIO(b'{"message":"Mission step limit reached"}'))
+                if mm and body.get("mission_role", "step") != "step":   # mirrors the 12 evaluation/verification task limit
+                    if sum(1 for x in self.tasks.values() if x.get("mission_id") == mm["id"] and x.get("mission_role", "step") != "step") >= 12:
+                        import urllib.error, io
+                        raise urllib.error.HTTPError("u", 400, "limit", {}, io.BytesIO(b'{"message":"Mission has too many evaluation/verification tasks"}'))
                 t = {"id": str(uuid.uuid4()), "result": None}; t.update(body); self.tasks[t["id"]] = t
                 return [dict(t)]
             if table == "memory":
@@ -143,7 +150,7 @@ class T(unittest.TestCase):
         with mock.patch.object(hq, "_request", db):
             return M.create_mission(kw.pop("objective", "Start a graffiti-removal business in Ottawa"), **kw)
 
-    def run_steps(self, db, mid, result="work done, see https://example.com"):
+    def run_steps(self, db, mid, result="work done: price menu backed by 3 competitor sites https://example.com/a ; 20 prospects with public sources"):
         """Steps run one at a time now: tick, finish whatever step is open, until the mission reaches verification."""
         for _ in range(20):
             self.tick(db)
@@ -780,7 +787,9 @@ class LearningTests(MissionEngineBase):
     def test_unreadable_evaluation_failure_writes_a_lesson(self):
         db = FakeDB(); mid = self.new(db)["id"]
         self.tick(db); db.finish("Evaluate", "no labels at all"); self.tick(db)
+        db.finish("Evaluate", "still no labels"); self.tick(db)   # the one format repair also fails
         self.tick(db); db.finish("Evaluate", "still nothing"); self.tick(db)
+        db.finish("Evaluate", "nothing again"); self.tick(db)
         self.assertEqual(db.missions[mid]["status"], "failed")
         self.assertEqual(len(self.lessons(db)), 1)
 
@@ -809,3 +818,416 @@ class LearningTests(MissionEngineBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ====================================================================== A4 / A5 / A6 (mission2 stream)
+
+class FormatResilienceTests(MissionEngineBase):
+    """A5: tolerant parsing and at most one cheap repair per task."""
+
+    def test_eval_label_variants_parse(self):
+        variants = [
+            "**MISSION_VERDICT:** **go** — worth it\nNUMBERS: startup cost CAD 1 | expected profit CAD 2,000 | days to first cash 9\nSUCCESS: ten sourced prospects exist\nSTEP: growth | Do it | research the thing carefully",
+            "## Mission Verdict: GO. worth it\n1. **NUMBERS**: startup cost CAD 1 | expected profit CAD 2,000 | days to first cash 9\n- success = ten sourced prospects exist\n**STEP 1:** `growth` | **Do it** | research the thing carefully",
+            "mission_verdict = Go - worth it\n2) numbers: startup cost CAD 1 | expected profit CAD 2,000 | days to first cash 9\nSuccess: ten sourced prospects exist\n* Step 1: growth | Do it | research the thing carefully",
+        ]
+        for v in variants:
+            ev = M.parse_evaluation(v)
+            self.assertEqual(ev["verdict"], "GO", v)
+            self.assertEqual(ev["expected_cad"], 2000.0, v)
+            self.assertEqual(ev["days_to_cash"], 9, v)
+            self.assertEqual(ev["success"], "ten sourced prospects exist", v)
+            self.assertEqual([(s["agent"], s["title"]) for s in ev["steps"]], [("growth", "Do it")], v)
+
+    def test_json_variants_parse(self):
+        fenced = ('Sure!\n```json\n{"mission_verdict": "TEST", "reason": "cheap", "numbers": {"startup_cost": 5, "expected_profit": 900, '
+                  '"days_to_first_cash": 14}, "success": "a ranked list with sources", "steps": [{"agent": "growth", "title": "Rank them", '
+                  '"detail": "rank the options with sources"},]}\n```')
+        single = "{'verdict': 'DEFER', 'reason': 'too thin'}"
+        ev = M.parse_evaluation(fenced)
+        self.assertEqual((ev["verdict"], ev["expected_cad"], ev["days_to_cash"]), ("TEST", 900.0, 14))
+        self.assertEqual(ev["steps"][0]["title"], "Rank them")
+        self.assertEqual(M.parse_evaluation(single)["verdict"], "DEFER")
+        v = M.parse_verification('{"verified": "yes", "evidence": [{"claim": "price menu exists", "source": "https://a.b/c"}], "gaps": []}')
+        self.assertTrue(v["verified"]); self.assertEqual(v["evidence"][0]["source"], "https://a.b/c")
+        v2 = M.parse_verification("**Verified:** No.\n* **Gap**: only 8 prospects have sources")
+        self.assertFalse(v2["verified"]); self.assertTrue(v2["has_verdict"]); self.assertEqual(v2["gaps"], ["only 8 prospects have sources"])
+
+    def test_labels_inside_prose_still_do_not_count(self):
+        self.assertFalse(M.parse_verification("I think VERIFIED: YES would be wrong here")["verified"])
+        self.assertIsNone(M.parse_evaluation("They said the MISSION_VERDICT: GO but I disagree")["verdict"])
+        self.assertFalse(M.parse_verification("{\"note\": \"not json we know\"}")["has_verdict"])
+
+    def test_unreadable_evaluation_gets_exactly_one_cheap_repair(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        self.tick(db); orig = db.finish("Evaluate", "I think this is a decent idea, go for it.")
+        self.tick(db)
+        rep = db.open_tasks()
+        self.assertEqual(len(rep), 1)
+        r = rep[0]
+        self.assertIn("(format repair)", r["title"]); self.assertTrue(r["title"].startswith("Mission: Evaluate"))
+        self.assertEqual((r["mission_role"], r["assigned_agent"], r["mission_id"]), ("eval", orig["assigned_agent"], mid))
+        self.assertIn("decent idea", r["detail"]); self.assertIn("MISSION_VERDICT", r["detail"])
+        self.assertLessEqual(len(r["detail"]), 1500 + M.REPAIR_PRIOR_CHARS)
+        self.tick(db, 3)
+        self.assertEqual(len(db.open_tasks()), 1)            # no second repair while it runs
+        self.assertEqual(db.missions[mid]["status"], "captured")
+        db.finish("Evaluate", EVAL_GO); self.tick(db)
+        self.assertEqual(db.missions[mid]["status"], "planned")
+        self.assertEqual(len([t for t in db.tasks.values() if "(format repair)" in t["title"]]), 1)
+
+    def test_failed_repair_is_not_repaired_again(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        self.tick(db); db.finish("Evaluate", "nothing usable"); self.tick(db)
+        db.finish("Evaluate", "still nothing usable"); self.tick(db)    # the repair fails too
+        repairs = [t for t in db.tasks.values() if "(format repair)" in t["title"]]
+        self.assertEqual(len(repairs), 1)
+        self.assertEqual(db.missions[mid]["checkpoint"]["eval_unreadable"], 1)   # now the old path: a second evaluation
+        self.assertTrue(any(t["title"] == "Mission: Evaluate " + db.missions[mid]["title"] and t["status"] == "todo" for t in db.tasks.values()))
+
+    def test_replan_repair_keeps_the_replan_role(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        ver = self.to_verifying(db, mid); ver["status"], ver["result"] = "done", VERIFY_NO; self.tick(db)
+        db.finish("Re-plan", "no labels here"); self.tick(db)
+        r = db.open_tasks()[0]
+        self.assertEqual(r["mission_role"], "replan"); self.assertTrue(r["title"].startswith("Mission: Re-plan"))
+        db.finish("Re-plan", EVAL_GO); self.tick(db)
+        self.assertEqual(db.missions[mid]["status"], "planned"); self.assertEqual(len(db.missions[mid]["plan"]), 3)
+
+    def test_unlabelled_verifier_gets_one_repair_and_no_counted_attempt(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        ver = self.to_verifying(db, mid)
+        ver["status"], ver["result"] = "done", "Looks fine to me, the prospects are sourced."
+        self.tick(db)
+        r = db.open_tasks()[0]
+        self.assertEqual((r["mission_role"], r["assigned_agent"]), ("verify", ver["assigned_agent"]))
+        self.assertIn("(format repair)", r["title"])
+        self.assertEqual((db.missions[mid]["status"], db.missions[mid]["attempts"]), ("verifying", 0))
+        db.finish("Verify", VERIFY_YES); self.tick(db)
+        self.assertEqual(db.missions[mid]["status"], "completed")
+
+    def test_failed_verifier_repair_counts_once_and_never_loops(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        ver = self.to_verifying(db, mid); ver["status"], ver["result"] = "done", "no label"; self.tick(db)
+        db.finish("Verify", "still no label"); self.tick(db)
+        self.assertEqual(db.missions[mid]["attempts"], 1)
+        self.assertEqual(db.missions[mid]["status"], "planned")                 # old path: re-plan with a gap
+        self.assertEqual(len([t for t in db.tasks.values() if "(format repair)" in t["title"]]), 1)
+
+    def test_readable_no_is_not_repaired(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        ver = self.to_verifying(db, mid); ver["status"], ver["result"] = "done", VERIFY_NO; self.tick(db)
+        self.assertEqual([t for t in db.tasks.values() if "(format repair)" in t["title"]], [])
+
+    def test_repair_falls_back_when_database_task_limit_is_hit(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        self.tick(db)
+        for i in range(11):   # fill the evaluation/verification task allowance (the Evaluate task is the 12th)
+            db.tasks[f"x{i}"] = {"id": f"x{i}", "mission_id": mid, "mission_role": "verify", "status": "cancelled", "title": f"Mission: other {i}", "result": None}
+        db.finish("Evaluate", "garbage"); self.tick(db)
+        self.assertEqual([t for t in db.tasks.values() if "(format repair)" in t["title"]], [])
+        self.assertEqual(db.missions[mid]["checkpoint"].get("eval_unreadable"), 1)      # old path, nothing crashed
+
+    def test_blocked_repair_is_not_repaired_again_or_counted(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        ver = self.to_verifying(db, mid); ver["status"], ver["result"] = "done", "no label"; self.tick(db)
+        r = db.open_tasks()[0]; r["status"], r["result"] = "blocked", "Stopped: Mission budget used up (200c)"
+        self.tick(db, 3)
+        self.assertEqual((db.missions[mid]["status"], db.missions[mid]["attempts"]), ("verifying", 0))
+        self.assertEqual(len([t for t in db.tasks.values() if "(format repair)" in t["title"]]), 1)
+
+    def test_repair_makes_no_model_call_itself(self):
+        # the repair is only a board task: hq_missions has no model client, and the engine's gateway runs it like any other task
+        import inspect
+        self.assertNotIn("anthropic", inspect.getsource(M).lower().replace("# ", ""))
+
+
+class EvidenceCheckTests(MissionEngineBase):
+    """A4: the verifier's EVIDENCE must trace to the mission's own results."""
+
+    def tasks(self, **results):
+        return [{"id": k, "title": "Mission: " + k, "status": "done", "result": v} for k, v in results.items()]
+
+    def test_url_must_appear_in_a_result(self):
+        t = self.tasks(a="Prices from https://www.Example.com/a/ and more")
+        kept, bad = M.check_evidence([{"claim": "price menu exists", "source": "http://example.com/a"}], [], t)
+        self.assertEqual((len(kept), bad), (1, []))
+        kept, bad = M.check_evidence([{"claim": "price menu exists", "source": "https://invented.example/zzz"}], [], t)
+        self.assertEqual(kept, []); self.assertIn("invented.example", bad[0])
+
+    def test_verifier_output_is_not_its_own_source(self):
+        t = self.tasks(a="nothing relevant") + [{"id": "v", "title": "Mission: Verify X", "status": "done", "result": "see https://only-in-verifier.example/p"}]
+        kept, bad = M.check_evidence([{"claim": "a claim here", "source": "https://only-in-verifier.example/p"}], [], t)
+        self.assertEqual(kept, []); self.assertEqual(len(bad), 1)
+
+    def test_quote_must_appear_verbatim(self):
+        t = self.tasks(a="The council says: 'graffiti removal contracts are tendered every April'.")
+        ok = M.check_evidence([{"claim": "tender timing", "source": "\"graffiti removal contracts are tendered every April\""}], [], t)
+        bad = M.check_evidence([{"claim": "tender timing", "source": "\"contracts are tendered every June by council\""}], [], t)
+        self.assertEqual((len(ok[0]), len(bad[0])), (1, 0))
+
+    def test_task_record_needs_the_claims_words_in_a_result(self):
+        t = self.tasks(a="Found twenty commercial property managers with public contact pages in Ottawa")
+        ok = M.check_evidence([{"claim": "twenty commercial property managers found", "source": "task record"}], [], t)
+        bad = M.check_evidence([{"claim": "contract signed with the city for 50000 dollars", "source": "task record"}], [], t)
+        self.assertEqual((len(ok[0]), len(bad[0])), (1, 0))
+
+    def test_step_reference_limits_the_search_to_that_step(self):
+        plan = [{"title": "Price it", "task_id": "s1"}, {"title": "Prospect list", "task_id": "s2"}]
+        t = self.tasks(s1="competitor price menu with three sites", s2="twenty prospects with public sources")
+        claim = {"claim": "competitor price menu with three sites", "source": "step 2"}
+        self.assertEqual(M.check_evidence([claim], plan, t)[0], [])                       # that text is in step 1, not step 2
+        self.assertEqual(len(M.check_evidence([dict(claim, source="step 1")], plan, t)[0]), 1)
+        self.assertEqual(len(M.check_evidence([dict(claim, source="Price it task record")], plan, t)[0]), 1)
+
+    def test_research_output_counts_as_a_source_and_unfinished_tasks_do_not(self):
+        t = self.tasks(ev="Market sources: https://stats.example/ottawa")
+        t.append({"id": "doing", "title": "Mission: later", "status": "doing", "result": "https://unfinished.example/x"})
+        self.assertEqual(len(M.check_evidence([{"claim": "market size known", "source": "https://stats.example/ottawa"}], [], t)[0]), 1)
+        self.assertEqual(M.check_evidence([{"claim": "market size known", "source": "https://unfinished.example/x"}], [], t)[0], [])
+
+    def test_fabricated_evidence_downgrades_yes_and_replans_with_a_gap(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        ver = self.to_verifying(db, mid)
+        ver["status"], ver["result"] = "done", "VERIFIED: YES\nEVIDENCE: demand is proven | https://made-up.example/report\n"
+        self.tick(db)
+        m = db.missions[mid]
+        self.assertNotEqual(m["status"], "completed")
+        self.assertEqual((m["status"], m["attempts"]), ("planned", 1))
+        rp = db.open_tasks()[0]
+        self.assertIn("not traceable", rp["detail"]); self.assertIn("made-up.example", rp["detail"])
+        self.assertTrue(any(a["action"] == "mission_evidence_downgraded" for a in db.audit))
+
+    def test_one_untraceable_claim_among_good_ones_still_downgrades(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        ver = self.to_verifying(db, mid)
+        ver["status"], ver["result"] = "done", VERIFY_YES + "EVIDENCE: the city already agreed | https://made-up.example/city\n"
+        self.tick(db)
+        self.assertNotEqual(db.missions[mid]["status"], "completed")
+
+    def test_traceable_evidence_still_completes(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        ver = self.to_verifying(db, mid); ver["status"], ver["result"] = "done", VERIFY_YES; self.tick(db)
+        self.assertEqual(db.missions[mid]["status"], "completed")
+
+
+class DueAndRecurrenceTests(MissionEngineBase):
+    """A6: due dates and owner-authorized recurring missions."""
+
+    def past(self, days=1):
+        return (M.datetime.now(M.timezone.utc) - M.timedelta(days=days)).isoformat()
+
+    def future(self, days=3):
+        return (M.datetime.now(M.timezone.utc) + M.timedelta(days=days)).isoformat()
+
+    def test_overdue_is_told_once(self):
+        db = FakeDB(); mid = self.new(db, due_at="+1d")["id"]
+        self.assertIn("due_at", db.missions[mid]["checkpoint"])
+        self.tick(db, 2)
+        self.assertEqual(self.told(db, "Mission overdue"), 0)           # not due yet
+        db.missions[mid]["checkpoint"]["due_at"] = self.past()
+        self.tick(db, 4)
+        self.assertEqual(self.told(db, "Mission overdue"), 1)
+        self.assertEqual(db.missions[mid]["status"], "captured")        # notification only: the mission itself is untouched
+        self.assertEqual(sum(a["action"] == "mission_overdue" for a in db.audit), 1)
+
+    def test_resetting_the_date_rearms_the_notice(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        db.missions[mid]["checkpoint"]["due_at"] = self.past(); self.tick(db)
+        with mock.patch.object(hq, "_request", db):
+            self.assertIn("due", M.set_due(mid[:8], "+2d"))
+        self.assertNotIn("told_overdue", db.missions[mid]["checkpoint"])
+        db.missions[mid]["checkpoint"]["due_at"] = self.past(); self.tick(db)
+        self.assertEqual(self.told(db, "Mission overdue"), 2)
+
+    def test_due_commands_and_validation(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        with mock.patch.object(hq, "_request", db):
+            self.assertIn("Use:", M.set_due(mid[:8], "someday"))
+            self.assertIn("due 2099-01-02", M.set_due(mid[:8], "2099-01-02"))
+            self.assertIn("no due date", M.set_due(mid[:8], "off"))
+            self.assertIn("error", M.create_mission("A second objective here", due_at="garbage"))
+        self.assertNotIn("due_at", db.missions[mid]["checkpoint"])
+
+    def test_resume_keeps_due_date_and_recurrence(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        db.missions[mid]["checkpoint"] = {"due_at": self.future(), "recurrence": {"enabled": True, "every_days": 7, "runs_left": 2}}
+        with mock.patch.object(hq, "_request", db):
+            M.set_status(mid[:8], "pause"); M.set_status(mid[:8], "resume")
+        self.assertIn("due_at", db.missions[mid]["checkpoint"]); self.assertTrue(db.missions[mid]["checkpoint"]["recurrence"]["enabled"])
+
+    # ---- recurrence
+    def completed(self, db, rec=None, **kw):
+        mid = self.new(db, **kw)["id"]
+        m = db.missions[mid]
+        m["status"], m["evidence"] = "completed", [{"claim": "c", "source": "s"}]
+        if rec is not None:
+            m["checkpoint"] = {"recurrence": rec}
+        return mid
+
+    def due_now(self, db, mid):
+        db.missions[mid]["checkpoint"]["recurrence"]["next_run_at"] = self.past()
+
+    def others(self, db, mid):
+        return [m for m in db.missions.values() if m["id"] != mid]
+
+    def test_default_off_never_recurs(self):
+        db = FakeDB(); mid = self.completed(db)
+        self.tick(db, 3)
+        self.assertEqual(self.others(db, mid), [])
+
+    def test_only_an_explicit_true_flag_counts(self):
+        db = FakeDB(); mid = self.completed(db, {"enabled": "yes", "every_days": 7, "runs_left": 3, "next_run_at": self.past()})
+        self.tick(db, 2)
+        self.assertEqual(self.others(db, mid), [])
+
+    def test_enabled_spawns_after_interval_with_same_limits_and_only_once(self):
+        db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 3}, max_steps=4, budget_cents=150, priority=3)
+        self.tick(db)                                                    # first look: schedules, does not spawn
+        self.assertEqual(self.others(db, mid), [])
+        self.assertIn("next_run_at", db.missions[mid]["checkpoint"]["recurrence"])
+        self.tick(db, 2); self.assertEqual(self.others(db, mid), [])    # interval not over
+        self.due_now(db, mid)
+        self.tick(db)
+        kids = self.others(db, mid)
+        self.assertEqual(len(kids), 1)
+        k = kids[0]
+        self.assertEqual((k["status"], k["budget_cents"], k["max_steps"], k["strict_steps"], k["priority"]), ("captured", 150, 4, True, 3))
+        self.assertEqual(k["objective"], db.missions[mid]["objective"])
+        self.assertEqual(k["checkpoint"]["recurrence"], {"enabled": True, "every_days": 7, "runs_left": 2, "parent": mid})
+        self.assertIn("due_at", k["checkpoint"])
+        self.assertEqual(db.missions[mid]["checkpoint"]["recurrence"]["spawned"], k["id"])
+        self.tick(db, 3)
+        self.assertEqual(len(self.others(db, mid)), 1)                   # exactly one successor per run
+        self.assertEqual(self.told(db, "Recurring mission started again"), 1)
+
+    def test_child_lookup_prevents_duplicates_even_without_the_marker(self):
+        db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 3, "next_run_at": self.past()})
+        self.tick(db); db.missions[mid]["checkpoint"]["recurrence"].pop("spawned")   # simulate a crash before the marker write
+        self.tick(db, 2)
+        self.assertEqual(len(self.others(db, mid)), 1)
+
+    def test_not_while_kill_switch_pause_focus_or_unreadable_state(self):
+        for name, st in (("kill", {"kill_switch": True}), ("pause", {"pause_reason": "credits"}), ("focus", {"focus_mission": "m-x"}), ("unreadable", None)):
+            db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 3, "next_run_at": self.past()})
+            if st is None:
+                db.state = None
+            else:
+                db.state.update(st)
+            self.tick(db, 2)
+            self.assertEqual(self.others(db, mid), [], name)
+            if st is None:
+                db.state = {"kill_switch": False, "pause_reason": None, "focus_mission": None}
+            else:
+                db.state = {"kill_switch": False, "pause_reason": None, "focus_mission": None}
+            self.tick(db)
+            self.assertEqual(len(self.others(db, mid)), 1, name)       # and it does run once the block clears
+
+    def test_not_until_previous_run_finished(self):
+        for status in ("captured", "planned", "executing", "verifying", "blocked", "paused", "failed", "rejected", "abandoned"):
+            db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 3, "next_run_at": self.past()})
+            db.missions[mid]["status"] = status
+            self.tick(db, 2)
+            self.assertEqual([m for m in self.others(db, mid) if m["status"] == "captured" and m["created_by"] == "recurrence"], [], status)
+
+    def test_runs_are_bounded_and_the_end_is_announced_once(self):
+        db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 1, "runs_left": 1, "next_run_at": self.past()})
+        self.tick(db)
+        kid = self.others(db, mid)[0]
+        self.assertEqual(kid["checkpoint"]["recurrence"]["runs_left"], 0)
+        kid["status"], kid["evidence"] = "completed", [{"claim": "c", "source": "s"}]
+        self.tick(db, 4)
+        self.assertEqual(len(self.others(db, mid)), 1)
+        self.assertEqual(self.told(db, "finished its runs"), 1)
+
+    def test_live_mission_cap_still_applies(self):
+        db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 3, "next_run_at": self.past()})
+        for i in range(M.MAX_LIVE_MISSIONS):
+            self.new(db, objective=f"Another live objective number {i}")
+        self.tick(db, 2)
+        self.assertEqual([m for m in db.missions.values() if m["created_by"] == "recurrence"], [])
+        self.assertNotIn("spawned", db.missions[mid]["checkpoint"]["recurrence"])
+
+    def test_budget_is_capped_on_spawn(self):
+        db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 3, "next_run_at": self.past()})
+        db.missions[mid]["budget_cents"] = 99999
+        self.tick(db)
+        self.assertEqual(self.others(db, mid)[0]["budget_cents"], M.MAX_BUDGET_CENTS)
+
+    def test_spawned_mission_still_runs_under_the_normal_engine(self):
+        db = FakeDB(); mid = self.completed(db, {"enabled": True, "every_days": 7, "runs_left": 3, "next_run_at": self.past()}, max_steps=2)
+        self.tick(db)
+        kid = self.others(db, mid)[0]
+        self.tick(db)
+        ev = db.open_tasks()[0]
+        self.assertEqual((ev["mission_id"], ev["mission_role"]), (kid["id"], "eval"))
+        self.assertIn("2 to 2 steps", ev["detail"])
+        db.finish("Evaluate", EVAL_GO); self.tick(db)
+        self.assertLessEqual(len(db.missions[kid["id"]]["plan"]), 2)    # the 2-step ceiling carried over
+
+    def test_repeat_command(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        with mock.patch.object(hq, "_request", db):
+            self.assertIn("Use:", M.set_recurrence(mid[:8], "hourly"))
+            self.assertIn("Use:", M.set_recurrence(mid[:8], "999"))
+            self.assertNotIn("recurrence", db.missions[mid]["checkpoint"])
+            self.assertIn("every 7 days", M.set_recurrence(mid[:8], "weekly"))
+            self.assertEqual(db.missions[mid]["checkpoint"]["recurrence"], {"enabled": True, "every_days": 7, "runs_left": M.RECUR_DEFAULT_RUNS})
+            M.set_recurrence(mid[:8], "3d", 99)
+            self.assertEqual(db.missions[mid]["checkpoint"]["recurrence"]["runs_left"], M.RECUR_MAX_RUNS)
+            self.assertIn("off", M.set_recurrence(mid[:8], "off"))
+        self.assertNotIn("recurrence", db.missions[mid]["checkpoint"])
+
+
+class EndToEndMissionTest(MissionEngineBase):
+    """capture -> evaluate -> plan -> execute (with a blocked step) -> verify (fail, re-plan, repair, pass) -> learn."""
+
+    def test_start_to_finish(self):
+        db = FakeDB(); mid = self.new(db, objective="Start a graffiti-removal business in Ottawa", max_steps=6)["id"]
+        self.assertEqual(db.missions[mid]["status"], "captured")
+        # evaluate: a markdown-bold, numbered reply (tolerant parser) instead of the exact labels
+        self.tick(db)
+        db.finish("Evaluate", "**MISSION_VERDICT:** GO — demand is real\n1. **NUMBERS:** startup cost CAD 400 | expected profit CAD 3000 | days to first cash 30\n"
+                              "**SUCCESS:** a priced service menu and 20 prospects with sources\n**RISKS:** seasonality\n"
+                              "**STEP 1:** new-ventures-researcher | Price the service | research competitor prices in Ottawa with sources\n"
+                              "**STEP 2:** growth | Build prospect list | 20 commercial property managers with public contact pages")
+        self.tick(db)
+        m = db.missions[mid]
+        self.assertEqual((m["status"], m["verdict"], len(m["plan"])), ("planned", "GO", 2))
+        # execute: step 1 done, step 2 blocked by an error -> requeued once -> done
+        self.tick(db, 2)
+        s1 = self.current_step(db)
+        s1["status"], s1["result"] = "done", "price menu backed by 3 competitor sites https://example.com/a"
+        self.tick(db, 2)
+        s2 = self.current_step(db)
+        self.assertIn("price menu backed by 3 competitor sites", s2["detail"])        # handoff
+        s2["status"], s2["result"] = "blocked", "error: upstream timeout"
+        self.tick(db)
+        self.assertEqual(s2["status"], "todo")                                        # blocked-step recovery
+        s2["status"], s2["result"] = "done", "found 8 prospects with public sources https://example.com/p"
+        self.tick(db, 2)
+        self.assertEqual(db.missions[mid]["status"], "verifying")
+        # verification 1 fails (readable NO) -> re-plan
+        db.finish("Verify", VERIFY_NO); self.tick(db)
+        self.assertEqual((db.missions[mid]["status"], db.missions[mid]["attempts"]), ("planned", 1))
+        db.finish("Re-plan", EVAL_GO)
+        self.tick(db)
+        self.assertEqual(db.missions[mid]["status"], "planned")
+        self.run_steps(db, mid, "twenty prospects with public sources listed; price menu backed by 3 competitor sites https://example.com/a")
+        # verification 2: no labels at all -> one repair -> YES with traceable evidence
+        ver = next(t for t in db.open_tasks() if t.get("mission_role") == "verify")
+        ver["status"], ver["result"] = "done", "All good, I re-checked the sources."
+        self.tick(db)
+        self.assertEqual(db.missions[mid]["status"], "verifying")
+        db.finish("Verify", "**VERIFIED:** YES\n- **EVIDENCE:** price menu backed by 3 competitor sites | https://example.com/a.\n"
+                            "- EVIDENCE: twenty prospects with public sources | task record\n")
+        self.tick(db)
+        m = db.missions[mid]
+        self.assertEqual((m["status"], len(m["evidence"])), ("completed", 2))
+        # learn
+        les = self.lessons(db)
+        self.assertEqual(len(les), 1); self.assertIn("Mission completed", les[0]["content"])
+        self.assertIn("attempts 1", les[0]["content"])
+        self.assertEqual(self.told(db, "Mission complete (verified)"), 1)
+        self.assertEqual(db.open_tasks(), [])
+        self.assertLessEqual(len([t for t in db.tasks.values() if t.get("mission_role") == "step"]), 8)
