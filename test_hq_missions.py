@@ -1338,7 +1338,9 @@ class EvidenceStrictnessTests(unittest.TestCase):
         # apostrophes are not quote marks: this is a plain-text source and goes through the 75% rule, so a bad claim fails
         self.assertEqual(self.run_check("council signed a contract", "'tenders' and 'contract'", s1=r)[0], [])
         # a one-word double-quoted "quote" is not a quote, so it cannot vouch for anything either
-        self.assertEqual(self.run_check("council signed a contract", '"contract"', s1=r)[0], [])
+        self.assertEqual(self.run_check("council signed a contract", '"tenders"', s1=r)[0], [])
+        r2 = "the council publishes tenders every April"
+        self.assertEqual(self.run_check("council signed a contract", "'council publishes tenders every April'", s1=r2)[0], [])
         self.assertEqual(len(self.run_check("council publish tenders", '"the council doesn\'t publish tenders"', s1=r)[0]), 1)
 
     def test_quotes_match_whole_words(self):
@@ -1369,6 +1371,8 @@ class RecurrenceClaimTests(DueAndRecurrenceTests):
         calls = {"n": 0}
         def get_with_stale_parent(path):
             rows = real_get(path)
+            if "->>parent=eq" in path and calls["n"] >= 1:
+                return []                                    # the child is not visible yet to the overlapping tick either
             if path.startswith("missions?status=in.(completed)") and calls["n"] >= 1:
                 return [dict(stale)]                         # the second tick still sees the unclaimed parent
             if path.startswith("missions?status=in.(completed)"):
