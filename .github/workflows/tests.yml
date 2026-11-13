@@ -1,18 +1,24 @@
 name: tests
+# Every check is one script: scripts/gate.sh. Run the same command locally (see DEV_GATE.md), so CI and local cannot diverge.
+# Job names `unit` and `migrations` are kept because branch protection / DEPLOY_RUNBOOK.md refer to them.
 on:
   pull_request:
   push:
-    branches: ["jarvis/**", "overnight-build"]
+    branches: ["jarvis/**", "overnight-build", "stream/**"]
 jobs:
   unit:
+    # fast feedback, no database: repo tests, lint/manifest tests, migration lint, bundle freshness
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }   # the migration lint compares against origin/overnight-build
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt
-      - run: python -m unittest discover -q
+      - run: scripts/gate.sh --only unit,scripts-tests,lint,bundle
   migrations:
+    # the full gate: everything in `unit` plus the replica run (migrations, e2e, integration, rollback drill), the generated
+    # function manifest, and the backup drill when the branch has one. --strict: a skipped required step is a failure.
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -23,15 +29,12 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
-      - run: pip install psycopg2-binary cryptography
-      - name: Apply every migration to a copy of the live schema, then run the end-to-end and integration scripts
-        env:
-          REPLICA_URL: postgresql://postgres:pw@localhost:5432/postgres
-          REQUIRE_INTEGRATION: "1"
-        run: scripts/replica/run.sh
-      - name: Go-live bundle matches the migrations
-        run: scripts/build_bundle.sh --check
-      - name: Backup and restore drill (encrypted backup to a fake B2, restore into a scratch DB, negative controls)
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt psycopg2-binary cryptography
+      - name: Full gate
         env:
           PGPASSWORD: pw
-        run: bash scripts/backup_drill.sh
+          REPLICA_URL: postgresql://postgres:pw@localhost:5432/postgres
+        run: scripts/gate.sh --strict
