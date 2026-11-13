@@ -18,18 +18,18 @@ Definition used here: Jarvis runs the mission loop reliably unattended; one real
 
 | # | Work package | Stream | Est (focused h) | Needs prod/owner? | Status |
 |---|---|---|---|---|---|
-| 0 | Phase 1.5 backup system: deploy + real proof | Reliability | owner 20 min + approvals | B2 account, approvals | built, verified synthetically |
-| A1 | Step-to-step handoff + scoped research | Mission | 6 | no | building |
-| A2 | Blocked step/verifier recovery, stuck-eval fix | Mission | 8 | no | building |
-| A3 | Real learning writes, `FACTS:` capture | Mission | 7 | no | building |
+| 0 | Phase 1.5 backup system: deploy + real proof | Reliability | owner 20 min + approvals | B2 account, approvals | built, CI green on PR #2, verified synthetically only |
+| A1 | Step-to-step handoff + scoped research | Mission | 6 | no | BUILT (stream/mission), in review |
+| A2 | Blocked step/verifier recovery, stuck-eval fix | Mission | 8 | no | BUILT (stream/mission), in review |
+| A3 | Real learning writes, `FACTS:` capture | Mission | 7 | no | BUILT (stream/mission), in review |
 | A4 | Evidence-checked verification (URLs resolve, traceable) | Mission | 6 | no | next |
 | A5 | Output-format resilience (schema + one cheap repair) | Mission | 8 | no | next |
 | A6 | Due dates, recurring missions, fast-tick, coast keeps in-flight | Mission | 8 | no | next |
-| B1-B3 | Generic venture resolution, per-venture CASL, generic researcher/division + prospecting | Venture | 8-12 | migration needs approval to apply | building |
-| B4 | Venture KPIs from real data | Venture | 4-5 | read-only function | building (kpis) |
+| B1-B3 | Generic venture resolution, per-venture CASL, generic researcher/division + prospecting | Venture | 8-12 | migration needs approval to apply | BUILT (stream/venture), in review |
+| B4 | Venture KPIs from real data | Venture | 4-5 | read-only function | BUILT, in review (deal stage names unverified) |
 | B5 | Deals/revenue capture (owner-confirmed) + reply tracking | Venture | 8-11 | migration | next |
 | B6 | Commission-partner program per venture | Venture | 3-4 | no | later |
-| C1 | Pre-deploy gate, migration lint, generated function manifest, parallel-work convention | Infra | 7 | no | building |
+| C1 | Pre-deploy gate, migration lint, generated function manifest, parallel-work convention | Infra | 7 | no | BUILT and used: gate passes 7/7 on PG16 + PG17.11 |
 | C2 | App smoke tests (jsdom) | Owner HQ | 5 | no | next |
 | D1 | Unified "Needs you" inbox + weekly digest | Owner HQ | 8 | migration | next |
 | E1 | Agent action tools through policy/capital gates | Mission | 24+ | DESIGN APPROVAL (touches protected gates) | proposal only |
@@ -48,3 +48,6 @@ One branch per stream off `overnight-build`, each owning disjoint files; migrati
 4. Decision: include push-key tables in the encrypted backup? (default no).
 5. Decision (later): approve the E1 design (agent tools through the existing gates).
 6. When you choose: authorize and fund the first real mission (F1). I will not do this myself.
+
+## 5. Sprint 1 outcome (Nov 13)
+Integrated on `integration/sprint1` (draft PR #3, includes PR #2): infra gate + mission engine (A1-A3) + generic ventures (B1-B4). Combined `scripts/gate.sh --strict` 7/7 on PG16 and PG17.11, 405 unit tests. Fixed during integration: lint arg-count bug on array defaults, rollback drill re-applied only 3 migrations (now full order, covers all new functions), PG16-backup-into-PG17 MAINTAIN grant false failure. Not done this sprint: A4-A6, B5, B6, C2, D1 (next), E1 (design approval). Nothing merged, deployed or migrated.
