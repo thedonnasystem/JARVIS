@@ -7,10 +7,10 @@ Goal: PR #3 and #4 live, six migrations applied, bot redeployed, everything dang
 |---|---|---|
 | PR #2 head | `dc9e0b01033784a0942a611c3345af8884468a86` (contained in #3; do NOT merge separately) | `git ls-remote`, GitHub REST |
 | PR #3 head | `db99772d8f340f4798887aac95c4fddb89d14d7f` -> `overnight-build` | same; mergeable clean |
-| PR #4 head | `460d533ab2f7cf17085408f85b50c9aa17041502` -> `integration/sprint1`; code head `4c90c20f9b0ff474210db3eb9d02f66a87ce4869`, later commits docs-only | same; clean |
+| PR #4 head | `2d61b0dd4e8bbefc9d3f6020820fd6689e146b24` at this writing -> `integration/sprint1`. Release CODE head is `4c90c20f9b0ff474210db3eb9d02f66a87ce4869`; every later commit changes only docs and `ops/` read-only files. Check at approval: `git diff --stat 4c90c20f9b0ff474210db3eb9d02f66a87ce4869 <PR4 head> -- migrations dist webapp '*.py' scripts sqltests webtests .github` must print nothing | same; clean |
 | overnight-build / deploy branch / Railway live | all `81c6a978044fe82e826f7d34a2399e007b5d1c31` | `ops/verify_deploy.sh`; fast-forward to #4 is possible |
 | Ancestry | #2 within #3 within #4; overnight-build within #3 and #4 | `git merge-base --is-ancestor` |
-| CI (`unit`, `migrations`) | success on #2, #3, 4c90c20f and 460d533a | GitHub check-runs |
+| CI (`unit`, `migrations`) | success on #2, #3, 4c90c20f; the final head's check-runs are re-checked below | GitHub check-runs |
 | Gate | `scripts/gate.sh --strict` 9/9 at 4c90c20f | local PG16 |
 | Production state | all `BEFORE-OK`; ledger ends `lockdown_v1`; 99 functions; security rows none; dry_run, kill false, pause api_credits, cap 330; heartbeat fresh | read-only SELECTs 13:3x-13:4x ET |
 | Function drift vs baseline | 3 changed (queue_outreach_drafts, queue_valuation_task, reserve_llm_budget) + 8 new = exactly the Phase 1 expectation; 0 missing; 0 unexpected | `ops/live_function_md5_20261113.txt` vs `ops/live_functions_baseline_20261112.txt` |
@@ -18,7 +18,7 @@ Goal: PR #3 and #4 live, six migrations applied, bot redeployed, everything dang
 
 ## 1. Approvals to give (copy one line per gate; each is separate)
 1. `APPROVE GATE 1A: merge PR #3 (head db99772d8f34) into overnight-build with a MERGE COMMIT (not squash, not rebase).`
-2. `APPROVE GATE 1B: retarget PR #4 to overnight-build and merge it (head 460d533ab2f7) with a MERGE COMMIT.`
+2. `APPROVE GATE 1B: retarget PR #4 to overnight-build and merge it (head 2d61b0dd4e8b, or newer with an empty code diff as above) with a MERGE COMMIT.`
 3. `APPROVE GATE 2: apply the six migrations then lockdown_v1, in the order in section 3, one file at a time.`
 4. `APPROVE GATE 3: fast-forward claude/telegram-claude-bot-59nusk to the merged overnight-build commit (Railway deploy).`
 Each gate starts only after the previous gate's verification passes. Not covered by these: anything in section 7.
