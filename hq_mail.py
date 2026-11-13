@@ -96,11 +96,28 @@ def refusal(row: dict, lead: dict | None = None) -> str | None:
     return None
 
 
+def normalize_addr(p) -> str | None:
+    """Mirror of SQL public.normalize_addr (a test runs one table of inputs through both): address inside <...> if present, lowercased,
+    +tag dropped from the local part, dots untouched. None = no usable single address (including any ';' or ',' list)."""
+    if p is None or re.search(r"[;,]", str(p)):
+        return None
+    s = str(p).strip(" ")
+    m = re.search(r"<([^<>]*)>", s)
+    a = (m.group(1) if m else s).strip(" ").lower()
+    if re.search(r"\s", a) or "@" not in a[1:] or not re.fullmatch(r"[^@]+@[^@]+", a):
+        return None
+    local, domain = a.split("@")
+    local = re.sub(r"\+.*$", "", local)
+    return f"{local}@{domain}" if local else None
+
+
 def suppressed(address) -> bool:
     """True when the address is on the do-not-contact list, or when that cannot be checked (fail closed: never send on doubt)."""
-    a = (address or "").strip().lower()
-    if not a:
+    if not (address or "").strip():
         return False
+    a = normalize_addr(address)
+    if a is None:
+        return True  # not one clean address (a list, or unparseable): never send on doubt
     try:
         return bool(_get(f"contact_suppressions?address=eq.{_q(a)}&select=address&limit=1"))
     except urllib.error.HTTPError as e:

@@ -2834,18 +2834,42 @@ grant execute on function public.venture_kpis(text) to service_role;
 -- venture_kpis already counts ('won','closed','closed_won','paid'). The pipeline therefore uses: pitched -> negotiating -> won | lost,
 -- and treats the legacy won-like names as already won (terminal). No CHECK constraint is added, so existing rows are never invalidated.
 
+-- One address normaliser for SQL and Python (hq_mail.normalize_addr must give the same answer; a test runs one table of inputs through both):
+-- take the address inside <...> if present, lowercase, trim, drop a +tag from the local part. Dots are NOT touched (gmail-only rule).
+-- Returns null when there is no usable address, or when the string is a multi-recipient list (';' or ',').
+create or replace function public.normalize_addr(p text) returns text
+language sql immutable set search_path to 'public' as $$
+  select case when p ~ '[;,]' or a is null or a ~ '\s' or position('@' in a) < 2 or a !~ '^[^@]+@[^@]+$' then null
+              else nullif(regexp_replace(split_part(a, '@', 1), '\+.*$', ''), '') || '@' || split_part(a, '@', 2) end
+  from (select lower(btrim(coalesce(substring(btrim(p) from '<([^<>]*)>'), btrim(p)))) a) s
+$$;
+
+-- Append-only: an opt-out is a legal record. There is NO unsuppress path in this sprint (an owner decision, later).
 create table if not exists public.contact_suppressions (
-  address text primary key check (address = lower(btrim(address)) and position('@' in address) > 1),
+  address text primary key check (coalesce(address = public.normalize_addr(address), false)),
   reason text not null,
   recorded_by text not null,
   source_lead uuid,
   recorded_at timestamptz not null default now()
 );
 alter table public.contact_suppressions enable row level security;
+create or replace function public.contact_suppressions_append_only() returns trigger
+language plpgsql set search_path to 'public' as $$
+begin
+  raise exception 'The do-not-contact list is append-only: entries cannot be changed or removed.' using errcode = 'P0001';
+end $$;
+drop trigger if exists contact_suppressions_append_only on public.contact_suppressions;
+create trigger contact_suppressions_append_only before update or delete on public.contact_suppressions
+  for each row execute function public.contact_suppressions_append_only();
+drop trigger if exists contact_suppressions_no_truncate on public.contact_suppressions;
+create trigger contact_suppressions_no_truncate before truncate on public.contact_suppressions
+  for each statement execute function public.contact_suppressions_append_only();
+grant select, insert on public.contact_suppressions to service_role;   -- explicit, so the revoke below is a real narrowing
+revoke update, delete, truncate on public.contact_suppressions from public, anon, authenticated, service_role;
 
 create table if not exists public.lead_replies (
   id uuid primary key default gen_random_uuid(),
-  lead_id uuid not null references public.leads(id),
+  lead_id uuid not null references public.leads(id) on delete cascade,
   venture_id uuid not null references public.ventures(id),
   kind text not null check (kind in ('interested','not_interested','question','unsubscribe','booked')),
   note text,
@@ -2868,13 +2892,13 @@ alter table public.venture_config enable row level security;
 
 -- Addresses already flagged do-not-contact before this migration are carried onto the suppression list (additive, conservative).
 insert into public.contact_suppressions (address, reason, recorded_by)
-select distinct lower(btrim(email)), 'lead already flagged do-not-contact before suppression list', 'migration'
-from public.leads where do_not_contact and email is not null and position('@' in btrim(email)) > 1
+select distinct public.normalize_addr(email), 'lead already flagged do-not-contact before suppression list', 'migration'
+from public.leads where do_not_contact and public.normalize_addr(email) is not null
 on conflict do nothing;
 
 create or replace function public.is_suppressed(p_address text) returns boolean
 language sql stable set search_path to 'public' as $$
-  select p_address is not null and exists (select 1 from public.contact_suppressions where address = lower(btrim(p_address)))
+  select public.normalize_addr(p_address) is not null and exists (select 1 from public.contact_suppressions where address = public.normalize_addr(p_address))
 $$;
 
 create or replace function public.mark_do_not_contact(p_lead uuid, p_reason text, p_by text) returns jsonb
@@ -2883,12 +2907,12 @@ declare l public.leads; addr text; n_leads int := 0; n_drafts int := 0; ids uuid
 begin
   select * into l from public.leads where id = p_lead;
   if not found then raise exception 'No such lead.'; end if;
-  addr := nullif(lower(btrim(coalesce(l.email, ''))), '');
-  if addr is not null and position('@' in addr) > 1 then
+  addr := public.normalize_addr(l.email);
+  if addr is not null then
     insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
     values (addr, left(coalesce(nullif(btrim(p_reason), ''), 'do not contact'), 300), coalesce(p_by, 'unknown'), l.id)
     on conflict do nothing;
-    select coalesce(array_agg(id), '{}') into ids from public.leads where lower(btrim(coalesce(email, ''))) = addr or id = l.id;
+    select coalesce(array_agg(id), '{}') into ids from public.leads where public.normalize_addr(email) = addr or id = l.id;
   else
     addr := null;
     ids := array[l.id];
@@ -2897,7 +2921,7 @@ begin
   get diagnostics n_leads = row_count;
   update public.outbox set status = 'rejected', decided_at = now()
    where status in ('draft','qa_passed','approved')
-     and (lead_id = any(ids) or (addr is not null and lower(btrim(coalesce(to_ref, ''))) = addr));
+     and (lead_id = any(ids) or (addr is not null and public.normalize_addr(to_ref) = addr));
   get diagnostics n_drafts = row_count;
   insert into public.audit_log (actor, action, target, detail)
   values (coalesce(p_by, 'unknown'), 'do_not_contact', 'leads/' || l.id,
@@ -2947,7 +2971,9 @@ begin
   select * into l from public.leads where id = p_lead;
   if not found then raise exception 'No such lead.'; end if;
   if l.do_not_contact or public.is_suppressed(l.email) then raise exception 'That lead is do-not-contact; no deal can be opened.'; end if;
-  if p_value_cents is not null and p_value_cents < 0 then raise exception 'Deal value cannot be negative.'; end if;
+  if p_value_cents is not null and (p_value_cents < 0 or p_value_cents > 10000000) then raise exception 'Deal value must be between 0 and 10,000,000 cents (CAD $100,000).'; end if;
+  -- one open deal per lead. Checked here (not only by the unique index below) because an existing table might already hold duplicates.
+  if exists (select 1 from public.deals where lead_id = l.id and stage in ('pitched','negotiating')) then raise exception 'That lead already has an open deal.'; end if;
   insert into public.deals (venture_id, lead_id, stage, value_cents, notes)
   values (l.venture_id, l.id, 'pitched', p_value_cents, left(p_note, 500)) returning id into d;
   insert into public.audit_log (actor, action, target, detail)
@@ -2983,6 +3009,7 @@ declare d public.deals; led uuid;
 begin
   if coalesce(p_by, '') not like 'owner%' then raise exception 'Only the owner confirms a win.'; end if;
   if p_amount_cents is null or p_amount_cents <= 0 then raise exception 'Confirming a win needs a positive amount.'; end if;
+  if p_amount_cents > 10000000 then raise exception 'Amount is above the 10,000,000 cent (CAD $100,000) limit; confirm a smaller amount or split it.'; end if;
   if p_ledger_status not in ('received','expected') then raise exception 'Say whether the money is received or expected.'; end if;
   select * into d from public.deals where id = p_deal for update;
   if not found then raise exception 'No such deal.'; end if;
@@ -2998,6 +3025,13 @@ begin
   insert into public.audit_log (actor, action, target, detail)
   values (p_by, 'deal_won', 'deals/' || d.id, jsonb_build_object('amount_cents', p_amount_cents, 'ledger', led, 'ledger_status', p_ledger_status));
   return jsonb_build_object('deal', d.id, 'amount_cents', p_amount_cents, 'ledger_id', led, 'ledger_status', p_ledger_status);
+end $$;
+
+-- One open deal per lead, enforced by the database only when the existing data allows it (the core table never forbade duplicates).
+do $$ begin
+  if not exists (select 1 from public.deals where lead_id is not null and stage in ('pitched','negotiating') group by lead_id having count(*) > 1) then
+    create unique index if not exists deals_one_open_per_lead on public.deals (lead_id) where lead_id is not null and stage in ('pitched','negotiating');
+  end if;
 end $$;
 
 -- ---------- config ----------
@@ -3126,6 +3160,9 @@ begin
   if new.lead_id is not null then
     select do_not_contact into dnc from public.leads where id = new.lead_id;
   end if;
+  if new.channel = 'email' and new.to_ref ~ '[;,]' then
+    raise exception 'One recipient per email: a list of addresses is not allowed.' using errcode = 'P0001';
+  end if;
   if coalesce(dnc, false) or (new.channel = 'email' and public.is_suppressed(new.to_ref)) then
     raise exception 'Do-not-contact: this lead or address has opted out (CASL). No draft, approval or send is allowed.' using errcode = 'P0001';
   end if;
@@ -3135,6 +3172,10 @@ drop trigger if exists outbox_dnc_guard on public.outbox;
 create trigger outbox_dnc_guard before insert or update on public.outbox
   for each row execute function public.outbox_dnc_guard();
 
+revoke all on function public.normalize_addr(text) from public, anon, authenticated;
+grant execute on function public.normalize_addr(text) to service_role;
+revoke all on function public.contact_suppressions_append_only() from public, anon, authenticated;
+grant execute on function public.contact_suppressions_append_only() to service_role;
 revoke all on function public.is_suppressed(text) from public, anon, authenticated;
 grant execute on function public.is_suppressed(text) to service_role;
 revoke all on function public.mark_do_not_contact(uuid, text, text) from public, anon, authenticated;

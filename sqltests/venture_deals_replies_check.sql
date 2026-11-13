@@ -177,13 +177,127 @@ begin
   if public.venture_config_get('no-such-venture') is not null then raise exception 'C11 config for unknown venture'; end if;
 end $$;
 
+
+-- ---------- address normalisation (the SAME table is parsed by test_hq_venture_ops.py and run through hq_mail.normalize_addr) ----------
+do $$
+declare bad text;
+begin
+  select string_agg(coalesce(c.input, 'NULL'), ' | ') into bad from (values
+    -- normalize cases begin
+    ('bob@x.com', 'bob@x.com'),
+    ('  Bob@X.COM ', 'bob@x.com'),
+    ('bob+z@x.com', 'bob@x.com'),
+    ('BOB+a+b@x.com', 'bob@x.com'),
+    ('x+@y.com', 'x@y.com'),
+    ('b.o.b@x.com', 'b.o.b@x.com'),
+    ('Bob <g@x.com>', 'g@x.com'),
+    ('Bob<g@x.com>', 'g@x.com'),
+    ('"Bob" <G+news@X.com>', 'g@x.com'),
+    ('a@b.com, c@d.com', null),
+    ('a@b.com;c@d.com', null),
+    ('a@b.com, <c@d.com>', null),
+    ('"Doe, Bob" <d@x.com>', null),
+    ('plain', null),
+    ('@x.com', null),
+    ('+tag@x.com', null),
+    ('a@b@c.com', null),
+    ('a b@x.com', null),
+    ('<>', null),
+    ('', null)
+    -- normalize cases end
+  ) as c(input, expected) where public.normalize_addr(c.input) is distinct from c.expected;
+  if bad is not null then raise exception 'N1 normalize_addr mismatches: %', bad; end if;
+  if public.normalize_addr(null) is not null then raise exception 'N2 null in, non-null out'; end if;
+end $$;
+
+do $$
+declare va uuid; la uuid; lb uuid; lc uuid; ld uuid; ok boolean; d1 uuid; led0 int; n int;
+begin
+  va := public.create_venture('dr-test-c', 'Dr Test C', 'revenue', 'revenue', 0, 'deal reply test venture C', 'test');
+  insert into public.leads (venture_id, name, email, status) values (va, 'Bob', 'bob@x.com', 'sent') returning id into la;
+  insert into public.leads (venture_id, name, email, status) values (va, 'Bob2', 'bob+zz@x.com', 'new') returning id into lb;
+  perform public.record_lead_reply(la, 'unsubscribe', 'stop', 'owner:test');
+  if (select address from public.contact_suppressions where source_lead = la) <> 'bob@x.com' then raise exception 'A0 suppression address not normalised'; end if;
+  if not (select do_not_contact from public.leads where id = lb) then raise exception 'A1 plus-address variant lead not flagged by the opt-out'; end if;
+  insert into public.leads (venture_id, name, email, status) values (va, 'Bob3', 'bob+later@X.com', 'new') returning id into lc;
+  if not (select do_not_contact from public.leads where id = lc) then raise exception 'A2 plus-address variant added later came back clean'; end if;
+  insert into public.leads (venture_id, name, email, status) values (va, 'Bob4', 'Bob <bob@x.com>', 'new') returning id into ld;
+  if not (select do_not_contact from public.leads where id = ld) then raise exception 'A2b decorated address came back clean'; end if;
+  declare t text; begin
+    foreach t in array array['bob+z@x.com', 'Bob<bob@x.com>', 'BOB@X.COM'] loop
+      begin insert into public.outbox (venture_id, agent, channel, to_ref, body, status) values (va, null, 'email', t, 'hi', 'draft'); raise exception 'A3 draft to % inserted', t;
+      exception when sqlstate 'P0001' then if sqlerrm like 'A3%' then raise; end if; end;
+    end loop;
+  end;
+  -- a plus variant opting out later also covers the plain address (matching goes both ways through normalize_addr)
+  insert into public.leads (venture_id, name, email, status) values (va, 'Amy', 'amy@x.com', 'sent') returning id into la;
+  insert into public.leads (venture_id, name, email, status) values (va, 'Amy2', 'amy@x.com', 'new') returning id into lb;
+  perform public.record_lead_reply(lb, 'unsubscribe', 'x', 'owner:test');
+  if not (select do_not_contact from public.leads where id = la) then raise exception 'A4 sibling lead not flagged'; end if;
+  -- multi-recipient strings are refused even when no address in them is suppressed
+  declare t text; begin
+    foreach t in array array['q@y.com;r@y.com', 'q@y.com, r@y.com', 'q@y.com,<r@y.com>'] loop
+      begin insert into public.outbox (venture_id, agent, channel, to_ref, body, status) values (va, null, 'email', t, 'hi', 'draft'); raise exception 'B1 multi-recipient % accepted', t;
+      exception when sqlstate 'P0001' then if sqlerrm like 'B1%' then raise; end if; end;
+    end loop;
+  end;
+  insert into public.outbox (venture_id, agent, channel, to_ref, body, status) values (va, null, 'email', 'Fine Person <fine@y.com>', 'hi', 'draft');  -- a clean decorated address is allowed
+
+  -- append-only suppression list: nobody can lift an opt-out
+  begin delete from public.contact_suppressions; raise exception 'L1 suppression rows deleted';
+  exception when sqlstate 'P0001' then if sqlerrm like 'L1%' then raise; end if; end;
+  begin update public.contact_suppressions set address = 'other@x.com'; raise exception 'L2 suppression rows updated';
+  exception when sqlstate 'P0001' then if sqlerrm like 'L2%' then raise; end if; end;
+  begin truncate public.contact_suppressions; raise exception 'L3 suppression list truncated';
+  exception when sqlstate 'P0001' then if sqlerrm like 'L3%' then raise; end if; end;
+  begin insert into public.contact_suppressions (address, reason, recorded_by) values ('Not Normal@X.com', 'x', 'test'); raise exception 'L4 un-normalised address stored';
+  exception when check_violation then null; end;
+  declare r text; p text; begin
+    foreach r in array array['service_role','anon','authenticated'] loop
+      foreach p in array array['UPDATE','DELETE','TRUNCATE'] loop
+        if has_table_privilege(r, 'public.contact_suppressions', p) then raise exception 'L5 % has % on the suppression list', r, p; end if;
+      end loop;
+    end loop;
+    if not has_table_privilege('service_role', 'public.contact_suppressions', 'INSERT') then raise exception 'L6 service_role cannot add an opt-out'; end if;
+  end;
+  if not public.is_suppressed('bob@x.com') then raise exception 'L7 opt-out lost'; end if;
+
+  -- money cap and one open deal per lead
+  select count(*) into led0 from public.ledger;
+  insert into public.leads (venture_id, name, email, status) values (va, 'Cap1', 'cap1@y.com', 'sent') returning id into la;
+  insert into public.leads (venture_id, name, email, status) values (va, 'Cap2', 'cap2@y.com', 'sent') returning id into lb;
+  begin perform public.create_deal(la, 10000001, 'owner:test'); raise exception 'M1 deal above the cap opened';
+  exception when raise_exception then if sqlerrm like 'M1%' then raise; end if; if sqlerrm not like '%100,000%' then raise exception 'M1b wrong error %', sqlerrm; end if; end;
+  d1 := public.create_deal(la, 10000000, 'owner:test');
+  begin perform public.confirm_deal_won(d1, 10000001, 'received', 'owner:test'); raise exception 'M2 win above the cap confirmed';
+  exception when raise_exception then if sqlerrm like 'M2%' then raise; end if; if sqlerrm not like '%100,000%' then raise exception 'M2b wrong error %', sqlerrm; end if; end;
+  if (select count(*) from public.ledger) <> led0 then raise exception 'M3 refused confirm wrote the ledger'; end if;
+  perform public.confirm_deal_won(d1, 10000000, 'expected', 'owner:test');
+  if (select count(*) from public.ledger where amount_cents = 10000000) <> 1 then raise exception 'M4 amount at the cap not recorded'; end if;
+  d1 := public.create_deal(lb, 100, 'owner:test');
+  begin perform public.create_deal(lb, 200, 'owner:test'); raise exception 'O1 second open deal for a lead';
+  exception when raise_exception then if sqlerrm like 'O1%' then raise; end if; if sqlerrm not like '%already has an open deal%' then raise exception 'O1b wrong error %', sqlerrm; end if; end;
+  begin insert into public.deals (venture_id, lead_id, stage) values (va, lb, 'negotiating'); raise exception 'O2 raw duplicate open deal inserted';
+  exception when unique_violation then null; end;
+  perform public.set_deal_stage(d1, 'lost', 'owner:test');
+  perform public.create_deal(lb, 300, 'owner:test');   -- once the first is closed a new deal is fine
+
+  -- replies follow their lead when it is deleted; the suppression list does not
+  insert into public.leads (venture_id, name, email, status) values (va, 'Del', 'del@y.com', 'sent') returning id into la;
+  perform public.record_lead_reply(la, 'unsubscribe', 'bye', 'owner:test');
+  delete from public.leads where id = la;
+  select count(*) into n from public.lead_replies where lead_id = la;
+  if n <> 0 then raise exception 'R-FK replies survived their lead'; end if;
+  if not public.is_suppressed('del@y.com') then raise exception 'R-FK2 deleting the lead lifted the opt-out'; end if;
+end $$;
+
 -- privileges: only service_role may execute any new function; anon/authenticated/public may not
 do $$
 declare f text; r text;
 begin
   foreach f in array array['public.is_suppressed(text)','public.mark_do_not_contact(uuid,text,text)','public.record_lead_reply(uuid,text,text,text)',
       'public.create_deal(uuid,integer,text,text)','public.set_deal_stage(uuid,text,text,text)','public.confirm_deal_won(uuid,integer,text,text,text)',
-      'public.venture_config_get(text)','public.set_venture_config(text,text,text,text)','public.lead_funnel(text)','public.venture_kpis(text)',
+      'public.normalize_addr(text)','public.contact_suppressions_append_only()','public.venture_config_get(text)','public.set_venture_config(text,text,text,text)','public.lead_funnel(text)','public.venture_kpis(text)',
       'public.leads_suppression_guard()','public.leads_dnc_cascade()','public.outbox_dnc_guard()'] loop
     foreach r in array array['anon','authenticated'] loop
       if has_function_privilege(r, f, 'execute') then raise exception 'P1 % can execute %', r, f; end if;

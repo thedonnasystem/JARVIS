@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 
 import hq
+import hq_mail
 import hq_ventures
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ MOVE_STAGES = ("pitched", "negotiating", "lost")
 CONFIG_KEYS = {"offer": "offer", "cta": "call_to_action", "call_to_action": "call_to_action", "sla": "reply_sla_hours", "reply_sla_hours": "reply_sla_hours"}
 FUNNEL_ORDER = ("new", "drafted", "approved_to_send", "sent", "replied", "booked", "won", "lost", "do_not_contact", "other")
 OWNER = "owner:telegram"
+MAX_CENTS = 10_000_000  # CAD $100,000, same cap as create_deal / confirm_deal_won
 
 
 def _q(v) -> str:
@@ -46,7 +48,7 @@ def _parse_cents(text: str) -> int | None:
     if not m:
         return None
     c = round(float(m.group(1).replace(",", "")) * 100)
-    return c if c > 0 else None
+    return c if 0 < c <= MAX_CENTS else None
 
 
 def find_lead(ref: str) -> dict | None:
@@ -98,7 +100,7 @@ def deal_new(ref: str, value_text: str = "", note: str = "", by: str = OWNER) ->
     if (value_text or "").strip():
         cents = _parse_cents(value_text)
         if cents is None:
-            return "Deal value must look like 1500 or 1,250.50 (CAD)."
+            return "Deal value must look like 1500 or 1,250.50 (CAD), at most $100,000."
     try:
         d = _rpc("create_deal", {"p_lead": lead["id"], "p_value_cents": cents, "p_by": by, "p_note": (note or "")[:500] or None})
     except Exception as e:
@@ -126,7 +128,7 @@ def deal_won(prefix: str, amount_text: str, ledger_status: str, note: str = "", 
     """The owner confirms a win and the amount. Nothing is inferred; the ledger row exists only because of this call."""
     cents = _parse_cents(amount_text)
     if cents is None:
-        return "Give the amount: /deal won <code> <amount> received|expected [note]"
+        return "Give the amount (positive, at most $100,000): /deal won <code> <amount> received|expected [note]"
     if (ledger_status or "").lower() not in ("received", "expected"):
         return "Say whether the money is received or expected: /deal won <code> <amount> received|expected [note]"
     d, err = _find_deal(prefix)
@@ -218,7 +220,10 @@ def dnc_problem(outbox_id: str) -> str | None:
         lead = (_get(f"leads?id=eq.{_q(ob['lead_id'])}&select=do_not_contact&limit=1") or [{}])[0]
         if lead.get("do_not_contact"):
             return "Cannot approve: this lead is do-not-contact (opted out). The draft stays unsent."
-    to = (ob.get("to_ref") or "").strip().lower()
+    raw = (ob.get("to_ref") or "").strip()
+    to = hq_mail.normalize_addr(raw)
+    if raw and ob.get("channel", "email") == "email" and to is None:
+        return "Cannot approve: the recipient is not one clean email address (a list or unreadable). Fix the draft's address first."
     try:
         if to and ob.get("channel", "email") == "email" and _get(f"contact_suppressions?address=eq.{_q(to)}&select=address&limit=1"):
             return "Cannot approve: that address opted out (do-not-contact in another venture or lead). The draft stays unsent."

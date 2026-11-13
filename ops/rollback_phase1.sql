@@ -159,6 +159,13 @@ drop function if exists public.create_deal(uuid, int, text, text);
 drop function if exists public.record_lead_reply(uuid, text, text, text);
 drop function if exists public.mark_do_not_contact(uuid, text, text);
 drop function if exists public.is_suppressed(text);
+-- normalize_addr is referenced by the suppression table's CHECK: drop that constraint first (the table and its append-only trigger stay: legal record)
+do $$ begin
+  if to_regclass('public.contact_suppressions') is not null then
+    alter table public.contact_suppressions drop constraint if exists contact_suppressions_address_check;
+  end if;
+end $$;
+drop function if exists public.normalize_addr(text);
 -- Optional, destructive, NOT part of a normal rollback (the suppression list is a legal record):
 -- drop table if exists public.lead_replies, public.venture_config, public.contact_suppressions;
 

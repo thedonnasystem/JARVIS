@@ -291,5 +291,64 @@ class Kpis(unittest.TestCase):
         self.assertNotIn("Funnel", t); self.assertIn("Revenue received $1,234.56", t)
 
 
+class Normalize(unittest.TestCase):
+    """Python and SQL must agree: the case table lives in sqltests/venture_deals_replies_check.sql (run through public.normalize_addr there)."""
+    def cases(self):
+        import re
+        with open(os.path.join(os.path.dirname(__file__), "sqltests", "venture_deals_replies_check.sql")) as fh:
+            sql = fh.read()
+        block = sql.split("-- normalize cases begin")[1].split("-- normalize cases end")[0]
+        out = []
+        for m in re.finditer(r"\('((?:[^']|'')*)',\s*(null|'((?:[^']|'')*)')\)", block):
+            out.append((m.group(1).replace("''", "'"), None if m.group(2) == "null" else m.group(3).replace("''", "'")))
+        return out
+
+    def test_same_table_as_sql(self):
+        cases = self.cases()
+        self.assertGreaterEqual(len(cases), 15)
+        for given, want in cases:
+            self.assertEqual(V.hq_mail.normalize_addr(given), want, repr(given))
+        self.assertIsNone(V.hq_mail.normalize_addr(None))
+
+    def test_plus_and_decorated_variants_hit_the_suppression_lookup(self):
+        import hq_mail
+        seen = []
+        def get(path): seen.append(path); return [{"address": "bob@x.com"}]
+        with mock.patch.object(hq_mail, "_get", side_effect=get):
+            for variant in ("bob+z@x.com", "Bob<BOB@x.com>", " BOB@X.COM "):
+                self.assertTrue(hq_mail.suppressed(variant))
+        self.assertTrue(all("address=eq.bob%40x.com" in p for p in seen))
+        with mock.patch.object(hq_mail, "_get", return_value=[]) as g:
+            self.assertTrue(hq_mail.suppressed("a@b.com, c@d.com")); self.assertTrue(hq_mail.suppressed("a@b.com;c@d.com"))
+            g.assert_not_called()  # a list is blocked without even asking
+
+    def test_dnc_problem_uses_the_normalised_address_and_refuses_lists(self):
+        ob = {"lead_id": None, "to_ref": "Bob <Bob+x@X.com>", "channel": "email"}
+        w = World(outbox=ob, suppressed=[{"address": "bob@x.com"}])
+        with mock.patch.object(hq, "_request", w):
+            self.assertIn("opted out", V.dnc_problem("ob1"))
+        self.assertIn("address=eq.bob%40x.com", [c[1] for c in w.calls if "contact_suppressions" in c[1]][0])
+        with mock.patch.object(hq, "_request", World(outbox={**ob, "to_ref": "a@b.com, c@d.com"})):
+            self.assertIn("not one clean email address", V.dnc_problem("ob1"))
+
+
+class Cap(unittest.TestCase):
+    def test_parse_cents_both_sides_of_the_cap(self):
+        self.assertEqual(V._parse_cents("100,000"), 10_000_000)
+        self.assertEqual(V._parse_cents("$100000.00"), 10_000_000)
+        self.assertIsNone(V._parse_cents("100000.01"))
+        self.assertIsNone(V._parse_cents("1000000"))
+
+    def test_commands_refuse_above_the_cap_without_any_write(self):
+        w = World()
+        with mock.patch.object(hq, "_request", w):
+            self.assertIn("at most $100,000", V.deal_new("12", "100000.01"))
+            self.assertIn("at most $100,000", V.deal_won("d1234567", "100000.01", "received"))
+        self.assertFalse(w.writes())
+        with mock.patch.object(hq, "_request", w):
+            V.deal_won("d1234567", "100000", "received")
+        self.assertEqual([c for c in w.calls if "confirm_deal_won" in c[1]][0][2]["p_amount_cents"], 10_000_000)
+
+
 if __name__ == "__main__":
     unittest.main()
