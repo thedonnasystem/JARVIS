@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import re
+import threading
 import urllib.error
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,7 @@ import hq
 import hq_wholesale
 import hq_systems
 import hq_missions
+import hq_evidence
 import hq_mail
 import hq_backup
 import hq_bank
@@ -73,6 +75,9 @@ MAX_FETCHES = 3
 FETCH_MAX_TOKENS = 3000  # per page, keeps a fetch to about 1.5 cents of input on the standard model
 
 
+_CAPTURE = threading.local()  # per-thread list the engine fills with the retrieved page/search text of ONE research call
+
+
 def can_search(slug: str) -> bool:
     return slug in SEARCH_AGENTS or slug.endswith(SEARCH_AGENT_SUFFIXES)
 
@@ -101,6 +106,12 @@ def _complete(model: str, system: str, user: str, max_tokens: int, search: bool 
             )
         else:
             raise
+    sink = getattr(_CAPTURE, "sink", None)
+    if sink is not None:  # keep the retrieved text (untrusted data) for evidence verification; a capture failure never fails the call
+        try:
+            sink.extend(hq_evidence.extract_sources(resp.content))
+        except Exception:
+            logger.exception("HQ evidence capture failed")
     # Keep only the final answer: text written before or between searches is the model thinking out loud.
     parts: list[str] = []
     for b in resp.content:
@@ -651,19 +662,43 @@ def _store_facts(t: dict, text: str) -> int:
     section = text.split("FACTS:", 1)
     if len(section) < 2:
         return 0
+    snaps = _snapshots_for(t)
     now = datetime.now(timezone.utc)
-    saved = 0
+    saved, skipped = 0, []
     for m in FACT_LINE.finditer(section[1]):
         if saved >= MAX_FACTS_PER_AUDIT:
             break
         fact, url, conf = m.group(1).strip(), m.group(2).rstrip(").,"), m.group(3).lower()
         if len(fact) < 15:
             continue
+        # R6: a fact reaches company memory only when a stored copy of the cited page actually says it. Otherwise it is SKIPPED
+        # (smallest safe behaviour: nothing unverified is written; the audit row lists what was dropped and why).
+        v = hq_evidence.verify_fact(fact, url, snaps)
+        if not v["ok"]:
+            skipped.append(f"{fact[:80]} ({v['code']})")
+            continue
+        if v["cls"] in hq_evidence.NEEDS_TWO_DOMAINS and conf == "high":
+            conf = "medium"  # one source is not the two independent domains the design asks for on money/legal/medical facts
         _insert("memory", {"venture_id": venture, "agent": t["assigned_agent"], "kind": "fact", "content": fact[:600],
                            "source": url[:500], "confidence": conf, "verified_at": now.isoformat(),
                            "expires_at": (now + timedelta(days=FACT_TTL_DAYS)).isoformat()})
         saved += 1
+    if skipped:
+        try:
+            _audit(t["assigned_agent"], "facts_unverified_skipped", str(t.get("id")), {"skipped": skipped[:8], "stored": saved})
+        except Exception:
+            logger.exception("HQ facts audit failed")
     return saved
+
+
+def _snapshots_for(t: dict) -> list[dict]:
+    """Stored retrieved text this task's FACTS may be checked against: the whole mission's snapshots, else the task's own."""
+    key = f"mission_id=eq.{_q(t['mission_id'])}" if t.get("mission_id") else f"task_id=eq.{_q(t.get('id'))}"
+    try:
+        rows = _get(f"evidence_sources?{key}&select=id,kind,title,url,final_url,host_norm,published_at,content_sha256,text,flags&limit=60")
+    except Exception:
+        return []  # no readable snapshots: facts are skipped (fail closed)
+    return [r for r in rows if isinstance(r, dict)]
 
 
 FETCH_HEAVY_PREFIXES = ("Find Donna prospects", "Find public contact emails", "Value fixer leads")
@@ -896,6 +931,13 @@ def _bank_watch() -> None:
 
 
 def _work_tasks() -> bool:
+    try:
+        return _work_tasks_inner()
+    finally:
+        _CAPTURE.sink = None  # never leave a capture list armed for a later, unrelated model call
+
+
+def _work_tasks_inner() -> bool:
     """Run up to MAX_TASKS_PER_TICK todo tasks. Returns False if the gateway blocked (stop for now)."""
     now = _now()
     tasks = _get(
@@ -922,6 +964,7 @@ def _work_tasks() -> bool:
         prompt += _attached_valuation_leads(t)
         prompt += _attached_drafts(t)
         prompt += _company_knowledge(t.get("venture_id"))
+        _CAPTURE.sink = [] if can_search(t["assigned_agent"]) else None
         try:
             text = run_turn_sync(t["assigned_agent"], prompt, TASK_MAX_OUTPUT, f"task {t['id']}")
         except GatewayBlocked as e:
@@ -949,9 +992,15 @@ def _work_tasks() -> bool:
                 _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "todo", "due_at": due, "updated_at": _now(),
                                                       "result": f"{RETRY_MARK} {str(e)[:300]}"})
             continue
+        captured, _CAPTURE.sink = getattr(_CAPTURE, "sink", None), None
         if len((text or "").strip()) < 2:
             _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked", "result": "error: empty or near-empty model output; not marked done", "updated_at": _now()})
             continue
+        if captured:
+            try:  # snapshots first: the verifier and the FACTS check read them
+                hq_evidence.save_snapshots(t, captured, _insert, audit=lambda a, tg, d: _audit(t["assigned_agent"], a, tg, d))
+            except Exception:
+                logger.exception("HQ evidence snapshot save failed")
         try:
             _log_prediction(t["assigned_agent"], t["id"], text, can_search(t["assigned_agent"]))
             _queue_audit(t, text)

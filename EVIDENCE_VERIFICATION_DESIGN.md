@@ -1,6 +1,6 @@
 # Evidence verification v2: checking the source text, not just the citation
 
-Status: DESIGN ONLY (no code, no migration). All names below are proposals. Scope: the mission engine's A4 stage (`check_evidence`, `canonicalize`, `parse_verification` in `hq_missions.py`; `MISSION_ENGINE.md` section A4).
+Status: phases 1-3 BUILT on dev branch hardening/evidence-build (nothing merged or deployed); the phase 4 judge is a stub; phase 5 is partial. Section 9 lists built vs deferred; where it differs from sections 0-8, section 9 is what the code does. Names below were proposals. Scope: the mission engine's A4 stage (`check_evidence`, `canonicalize`, `parse_verification` in `hq_missions.py`; `MISSION_ENGINE.md` section A4).
 
 ## 0. Problem
 
@@ -181,3 +181,37 @@ Explicit statement: NOTHING in this design changes spend controls, the kill swit
 - Claims about the future, intent, or absence ("no competitor exists"): absence cannot be shown by a presence check.
 - Independence: two domains can share an upstream source.
 - That the classifier catches every material claim; the owner remains the final control for money, legal and medical decisions.
+
+
+## 9. Build status (branch `hardening/evidence-build`, Nov 13, 2026)
+
+Everything below ran on a scratch Postgres and fakes: no production access, no network, no model call, no spend. Nothing is merged or deployed; the migration is applied nowhere except the scratch replica.
+
+### Built
+| Design item | Where | Notes |
+|---|---|---|
+| s.2.1 capture | `hq_evidence.extract_sources`; hook in `hq_engine._complete` (a thread-local list, armed only by `_work_tasks` for search-capable agents); `hq_evidence.save_snapshots` called in `_work_tasks` before facts/leads/etc | `_complete` / `run_turn_sync` signatures unchanged. A capture failure is logged and never fails the task. Field names follow the public web_fetch / web_search result shapes and are tested with fixtures ONLY: confirm against a real response (still open) |
+| s.2.2-2.3 table and access | `migrations/20261116_evidence_sources_v1.sql` (ordered before lockdown), `sqltests/evidence_sources_check.sql`, rollback added to `ops/rollback_sprint12.sql` and `ops/rollback_phase1.sql`, `ops/EXPECTED_NEW_FUNCTIONS.txt` regenerated, `dist/APPLY_ALL.sql` rebuilt | Additions to the design: `title`, `flags jsonb` (injection / hidden-control flags), `untrusted` fixed true by CHECK, `mission_id` nullable (a non-mission auditor task is keyed by `task_id`; a CHECK requires one of them), FK `task_id` is `on delete set null` (the one UPDATE the append-only trigger allows). service_role: select + insert only. `purge_evidence_sources(days)` deletes only snapshots of finished missions, minimum 7 days; nothing schedules it yet |
+| s.3a tier A | `hq_evidence.check_snapshot`, `check_span`, `verify_claim`, `verify_evidence` | Hash recompute; verbatim quote at word boundaries after NFKC / case-fold / quote and dash unification, with hidden-control rejection; numbers with scale and unit class (`$5k` = `5,000`, `%` vs `$` distinct); names; key-term share; negation / hedge / example detectors; search-snippet-only rejection; cited host vs fetched host (IDNA). Deviation from the design text: numbers and names must be in the QUOTED sentence itself (stricter than sentence + neighbours); negation / hedge / example are scanned on the sentence plus one neighbour each side |
+| s.3c corroboration, recency | same | Two registrable domains (approximate eTLD+1 table) and mirror similarity > 0.9 counts once, for money / legal / medical; money / legal pages published more than 24 months ago are STALE; a legal claim with no extractable date is STALE. A source that supports plus a source that contradicts -> DISPUTED |
+| s.4 composition | `hq_missions._evidence_v2`, called in `_handle_verifying` after `parse_verification` and `check_evidence` | Can only set `verified = False`. Mode `HQ_EVIDENCE_V2` = `off` / `shadow` (DEFAULT: compute, audit `mission_evidence_v2`, never downgrade) / `enforce` (downgrade, audit `mission_evidence_v2_downgraded`, gaps flow into the existing re-plan). `check_evidence` also accepts quotes and bare `S:<id>` citations that trace to a stored snapshot (this only adds ways to trace; nothing was relaxed) |
+| s.5 judge (tier B) | `hq_evidence.judge_entailment` | STUB: needs a `caller(system, user)`, which is `None` unless a deployment wires `hq_missions.JUDGE_CALLER` AND sets `HQ_EVIDENCE_JUDGE=1`. Nonce fence; abort if the fence or nonce appears in the page; strict JSON schema; the returned quote must re-verify verbatim and pass the number / name / modality test; `no`, `partial`, extra keys, prose or an invented quote are discarded; ceiling 6 calls per verification. No real caller exists, so $0 and nothing yet routes through the gateway |
+| injected instructions | `hq_evidence.scan_injection`, snapshot `flags`, owner message and mission result note | Six pattern families flagged: ignore-instructions, role markers, tool-call syntax, policy overrides, forged VERIFIED / EVIDENCE / FACTS labels, secret exfiltration. Flags are informational only. The module is pure (a test patches `hq._request` to raise), never parses page text for labels, and its source is asserted free of network / model imports |
+| verifier prompt | `verification_detail(m, results, snaps)` | Lists `S:<8 hex> kind url` handles only (never page text) and asks for `EVIDENCE: <claim> | S:<id> "<verbatim quote>"` |
+| R6 FACTS | `hq_engine._store_facts`, `_snapshots_for`, `hq_evidence.verify_fact` | ALWAYS ON (not behind the mode flag, because it only reduces what is written). A fact is stored only if a stored PAGE snapshot of the cited URL has ONE sentence supporting it (numbers, names, >= 60% key words, no negation / hedge / example mismatch, hash intact). Otherwise it is SKIPPED (not stored as pending: smallest change, and there is no schema for a pending state) and listed in audit `facts_unverified_skipped`. A money / legal / medical fact from a single source has `high` capped to `medium` |
+| R3 | `hq_missions.canonicalize` | A decorated VERIFIED line is never YES, even alone. A lone decorated NO still counts (ignoring a NO is the unsafe direction). MISSION_VERDICT keeps its tolerant forms on purpose (a GO cannot complete a mission) |
+| R5 | `hq_missions.unstick_recurrence`, `/mission unstick <id>` | Looks for a child first: a child exists -> repair the link only; none -> release the claim, conditional on it still being `claiming`. Idempotent. The successor is still made by `create_mission` behind the kill switch / pause / focus / live-cap gates |
+
+### Tests
+`test_hq_evidence.py` (58 tests): capture; fixtures F1-F8, F10-F16, F20-F25 of s.6, plus F9 stale, F17-F19 judge and canary; a mutation harness (10 mutants of the positive control must all stop being SUPPORTED, and three safeguards disabled in turn must let their fixture through, which proves the fixtures have teeth); injected payloads per class; the mission end to end in all three modes; FACTS; unstick. Also `test_hq_missions.LoneDecoratedVerdictTests` (R3) and `sqltests/evidence_sources_check.sql` (grants, RLS, append-only, constraints, purge, FK detach; run by the replica harness).
+
+### Deferred (not built)
+- A real judge caller through `hq_meter.metered_create`, the per-mission judge cents ceiling (s.4), `HQ_EVIDENCE_JUDGE_MODEL` (D3), judge-vs-author model separation.
+- Detecting material claims the verifier did NOT list (s.4 "unverified material claim"): the classifier is applied only to the claims the verifier lists.
+- Echo guard (T10); cloaking (T4, unsolvable by HQ); `published_at` beyond a best-effort regex; PDF / binary capture; redirect allowlist; content-type allowlist.
+- A job that calls `purge_evidence_sources`; the D4 180-day class.
+- Weekly metrics (s.6.7), shadow-vs-owner disagreement tracking, and a false-reject measurement on real pages (needs at least 20 captured pages; none exist). Confirming the SDK block field names against a live response.
+- Flipping `HQ_EVIDENCE_V2` from shadow to enforce: an owner decision (D2) after a shadow period.
+
+### Honest limits of what is built
+The check proves the STORED TEXT says it, not that the page is true. Deterministic matching is conservative and will reject some true paraphrases (shadow mode exists to measure that). Corroboration is by registrable domain, so two sites that copy one upstream still pass. Hostile text that merely contains words like "not", "example" or "may" next to a real claim can only make verification fail (a denial of verification, never a false pass). The verifier's own fetches also become snapshots of the mission; the verifier cannot cite them because their ids do not exist yet when it writes.

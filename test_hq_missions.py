@@ -1276,8 +1276,9 @@ class BlockerRegressionTests(unittest.TestCase):
             self.assertFalse(self.pv(t)["verified"], t)
 
     def test_last_strict_line_decides_and_lone_loose_line_is_accepted(self):
-        self.assertTrue(self.pv("## Verified - yes")["verified"])
-        self.assertTrue(self.pv("1. Verified: YES")["verified"])
+        # R3: a lone DECORATED yes is no longer a verdict (see LoneDecoratedVerdictTests); the canonical forms still are
+        self.assertTrue(self.pv("VERIFIED: YES")["verified"])
+        self.assertTrue(self.pv("**Verified:** yes")["verified"])
         self.assertTrue(self.pv("note\n- VERIFIED: NO is what the page said\nVERIFIED: YES")["verified"])   # loose NO is dropped, strict YES decides
 
     def test_loose_second_verdict_line_is_ignored_not_counted(self):
@@ -1359,6 +1360,30 @@ class EvidenceStrictnessTests(unittest.TestCase):
 
     def test_untrusted_fetched_text_limit_is_documented(self):
         self.assertIn("untrusted", open("MISSION_ENGINE.md").read().lower())
+
+
+class LoneDecoratedVerdictTests(unittest.TestCase):
+    """R3 (SECURITY_REVIEW_SPRINT2): a lone decorated 'Verified - yes' line must not count as YES unless it is the canonical label form."""
+    pv = staticmethod(M.parse_verification)
+
+    def test_lone_decorated_yes_is_not_a_verdict(self):
+        for t in ("## Verified - yes", "1. Verified: YES", "- VERIFIED: YES", "* **VERIFIED** - yes", "### verified = yes",
+                  "2) Verified - Yes\nEVIDENCE: price menu backed by 3 competitor sites | https://example.com/a"):
+            r = self.pv(t)
+            self.assertFalse(r["verified"], t)
+            self.assertFalse(r["has_verdict"], t)   # so the engine asks for ONE format repair instead of completing
+
+    def test_canonical_forms_still_count(self):
+        for t in ("VERIFIED: YES", "verified: yes", "**VERIFIED:** YES", "__Verified:__ yes", "  VERIFIED:   YES — checked"):
+            self.assertTrue(self.pv(t)["verified"], t)
+
+    def test_lone_decorated_no_still_counts_because_ignoring_a_no_is_unsafe(self):
+        r = self.pv("## Verified - no")
+        self.assertTrue(r["has_verdict"]); self.assertFalse(r["verified"])
+
+    def test_decorated_yes_next_to_canonical_no_or_canonical_yes_changes_nothing(self):
+        self.assertFalse(self.pv("## Verified - yes\nVERIFIED: NO")["verified"])
+        self.assertTrue(self.pv("## Verified - no\nVERIFIED: YES")["verified"] is True)   # an earlier decorated line never competes with the canonical one
 
 
 class RecurrenceClaimTests(DueAndRecurrenceTests):
