@@ -134,6 +134,21 @@ class BuildSandbox(unittest.TestCase):
             else:
                 self.assertEqual(out.get(k), "", k)
 
+    def test_bash_and_read_gates_block_parent_environment_reads(self):
+        for cmd in ("cat /proc/1/environ", "tr '\\0' '\\n' < /proc/$PPID/environ", "cat .env", "python3 -c 'import os;print(os.environ)'", "printenv"):
+            self.assertTrue(self.bot._is_dangerous_bash(cmd)[0], cmd)
+        self.assertFalse(self.bot._is_dangerous_bash("ls -la && python3 hello.py")[0])
+        for path in ("/proc/self/environ", "/app/.env", "/proc/1/environ"):
+            r = asyncio.run(self.bot.build_permission_gate("Read", {"file_path": path}, None))
+            self.assertEqual(type(r).__name__, "PermissionResultDeny", path)
+
+    def test_build_env_also_blanks_dsn_auth_and_restore_vars(self):
+        env = {"RESTORE_DB_URL": "x", "RESTORE_B2_AUTH": "x", "SOME_DSN": "x", "POSTGRES_URL": "x", "PATH": "/bin"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            out = self.bot._build_env()
+        for k in ("RESTORE_DB_URL", "RESTORE_B2_AUTH", "SOME_DSN", "POSTGRES_URL"):
+            self.assertEqual(out.get(k), "", k)
+
     def test_both_build_sessions_pass_the_clean_env(self):
         src = (ROOT / "bot.py").read_text()
         self.assertEqual(len(re.findall(r"ClaudeAgentOptions\(", src)), src.count("env=_build_env()"))

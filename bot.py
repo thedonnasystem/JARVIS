@@ -750,6 +750,10 @@ def _is_dangerous_bash(command: str) -> tuple[bool, str]:
             return True, f"contains '{phrase.strip()}'"
     if GH_CLI_PATTERN.search(lowered):
         return True, "uses the GitHub CLI (gh)"
+    # Audit review F4b: blanking the child's env does not stop it reading the PARENT's environment through /proc or a dotenv file.
+    for needle in ("/proc", "environ", ".env", "$ppid", "printenv"):
+        if needle in lowered:
+            return True, f"may read process or file secrets ('{needle}')"
     piping_to_shell = any(p in lowered for p in ("| sh", "|sh", "| bash", "|bash"))
     if ("curl" in lowered or "wget" in lowered) and piping_to_shell:
         return True, "downloads and pipes into a shell"
@@ -809,6 +813,12 @@ async def build_permission_gate(tool_name, input_data, context):
             )
         return PermissionResultAllow(updated_input=input_data)
 
+    if tool_name in ("Read", "Grep", "Glob"):
+        probe = " ".join(str(v) for v in input_data.values()).lower()
+        if any(n in probe for n in ("/proc", "environ", ".env")):
+            return PermissionResultDeny(message="Reading process environment or dotenv files is blocked.")
+        return PermissionResultAllow(updated_input=input_data)
+
     if tool_name == "Bash":
         command = str(input_data.get("command", ""))
         dangerous, reason = _is_dangerous_bash(command)
@@ -852,7 +862,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # (the Agent SDK lets options.env override the inherited environment). Only the model key the session itself needs is kept.
 BUILD_ENV_KEEP = frozenset({"ANTHROPIC_API_KEY"})
 _SECRET_ENV_NAME = re.compile(
-    r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|WEBHOOK|DATABASE_URL|SUPABASE|RESEND|MAIL_|TELEGRAM|N8N|GOOGLE|^BW_|^B2_|BACKUP|JARVIS_OWNER", re.I)
+    r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|WEBHOOK|DATABASE_URL|SUPABASE|RESEND|MAIL_|TELEGRAM|N8N|GOOGLE|^BW_|^B2_|BACKUP|JARVIS_OWNER|AUTH|DSN|_URL$|^RESTORE_|POSTGRES|PGPASS|PASS", re.I)
 
 
 def _build_env() -> dict[str, str]:
@@ -2268,7 +2278,7 @@ async def run_plan_phase(
                 cwd=str(WORKSPACE_DIR),
                 permission_mode="plan",
                 allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch"],
-                disallowed_tools=["Write", "Edit", "Bash", "NotebookEdit", "AskUserQuestion"],
+                disallowed_tools=["Write", "Edit", "Bash", "NotebookEdit", "AskUserQuestion", "Read(//proc/**)", "Read(**/.env*)"],
                 max_budget_usd=sess.max_usd,
                 env=_build_env(),
             ),

@@ -24,8 +24,7 @@ create table if not exists public.evidence_sources (
   bytes_original integer,
   untrusted boolean not null default true check (untrusted),
   flags jsonb not null default '[]'::jsonb,
-  created_at timestamptz not null default now(),
-  check (mission_id is not null or task_id is not null)
+  created_at timestamptz not null default now()
 );
 create index if not exists evidence_sources_mission_idx on public.evidence_sources (mission_id);
 create index if not exists evidence_sources_task_idx on public.evidence_sources (task_id);

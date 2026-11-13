@@ -40,8 +40,11 @@ begin
   exception when check_violation then null; end;
   begin insert into public.evidence_sources (mission_id, kind, url, final_url, host_norm, content_sha256, text, untrusted) values (mid, 'page', 'u', 'u', 'h', h, 'x', false); raise exception 'E11 untrusted=false accepted';
   exception when check_violation then null; end;
-  begin insert into public.evidence_sources (kind, url, final_url, host_norm, content_sha256, text) values ('page', 'u', 'u', 'h', h, 'x'); raise exception 'E12 row with no mission or task accepted';
-  exception when check_violation then null; end;
+  -- E12 (review finding 4): a mission-less snapshot of an ordinary search task must not block deleting that task
+  declare t12 uuid; begin insert into public.tasks (title, assigned_agent) values ('e12', 'research') returning id into t12;
+    insert into public.evidence_sources (task_id, kind, url, final_url, host_norm, content_sha256, text) values (t12, 'page', 'u', 'u', 'h12', h, 'x12');
+    delete from public.tasks where id = t12;
+    if not exists (select 1 from public.evidence_sources where text = 'x12' and task_id is null) then raise exception 'E12 mission-less snapshot lost or task delete blocked'; end if; end;
   begin insert into public.evidence_sources (mission_id, kind, url, final_url, host_norm, content_sha256, text) values (gen_random_uuid(), 'page', 'u', 'u', 'h', h, 'x'); raise exception 'E13 unknown mission accepted';
   exception when foreign_key_violation then null; end;
   begin insert into public.evidence_sources (mission_id, kind, url, final_url, host_norm, content_sha256, text) values (mid, 'video', 'u', 'u', 'h', h, 'x'); raise exception 'E14 bad kind accepted';

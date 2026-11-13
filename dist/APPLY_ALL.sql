@@ -3510,6 +3510,33 @@ grant execute on function public.outbox_dnc_guard() to service_role;
 revoke all on function public.mark_do_not_contact(uuid, text, text) from public, anon, authenticated;
 grant execute on function public.mark_do_not_contact(uuid, text, text) to service_role;
 
+
+-- Review finding 1 (Major): an unclean email (e.g. jane@my_company.com) made the raw-flag cascade loop forever: the trigger called
+-- mark_do_not_contact, which updated leads.do_not_contact again (the trigger fires on "update of" even when the value is unchanged), and with a
+-- NULL key is_suppressed() is never true. Now the cascade only acts on the transition false -> true, so the nested update ends the recursion.
+create or replace function public.leads_dnc_cascade() returns trigger
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  if tg_op = 'UPDATE' and old.do_not_contact then return null; end if;
+  if new.do_not_contact and (new.email is null or not public.is_suppressed(new.email)) then
+    perform public.mark_do_not_contact(new.id, 'lead flagged do-not-contact', 'system:trigger');
+  end if;
+  return null;
+end $$;
+
+-- Review finding 3: rows stored by 20261115 used the OLD normaliser, so e.g. "jane@acme.com." no longer matched the new key. Re-key every
+-- stored suppression and every do-not-contact lead under the strict form (insert-only; the table is append-only).
+insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+select distinct on (public.normalize_addr(address)) public.normalize_addr(address), reason, 'migration:rekey', source_lead
+from public.contact_suppressions where public.normalize_addr(address) is not null
+on conflict do nothing;
+insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+select distinct on (public.normalize_addr(email)) public.normalize_addr(email), 'lead flagged do-not-contact (re-keyed)', 'migration:rekey', id
+from public.leads where do_not_contact and public.normalize_addr(email) is not null
+on conflict do nothing;
+revoke all on function public.leads_dnc_cascade() from public, anon, authenticated;
+grant execute on function public.leads_dnc_cascade() to service_role;
+
 -- ===== 20261116_evidence_sources_v1.sql =====
 -- Evidence verification v2, phase 1 (EVIDENCE_VERIFICATION_DESIGN.md s.2): a snapshot of the page / search text the engine actually
 -- retrieved during a mission task, so a claim can later be compared with the SOURCE TEXT instead of the researcher's paraphrase.
@@ -3537,8 +3564,7 @@ create table if not exists public.evidence_sources (
   bytes_original integer,
   untrusted boolean not null default true check (untrusted),
   flags jsonb not null default '[]'::jsonb,
-  created_at timestamptz not null default now(),
-  check (mission_id is not null or task_id is not null)
+  created_at timestamptz not null default now()
 );
 create index if not exists evidence_sources_mission_idx on public.evidence_sources (mission_id);
 create index if not exists evidence_sources_task_idx on public.evidence_sources (task_id);

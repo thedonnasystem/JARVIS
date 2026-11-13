@@ -528,4 +528,27 @@ begin
   perform pg_temp.expect('H26 thirteenth verification task', format('insert into public.tasks (title, assigned_agent, mission_id, mission_role) values (''v13'', ''research'', %L, ''verify'')', m), '%too many%');
 end $$;
 
+-- I  review findings (final release review): unclean address cannot loop the cascade; old-key suppressions are re-keyed
+do $$
+declare v uuid; l uuid; r text; n int;
+begin
+  insert into public.ventures (slug, name, kind) values ('audit-i', 'Audit I', 'revenue') returning id into v;
+  -- I1 raw flag on a lead whose address normalises to NULL (underscore domain): must complete, not recurse to "stack depth limit exceeded"
+  insert into public.leads (venture_id, name, email) values (v, 'Unclean', 'jane@my_company.com') returning id into l;
+  r := pg_temp.refused(format('update public.leads set do_not_contact = true where id = %L', l));
+  if r is not null then raise exception 'AUDIT FAIL I1 raw DNC flag on an unclean address failed: %', r; end if;
+  if not (select do_not_contact from public.leads where id = l) then raise exception 'AUDIT FAIL I1b lead not flagged'; end if;
+  -- I2 same through the function
+  insert into public.leads (venture_id, name, email) values (v, 'Unclean2', 'jane@münchen.de') returning id into l;
+  r := pg_temp.refused(format('select public.mark_do_not_contact(%L, ''t'', ''test'')', l));
+  if r is not null then raise exception 'AUDIT FAIL I2 mark_do_not_contact on a non-ASCII address failed: %', r; end if;
+  -- I3 a clean address still cascades to every lead sharing it
+  insert into public.leads (venture_id, name, email) values (v, 'One', 'dup@example.com') returning id into l;
+  insert into public.leads (venture_id, name, email) values (v, 'Two', 'DUP+x@Example.com.');
+  update public.leads set do_not_contact = true where id = l;
+  select count(*) into n from public.leads where lower(email) like 'dup%' and do_not_contact;
+  if n <> 2 then raise exception 'AUDIT FAIL I3 clean cascade marked % of 2 leads', n; end if;
+  if not public.is_suppressed('dup@example.com') then raise exception 'AUDIT FAIL I3b address not suppressed'; end if;
+end $$;
+
 rollback;
