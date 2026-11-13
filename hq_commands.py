@@ -30,6 +30,7 @@ import hq_succession
 import hq_tools
 import hq_org
 import hq_ventures
+import hq_mail
 import hq_capital
 import hq_payments
 import hq_accounts
@@ -65,14 +66,34 @@ def _count(path: str) -> int:
     return len(_get(path))
 
 
+COMPANY_WORDS = ("company", "holding", "all")  # explicit words for "not a venture" in /money
+
+
+def resolve_venture(word: str | None) -> tuple[str | None, str | None, str | None]:
+    """Venture argument -> (id, slug, error). Order: the old short aliases (unchanged), then a real slug, then a venture name.
+    An empty word is (None, None, None). An unknown word is an error, never a silent fall-through to company-wide."""
+    w = (word or "").strip().lstrip("@").lower()
+    if not w:
+        return None, None, None
+    slug = VENTURE_ALIASES.get(w)
+    if slug:
+        rows = _get(f"ventures?slug=eq.{_q(slug)}&select=id,slug&limit=1")
+        if rows:
+            return rows[0]["id"], rows[0]["slug"], None
+    norm = re.sub(r"[^a-z0-9]+", "-", w).strip("-")
+    if norm:
+        rows = _get(f"ventures?slug=eq.{_q(norm)}&select=id,slug&limit=1")
+        if rows:
+            return rows[0]["id"], rows[0]["slug"], None
+        for r in _get("ventures?select=id,slug,name&limit=500"):  # name match, exact, case-insensitive
+            if re.sub(r"[^a-z0-9]+", "-", (r.get("name") or "").lower()).strip("-") == norm:
+                return r["id"], r["slug"], None
+    return None, None, f"No venture called '{word}'. /venture list shows them."
+
+
 def _venture_id(word: str | None) -> tuple[str | None, str | None]:
-    if not word:
-        return None, None
-    slug = VENTURE_ALIASES.get(word.lower())
-    if not slug:
-        return None, None
-    rows = _get(f"ventures?slug=eq.{_q(slug)}&select=id,slug&limit=1")
-    return (rows[0]["id"], rows[0]["slug"]) if rows else (None, None)
+    vid, vslug, _ = resolve_venture(word)
+    return vid, vslug
 
 
 def parse_amount(s: str) -> int | None:
@@ -149,8 +170,12 @@ async def hq_money(update, context) -> None:
     if cents is None:
         await update.message.reply_text("Amount must be a positive number, like 450 or 1,250.50")
         return
-    vid, vslug = _venture_id(args[2] if len(args) > 2 else None)
-    note = " ".join(args[3:] if vid else args[2:])[:300]
+    vid, vslug, err = resolve_venture(args[2] if len(args) > 2 else None)
+    company = len(args) > 2 and args[2].lower() in COMPANY_WORDS and not vid
+    if err and not company:
+        await update.message.reply_text(err + " Use a venture name, or the word 'company' for a company-wide entry.")
+        return
+    note = " ".join(args[3:] if (vid or company) else args[2:])[:300]
     kind = "revenue" if args[0].lower() == "in" else "expense"
     hq._request("POST", "/rest/v1/ledger", {"venture_id": vid, "kind": kind, "amount_cents": cents, "currency": "CAD",
                                             "status": "received", "note": note or None,
@@ -168,8 +193,14 @@ async def hq_ask(update, context) -> None:
     slug, text = args[0].lower(), " ".join(args[1:])
     rows = _get(f"agents?slug=eq.{_q(slug)}&select=slug,venture_id,status&limit=1")
     if not rows:
-        await update.message.reply_text(f"No agent called {slug}. /agents lists them.")
-        return
+        # not an agent: maybe a venture, which routes to its manager
+        vid, vslug, _err = resolve_venture(slug)
+        mgr = (_get(f"ventures?id=eq.{_q(vid)}&select=manager_agent&limit=1") or [{}])[0].get("manager_agent") if vid else None
+        rows = _get(f"agents?slug=eq.{_q(mgr)}&select=slug,venture_id,status&limit=1") if mgr else []
+        if not rows:
+            await update.message.reply_text(f"No agent or venture called {slug}. /agents and /venture list show them.")
+            return
+        slug = rows[0]["slug"]
     hq._request("POST", "/rest/v1/tasks", {
         "assigned_agent": slug, "venture_id": rows[0].get("venture_id"), "created_by": "owner", "priority": 1,
         "status": "todo", "title": text[:140],
@@ -574,7 +605,11 @@ def _mailing_address(venture: str = "donna") -> str:
 
 
 def casl_footer(venture: str = "donna") -> str:
-    """CASL identification + unsubscribe: sender, mailing address and a working way to opt out."""
+    """CASL identification + unsubscribe: sender, mailing address and a working way to opt out.
+    Donna keeps its legacy behaviour (defaults, and a visible placeholder if the address is unset). Any other venture FAILS CLOSED:
+    hq_mail.ProfileMissing is raised unless sender, brand and mailing address are all set for that venture."""
+    if venture != hq_mail.DONNA:
+        return hq_mail.footer(venture)
     rows = _get(f"company_profile?venture_slug=eq.{_q(venture)}&select=sender_name,brand,mailing_address&limit=1")
     p = (rows or [{}])[0]
     addr = (p.get("mailing_address") or "").strip() or "[ADD YOUR BUSINESS MAILING ADDRESS - required by CASL]"
@@ -582,17 +617,78 @@ def casl_footer(venture: str = "donna") -> str:
             "To stop receiving emails from us, reply \"unsubscribe\" and we will remove you within 10 business days.")
 
 
+def _save_profile(slug: str, **fields) -> None:
+    body = {"venture_slug": slug, "updated_at": datetime.now(timezone.utc).isoformat()}
+    body.update({k: v for k, v in fields.items() if v})
+    hq._request("POST", "/rest/v1/company_profile?on_conflict=venture_slug", body, prefer="resolution=merge-duplicates,return=minimal")
+
+
+def set_profile_field(slug: str, field: str, value: str) -> str:
+    """Set one CASL profile field for a venture: address | sender | brand. Never touches another venture's row."""
+    col = {"address": "mailing_address", "sender": "sender_name", "brand": "brand"}.get(field)
+    value = (value or "").strip()
+    if not col:
+        return "Field must be address, sender or brand."
+    if col == "mailing_address" and (len(value) < 10 or not re.search(r"\d", value)):
+        return "That does not look like a mailing address (street number, street, city, province, postal code)."
+    if col != "mailing_address" and len(value) < 2:
+        return f"Give a {field}."
+    _save_profile(slug, **{col: value[:200]})
+    p = hq_mail.profile(slug)
+    return f"Saved {field} for {slug}. " + ("Its emails can now carry a CASL footer." if p else
+            "Still incomplete: a venture needs sender, brand and address before any of its emails can be approved or sent.")
+
+
 async def hq_setaddress(update, context) -> None:
+    """/setaddress [venture] <address>. With no venture it is Donna's, exactly as before."""
     if not _owner(update):
         return
-    addr = " ".join(context.args or []).strip()
+    args = list(context.args or [])
+    slug = hq_mail.DONNA
+    if len(args) > 1 and not re.search(r"\d", args[0]):
+        # a leading word with no digit may be a venture ("/setaddress ottawa-cleanouts 1 Main St ..."); an unknown one is an error, not an address
+        vid, vslug, err = resolve_venture(args[0])
+        if vid:
+            slug, args = vslug, args[1:]
+        elif args[0].startswith("@") or re.fullmatch(r"[a-z][a-z0-9-]{2,40}", args[0]):
+            await update.message.reply_text(err or f"No venture called '{args[0]}'.")
+            return
+    addr = " ".join(args).strip()
     if len(addr) < 10 or not re.search(r"\d", addr):
-        await update.message.reply_text("Use: /setaddress 123 Example St, Ottawa ON K1A 0A1  (your business mailing address, required by CASL)")
+        await update.message.reply_text("Use: /setaddress [venture] 123 Example St, Ottawa ON K1A 0A1  (the business mailing address, required by CASL; no venture word means Donna)")
         return
-    hq._request("POST", "/rest/v1/company_profile?on_conflict=venture_slug",
-                {"venture_slug": "donna", "mailing_address": addr[:200], "updated_at": datetime.now(timezone.utc).isoformat()},
-                prefer="resolution=merge-duplicates,return=minimal")
-    await update.message.reply_text("Saved. Every approved email now ends with your name, this address and an unsubscribe line.")
+    _save_profile(slug, mailing_address=addr[:200])
+    if slug == hq_mail.DONNA:
+        await update.message.reply_text("Saved. Every approved email now ends with your name, this address and an unsubscribe line.")
+    else:
+        done = hq_mail.profile(slug)
+        await update.message.reply_text(f"Saved the address for {slug}. " + ("Its emails can now carry a CASL footer." if done else
+            f"Not ready yet: also set the sender and brand with /venture profile {slug} sender <name> and /venture profile {slug} brand <name>."))
+
+
+def _outbox_venture_id(outbox_id: str) -> tuple[str | None, bool]:
+    """(venture id, has a lead). The one place that decides which venture a draft belongs to: the LEAD's venture wins,
+    else the draft's own. The sender (hq_mail.deliver_approved) reads outbox.venture_id, so approval stamps this value there."""
+    ob = (_get(f"outbox?id=eq.{_q(outbox_id)}&select=venture_id,lead_id&limit=1") or [{}])[0]
+    vid = ob.get("venture_id")
+    if ob.get("lead_id"):
+        vid = (_get(f"leads?id=eq.{_q(ob['lead_id'])}&select=venture_id&limit=1") or [{}])[0].get("venture_id") or vid
+    return vid, bool(ob.get("lead_id"))
+
+
+def _outbox_casl_gate(outbox_id: str) -> tuple[str | None, str | None]:
+    """(venture slug, problem) for approving this draft. The venture comes from the draft's LEAD (else the draft itself).
+    Donna keeps its legacy flow (a warning, not a block); every other venture is refused without a complete profile."""
+    vid, has_lead = _outbox_venture_id(outbox_id)
+    if not vid and not has_lead:
+        return hq_mail.DONNA, None  # legacy hand-made draft with no venture at all: today's Donna flow (hq_mail still refuses to SEND it)
+    slug = hq_mail.venture_slug(vid)
+    if not slug:
+        return None, "Cannot approve: this draft's venture cannot be found, so there is no CASL sender profile to put on it."
+    if slug != hq_mail.DONNA and not hq_mail.profile(slug):
+        return slug, (f"Cannot approve yet: {slug} has no complete CASL profile (sender, brand, mailing address), and every email must carry one. "
+                      f"Set it with /setaddress {slug} <address>, /venture profile {slug} sender <name>, /venture profile {slug} brand <name>, then tap Approve again.")
+    return slug, None
 
 
 def apply_decision(msg_id: str, approved: bool) -> str:
@@ -650,11 +746,17 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         hq_policy.decide_approval(ref_id, approved)
     elif ref_table == "outbox" and ref_id:
         if approved:
+            gate_slug, problem = _outbox_casl_gate(ref_id)
+            if problem:  # fail closed: release the tap so the same draft can be approved after the profile is set
+                hq._request("PATCH", f"/rest/v1/owner_messages?id=eq.{_q(msg_id)}", {"decision": None, "decided_at": None}, prefer="return=minimal")
+                return problem
             # The owner is a reviewer independent of the writing agent, so his approval is the QA step too.
             # The database requires draft -> qa_passed -> approved; before this, Approve on a draft was refused.
-            hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=eq.draft",
-                        {"status": "qa_passed", "qa_agent": "owner", "qa_notes": "Reviewed by the owner on Telegram"},
-                        prefer="return=minimal")
+            gate_vid, _hl = _outbox_venture_id(ref_id)
+            qa = {"status": "qa_passed", "qa_agent": "owner", "qa_notes": "Reviewed by the owner on Telegram"}
+            if gate_vid:
+                qa["venture_id"] = gate_vid  # sender and approval gate must agree on the venture (review finding)
+            hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=eq.draft", qa, prefer="return=minimal")
         hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=in.(draft,qa_passed)",
                     {"status": verdict, "decided_at": now}, prefer="return=minimal")
         if approved:
@@ -664,8 +766,8 @@ def apply_decision(msg_id: str, approved: bool) -> str:
                     hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(ob[0]['lead_id'])}", {"status": "approved_to_send"},
                                 prefer="return=minimal")
                 ready = (f"Approved. Send this from your business email:\n\nTo: {ob[0].get('to_ref')}\n"
-                         f"{ob[0].get('body')}{casl_footer()}\n\nOnce sent, reply /sent {ref_id[:8]}")
-                if not _mailing_address():
+                         f"{ob[0].get('body')}{casl_footer(gate_slug)}\n\nOnce sent, reply /sent {ref_id[:8]}")
+                if gate_slug == hq_mail.DONNA and not _mailing_address():
                     ready += ("\n\nBefore sending: CASL requires your business mailing address in every email. "
                               "Set it once with /setaddress 123 Example St, Ottawa ON K1A 0A1 and it is added from then on.")
                 _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
@@ -718,15 +820,22 @@ async def hq_mission_cmd(update, context) -> None:
         return
     args = list(context.args or [])
     if not args:
-        await update.message.reply_text("Usage:\n/mission new <objective>\n/mission <id>\n/mission pause|resume|abandon <id>\n"
+        await update.message.reply_text("Usage:\n/mission new [@venture] <objective>\n/mission <id>\n/mission pause|resume|abandon <id>\n"
                                         "/mission budget <id> <cents CAD>\n/mission steps <id> <n>\n/mission focus <id>|off\nOr just tell me the goal in chat.")
         return
     try:
         verb = args[0].lower()
         if verb == "new":
-            r = hq_missions.create_mission(" ".join(args[1:]), created_by="owner")
+            vslug = None
+            if len(args) > 1 and args[1].startswith("@"):  # /mission new @venture <objective>
+                _vid, vslug, err = resolve_venture(args[1])
+                if err:
+                    await update.message.reply_text(err)
+                    return
+                args = args[:1] + args[2:]
+            r = hq_missions.create_mission(" ".join(args[1:]), vslug, created_by="owner") if vslug else hq_missions.create_mission(" ".join(args[1:]), created_by="owner")
             text = r.get("error") or f"Mission opened: {r['title']} ({str(r['id'])[:8]}). Evaluation starts on the next tick."
-        elif verb in ("pause", "resume", "abandon") and len(args) >= 2:
+        elif verb in ("pause", "resume", "abandon", "retry") and len(args) >= 2:
             text = hq_missions.set_status(args[1], verb)
         elif verb == "steps" and len(args) >= 3 and args[2].isdigit():
             text = hq_missions.set_steps(args[1], int(args[2]))
@@ -759,7 +868,7 @@ async def hq_policy_cmd(update, context) -> None:
 
 
 async def hq_venture_cmd(update, context) -> None:
-    """/venture list | new <name> | <idea> | activate <slug> | budget [<slug> <dollars>] | <slug> (workspace)  (owner only)."""
+    """/venture list | new <name> | <idea> | activate <slug> | kpis <slug> | profile <slug> sender|brand|address <v> | agents <slug> | budget [<slug> <dollars>] | <slug> (workspace)  (owner only)."""
     if not _owner(update):
         return
     args = list(context.args or [])
@@ -773,6 +882,17 @@ async def hq_venture_cmd(update, context) -> None:
             text = hq_ventures.set_budget(args[1], args[2])
         elif sub == "budget":
             text = "Use: /venture budget   (show)   or   /venture budget <slug> <dollars per month>"
+        elif sub == "kpis" and len(args) > 1:
+            vid, vslug, err = resolve_venture(args[1])
+            text = err or hq_ventures.kpis_text(vslug)
+        elif sub == "profile" and len(args) >= 4:
+            vid, vslug, err = resolve_venture(args[1])
+            text = err or set_profile_field(vslug, args[2].lower(), " ".join(args[3:]))
+        elif sub == "profile":
+            text = "Use: /venture profile <venture> sender|brand|address <value>"
+        elif sub == "agents" and len(args) > 1:
+            vid, vslug, err = resolve_venture(args[1])
+            text = err or hq_ventures.ensure_agents(vslug)
         elif sub == "activate" and len(args) > 1:
             text = hq_ventures.activate(args[1].lower())
         elif sub == "new" and len(args) > 1:
@@ -953,8 +1073,43 @@ async def hq_capital_cmd(update, context) -> None:
     await update.message.reply_text(text[:4000])
 
 
+async def hq_backup_cmd(update, context) -> None:
+    """/backup -> status of the encrypted off-site backup; /backup now -> run one immediately (owner only). Never shows secrets."""
+    if not _owner(update):
+        return
+    import hq_backup
+    args = [a.lower() for a in (context.args or [])]
+    try:
+        if args and args[0] == "check":
+            res = await asyncio.to_thread(hq_backup.preflight)
+            icon = {"pass": "OK  ", "warn": "WARN", "fail": "FAIL"}
+            lines = [f"{icon.get(r['status'], '?   ')} {r['check']}" + (f" - {r['detail']}" if r.get("detail") else "") for r in res]
+            bad = sum(r["status"] == "fail" for r in res)
+            text = "Backup configuration check (read-only, nothing uploaded):\n" + "\n".join(lines) + ("\n\nReady for /backup now." if not bad else f"\n\n{bad} problem(s) to fix first.")
+        elif args and args[0] == "now":
+            if not hq_backup.configured():
+                text = "Backup is not configured (BACKUP_KEY or BACKUP_PUT_URL missing)."
+            else:
+                await update.message.reply_text("Running backup now. This can take a minute.")
+                r = await asyncio.to_thread(hq_backup.run, True)
+                text = "Backup finished. Check /backup for details." if r.get("ok") else f"Backup did not complete: {str(r.get('reason'))[:200]}"
+        else:
+            last = await asyncio.to_thread(hq_backup.last_ok)
+            conf = "configured" if hq_backup.configured() else "NOT configured"
+            if last:
+                text = (f"Backup {conf}. Last good: {str(last.get('at'))[:19]} UTC\nFile: {last.get('file')}\n"
+                        f"Size: {last.get('bytes')} bytes, rows: {last.get('rows')}, tables: {last.get('tables')}, complete: {last.get('complete')}\n"
+                        f"sha256: {last.get('sha256')}")
+            else:
+                text = f"Backup {conf}. No successful backup recorded yet."
+    except Exception as e:
+        logger.exception("HQ backup command failed")
+        text = f"Backup command failed: {type(e).__name__}"
+    await update.message.reply_text(text[:4000])
+
+
 MENU = [
-    ("hq", "Company status"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -1031,7 +1186,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd)):
         app.add_handler(CommandHandler(name, fn))
     try:
         from telegram.ext import MessageHandler, filters

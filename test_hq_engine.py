@@ -527,6 +527,99 @@ class T(unittest.TestCase):
         self.assertFalse(any("owner_messages" in i[0] for i in b.inserts))
 
 
+class MissionEngineTouchpointTests(unittest.TestCase):
+    """Engine-side parts of the mission work: research scoping, verifier facts, shared regex, pause behaviour."""
+
+    MID = "99999999-aaaa-bbbb-cccc-000000000001"
+
+    def _attached(self, task):
+        paths = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            paths.append(path)
+            return [{"title": "Prior research", "result": "some findings"}]
+        with mock.patch.object(hq, "_request", fake):
+            out = E._attached_research(task)
+        return out, paths
+
+    def test_attached_research_is_scoped_to_the_missions_own_tasks(self):
+        out, paths = self._attached({"assigned_agent": "new-ventures-auditor", "title": "Mission: Verify x", "mission_id": self.MID})
+        self.assertIn("some findings", out)
+        self.assertIn(f"mission_id=eq.{self.MID}", paths[0])
+        self.assertNotIn("mission_id=is.null", paths[0])
+
+    def test_ordinary_audit_never_sees_mission_output(self):
+        out, paths = self._attached({"assigned_agent": "new-ventures-auditor", "title": "Weekly check", "mission_id": None})
+        self.assertIn("mission_id=is.null", paths[0])
+        self.assertNotIn("mission_id=eq.", paths[0])
+
+    def test_work_tasks_selects_mission_id(self):
+        seen = []
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            seen.append(path)
+            return []
+        with mock.patch.object(hq, "_request", fake):
+            E._work_tasks()
+        self.assertTrue(any("select=" in p and "mission_id" in p.split("select=")[1] for p in seen if p.startswith("/rest/v1/tasks?status=eq.todo")))
+
+    def test_mission_verifier_facts_saved_even_when_verifier_is_not_an_auditor(self):
+        b = Board()
+        t = {"id": "v1", "assigned_agent": "compliance-qa", "title": "Mission: Verify Start a business", "venture_id": "v9"}
+        text = ("VERIFIED: YES\nEVIDENCE: prices confirmed | https://a.example/x\nFACTS:\n"
+                "- Ottawa requires a business licence for door to door selling | https://ottawa.ca/lic | high\n")
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_facts(t, text), 1)
+        row = [i[1] for i in b.inserts if "memory" in i[0]][0]
+        self.assertEqual((row["kind"], row["agent"], row["venture_id"]), ("fact", "compliance-qa", "v9"))
+
+    def test_mission_verifier_facts_not_saved_when_verification_failed(self):
+        b = Board()
+        t = {"id": "v1", "assigned_agent": "compliance-qa", "title": "Mission: Verify x", "venture_id": "v9"}
+        with mock.patch.object(hq, "_request", b):
+            self.assertEqual(E._store_facts(t, "VERIFIED: NO\nGAP: missing\nFACTS:\n- A claim that is long enough here | https://x.y/z | high"), 0)
+        self.assertEqual([i for i in b.inserts if "memory" in i[0]], [])
+
+    def test_non_mission_non_auditor_still_writes_nothing(self):
+        b = Board()
+        with mock.patch.object(hq, "_request", b):
+            E._store_facts({"id": "r", "assigned_agent": "compliance-qa", "title": "Other task"}, "VERIFIED: YES\nFACTS:\n- Something long enough here | https://x.y | high")
+        self.assertEqual(b.inserts, [])
+
+    def test_sourcing_regex_is_shared_with_missions(self):
+        self.assertIs(E.SOURCING_RE, E.hq_missions.SOURCING_RE)
+        self.assertTrue(E.SOURCING_RE.search("find houses for sale in Ottawa"))
+        self.assertEqual(E.RETRY_MARK, E.hq_missions.RETRY_MARK)
+
+    def _tick_with(self, state):
+        def fake(method, path, body=None, timeout=30, prefer=None):
+            if path.startswith("/rest/v1/system_state"):
+                return [state]
+            return []
+        E._last_probe = None
+        with mock.patch.object(hq, "_request", fake), mock.patch.object(E, "_credits_back", return_value=False), \
+             mock.patch.object(E.hq_missions, "advance") as adv, mock.patch.object(E, "_work_tasks") as work:
+            E.tick_sync()
+        return adv, work
+
+    def test_kill_switch_stops_mission_advance_and_task_work(self):
+        adv, work = self._tick_with({"kill_switch": True})
+        adv.assert_not_called(); work.assert_not_called()
+
+    def test_credit_pause_stops_mission_advance_and_task_work(self):
+        adv, work = self._tick_with({"kill_switch": False, "pause_reason": E.CREDITS_PAUSE, "paused_at": "2026-11-06T05:30:00Z"})
+        adv.assert_not_called(); work.assert_not_called()
+
+    def test_requeued_mission_task_goes_through_the_gateway_and_blocks_at_once_on_a_second_failure(self):
+        # a requeued task carries the retry marker, so one more failure blocks it (no third attempt, no loop)
+        import hq_missions as M
+        b = Board(tasks=[{"id": "t1", "assigned_agent": "x", "title": "Mission: Step", "detail": "", "result": f"{M.RETRY_MARK} mission requeue",
+                          "mission_id": self.MID}])
+        with mock.patch.object(hq, "_request", b), mock.patch.object(E, "_complete", side_effect=RuntimeError("API down")):
+            E._work_tasks()
+        last = [p[1] for p in b.patches if "tasks?id=eq.t1" in p[0]][-1]
+        self.assertEqual(last["status"], "blocked")
+        self.assertTrue(last["result"].startswith("error:"))
+
+
 class FocusIsolationTests(unittest.TestCase):
     """Focus mode end to end at the engine level: backlog, triage, credit recovery, cleanup."""
     MISSION = "11111111-2222-3333-4444-555555555555"

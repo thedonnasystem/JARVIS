@@ -106,6 +106,8 @@ begin
 end $function$;
 
 -- 4) drop functions that only Phase 1 created (nothing else references them once the above is restored)
+drop function if exists public.backup_snapshot(text[]);
+drop function if exists public.backup_schema();
 drop function if exists public.ops_alerts();
 drop function if exists public._queue_alert(text, interval, text);
 drop function if exists public.audit_task_bulk_update();
@@ -121,3 +123,9 @@ drop function if exists public.mission_guard(text, text, integer);
 -- alter table public.missions drop column if exists max_steps, drop column if exists strict_steps;
 -- alter table public.system_state drop column if exists focus_mission;
 -- drop table if exists public.integration_status, public.alert_state;
+
+-- Venture generic loop (20261114_venture_generic_v1): new functions only, nothing else changed
+drop function if exists public.ensure_venture_agents(text, text);
+drop function if exists public.queue_prospect_task(text);
+drop function if exists public.queue_all_prospect_tasks();
+drop function if exists public.venture_kpis(text);
