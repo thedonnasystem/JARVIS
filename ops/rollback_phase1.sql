@@ -106,6 +106,8 @@ begin
 end $function$;
 
 -- 4) drop functions that only Phase 1 created (nothing else references them once the above is restored)
+drop function if exists public.backup_snapshot(text[]);
+drop function if exists public.backup_schema();
 drop function if exists public.ops_alerts();
 drop function if exists public._queue_alert(text, interval, text);
 drop function if exists public.audit_task_bulk_update();

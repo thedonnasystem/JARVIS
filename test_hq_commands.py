@@ -291,5 +291,55 @@ class D(unittest.TestCase):
         self.assertFalse(any(c[0] == "POST" for c in f.calls))
 
 
+class BackupCmd(unittest.TestCase):
+    def setUp(self):
+        os.environ["JARVIS_OWNER_ID"] = "42"
+
+    def test_non_owner_ignored(self):
+        import hq_backup
+        u = upd("999")
+        with mock.patch.object(hq_backup, "run") as run:
+            asyncio.run(C.hq_backup_cmd(u, SimpleNamespace(args=["now"])))
+        run.assert_not_called()
+        self.assertFalse(u.message.sent)
+
+    def test_status_shows_last_without_secrets(self):
+        import hq_backup
+        u = upd()
+        last = {"at": "2026-11-13T07:05:00+00:00", "file": "hq-x.tar.gz.enc", "bytes": 10, "rows": 5, "tables": 3, "complete": True, "sha256": "ab" * 32}
+        with mock.patch.dict(os.environ, {"BACKUP_KEY": "SECRETKEY", "BACKUP_PUT_URL": "b2://b/hq", "BACKUP_AUTH": "id:SECRETAPP"}), \
+             mock.patch.object(hq_backup, "last_ok", return_value=last):
+            asyncio.run(C.hq_backup_cmd(u, SimpleNamespace(args=[])))
+        out = u.message.sent[0]
+        self.assertIn("hq-x.tar.gz.enc", out)
+        self.assertNotIn("SECRET", out)
+
+    def test_check_reports_without_secrets(self):
+        import hq_backup
+        u = upd()
+        res = [{"check": "BACKUP_KEY is set", "status": "pass", "detail": ""}, {"check": "Key can write files", "status": "fail", "detail": "key needs writeFiles"}]
+        with mock.patch.object(hq_backup, "preflight", return_value=res):
+            asyncio.run(C.hq_backup_cmd(u, SimpleNamespace(args=["check"])))
+        out = u.message.sent[0]
+        self.assertIn("FAIL Key can write files", out); self.assertIn("1 problem", out)
+
+    def test_now_runs_forced(self):
+        import hq_backup
+        u = upd()
+        with mock.patch.dict(os.environ, {"BACKUP_KEY": "k", "BACKUP_PUT_URL": "b2://b/hq"}), \
+             mock.patch.object(hq_backup, "run", return_value={"ok": True}) as run:
+            asyncio.run(C.hq_backup_cmd(u, SimpleNamespace(args=["now"])))
+        run.assert_called_once_with(True)
+
+    def test_now_unconfigured_does_not_run(self):
+        import hq_backup
+        u = upd()
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(hq_backup, "configured", return_value=False), \
+             mock.patch.object(hq_backup, "run") as run:
+            asyncio.run(C.hq_backup_cmd(u, SimpleNamespace(args=["now"])))
+        run.assert_not_called()
+        self.assertIn("not configured", u.message.sent[0])
+
+
 if __name__ == "__main__":
     unittest.main()

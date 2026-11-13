@@ -5,3 +5,6 @@ __pycache__/
 venv/
 *.db
 jarvis-projects/
+
+restore_report_*.json
+restore_fingerprint_*.txt
