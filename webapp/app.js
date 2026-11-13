@@ -20,6 +20,13 @@ async function rpc(name, args) {
   if (error) throw error;
   return data;
 }
+// app_needs_you is closed to the owner until the lockdown allowlist is signed off. Remember the first denial instead of failing every 8s;
+// retry after a page reload or when the owner opens the Inbox tab. A network error is not a denial and is retried normally.
+async function needsYou() {
+  if (S.inboxDenied) return null;
+  try { return await rpc('app_needs_you'); }
+  catch (e) { if (/permission denied|not authorized|42501|PGRST202|could not find the function|404/i.test(String((e && (e.message || e.code)) || e))) S.inboxDenied = true; return null; }
+}
 function note(msg) { const b = $('banner'); b.textContent = msg; b.hidden = !msg; }
 
 // ---------- login (email code; owner check is enforced in the database) ----------
@@ -60,6 +67,7 @@ async function enter() {
 }
 function show(k) {
   S.tab = k;
+  if (k === 'inbox' && S.inboxDenied) { S.inboxDenied = false; refresh(); }   // one retry each time the Inbox is opened
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('on', v.id === 'v-' + k));
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.id === 't-' + k));
   render();
@@ -68,7 +76,7 @@ function show(k) {
 // ---------- data ----------
 async function refresh() {
   try {
-    const [snap, msgs, office, pays, inbox] = await Promise.all([rpc('app_snapshot'), rpc('app_messages', { p_limit: 80 }), rpc('app_office').catch(() => null), rpc('app_payments').catch(() => null), rpc('app_needs_you').catch(() => null)]);
+    const [snap, msgs, office, pays, inbox] = await Promise.all([rpc('app_snapshot'), rpc('app_messages', { p_limit: 80 }), rpc('app_office').catch(() => null), rpc('app_payments').catch(() => null), needsYou()]);
     S.snap = snap; S.office = office; S.pays = pays; S.inbox = Array.isArray(inbox) ? inbox : null; note('');
     const fresh = msgs.filter((m) => m.role === 'jarvis' && m.kind === 'chat' && !S.seen.has(m.id));
     const first = S.msgs.length === 0;

@@ -28,8 +28,11 @@ VERB_HINT = {
 TG_LIMIT = 3800
 
 
+FETCH_TIMEOUT = 5  # seconds: hq._request is synchronous and runs inside the async delivery job; a slow database must not hold messages back
+
+
 def fetch(limit: int = 50) -> list[dict]:
-    rows = hq._request("POST", "/rest/v1/rpc/needs_you", {"p_limit": int(limit)})
+    rows = hq._request("POST", "/rest/v1/rpc/needs_you", {"p_limit": int(limit)}, timeout=FETCH_TIMEOUT)
     if not isinstance(rows, list):
         raise ValueError("needs_you() returned something that is not a list")
     return [r for r in rows if isinstance(r, dict)]
@@ -76,15 +79,15 @@ def brief_line(items: list[dict] | None = None) -> str:
     """One line for the brief. Returns '' when the inbox cannot be read, so a brief is never blocked or made wrong."""
     try:
         items = fetch() if items is None else items
-    except Exception as e:  # the brief is more important than the count
+        if not items:
+            return "Needs you: nothing waiting."
+        oldest = max(items, key=lambda x: int(x.get("age_minutes") or 0))
+        top = items[0]
+        return (f"Needs you: {len(items)} waiting, oldest {age_text(oldest.get('age_minutes'))}. "
+                f"Top: {str(top.get('title') or '')[:80]}. /needs lists them.")
+    except Exception as e:  # the brief is more important than the count: any problem, including malformed rows, means no line
         logger.warning("inbox count unavailable for the brief: %s", e)
         return ""
-    if not items:
-        return "Needs you: nothing waiting."
-    oldest = max(items, key=lambda x: int(x.get("age_minutes") or 0))
-    top = items[0]
-    return (f"Needs you: {len(items)} waiting, oldest {age_text(oldest.get('age_minutes'))}. "
-            f"Top: {str(top.get('title') or '')[:80]}. /needs lists them.")
 
 
 def append_to_brief(text: str, items: list[dict] | None = None) -> str:

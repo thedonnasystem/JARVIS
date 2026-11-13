@@ -158,6 +158,25 @@ test('fallback: while app_needs_you is closed to the owner, the inbox still show
   app.stop();
 });
 
+test('a denied app_needs_you is remembered: no failing request every refresh; retried when the Inbox tab is opened; network errors are not remembered', async () => {
+  const be = backend({ app_needs_you: () => { throw new Error('permission denied for function app_needs_you'); } });
+  const app = await boot({ rpc: be });
+  assert.equal(app.callsTo('app_needs_you').length, 1);
+  await app.refresh(); await app.refresh(); await app.refresh();
+  assert.equal(app.callsTo('app_needs_you').length, 1, 'no repeat requests while denied');
+  await app.tab('inbox');
+  assert.equal(app.callsTo('app_needs_you').length, 2, 'opening the Inbox retries once');
+  assert.match(app.text('#v-inbox'), /Showing approvals, questions and blocked missions/);
+  await app.refresh(); await app.refresh();
+  assert.equal(app.callsTo('app_needs_you').length, 2);
+  app.stop();
+  let n = 0;   // a flaky network must not switch the full inbox off
+  const app2 = await boot({ rpc: backend({ app_needs_you: () => { if (n++ === 0) throw new Error('network down'); return []; } }) });
+  await app2.refresh();
+  assert.equal(app2.callsTo('app_needs_you').length, 2, 'retried after a network error');
+  app2.stop();
+});
+
 // ---------- errors are visible, never a blank page ----------
 test('a failed refresh shows a banner and keeps the last screen', async () => {
   let down = false; const be = backend();
