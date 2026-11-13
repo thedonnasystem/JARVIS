@@ -46,7 +46,7 @@ def fake_complete(model, system, user, max_tokens, search=False, fetches=None):
     if SCRIPT["mode"] == "resilience":
         if "FORMAT REPAIR" in user:
             SCRIPT["repairs"] += 1
-            return (EVAL_SMALL if "MISSION_VERDICT" in user else VERIFY_GOOD), 800, 300, 0
+            return (VERIFY_GOOD if "VERIFIED: YES or VERIFIED: NO" in user else EVAL_SMALL), 800, 300, 0
         if "Re-plan this mission" in user or "MISSION OBJECTIVE" in user:
             first = not SCRIPT.get("eval_seen")
             SCRIPT["eval_seen"] = True
