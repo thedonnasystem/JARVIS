@@ -263,6 +263,7 @@ def rebuild_schema(cur, schema: dict, rep: dict):
         roles.add(d["role"])
     for p in schema.get("policies", []):
         roles.update(r for r in (p.get("roles") or []) if r)
+    roles.update(g.split(":")[0] for g in _acl_grants(schema.get("schema_acl")))
     cur.execute("select current_user")
     me = cur.fetchone()[0]
     for r in sorted(roles - {"PUBLIC", "public", "postgres", me}):
@@ -357,7 +358,12 @@ def _acl_grants(entries) -> list:
     """['role=UC/grantor', ...] -> ['role:USAGE', 'role:CREATE'] (PUBLIC for an empty role; the owner's own entry is implicit and skipped)."""
     out = []
     for e in entries or []:
-        who, _, rest = str(e).partition("=")
+        e = str(e)
+        if e.startswith('"'):                       # aclitem quotes role names containing spaces or quotes
+            end = e.rfind('"=')
+            who, rest = e[1:end].replace('""', '"'), e[end + 2:]
+        else:
+            who, _, rest = e.partition("=")
         privs = rest.split("/")[0]
         if who == "pg_database_owner":
             continue

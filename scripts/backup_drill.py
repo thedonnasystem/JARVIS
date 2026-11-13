@@ -15,6 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path[:0] = [ROOT, os.path.join(HERE, "replica"), os.path.join(ROOT, "ops")]
 
+import subprocess
 import psycopg2
 from cryptography.fernet import Fernet
 
@@ -177,6 +178,28 @@ def main():
         finally:
             stop.set(); th.join()
         ddl.cursor().execute("drop table public.drill_pair_a, public.drill_pair_b"); ddl.close()
+        with psycopg2.connect(SRC) as sc, sc.cursor() as scur:
+            scur.execute("select p.proname, p.provolatile, has_function_privilege('anon', p.oid, 'execute'), has_function_privilege('authenticated', p.oid, 'execute'), has_function_privilege('service_role', p.oid, 'execute') from pg_proc p where p.proname in ('backup_snapshot', 'backup_schema')")
+            fr = scur.fetchall()
+        check("2d backup_snapshot/backup_schema are STABLE (single-snapshot guarantee depends on it) and only service_role may execute", len(fr) == 2 and all(r[1] == "s" and not r[2] and not r[3] and r[4] for r in fr), str(fr))
+        # negative control: reading the two tables in two SEPARATE statements while the writer runs MUST show mismatches (proves check 2c can fail)
+        stop.clear(); th = threading.Thread(target=writer); ddl2 = psycopg2.connect(SRC); ddl2.autocommit = True
+        ddl2.cursor().execute("create table if not exists public.drill_pair_a (id int primary key); create table if not exists public.drill_pair_b (id int primary key); truncate public.drill_pair_a, public.drill_pair_b")
+        th.start(); split_bad = 0
+        try:
+            time.sleep(0.3)
+            for _ in range(300):
+                with ddl2.cursor() as xc:
+                    xc.execute("select id from public.drill_pair_a"); a = {r[0] for r in xc.fetchall()}
+                    time.sleep(0.003)
+                    xc.execute("select id from public.drill_pair_b"); b = {r[0] for r in xc.fetchall()}
+                split_bad += (a != b)
+                if split_bad:
+                    break
+        finally:
+            stop.set(); th.join()
+        ddl2.cursor().execute("drop table public.drill_pair_a, public.drill_pair_b"); ddl2.close()
+        check("2e negative control: two separate statements DO show cross-table skew under the same writer (so 2c can fail)", split_bad > 0, f"skewed reads seen: {split_bad}")
         check("2c under concurrent two-table transactions, every snapshot is internally consistent", bad == 0 and wrote["n"] > 50, f"{taken} snapshots while {wrote['n']} paired transactions committed; inconsistent snapshots: {bad}")
         check("13 restored sequences continue after the data (next serial id does not collide) and view keeps security_invoker", nid > 25 and ("true",) in opts, f"next id {nid}, view options {opts}")
         # ---- negative controls: the checks must be able to fail
@@ -230,6 +253,23 @@ def main():
         check("N8 schema verifier passes clean restore and catches dropped index + edited function",
               ok_clean and (not ok_bad) and not sr["schema"]["indexes"]["identical"] and not sr["schema"]["functions"]["identical"],
               str({k: v.get("identical") for k, v in sr.get("schema", {}).items()})[:200])
+
+        # ---- the owner's one-command local restore (Docker): isolated throwaway server, hidden-prompt secrets, no secret in outputs
+        import shutil
+        if shutil.which("docker") and subprocess.run(["docker", "info"], capture_output=True).returncode == 0 and os.environ.get("DRILL_SKIP_DOCKER") != "1":
+            lf = os.path.join(work, "local_restore"); os.makedirs(lf, exist_ok=True)
+            open(os.path.join(lf, "hq-local.tar.gz.enc"), "wb").write(enc)
+            open(os.path.join(lf, "hq-local.tar.gz.enc.sha256"), "w").write(out["sha256"] + "  hq-local.tar.gz.enc\n")
+            p = subprocess.run(["bash", os.path.join(ROOT, "ops", "restore_local.sh"), "--file", os.path.join(lf, "hq-local.tar.gz.enc"), "--expect-sha256", out["sha256"]],
+                               cwd=lf, env={**os.environ, "BACKUP_KEY": key}, capture_output=True, text=True, timeout=600)
+            files = [f for f in os.listdir(lf) if f.startswith("restore_")]
+            blob_all = p.stdout + p.stderr + "".join(open(os.path.join(lf, f)).read() for f in files)
+            left = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True).stdout
+            check("L1 ops/restore_local.sh: isolated restore passes, writes report + fingerprint, leaks no key, destroys its container",
+                  p.returncode == 0 and "RESULT: PASS" in p.stdout and len(files) == 2 and key not in blob_all and "fendezy-restore" not in left,
+                  f"exit {p.returncode}; files {sorted(files)}")
+        else:
+            print("SKIP  L1 ops/restore_local.sh (Docker not available here; CI runs it)")
 
         # ---- restore-guard bypass attempts (found by the independent review): none may reach a database
         base = DST.rsplit("/", 1)[0]

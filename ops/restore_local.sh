@@ -22,13 +22,21 @@ if [ "$use_b2" = 1 ]; then
   export RESTORE_B2_AUTH RESTORE_B2_BUCKET_ID RESTORE_B2_PREFIX="${RESTORE_B2_PREFIX:-hq/}"
 fi
 name="fendezy-restore-$$"; pw="$(python3 -c 'import secrets;print(secrets.token_urlsafe(24))')"
-cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; unset BACKUP_KEY RESTORE_B2_AUTH pw; }
+cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; unset BACKUP_KEY RESTORE_B2_AUTH RESTORE_DB_URL POSTGRES_PASSWORD pw; }
 trap cleanup EXIT
-docker run -d --name "$name" -e POSTGRES_PASSWORD="$pw" -p 127.0.0.1::5432 postgres:17.11 >/dev/null
+export POSTGRES_PASSWORD="$pw"      # passed to docker by NAME (-e POSTGRES_PASSWORD), so the value never appears in ps / docker inspect arguments or bash -x output
+if ! docker run -d --name "$name" -e POSTGRES_PASSWORD -p 127.0.0.1::5432 postgres:17.11 >/dev/null; then
+  echo "Could not start the throwaway PostgreSQL 17.11 container (is Docker running, and can it pull postgres:17.11?)."; exit 2
+fi
+unset POSTGRES_PASSWORD
 port="$(docker port "$name" 5432/tcp | head -1 | sed 's/.*://')"
-for i in $(seq 1 40); do docker exec "$name" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
-docker exec "$name" psql -U postgres -Atqc "create database restore_local" >/dev/null
-export RESTORE_DB_URL="postgresql://postgres:${pw}@localhost:${port}/restore_local"
+ready=0
+for i in $(seq 1 60); do   # -h 127.0.0.1: the image's temporary init server only listens on the unix socket, so TCP readiness means the real server is up
+  docker exec "$name" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && { ready=1; break; }; sleep 1
+done
+[ "$ready" = 1 ] || { echo "The throwaway database did not become ready in 60 seconds."; exit 2; }
+docker exec "$name" psql -h 127.0.0.1 -U postgres -Atqc "create database restore_local" >/dev/null
+export RESTORE_DB_URL="postgresql://postgres:${pw}@127.0.0.1:${port}/restore_local"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report="restore_report_${stamp}.json"
 set +e

@@ -51,18 +51,28 @@ base := jsonb_build_object(
   'schema_acl', (select coalesce(to_jsonb(n.nspacl::text[]), '[]'::jsonb) from pg_namespace n where n.nspname = 'public'),
   'comments', (select coalesce(jsonb_agg(x order by x->>'kind', x->>'name', x->>'column'), '[]'::jsonb) from (
       select jsonb_build_object('kind', case c.relkind when 'v' then 'view' when 'm' then 'matview' when 'S' then 'sequence' else 'table' end, 'name', c.relname, 'column', null, 'text', d.description) x
-        from pg_description d join pg_class c on c.oid = d.objoid and d.classoid = 'pg_class'::regclass and d.objsubid = 0 where c.relnamespace = 'public'::regnamespace
+        from pg_description d join pg_class c on c.oid = d.objoid and d.classoid = 'pg_class'::regclass and d.objsubid = 0
+        where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm', 'S')
       union all
       select jsonb_build_object('kind', 'column', 'name', c.relname, 'column', a.attname, 'text', d.description)
         from pg_description d join pg_class c on c.oid = d.objoid and d.classoid = 'pg_class'::regclass and d.objsubid > 0
-        join pg_attribute a on a.attrelid = c.oid and a.attnum = d.objsubid where c.relnamespace = 'public'::regnamespace
+        join pg_attribute a on a.attrelid = c.oid and a.attnum = d.objsubid
+        where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm')
       union all
       select jsonb_build_object('kind', 'function', 'name', p.oid::regprocedure::text, 'column', null, 'text', d.description)
-        from pg_description d join pg_proc p on p.oid = d.objoid and d.classoid = 'pg_proc'::regclass where p.pronamespace = 'public'::regnamespace) q),
+        from pg_description d join pg_proc p on p.oid = d.objoid and d.classoid = 'pg_proc'::regclass
+        where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p') and not exists (select 1 from pg_depend e where e.objid = p.oid and e.deptype = 'e')) q),
   'unsupported', jsonb_build_object(
       'column_acls', (select count(*) from pg_attribute a join pg_class c on c.oid = a.attrelid where c.relnamespace = 'public'::regnamespace and a.attacl is not null),
       'nondefault_owners', (select (select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm', 'S') and pg_get_userbyid(c.relowner) <> 'postgres')
-                                 + (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace and pg_get_userbyid(p.proowner) <> 'postgres')),
+                                 + (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace and pg_get_userbyid(p.proowner) <> 'postgres'
+                                      and not exists (select 1 from pg_depend e where e.objid = p.oid and e.deptype = 'e'))),
+      'other_comments', (select (select count(*) from pg_description d join pg_class c on c.oid = d.objoid and d.classoid = 'pg_class'::regclass
+                                   where c.relnamespace = 'public'::regnamespace and c.relkind not in ('r', 'p', 'v', 'm', 'S'))
+                               + (select count(*) from pg_description d join pg_constraint k on k.oid = d.objoid and d.classoid = 'pg_constraint'::regclass where k.connamespace = 'public'::regnamespace)
+                               + (select count(*) from pg_description d join pg_type t on t.oid = d.objoid and d.classoid = 'pg_type'::regclass where t.typnamespace = 'public'::regnamespace)
+                               + (select count(*) from pg_description d join pg_trigger g on g.oid = d.objoid and d.classoid = 'pg_trigger'::regclass join pg_class c on c.oid = g.tgrelid where c.relnamespace = 'public'::regnamespace)),
+      'json_columns', (select count(*) from pg_attribute a join pg_class c on c.oid = a.attrelid where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p') and a.attnum > 0 and not a.attisdropped and a.atttypid = 'json'::regtype),
       'composite_types', (select count(*) from pg_type t join pg_class c on c.oid = t.typrelid where t.typnamespace = 'public'::regnamespace and t.typtype = 'c' and c.relkind = 'c'),
       'rules', (select count(*) from pg_rewrite w join pg_class c on c.oid = w.ev_class where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'),
       'inherited_tables', (select count(*) from pg_inherits i join pg_class c on c.oid = i.inhrelid where c.relnamespace = 'public'::regnamespace)));
@@ -82,7 +92,7 @@ grant execute on function public.backup_schema() to service_role;
 -- A single SQL statement sees one database snapshot, and STABLE functions called from it use that same snapshot, so rows of all tables and the
 -- schema are mutually consistent (no half-finished transaction can show in one table and not another). Read-only. Service role only.
 create or replace function public.backup_snapshot(skip text[] default array['push_config', 'push_subscriptions']) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' set statement_timeout to '60s' as $$
+language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$  -- the effective time limit is whatever PostgREST/the role applies; on any failure the client falls back to the two-read method
 declare q text; res jsonb;
 begin
   -- UNION ALL of per-table subselects (jsonb_build_object cannot take more than 100 arguments, i.e. about 49 tables)
