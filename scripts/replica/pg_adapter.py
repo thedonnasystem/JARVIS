@@ -2,6 +2,7 @@
 Postgres, so database triggers, constraints and the spend gateway are exercised through the same hq._request calls used in
 production. It supports only the query shapes the engine uses (eq/neq/in/lt/lte/gt/gte/like/ilike/is/not, or=(), order, limit,
 select) and POST/PATCH/rpc. It is test tooling, not production code, and it is NOT a substitute for PostgREST itself."""
+import re
 import datetime
 import decimal
 import io
@@ -30,21 +31,33 @@ def _clean(v, dec=False):
     return v
 
 
+def _colsql(col):
+    """'checkpoint->recurrence->>spawned' (PostgREST JSON path) -> "checkpoint"->'recurrence'->>'spawned'; a plain column is quoted."""
+    if "->" not in col:
+        return f'"{col}"'
+    parts = re.split(r"(->>|->)", col)
+    out = f'"{parts[0]}"'
+    for op, key in zip(parts[1::2], parts[2::2]):
+        out += f"{op}'{key}'"
+    return out
+
+
 def _cond(col, expr, params):
+    colsql, col = _colsql(col), col
     neg = False
     if expr.startswith("not."):
         neg, expr = True, expr[4:]
     op, _, val = expr.partition(".")
     if op == "is":
-        sql = f'"{col}" is null' if val == "null" else f'"{col}" is {val}'
+        sql = f'{colsql} is null' if val == "null" else f'{colsql} is {val}'
     elif op == "in":
         items = [x.strip('"') for x in val.strip("()").split(",") if x != ""]
-        sql = f'"{col}"::text = any(%s)'; params.append(items)
+        sql = f'{colsql}::text = any(%s)'; params.append(items)
     elif op in OPS:
         val = urllib.parse.unquote(val)
         if op in ("like", "ilike"):
             val = val.replace("*", "%")
-        sql = f'"{col}"::text {OPS[op]} %s' if op in ("like", "ilike") else f'"{col}" {OPS[op]} %s'
+        sql = f'{colsql}::text {OPS[op]} %s' if op in ("like", "ilike") else f'{colsql} {OPS[op]} %s'
         params.append(val)
     else:
         raise ValueError(f"unsupported filter {col}={expr}")

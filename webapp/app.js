@@ -12,13 +12,20 @@ function h(tag, attrs, ...kids) {
   return e;
 }
 const sb = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
-const S = { snap: null, msgs: [], tab: 'chat', seen: new Set(), busy: false };
-const TABS = [['chat', 'Jarvis'], ['home', 'Home'], ['missions', 'Missions'], ['agents', 'Agents'], ['money', 'Money'], ['feed', 'Feed']];
+const S = { snap: null, inbox: null, msgs: [], tab: 'chat', seen: new Set(), busy: false };
+const TABS = [['chat', 'Jarvis'], ['inbox', 'Inbox'], ['home', 'Home'], ['missions', 'Missions'], ['agents', 'Agents'], ['money', 'Money'], ['feed', 'Feed']];
 
 async function rpc(name, args) {
   const { data, error } = await sb.rpc(name, args || {});
   if (error) throw error;
   return data;
+}
+// app_needs_you is closed to the owner until the lockdown allowlist is signed off. Remember the first denial instead of failing every 8s;
+// retry after a page reload or when the owner opens the Inbox tab. A network error is not a denial and is retried normally.
+async function needsYou() {
+  if (S.inboxDenied) return null;
+  try { return await rpc('app_needs_you'); }
+  catch (e) { if (/permission denied|not authorized|42501|PGRST202|could not find the function|404/i.test(String((e && (e.message || e.code)) || e))) S.inboxDenied = true; return null; }
 }
 function note(msg) { const b = $('banner'); b.textContent = msg; b.hidden = !msg; }
 
@@ -60,6 +67,7 @@ async function enter() {
 }
 function show(k) {
   S.tab = k;
+  if (k === 'inbox' && S.inboxDenied) { S.inboxDenied = false; refresh(); }   // one retry each time the Inbox is opened
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('on', v.id === 'v-' + k));
   document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.id === 't-' + k));
   render();
@@ -68,8 +76,8 @@ function show(k) {
 // ---------- data ----------
 async function refresh() {
   try {
-    const [snap, msgs, office, pays] = await Promise.all([rpc('app_snapshot'), rpc('app_messages', { p_limit: 80 }), rpc('app_office').catch(() => null), rpc('app_payments').catch(() => null)]);
-    S.snap = snap; S.office = office; S.pays = pays; note('');
+    const [snap, msgs, office, pays, inbox] = await Promise.all([rpc('app_snapshot'), rpc('app_messages', { p_limit: 80 }), rpc('app_office').catch(() => null), rpc('app_payments').catch(() => null), needsYou()]);
+    S.snap = snap; S.office = office; S.pays = pays; S.inbox = Array.isArray(inbox) ? inbox : null; note('');
     const fresh = msgs.filter((m) => m.role === 'jarvis' && m.kind === 'chat' && !S.seen.has(m.id));
     const first = S.msgs.length === 0;
     S.msgs = msgs;
@@ -107,7 +115,38 @@ function render() {
   // Never rebuild a screen while the owner is typing into it (the 8s refresh would wipe the field).
   const ae = document.activeElement;
   if (S.tab !== 'chat' && ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && $('v-' + S.tab).contains(ae)) return;
-  ({ chat: rChat, home: rHome, missions: rMissions, agents: rAgents, money: rMoney, feed: rFeed })[S.tab](s);
+  const n = inboxItems(s).length; const tb = $('t-inbox'); if (tb) tb.textContent = n ? 'Inbox (' + n + ')' : 'Inbox';
+  try { ({ chat: rChat, home: rHome, inbox: rInbox, missions: rMissions, agents: rAgents, money: rMoney, feed: rFeed })[S.tab](s); }
+  catch (e) { note('Could not draw this page: ' + String((e && e.message) || e)); $('v-' + S.tab).replaceChildren(h('p', { class: 'dim' }, 'This page could not be drawn. Pull to refresh, or tell Jarvis.')); }
+}
+// ---------- inbox: everything waiting on the owner, ranked by the database (app_needs_you). Read-only here: Approve/Reject/answer/resume use the EXISTING app_send kinds ----------
+const INBOX_KINDS = { decision: 1, answer: 1, mission: 1 };   // nothing else can be triggered from this page
+function inboxItems(s) {
+  if (Array.isArray(S.inbox)) return S.inbox;
+  // app_needs_you not opened to the owner yet (needs the lockdown allowlist sign-off): show what app_snapshot already carries
+  const out = [];
+  ((s && s.needs_you) || []).forEach((n) => {
+    if (n.needs_decision) out.push({ kind: 'approval', ref_id: n.id, title: String(n.body || '').split('\n')[0].slice(0, 140), why: n.kind, created_at: n.created_at,
+      actions: [{ verb: 'approve', label: 'Approve', kind: 'decision', payload: { msg_id: n.id, approved: true } }, { verb: 'reject', label: 'Reject', kind: 'decision', payload: { msg_id: n.id, approved: false } }] });
+    else if (Array.isArray(n.options)) out.push({ kind: 'question', ref_id: n.id, title: String(n.body || '').split('\n')[0].slice(0, 140), why: 'A task is paused until you pick an option', created_at: n.created_at,
+      actions: n.options.map((o, i) => ({ verb: 'answer', label: typeof o === 'string' ? o : (o.label || o.title || 'Option ' + (i + 1)), kind: 'answer', payload: { msg_id: n.id, idx: i } })) });
+  });
+  ((s && s.missions) || []).filter((m) => m.status === 'blocked').forEach((m) => out.push({ kind: 'mission', ref_id: m.id, title: (m.title || '').replace(/^Mission: /, ''), why: m.next_action || 'Blocked', created_at: m.updated_at,
+    actions: [{ verb: 'resume', label: 'Resume', kind: 'mission', payload: { verb: 'resume', id: m.id } }, { verb: 'abandon', label: 'Abandon', kind: 'mission', confirm: true, payload: { verb: 'abandon', id: m.id } }] }));
+  return out;
+}
+function rInbox(s) {
+  const items = inboxItems(s); const full = Array.isArray(S.inbox);
+  $('v-inbox').replaceChildren(
+    h('h2', {}, items.length ? items.length + ' waiting on you' : 'Nothing waiting on you'),
+    ...(full ? [] : [h('p', { class: 'dim' }, 'Showing approvals, questions and blocked missions. The full inbox (payments, drafts, alerts, blocked tasks) turns on after the one-time owner sign-off in WEBAPP.md. /needs in Telegram already shows everything.')]),
+    ...items.map((it) => h('div', { class: 'card' },
+      h('div', { class: 'row dim' }, h('span', {}, (it.kind || 'item') + (it.rank ? ' · #' + it.rank : '')), h('span', {}, ago(it.created_at))),
+      h('div', {}, it.title || ''), it.why ? h('div', { class: 'dim' }, it.why) : null,
+      (it.actions || []).filter((a) => a && INBOX_KINDS[a.kind] === 1 && a.payload).length
+        ? h('div', { class: 'btns' }, (it.actions || []).filter((a) => a && INBOX_KINDS[a.kind] === 1 && a.payload).map((a) => h('button', { class: a.verb === 'approve' ? 'ok' : a.verb === 'reject' || a.verb === 'abandon' ? 'bad' : 'ghost',
+          onclick: () => { if (a.confirm && !confirm(a.label + ' this?')) return; act(a.kind, a.payload); } }, a.label || a.verb)))
+        : (it.command ? h('div', { class: 'dim' }, 'In Telegram: ' + it.command) : null))));
 }
 function rChat() {
   const box = $('msgs'); const atEnd = box.parentElement.scrollHeight - box.parentElement.scrollTop - box.parentElement.clientHeight < 80;

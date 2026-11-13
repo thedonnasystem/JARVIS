@@ -26,13 +26,35 @@ def check(name, cond, extra=""):
 EVAL = ("MISSION_VERDICT: GO — cheap to test, real demand\nNUMBERS: startup cost CAD 0 | expected profit CAD 1500 | days to first cash 21 | confidence low\n"
         "SUCCESS: three markets compared with sources and one recommendation\nRISKS: thin local data\n"
         + "".join(f"STEP: new-ventures-researcher | Research part {i} | investigate part {i} and cite sources\n" for i in range(1, 7)))
-STEP = "Findings with sources: https://example.ca/a and https://example.ca/b. Recommendation: option 2."
+STEP = ("Findings with sources: three markets compared with prices https://example.ca/a and options compared with prices; "
+        "recommendation supported by https://example.ca/b. Recommendation: option 2.")
 VERIFY = "VERIFIED: YES\nEVIDENCE: three markets compared with prices | https://example.ca/a\nEVIDENCE: recommendation supported | https://example.ca/b\n"
 script_log = []
 
 
+SCRIPT = {"verify_calls": 0, "repairs": 0, "mode": "default"}
+EVAL_SMALL = ("**MISSION_VERDICT:** GO — cheap to test\n1. **NUMBERS:** startup cost CAD 0 | expected profit CAD 900 | days to first cash 14\n"
+              "**SUCCESS:** two options compared with sources\n**RISKS:** thin data\n"
+              "**STEP 1:** new-ventures-researcher | Research option one | investigate option one and cite sources\n"
+              "**STEP 2:** new-ventures-researcher | Research option two | investigate option two and cite sources\n")
+VERIFY_FAKE = "VERIFIED: YES\nEVIDENCE: demand is proven | https://invented.example/report\n"
+VERIFY_GOOD = "**Verified:** YES\n- **Evidence:** options compared with prices | https://example.ca/a.\n- Evidence: recommendation supported | https://example.ca/b\n"
+
+
 def fake_complete(model, system, user, max_tokens, search=False, fetches=None):
     script_log.append(user[:60])
+    if SCRIPT["mode"] == "resilience":
+        if "FORMAT REPAIR" in user:
+            SCRIPT["repairs"] += 1
+            return (VERIFY_GOOD if "VERIFIED: YES or VERIFIED: NO" in user else EVAL_SMALL), 800, 300, 0
+        if "Re-plan this mission" in user or "MISSION OBJECTIVE" in user:
+            first = not SCRIPT.get("eval_seen")
+            SCRIPT["eval_seen"] = True
+            return ("Sounds like a decent idea to me, let's go." if first else EVAL_SMALL), 1000, 400, 0
+        if "Independently verify" in user:
+            SCRIPT["verify_calls"] += 1
+            return (VERIFY_FAKE if SCRIPT["verify_calls"] == 1 else "Looks fine, I re-checked the sources."), 3000, 300, 0
+        return STEP, 1500, 500, 0
     if "Re-plan this mission" in user or "MISSION OBJECTIVE" in user:
         return EVAL, 1000, 400, 0
     if "Independently verify" in user:
@@ -115,6 +137,43 @@ try:
     check("extra step refused by the database", False)
 except Exception as e:
     check("extra step refused by the database", "step limit" in str(e).lower(), str(e)[:120])
+
+# ===== D. resilience + evidence check + recurrence against the real triggers (unlabeled eval -> repair; fabricated evidence ->
+#         downgraded; unlabeled verifier -> repair -> pass; due date; owner-authorized recurrence)
+db.sql("delete from tasks where mission_id is not null"); db.sql("delete from missions"); db.sql("delete from owner_messages")
+SCRIPT["mode"] = "resilience"
+with mock.patch.object(hq, "_request", db):
+    mid4 = M.create_mission("Compare two options for a service business in Ottawa and recommend one with sources", budget_cents=1000)["id"]
+    M.set_recurrence(mid4[:8], "weekly", 2)
+run_cycles(60)
+m4 = mission(mid4)
+check("D: resilient mission reaches completed", m4["status"] == "completed", f"status={m4['status']} next={m4['next_action']} attempts={m4['attempts']}")
+check("D: fabricated evidence cost exactly one counted attempt", m4["attempts"] == 1, str(m4["attempts"]))
+check("D: evidence stored is traceable", "example.ca" in str(m4["evidence"]) and "invented" not in str(m4["evidence"]))
+reps = db.sql("select mission_role from tasks where mission_id = %s and title like %s", (mid4, "%(format repair)%"))
+check("D: exactly one eval repair and one verify repair, no loop", sorted(r["mission_role"] for r in reps) == ["eval", "verify"], str(reps))
+check("D: evidence downgrade audited", db.sql("select count(*) c from audit_log where action = 'mission_evidence_downgraded' and target = %s", (mid4,))[0]["c"] == 1)
+spent4 = db.sql("select mission_spent_cents(%s) s", (mid4,))[0]["s"]
+check("D: repairs went through the mission budget", 0 < spent4 <= 1000, str(spent4))
+check("D: repair calls are metered llm_calls", db.sql("select count(*) c from llm_calls where purpose in (select 'task '||id from tasks where mission_id = %s and title like %s)", (mid4, "%(format repair)%"))[0]["c"] == 2)
+# recurrence: kill switch blocks, then the interval passing spawns exactly one successor with the same limits
+db.sql("update missions set checkpoint = jsonb_set(checkpoint, '{recurrence,next_run_at}', to_jsonb((now() - interval '1 hour')::text)) where id = %s", (mid4,))
+db.sql("update system_state set kill_switch = true where id = 1")
+with mock.patch.object(hq, "_request", db):
+    M.advance()
+check("D: kill switch blocks recurrence", db.sql("select count(*) c from missions where created_by = 'recurrence'")[0]["c"] == 0)
+db.sql("update system_state set kill_switch = false where id = 1")
+with mock.patch.object(hq, "_request", db):
+    M.advance(); M.advance()
+kids = db.sql("select * from missions where created_by = 'recurrence'")
+check("D: one successor, captured, same budget, runs decremented", len(kids) == 1 and kids[0]["status"] == "captured" and kids[0]["budget_cents"] == 1000
+      and kids[0]["checkpoint"]["recurrence"]["runs_left"] == 1, str(kids))
+# due date: overdue notice once
+db.sql("update missions set checkpoint = checkpoint || jsonb_build_object('due_at', (now() - interval '1 day')::text) where id = %s", (kids[0]["id"],))
+with mock.patch.object(hq, "_request", db):
+    M.advance(); M.advance()
+check("D: overdue owner message sent once", db.sql("select count(*) c from owner_messages where body like 'Mission overdue%%'")[0]["c"] == 1)
+SCRIPT["mode"] = "default"
 
 print("\nRESULT:", "ALL PASSED" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

@@ -26,18 +26,34 @@ class T(unittest.TestCase):
         with mock.patch.dict(os.environ, ENV), mock.patch.object(M, "live", return_value=False), mock.patch.object(M, "_post") as p:
             self.assertEqual(M.deliver_approved()["reason"], "not live"); p.assert_not_called()
 
-    def _run(self, decision="allow", posted=True, refused=False, slug="donna", prof=PROF, venture_id="v1"):
+    def _run(self, decision="allow", posted=True, refused=False, slug="donna", prof=PROF, venture_id="v1", suppressed=()):
         row = {**ROW, "body": "no footer"} if refused else {**ROW, "venture_id": venture_id}
         def get(path):
             if path.startswith("outbox"): return [row]
             if path.startswith("ventures"): return [{"slug": slug}] if slug else []
             if path.startswith("company_profile"): return [prof] if prof else []
+            if path.startswith("contact_suppressions"): return suppressed
             return [{"do_not_contact": False}]
         with mock.patch.dict(os.environ, ENV), mock.patch.object(M, "live", return_value=True), \
              mock.patch.object(M, "_get", side_effect=get), \
              mock.patch("hq_policy.authorize", return_value=Decision("send_email", decision, "r")), \
+             mock.patch.object(M, "_claim", return_value=True), mock.patch.object(M, "_release"), \
              mock.patch.object(M, "_post", return_value=posted) as post, mock.patch.object(M, "_mark_sent") as mark:
             return M.deliver_approved(), post, mark
+
+    def test_suppressed_address_is_never_posted_even_when_the_lead_row_is_clean(self):
+        out, post, mark = self._run(suppressed=[{"address": "x@example.com"}])
+        self.assertEqual((out["sent"], out["skipped"]), (0, 1)); post.assert_not_called(); mark.assert_not_called()
+
+    def test_suppression_check_fails_closed(self):
+        import urllib.error
+        for exc in (RuntimeError("boom"), urllib.error.HTTPError("u", 500, "x", {}, None)):
+            with mock.patch.object(M, "_get", side_effect=exc):
+                self.assertTrue(M.suppressed("a@b.co"))
+        with mock.patch.object(M, "_get", side_effect=urllib.error.HTTPError("u", 404, "x", {}, None)):
+            self.assertFalse(M.suppressed("a@b.co"))  # migration not applied yet
+        with mock.patch.object(M, "_get", return_value=[]):
+            self.assertFalse(M.suppressed("a@b.co")); self.assertFalse(M.suppressed(""))
 
     def test_sends_and_marks(self):
         out, post, mark = self._run()

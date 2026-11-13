@@ -58,7 +58,7 @@ Every task prompt includes the venture's **company knowledge** (recent facts, de
 
 ## Owner commands (Telegram)
 
-`/hq` status · `/brief` daily brief · `/due` follow-ups · `/day dials pitches submissions` · `/paid name` · `/lead name | phone | note | days` · `/done # days note` · `/money in|out amount venture note` · `/ask agent task` · `/agents` · `/leads` · `/drafts` · `/sent code` · `/systems` · `/ideas` · `/testidea name` · `/parkidea name` · `/kill` · `/resume`
+`/hq` status · `/needs` everything waiting on you, ranked · `/brief` daily brief (ends with the inbox count) · `/due` follow-ups · `/day dials pitches submissions` · `/paid name` · `/lead name | phone | note | days` · `/done # days note` · `/money in|out amount venture note` · `/ask agent task` · `/agents` · `/leads` · `/drafts` · `/sent code` · `/systems` · `/ideas` · `/testidea name` · `/parkidea name` · `/kill` · `/resume`
 
 ## The Donna money loop
 
@@ -231,3 +231,11 @@ Full setup, schedule, retention, recovery steps and limits: **BACKUP_RECOVERY.md
 
 ## Releases
 See DEPLOY_RUNBOOK.md (gates, exact order, verification, rollback), SECURITY_REVIEW_PHASE1.md, and the read-only tools in `ops/` (`verify_deploy.sh`, `verify_live.sql`, `rollback_phase1.sql`).
+
+## Needs-you inbox (`/needs`)
+- `/needs` lists everything waiting on you in one ranked list: approvals, Task Brief questions, important alerts, blocked missions, escalations, proposals, payments to make, accounts to create, drafts, blocked tasks, expiring items. Top items get tap buttons that are the SAME Approve/Reject and answer buttons as the original message (no new way to approve). It only reads.
+- Ranking (database function `needs_you()`): alerts and expiring red-action approvals first, then approvals, payments you must make, questions, blocked missions, escalations, proposals, drafts, blocked tasks; older items rise a little (one point per 12 hours, max 10); ties go to the oldest.
+- Hidden on purpose: decisions already made, approval requests that expired, escalations whose buttons are already pending (shown once), blocked tasks inside a mission (the mission is listed), tasks only waiting for API credit, alerts older than 24 hours.
+- The daily brief message ends with `Needs you: N waiting, oldest ...`; if the inbox cannot be read the brief goes out without that line.
+- If `/needs` says it could not read the inbox, migration `20261115_inbox_needs_you_v1.sql` is not applied yet.
+- Weekly digest text exists (`hq_inbox.weekly_digest`) but is not scheduled; scheduling it is a separate decision.

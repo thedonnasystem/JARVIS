@@ -30,11 +30,13 @@ import hq_succession
 import hq_tools
 import hq_org
 import hq_ventures
+import hq_venture_ops
 import hq_mail
 import hq_capital
 import hq_payments
 import hq_accounts
 import hq_office
+import hq_inbox  # hqui
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +218,9 @@ async def hq_brief(update, context) -> None:
         text = hq._request("POST", "/rest/v1/rpc/daily_brief_text", {}) or "No brief available."
     except Exception as e:
         text = f"Brief failed: {str(e)[:200]}"
+    # --- hqui begin: inbox count in the brief ---
+    text = hq_inbox.append_to_brief(str(text))
+    # --- hqui end ---
     await update.message.reply_text(str(text)[:4000])
 
 
@@ -679,6 +684,9 @@ def _outbox_venture_id(outbox_id: str) -> tuple[str | None, bool]:
 def _outbox_casl_gate(outbox_id: str) -> tuple[str | None, str | None]:
     """(venture slug, problem) for approving this draft. The venture comes from the draft's LEAD (else the draft itself).
     Donna keeps its legacy flow (a warning, not a block); every other venture is refused without a complete profile."""
+    _v2_problem = hq_venture_ops.dnc_problem(outbox_id)  # venture2 hook: do-not-contact first
+    if _v2_problem:
+        return None, _v2_problem
     vid, has_lead = _outbox_venture_id(outbox_id)
     if not vid and not has_lead:
         return hq_mail.DONNA, None  # legacy hand-made draft with no venture at all: today's Donna flow (hq_mail still refuses to SEND it)
@@ -688,6 +696,9 @@ def _outbox_casl_gate(outbox_id: str) -> tuple[str | None, str | None]:
     if slug != hq_mail.DONNA and not hq_mail.profile(slug):
         return slug, (f"Cannot approve yet: {slug} has no complete CASL profile (sender, brand, mailing address), and every email must carry one. "
                       f"Set it with /setaddress {slug} <address>, /venture profile {slug} sender <name>, /venture profile {slug} brand <name>, then tap Approve again.")
+    _v2_cfg = hq_venture_ops.config_problem(slug)  # venture2 hook: offer + call to action on file (donna exempt)
+    if _v2_cfg:
+        return slug, _v2_cfg
     return slug, None
 
 
@@ -821,7 +832,7 @@ async def hq_mission_cmd(update, context) -> None:
     args = list(context.args or [])
     if not args:
         await update.message.reply_text("Usage:\n/mission new [@venture] <objective>\n/mission <id>\n/mission pause|resume|abandon <id>\n"
-                                        "/mission budget <id> <cents CAD>\n/mission steps <id> <n>\n/mission focus <id>|off\nOr just tell me the goal in chat.")
+                                        "/mission budget <id> <cents CAD>\n/mission steps <id> <n>\n/mission focus <id>|off\n/mission due <id> <YYYY-MM-DD|+3d|off>\n/mission repeat <id> <weekly|daily|Nd|off> [runs]\n/mission unstick <id>  (a repeat that never started its next run)\nOr just tell me the goal in chat.")
         return
     try:
         verb = args[0].lower()
@@ -837,8 +848,14 @@ async def hq_mission_cmd(update, context) -> None:
             text = r.get("error") or f"Mission opened: {r['title']} ({str(r['id'])[:8]}). Evaluation starts on the next tick."
         elif verb in ("pause", "resume", "abandon", "retry") and len(args) >= 2:
             text = hq_missions.set_status(args[1], verb)
+        elif verb == "unstick" and len(args) >= 2:
+            text = hq_missions.unstick_recurrence(args[1])
         elif verb == "steps" and len(args) >= 3 and args[2].isdigit():
             text = hq_missions.set_steps(args[1], int(args[2]))
+        elif verb == "due" and len(args) >= 3:
+            text = hq_missions.set_due(args[1], args[2])
+        elif verb == "repeat" and len(args) >= 3:
+            text = hq_missions.set_recurrence(args[1], args[2], int(args[3]) if len(args) > 3 and args[3].isdigit() else None)
         elif verb == "focus" and len(args) >= 2:
             text = hq_missions.set_focus(args[1])
         elif verb == "budget" and len(args) >= 3 and args[2].isdigit():
@@ -893,6 +910,8 @@ async def hq_venture_cmd(update, context) -> None:
         elif sub == "agents" and len(args) > 1:
             vid, vslug, err = resolve_venture(args[1])
             text = err or hq_ventures.ensure_agents(vslug)
+        elif sub in ("config", "funnel", "deals"):  # venture2 hook
+            text = venture2_sub(sub, args)
         elif sub == "activate" and len(args) > 1:
             text = hq_ventures.activate(args[1].lower())
         elif sub == "new" and len(args) > 1:
@@ -1108,12 +1127,35 @@ async def hq_backup_cmd(update, context) -> None:
     await update.message.reply_text(text[:4000])
 
 
+# --- hqui begin: /needs (unified Needs-you inbox; read-only, buttons reuse the existing hqd:/hqq: callbacks) ---
+async def hq_needs_cmd(update, context) -> None:
+    if not _owner(update):
+        return
+    try:
+        items = hq_inbox.fetch()
+    except Exception as e:
+        logger.exception("HQ /needs failed")
+        await update.message.reply_text(f"Could not read the inbox: {type(e).__name__}. Is migration 20261115_inbox_needs_you_v1 applied?")
+        return
+    await update.message.reply_text(hq_inbox.format_inbox(items))
+    for it in items[:3]:  # tap-to-act for the top items only, through the same Approve/Reject and answer callbacks as the original message
+        markup = hq_inbox.action_buttons(it)
+        if markup is not None:
+            await update.message.reply_text(f"{it.get('title', '')[:200]}", reply_markup=markup)
+
+
+MENU_HQUI = [("needs", "Everything waiting on you, ranked")]
+# --- hqui end ---
+
+
 MENU = [
     ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
 ]
+
+MENU += MENU_HQUI  # hqui
 
 
 async def set_menu(app) -> None:
@@ -1188,6 +1230,10 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
                      ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd)):
         app.add_handler(CommandHandler(name, fn))
+    register_venture2(app, CommandHandler)  # venture2 hook
+    # --- hqui begin ---
+    app.add_handler(CommandHandler("needs", hq_needs_cmd))
+    # --- hqui end ---
     try:
         from telegram.ext import MessageHandler, filters
         app.add_handler(MessageHandler(filters.Document.ALL & filters.CaptionRegex(r"(?i)^/?bank"), hq_bank_file))
@@ -1470,3 +1516,81 @@ async def handle_chat_tool(name: str, tool_input: dict) -> str:
         logger.exception("HQ chat tool failed")
         return f"HQ tool error: {str(e)[:200]}"
     return f"Unknown HQ tool {name}"
+
+
+# --- venture2 begin ---
+# Deals, reply tracking, do-not-contact, funnel and per-venture config (hq_venture_ops.py). Everything here is an owner command;
+# nothing sends anything. Hooks outside this block: _outbox_casl_gate (draft_problem), hq_venture_cmd (config/funnel/deals), register().
+
+def venture2_sub(sub: str, args: list) -> str:
+    """/venture config <v> [offer|cta|sla|brief <value>] | /venture funnel <v> | /venture deals [<v>]"""
+    if sub == "deals":
+        if len(args) > 1:
+            _vid, vslug, err = resolve_venture(args[1])
+            return err or hq_venture_ops.deals_text(vslug)
+        return hq_venture_ops.deals_text()
+    if len(args) < 2:
+        return f"Use: /venture {sub} <venture>" + (" [offer|cta|sla|brief <value>]" if sub == "config" else "")
+    _vid, vslug, err = resolve_venture(args[1])
+    if err:
+        return err
+    if sub == "funnel":
+        return hq_venture_ops.funnel_text(vslug)
+    if len(args) == 2:
+        return hq_venture_ops.config_text(vslug)
+    return hq_venture_ops.set_config(vslug, args[2], " ".join(args[3:]))
+
+
+async def hq_reply_cmd(update, context) -> None:
+    """/reply <lead#> <interested|not_interested|question|unsubscribe|booked> [note]  (owner only)"""
+    if not _owner(update):
+        return
+    args = list(context.args or [])
+    if len(args) < 2:
+        await update.message.reply_text("Use: /reply 12 interested wants a call Tuesday\nKinds: " + ", ".join(hq_venture_ops.REPLY_KINDS) +
+                                        "\n'unsubscribe' stops all contact with that address in every venture, at once.")
+        return
+    try:
+        text = hq_venture_ops.record_reply(args[0], args[1], " ".join(args[2:]))
+    except Exception as e:
+        logger.exception("HQ reply command failed")
+        text = f"Reply failed: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
+async def hq_deal_cmd(update, context) -> None:
+    """/deal new <lead#> [value] | list [venture] | move <code> pitched|negotiating|lost [note] | won <code> <amount> received|expected [note]"""
+    if not _owner(update):
+        return
+    args = list(context.args or [])
+    sub = args[0].lower() if args else "list"
+    try:
+        if sub == "list":
+            text = hq_venture_ops.deals_text(None)
+            if len(args) > 1:
+                _vid, vslug, err = resolve_venture(args[1])
+                text = err or hq_venture_ops.deals_text(vslug)
+        elif sub == "new" and len(args) >= 2:
+            text = hq_venture_ops.deal_new(args[1], args[2] if len(args) > 2 else "", " ".join(args[3:]))
+        elif sub == "move" and len(args) >= 3:
+            text = hq_venture_ops.deal_move(args[1], args[2], " ".join(args[3:]))
+        elif sub == "won" and len(args) >= 4:
+            text = hq_venture_ops.deal_won(args[1], args[2], args[3], " ".join(args[4:]))
+        elif sub == "won":
+            text = "Use: /deal won <code> <amount> received|expected [note]   (only this records revenue)"
+        else:
+            text = ("Use:\n/deal list [venture]\n/deal new <lead#> [value]\n/deal move <code> pitched|negotiating|lost [note]\n"
+                    "/deal won <code> <amount> received|expected [note]")
+    except Exception as e:
+        logger.exception("HQ deal command failed")
+        text = f"Deal command failed: {str(e)[:150]}"
+    await update.message.reply_text(text[:4000])
+
+
+def register_venture2(app, CommandHandler) -> None:
+    for name, fn in (("reply", hq_reply_cmd), ("deal", hq_deal_cmd)):
+        app.add_handler(CommandHandler(name, fn))
+
+
+MENU.extend([("reply", "Record a lead's reply; unsubscribe = do not contact"), ("deal", "Deals: new, move, won (owner confirms revenue)")])
+# --- venture2 end ---

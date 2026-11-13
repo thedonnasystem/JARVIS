@@ -2816,6 +2816,796 @@ grant execute on function public.queue_all_prospect_tasks() to service_role;
 revoke all on function public.venture_kpis(text) from public, anon, authenticated;
 grant execute on function public.venture_kpis(text) to service_role;
 
+-- ===== 20261115_venture_deals_replies_v1.sql =====
+-- Deals, reply tracking, do-not-contact and per-venture operating config (VENTURE_FACTORY.md, "Deals, replies and do-not-contact").
+-- Safe to re-run. Touches NO spend control, cap, kill switch, dry-run, permission or capital function. Nothing here sends anything.
+--   contact_suppressions     one row per suppressed address (CASL): survives lead deletion, shared by every venture.
+--   lead_replies             the owner's record of a reply on a lead (interested / not_interested / question / unsubscribe / booked).
+--   venture_config           offer, call to action, reply SLA per venture (the prospecting brief stays a venture_procedures row).
+--   is_suppressed(addr)      true when the address is on the suppression list.
+--   mark_do_not_contact()    flags EVERY lead sharing the address (all ventures), suppresses it, rejects open drafts to it.
+--   record_lead_reply()      owner-only; 'unsubscribe' calls mark_do_not_contact.
+--   create_deal / set_deal_stage / confirm_deal_won   owner-confirmed deal pipeline. Revenue is written ONLY by confirm_deal_won.
+--   lead_funnel(), venture_kpis() (replaced, adds funnel/replies/SLA), venture_config_get(), set_venture_config()
+--   triggers: leads_suppression_guard (a suppressed address can never be un-flagged or re-added clean),
+--             leads_dnc_cascade (any path that flags a lead do-not-contact cascades), outbox_dnc_guard (a do-not-contact lead
+--             or suppressed address can never be drafted, qa-passed, approved or sent).
+-- Deal stages. The ONLY stage names found in the repo are the table default 'pitched' (core schema) and the won-like names that
+-- venture_kpis already counts ('won','closed','closed_won','paid'). The pipeline therefore uses: pitched -> negotiating -> won | lost,
+-- and treats the legacy won-like names as already won (terminal). No CHECK constraint is added, so existing rows are never invalidated.
+
+-- One address normaliser for SQL and Python (hq_mail.normalize_addr must give the same answer; a test runs one table of inputs through both):
+-- take the address inside <...> if present, lowercase, trim, drop a +tag from the local part. Dots are NOT touched (gmail-only rule).
+-- Returns null when there is no usable address, or when the string is a multi-recipient list (';' or ',').
+create or replace function public.normalize_addr(p text) returns text
+language sql immutable set search_path to 'public' as $$
+  select case when p ~ '[;,]' or a is null or a ~ '\s' or position('@' in a) < 2 or a !~ '^[^@]+@[^@]+$' then null
+              else nullif(regexp_replace(split_part(a, '@', 1), '\+.*$', ''), '') || '@' || split_part(a, '@', 2) end
+  from (select lower(btrim(coalesce(substring(btrim(p) from '<([^<>]*)>'), btrim(p)))) a) s
+$$;
+
+-- Append-only: an opt-out is a legal record. There is NO unsuppress path in this sprint (an owner decision, later).
+create table if not exists public.contact_suppressions (
+  address text primary key check (coalesce(address = public.normalize_addr(address), false)),
+  reason text not null,
+  recorded_by text not null,
+  source_lead uuid,
+  recorded_at timestamptz not null default now()
+);
+alter table public.contact_suppressions enable row level security;
+create or replace function public.contact_suppressions_append_only() returns trigger
+language plpgsql set search_path to 'public' as $$
+begin
+  raise exception 'The do-not-contact list is append-only: entries cannot be changed or removed.' using errcode = 'P0001';
+end $$;
+drop trigger if exists contact_suppressions_append_only on public.contact_suppressions;
+create trigger contact_suppressions_append_only before update or delete on public.contact_suppressions
+  for each row execute function public.contact_suppressions_append_only();
+drop trigger if exists contact_suppressions_no_truncate on public.contact_suppressions;
+create trigger contact_suppressions_no_truncate before truncate on public.contact_suppressions
+  for each statement execute function public.contact_suppressions_append_only();
+grant select, insert on public.contact_suppressions to service_role;   -- explicit, so the revoke below is a real narrowing
+revoke update, delete, truncate on public.contact_suppressions from public, anon, authenticated, service_role;
+
+create table if not exists public.lead_replies (
+  id uuid primary key default gen_random_uuid(),
+  lead_id uuid not null references public.leads(id) on delete cascade,
+  venture_id uuid not null references public.ventures(id),
+  kind text not null check (kind in ('interested','not_interested','question','unsubscribe','booked')),
+  note text,
+  recorded_by text not null,
+  created_at timestamptz not null default now()
+);
+alter table public.lead_replies enable row level security;
+create index if not exists lead_replies_lead_idx on public.lead_replies(lead_id, created_at desc);
+create index if not exists lead_replies_venture_idx on public.lead_replies(venture_id, created_at desc);
+
+create table if not exists public.venture_config (
+  venture_id uuid primary key references public.ventures(id) on delete cascade,
+  offer text check (offer is null or length(offer) between 10 and 600),
+  call_to_action text check (call_to_action is null or length(call_to_action) between 5 and 300),
+  reply_sla_hours int check (reply_sla_hours is null or reply_sla_hours between 1 and 720),
+  updated_by text not null default 'owner',
+  updated_at timestamptz not null default now()
+);
+alter table public.venture_config enable row level security;
+
+-- Addresses already flagged do-not-contact before this migration are carried onto the suppression list (additive, conservative).
+insert into public.contact_suppressions (address, reason, recorded_by)
+select distinct public.normalize_addr(email), 'lead already flagged do-not-contact before suppression list', 'migration'
+from public.leads where do_not_contact and public.normalize_addr(email) is not null
+on conflict do nothing;
+
+create or replace function public.is_suppressed(p_address text) returns boolean
+language sql stable set search_path to 'public' as $$
+  select public.normalize_addr(p_address) is not null and exists (select 1 from public.contact_suppressions where address = public.normalize_addr(p_address))
+$$;
+
+create or replace function public.mark_do_not_contact(p_lead uuid, p_reason text, p_by text) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare l public.leads; addr text; n_leads int := 0; n_drafts int := 0; ids uuid[];
+begin
+  select * into l from public.leads where id = p_lead;
+  if not found then raise exception 'No such lead.'; end if;
+  addr := public.normalize_addr(l.email);
+  if addr is not null then
+    insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+    values (addr, left(coalesce(nullif(btrim(p_reason), ''), 'do not contact'), 300), coalesce(p_by, 'unknown'), l.id)
+    on conflict do nothing;
+    select coalesce(array_agg(id), '{}') into ids from public.leads where public.normalize_addr(email) = addr or id = l.id;
+  else
+    addr := null;
+    ids := array[l.id];
+  end if;
+  update public.leads set do_not_contact = true, status = 'do_not_contact', next_followup_at = null where id = any(ids);
+  get diagnostics n_leads = row_count;
+  update public.outbox set status = 'rejected', decided_at = now()
+   where status in ('draft','qa_passed','approved')
+     and (lead_id = any(ids) or (addr is not null and public.normalize_addr(to_ref) = addr));
+  get diagnostics n_drafts = row_count;
+  insert into public.audit_log (actor, action, target, detail)
+  values (coalesce(p_by, 'unknown'), 'do_not_contact', 'leads/' || l.id,
+          jsonb_build_object('leads_marked', n_leads, 'drafts_rejected', n_drafts, 'address_suppressed', addr is not null,
+                             'reason', left(coalesce(p_reason, ''), 300)));
+  return jsonb_build_object('leads_marked', n_leads, 'drafts_rejected', n_drafts, 'address_suppressed', addr is not null);
+end $$;
+
+create or replace function public.record_lead_reply(p_lead uuid, p_kind text, p_note text, p_by text) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare l public.leads; order_ text[] := array['new','drafted','approved_to_send','contacted','sent','replied','booked','won'];
+        cur int; target text; dnc jsonb;
+begin
+  if coalesce(p_by, '') not like 'owner%' then raise exception 'Only the owner records a reply.'; end if;
+  if p_kind not in ('interested','not_interested','question','unsubscribe','booked') then
+    raise exception 'Reply kind must be interested, not_interested, question, unsubscribe or booked.'; end if;
+  select * into l from public.leads where id = p_lead;
+  if not found then raise exception 'No such lead.'; end if;
+  insert into public.lead_replies (lead_id, venture_id, kind, note, recorded_by)
+  values (l.id, l.venture_id, p_kind, left(nullif(btrim(coalesce(p_note, '')), ''), 500), p_by);
+  if p_kind = 'unsubscribe' then
+    dnc := public.mark_do_not_contact(l.id, 'unsubscribe reply: ' || coalesce(p_note, ''), p_by);
+    return jsonb_build_object('kind', p_kind, 'status', 'do_not_contact') || dnc;
+  end if;
+  if l.do_not_contact or l.status in ('won','do_not_contact') then   -- a reply never lifts do-not-contact and never demotes a win
+    return jsonb_build_object('kind', p_kind, 'status', l.status, 'unchanged', true);
+  end if;
+  cur := coalesce(array_position(order_, l.status), 0);
+  target := case p_kind when 'not_interested' then 'lost'
+                        when 'booked' then 'booked'
+                        else 'replied' end;
+  if target = 'lost' or cur < array_position(order_, target) then
+    update public.leads set status = target, next_followup_at = case when target in ('lost','booked') then null else next_followup_at end
+     where id = l.id;
+  else
+    target := l.status;
+  end if;
+  return jsonb_build_object('kind', p_kind, 'status', target);
+end $$;
+
+-- ---------- deals ----------
+create or replace function public.create_deal(p_lead uuid, p_value_cents int, p_by text, p_note text default null) returns uuid
+language plpgsql security definer set search_path to 'public' as $$
+declare l public.leads; d uuid;
+begin
+  if coalesce(p_by, '') not like 'owner%' then raise exception 'Only the owner opens a deal.'; end if;
+  select * into l from public.leads where id = p_lead;
+  if not found then raise exception 'No such lead.'; end if;
+  if l.do_not_contact or public.is_suppressed(l.email) then raise exception 'That lead is do-not-contact; no deal can be opened.'; end if;
+  if p_value_cents is not null and (p_value_cents < 0 or p_value_cents > 10000000) then raise exception 'Deal value must be between 0 and 10,000,000 cents (CAD $100,000).'; end if;
+  -- one open deal per lead. Checked here (not only by the unique index below) because an existing table might already hold duplicates.
+  if exists (select 1 from public.deals where lead_id = l.id and stage in ('pitched','negotiating')) then raise exception 'That lead already has an open deal.'; end if;
+  insert into public.deals (venture_id, lead_id, stage, value_cents, notes)
+  values (l.venture_id, l.id, 'pitched', p_value_cents, left(p_note, 500)) returning id into d;
+  insert into public.audit_log (actor, action, target, detail)
+  values (p_by, 'deal_created', 'deals/' || d, jsonb_build_object('lead', l.id, 'value_cents', p_value_cents));
+  return d;
+end $$;
+
+create or replace function public.set_deal_stage(p_deal uuid, p_stage text, p_by text, p_note text default null) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare d public.deals; ok boolean;
+begin
+  if coalesce(p_by, '') not like 'owner%' then raise exception 'Only the owner moves a deal.'; end if;
+  select * into d from public.deals where id = p_deal for update;
+  if not found then raise exception 'No such deal.'; end if;
+  if p_stage = 'won' then raise exception 'A deal is won only by confirming it with an amount (confirm_deal_won): that is what records revenue.'; end if;
+  if p_stage not in ('pitched','negotiating','lost') then raise exception 'Stage must be pitched, negotiating or lost.'; end if;
+  ok := (d.stage = 'pitched' and p_stage in ('negotiating','lost'))
+     or (d.stage = 'negotiating' and p_stage in ('pitched','lost'));
+  if not ok then raise exception 'Deal stage % -> % is not allowed.', d.stage, p_stage; end if;
+  update public.deals set stage = p_stage, updated_at = now(), notes = left(coalesce(nullif(btrim(p_note), ''), notes), 500) where id = d.id;
+  if p_stage = 'lost' and d.lead_id is not null then
+    update public.leads set status = 'lost' where id = d.lead_id and not do_not_contact and status not in ('won','do_not_contact');
+  end if;
+  insert into public.audit_log (actor, action, target, detail)
+  values (p_by, 'deal_stage', 'deals/' || d.id, jsonb_build_object('from', d.stage, 'to', p_stage, 'note', left(coalesce(p_note, ''), 200)));
+  return jsonb_build_object('deal', d.id, 'from', d.stage, 'to', p_stage);
+end $$;
+
+-- The ONE place a deal becomes won and the ONE place this feature writes the ledger. It never infers an amount.
+create or replace function public.confirm_deal_won(p_deal uuid, p_amount_cents int, p_ledger_status text, p_by text, p_note text default null) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare d public.deals; led uuid;
+begin
+  if coalesce(p_by, '') not like 'owner%' then raise exception 'Only the owner confirms a win.'; end if;
+  if p_amount_cents is null or p_amount_cents <= 0 then raise exception 'Confirming a win needs a positive amount.'; end if;
+  if p_amount_cents > 10000000 then raise exception 'Amount is above the 10,000,000 cent (CAD $100,000) limit; confirm a smaller amount or split it.'; end if;
+  if p_ledger_status not in ('received','expected') then raise exception 'Say whether the money is received or expected.'; end if;
+  select * into d from public.deals where id = p_deal for update;
+  if not found then raise exception 'No such deal.'; end if;
+  if d.stage not in ('pitched','negotiating') then raise exception 'Deal is already %; revenue is never recorded twice.', d.stage; end if;
+  if exists (select 1 from public.ledger where note like 'deal ' || d.id || '%') then raise exception 'Revenue for this deal is already recorded.'; end if;
+  insert into public.ledger (venture_id, kind, amount_cents, currency, status, note, occurred_on)
+  values (d.venture_id, 'revenue', p_amount_cents, 'CAD', p_ledger_status, left('deal ' || d.id || ': owner confirmed win' || coalesce(' - ' || nullif(btrim(p_note), ''), ''), 300),
+          (now() at time zone 'America/Toronto')::date) returning id into led;
+  update public.deals set stage = 'won', value_cents = p_amount_cents, updated_at = now() where id = d.id;
+  if d.lead_id is not null then
+    update public.leads set status = 'won', next_followup_at = null where id = d.lead_id and not do_not_contact;
+  end if;
+  insert into public.audit_log (actor, action, target, detail)
+  values (p_by, 'deal_won', 'deals/' || d.id, jsonb_build_object('amount_cents', p_amount_cents, 'ledger', led, 'ledger_status', p_ledger_status));
+  return jsonb_build_object('deal', d.id, 'amount_cents', p_amount_cents, 'ledger_id', led, 'ledger_status', p_ledger_status);
+end $$;
+
+-- One open deal per lead, enforced by the database only when the existing data allows it (the core table never forbade duplicates).
+do $$ begin
+  if not exists (select 1 from public.deals where lead_id is not null and stage in ('pitched','negotiating') group by lead_id having count(*) > 1) then
+    create unique index if not exists deals_one_open_per_lead on public.deals (lead_id) where lead_id is not null and stage in ('pitched','negotiating');
+  end if;
+end $$;
+
+-- ---------- config ----------
+create or replace function public.venture_config_get(p_venture text) returns jsonb
+language plpgsql stable set search_path to 'public' as $$
+declare v public.ventures; c public.venture_config;
+begin
+  select * into v from public.ventures where slug = p_venture;
+  if not found then return null; end if;
+  select * into c from public.venture_config where venture_id = v.id;
+  return jsonb_build_object('venture', v.slug, 'offer', c.offer, 'call_to_action', c.call_to_action,
+    'reply_sla_hours', coalesce(c.reply_sla_hours, 24), 'reply_sla_is_default', c.reply_sla_hours is null,
+    'prospecting_brief_set', exists (select 1 from public.venture_procedures p where p.venture_id = v.id and p.title = 'prospecting brief'
+                                      and p.status = 'active' and length(btrim(p.steps)) >= 20),
+    -- fail closed: a venture other than donna needs BOTH an offer and a call to action before a draft for it can be approved
+    'drafts_ready', v.slug = 'donna' or (c.offer is not null and c.call_to_action is not null));
+end $$;
+
+create or replace function public.set_venture_config(p_venture text, p_key text, p_value text, p_by text) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare v public.ventures; val text := nullif(btrim(coalesce(p_value, '')), '');
+begin
+  if coalesce(p_by, '') not like 'owner%' then raise exception 'Only the owner changes venture config.'; end if;
+  select * into v from public.ventures where slug = p_venture;
+  if not found then raise exception 'No such venture.'; end if;
+  if p_key not in ('offer','call_to_action','reply_sla_hours') then raise exception 'Config key must be offer, call_to_action or reply_sla_hours.'; end if;
+  if val ~* '(password|passwd|secret|api[_-]?key|token)\s*[:=]|sk-[A-Za-z0-9]{10,}' then raise exception 'Config must not contain credentials.'; end if;
+  insert into public.venture_config (venture_id, updated_by) values (v.id, p_by) on conflict do nothing;
+  if p_key = 'offer' then update public.venture_config set offer = val where venture_id = v.id;
+  elsif p_key = 'call_to_action' then update public.venture_config set call_to_action = val where venture_id = v.id;
+  else
+    if val is not null and val !~ '^[0-9]{1,3}$' then raise exception 'reply_sla_hours must be a whole number of hours (1-720).'; end if;
+    update public.venture_config set reply_sla_hours = val::int where venture_id = v.id;
+  end if;
+  update public.venture_config set updated_by = p_by, updated_at = now() where venture_id = v.id;
+  insert into public.audit_log (actor, action, target, detail)
+  values (p_by, 'venture_config', 'ventures/' || v.slug, jsonb_build_object('key', p_key, 'cleared', val is null));
+  return public.venture_config_get(p_venture);
+end $$;
+
+-- ---------- funnel + KPIs (read-only) ----------
+create or replace function public.lead_funnel(p_venture text) returns jsonb
+language plpgsql stable set search_path to 'public' as $$
+declare v public.ventures; sla int; counts jsonb; stale int;
+begin
+  select * into v from public.ventures where slug = p_venture;
+  if not found then return null; end if;
+  sla := coalesce((select reply_sla_hours from public.venture_config where venture_id = v.id), 24);
+  select jsonb_build_object(
+      'new', count(*) filter (where b = 'new'), 'drafted', count(*) filter (where b = 'drafted'),
+      'approved_to_send', count(*) filter (where b = 'approved_to_send'), 'sent', count(*) filter (where b = 'sent'),
+      'replied', count(*) filter (where b = 'replied'), 'booked', count(*) filter (where b = 'booked'),
+      'won', count(*) filter (where b = 'won'), 'lost', count(*) filter (where b = 'lost'),
+      'do_not_contact', count(*) filter (where b = 'do_not_contact'), 'other', count(*) filter (where b = 'other'))
+    into counts
+    from (select case when do_not_contact then 'do_not_contact'
+                      when status in ('new','drafted','approved_to_send','replied','booked','won','lost','do_not_contact') then status
+                      when status in ('contacted','sent') then 'sent'   -- 'contacted' is what mark_sent / hq_mail actually write
+                      else 'other' end b
+            from public.leads where venture_id = v.id) s;
+  -- replies waiting on the owner longer than the SLA: still 'replied', last recorded reply is interested/question and older than sla hours
+  select count(*) into stale from public.leads l
+   where l.venture_id = v.id and not l.do_not_contact and l.status = 'replied'
+     and (select max(r.created_at) from public.lead_replies r where r.lead_id = l.id and r.kind in ('interested','question')) < now() - make_interval(hours => sla);
+  return jsonb_build_object('venture', v.slug, 'counts', counts, 'total', (select count(*) from public.leads where venture_id = v.id),
+    'reply_sla_hours', sla, 'replies_over_sla', stale,
+    'replies_by_kind', coalesce((select jsonb_object_agg(kind, n) from (select kind, count(*) n from public.lead_replies where venture_id = v.id group by kind) r), '{}'::jsonb));
+end $$;
+
+create or replace function public.venture_kpis(p_venture text) returns jsonb
+language plpgsql stable set search_path to 'public' as $$
+declare v public.ventures; f jsonb;
+begin
+  select * into v from public.ventures where slug = p_venture;
+  if not found then return null; end if;
+  f := public.lead_funnel(p_venture);
+  return jsonb_build_object(
+    'venture', v.slug,
+    'leads', (select count(*) from public.leads where venture_id = v.id),
+    'emailable_leads', (select count(*) from public.leads where venture_id = v.id and email is not null and do_not_contact = false),
+    'drafted', (select count(*) from public.outbox o left join public.leads l on l.id = o.lead_id where coalesce(o.venture_id, l.venture_id) = v.id),
+    'approved', (select count(*) from public.outbox o left join public.leads l on l.id = o.lead_id where coalesce(o.venture_id, l.venture_id) = v.id and o.status in ('approved','sent')),
+    'sent', (select count(*) from public.outbox o left join public.leads l on l.id = o.lead_id where coalesce(o.venture_id, l.venture_id) = v.id and o.status = 'sent'),
+    'won_deals', (select count(*) from public.deals where venture_id = v.id and lower(stage) in ('won','closed','closed_won','paid')),
+    'deals_by_stage', coalesce((select jsonb_object_agg(stage, n) from (select stage, count(*) n from public.deals where venture_id = v.id group by stage) d), '{}'::jsonb),
+    'revenue_cents', coalesce((select sum(amount_cents) from public.ledger where venture_id = v.id and kind = 'revenue' and status = 'received' and intercompany = false), 0),
+    'funnel', f->'counts', 'replies_by_kind', f->'replies_by_kind', 'replies_over_sla', f->'replies_over_sla', 'reply_sla_hours', f->'reply_sla_hours');
+end $$;
+
+-- ---------- guards ----------
+-- A suppressed address can never be (re)added clean or un-flagged, whichever path writes the lead.
+create or replace function public.leads_suppression_guard() returns trigger
+language plpgsql set search_path to 'public' as $$
+begin
+  if public.is_suppressed(new.email) then
+    new.do_not_contact := true;
+    if tg_op = 'INSERT' or new.status is distinct from 'do_not_contact' then new.status := 'do_not_contact'; end if;
+    new.next_followup_at := null;
+  end if;
+  return new;
+end $$;
+drop trigger if exists leads_suppression_guard on public.leads;
+create trigger leads_suppression_guard before insert or update on public.leads
+  for each row execute function public.leads_suppression_guard();
+
+-- Any path (raw update included) that flags a lead do-not-contact cascades to every lead and draft sharing the address.
+create or replace function public.leads_dnc_cascade() returns trigger
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  if new.do_not_contact and new.email is not null and not public.is_suppressed(new.email) then
+    perform public.mark_do_not_contact(new.id, 'lead flagged do-not-contact', 'system:trigger');
+  end if;
+  return null;
+end $$;
+drop trigger if exists leads_dnc_cascade on public.leads;
+create trigger leads_dnc_cascade after insert or update of do_not_contact on public.leads
+  for each row when (new.do_not_contact) execute function public.leads_dnc_cascade();
+
+-- Last line of defence for every drafting / approval / send path. Rejecting a draft is always allowed.
+create or replace function public.outbox_dnc_guard() returns trigger
+language plpgsql set search_path to 'public' as $$
+declare dnc boolean := false;
+begin
+  if new.status not in ('draft','qa_passed','approved','sent') then return new; end if;
+  if tg_op = 'UPDATE' and new.status is not distinct from old.status then return new; end if;   -- only progress is guarded
+  if new.lead_id is not null then
+    select do_not_contact into dnc from public.leads where id = new.lead_id;
+  end if;
+  if new.channel = 'email' and new.to_ref ~ '[;,]' then
+    raise exception 'One recipient per email: a list of addresses is not allowed.' using errcode = 'P0001';
+  end if;
+  if coalesce(dnc, false) or (new.channel = 'email' and public.is_suppressed(new.to_ref)) then
+    raise exception 'Do-not-contact: this lead or address has opted out (CASL). No draft, approval or send is allowed.' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+drop trigger if exists outbox_dnc_guard on public.outbox;
+create trigger outbox_dnc_guard before insert or update on public.outbox
+  for each row execute function public.outbox_dnc_guard();
+
+revoke all on function public.normalize_addr(text) from public, anon, authenticated;
+grant execute on function public.normalize_addr(text) to service_role;
+revoke all on function public.contact_suppressions_append_only() from public, anon, authenticated;
+grant execute on function public.contact_suppressions_append_only() to service_role;
+revoke all on function public.is_suppressed(text) from public, anon, authenticated;
+grant execute on function public.is_suppressed(text) to service_role;
+revoke all on function public.mark_do_not_contact(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.mark_do_not_contact(uuid, text, text) to service_role;
+revoke all on function public.record_lead_reply(uuid, text, text, text) from public, anon, authenticated;
+grant execute on function public.record_lead_reply(uuid, text, text, text) to service_role;
+revoke all on function public.create_deal(uuid, int, text, text) from public, anon, authenticated;
+grant execute on function public.create_deal(uuid, int, text, text) to service_role;
+revoke all on function public.set_deal_stage(uuid, text, text, text) from public, anon, authenticated;
+grant execute on function public.set_deal_stage(uuid, text, text, text) to service_role;
+revoke all on function public.confirm_deal_won(uuid, int, text, text, text) from public, anon, authenticated;
+grant execute on function public.confirm_deal_won(uuid, int, text, text, text) to service_role;
+revoke all on function public.venture_config_get(text) from public, anon, authenticated;
+grant execute on function public.venture_config_get(text) to service_role;
+revoke all on function public.set_venture_config(text, text, text, text) from public, anon, authenticated;
+grant execute on function public.set_venture_config(text, text, text, text) to service_role;
+revoke all on function public.lead_funnel(text) from public, anon, authenticated;
+grant execute on function public.lead_funnel(text) to service_role;
+revoke all on function public.venture_kpis(text) from public, anon, authenticated;
+grant execute on function public.venture_kpis(text) to service_role;
+revoke all on function public.leads_suppression_guard() from public, anon, authenticated;
+grant execute on function public.leads_suppression_guard() to service_role;
+revoke all on function public.leads_dnc_cascade() from public, anon, authenticated;
+grant execute on function public.leads_dnc_cascade() to service_role;
+revoke all on function public.outbox_dnc_guard() from public, anon, authenticated;
+grant execute on function public.outbox_dnc_guard() to service_role;
+
+-- ===== 20261115_inbox_needs_you_v1.sql =====
+-- Unified "Needs you" inbox: ONE ranked, read-only list of everything waiting on the owner.
+--   needs_you(p_limit)      internal (service role only, like app_snapshot_data): the Telegram /needs command and the brief call it.
+--   app_needs_you()         owner-checked wrapper for the PWA (same pattern as app_snapshot -> app_snapshot_data). It is created CLOSED
+--                           (service role only): opening a function to the signed-in owner means adding its name to the lockdown keep-open
+--                           list, which edits an applied migration and needs the owner's sign-off. The ready-to-apply change is
+--                           ops/pending_signoff/inbox_open_app_needs_you.txt (see WEBAPP.md). Until then the PWA Inbox falls back to the
+--                           data app_snapshot already returns. NEVER callable by anon.
+-- It only READS. Approving/rejecting/answering still goes through the existing decision path (app_send kind decision/answer/mission
+-- -> hq_commands.apply_decision / apply_answer / hq_missions.set_status). Nothing here changes spend controls, caps, policy or kill switch.
+--
+-- Sources (each is de-duplicated against the pending owner_messages that already carry its Approve/Reject buttons):
+--   approval        owner_messages needs_decision, undecided        (stale ones - request no longer pending - are dropped)
+--   question        owner_messages with options, unanswered         (Task Brief)
+--   alert           owner_messages kind emergency/health, last 24h  (what ops_alerts() queues)
+--   mission         missions status 'blocked'                        (resume / abandon)
+--   escalation      escalations 'sent_to_owner' with no pending message
+--   proposal        org_changes 'proposed' and ventures 'proposed' with no pending message
+--   payment         payment_instructions approved (you pay) or awaiting_owner with no pending message
+--   account         account_requests awaiting_owner / approved (you create it)
+--   draft           outbox draft/qa_passed (review) or approved (send it) with no pending message
+--   task            blocked tasks that are not part of a mission, last 3 days, not just waiting on API credit
+--   expiring        approval_requests about to expire with no message; ideas whose 7-day test has ended
+-- Ranking: score = base per kind + up to 10 for age (1 point per 12h) + expiry bump; ties oldest first. Returns a jsonb array.
+
+create or replace function public.needs_you(p_limit int default 50) returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+declare r jsonb; v_lim int := greatest(1, least(coalesce(p_limit, 50), 200));
+begin
+  with pend as (
+    select ref_table, ref_id from owner_messages where needs_decision and decision is null and ref_table is not null),
+  raw(kind, ref_table, ref_id, title, created_at, expires_at, why, base, action, actions, command) as (
+    -- approvals ---------------------------------------------------------------------------------------------------------
+    select 'approval', 'owner_messages', o.id::text,
+           left(coalesce(nullif(split_part(o.body, E'\n', 1), ''), o.kind), 140), o.created_at,
+           (select ar.expires_at from approval_requests ar where o.ref_table = 'approval_requests' and ar.id = o.ref_id),
+           case when o.ref_table = 'approval_requests' then 'An agent asked to take a restricted action; it happens once, only if you approve'
+                when o.ref_table = 'payment_instructions' then 'A payment you would make yourself; approving reserves the funds'
+                when o.ref_table = 'account_requests' then 'An account an agent wants you to create'
+                when o.ref_table = 'org_changes' then 'A change to the company (agent, tool, workflow or shutdown)'
+                when o.ref_table = 'outbox' then 'An outreach draft; approving does not send it, you send it yourself'
+                when o.ref_table = 'escalations' then 'An agent escalated this and Jarvis could not close it'
+                when o.ref_table like 'activate_venture:%' then 'A venture waiting for you to switch it on'
+                when o.ref_table like 'set_cap:%' then 'A proposal to change the daily AI budget'
+                else 'Waiting for your Approve or Reject (' || o.kind || ')' end,
+           80 + case when o.ref_table in ('approval_requests', 'payment_instructions', 'account_requests') then 10 else 0 end,
+           'approve_or_reject',
+           jsonb_build_array(
+             jsonb_build_object('verb', 'approve', 'label', 'Approve', 'kind', 'decision', 'payload', jsonb_build_object('msg_id', o.id, 'approved', true)),
+             jsonb_build_object('verb', 'reject', 'label', 'Reject', 'kind', 'decision', 'payload', jsonb_build_object('msg_id', o.id, 'approved', false))),
+           null::text
+      from owner_messages o
+     where o.needs_decision and o.decision is null and o.options is null
+       and case o.ref_table
+             when 'approval_requests' then exists (select 1 from approval_requests a where a.id = o.ref_id and a.status = 'pending' and a.expires_at > now())
+             when 'payment_instructions' then exists (select 1 from payment_instructions p where p.id = o.ref_id and p.status = 'awaiting_owner')
+             when 'org_changes' then exists (select 1 from org_changes c where c.id = o.ref_id and c.status = 'proposed')
+             when 'escalations' then exists (select 1 from escalations e where e.id = o.ref_id and e.status not in ('closed', 'resolved'))
+             when 'outbox' then exists (select 1 from outbox b where b.id = o.ref_id and b.status in ('draft', 'qa_passed'))
+             when 'account_requests' then exists (select 1 from account_requests a where a.id = o.ref_id and a.status = 'awaiting_owner')
+             else true end
+       and case when o.ref_table like 'activate_venture:%' then exists (select 1 from ventures v where v.slug = substr(o.ref_table, 18) and v.status = 'proposed') else true end
+    union all
+    -- questions (Task Brief options) ------------------------------------------------------------------------------------------
+    select 'question', 'owner_messages', o.id::text, left(coalesce(nullif(split_part(o.body, E'\n', 1), ''), o.kind), 140), o.created_at, null,
+           'A task is paused until you pick an option', 65, 'answer',
+           (select jsonb_agg(jsonb_build_object('verb', 'answer', 'label', left(case when jsonb_typeof(x.v) = 'string' then x.v #>> '{}' else coalesce(x.v->>'label', x.v->>'title', 'Option ' || x.i) end, 60),
+                                                'kind', 'answer', 'payload', jsonb_build_object('msg_id', o.id, 'idx', x.i - 1)) order by x.i)
+              from jsonb_array_elements(o.options) with ordinality as x(v, i)),
+           null
+      from owner_messages o
+     where o.options is not null and jsonb_typeof(o.options) = 'array' and jsonb_array_length(o.options) > 0 and o.answer is null
+    union all
+    -- important alerts (ops_alerts() queues these as owner_messages kind health; emergencies come from the engine) ----------------
+    select 'alert', 'owner_messages', a.id::text, left(regexp_replace(a.body, '^ALERT: ', ''), 140), a.created_at, null,
+           case when a.kind = 'emergency' then 'Emergency from HQ' else 'HQ health alert (repeats are suppressed for a few hours)' end,
+           case when a.kind = 'emergency' then 100 else 70 end, 'review', '[]'::jsonb, null
+      from (select distinct on (body) * from owner_messages
+             where kind in ('emergency', 'health') and not needs_decision and options is null and created_at > now() - interval '24 hours'
+             order by body, created_at desc) a
+    union all
+    -- blocked missions ----------------------------------------------------------------------------------------------------------
+    select 'mission', 'missions', m.id::text, left(regexp_replace(m.title, '^Mission: ', ''), 140), coalesce(m.last_progress_at, m.updated_at), null,
+           coalesce(nullif(left(m.next_action, 200), ''), 'Blocked; a failed step needs you'), 60, 'resume_or_abandon',
+           jsonb_build_array(
+             jsonb_build_object('verb', 'resume', 'label', 'Resume', 'kind', 'mission', 'payload', jsonb_build_object('verb', 'resume', 'id', m.id)),
+             jsonb_build_object('verb', 'abandon', 'label', 'Abandon', 'kind', 'mission', 'confirm', true, 'payload', jsonb_build_object('verb', 'abandon', 'id', m.id))),
+           '/mission retry ' || left(m.id::text, 8)
+      from missions m where m.status = 'blocked'
+    union all
+    -- escalations that reached the owner and have no Approve/Reject message pending ------------------------------------------------------
+    select 'escalation', 'escalations', e.id::text, left(e.summary, 140), e.created_at, null,
+           'From ' || e.from_agent || ': ' || e.kind || '. ' || coalesce(left(e.resolution, 160), 'Jarvis passed it to you'), 55, 'review', '[]'::jsonb, null
+      from escalations e
+     where e.status = 'sent_to_owner'
+       and not exists (select 1 from pend p where p.ref_table = 'escalations' and p.ref_id = e.id)
+    union all
+    -- proposals -----------------------------------------------------------------------------------------------------------------------
+    select 'proposal', 'org_changes', c.id::text, left(c.change, 140), c.created_at, null,
+           'Proposed ' || c.kind || ' by ' || c.proposed_by || coalesce('. Gain: ' || left(c.gain, 100), '') || coalesce('. Cost: ' || left(c.cost, 60), ''), 50, 'review', '[]'::jsonb, null
+      from org_changes c
+     where c.status = 'proposed' and not exists (select 1 from pend p where p.ref_table = 'org_changes' and p.ref_id = c.id)
+       and (c.owner_message_id is null or not exists (select 1 from owner_messages m2 where m2.id = c.owner_message_id and m2.needs_decision and m2.decision is null))
+    union all
+    select 'proposal', 'ventures', v.id::text, left(v.name, 140), v.created_at, null,
+           'Venture set up but switched off until you approve it', 50, 'review', '[]'::jsonb, '/venture activate ' || v.slug
+      from ventures v
+     where v.status = 'proposed' and not exists (select 1 from pend p where p.ref_table = 'activate_venture:' || v.slug)
+    union all
+    -- payments ------------------------------------------------------------------------------------------------------------------------
+    select 'payment', 'payment_instructions', p.id::text, '$' || to_char(p.amount_cents / 100.0, 'FM999,990.00') || ' to ' || coalesce(p.payee, 'unknown payee'), p.created_at,
+           case when p.due_on is not null then (p.due_on::timestamp at time zone 'America/Toronto') end,
+           case when p.status = 'approved' then 'Approved: pay it in RBC yourself, then confirm with the reference' else 'Waiting for your OK' end
+             || ' (' || left(p.purpose, 100) || ')' || coalesce('. Due ' || p.due_on, ''),
+           case when p.status = 'approved' then 75 else 70 end, case when p.status = 'approved' then 'pay' else 'review' end, '[]'::jsonb,
+           case when p.status = 'approved' then '/pay done ' || left(p.id::text, 8) || ' <amount> <reference>' else '/pay' end
+      from payment_instructions p
+     where p.status = 'approved'
+        or (p.status = 'awaiting_owner' and not exists (select 1 from pend x where x.ref_table = 'payment_instructions' and x.ref_id = p.id))
+    union all
+    -- accounts ------------------------------------------------------------------------------------------------------------------------
+    select 'account', 'account_requests', a.id::text, coalesce(a.vendor, 'unknown vendor') || ': ' || coalesce(left(a.purpose, 100), ''), a.created_at, null,
+           case when a.status = 'approved' then 'Approved: sign up yourself' || coalesce(' (needs ' || array_to_string(a.needs, ', ') || ')', '') || ', then confirm'
+                else 'Waiting for your OK' end,
+           case when a.status = 'approved' then 55 else 45 end, case when a.status = 'approved' then 'create' else 'review' end, '[]'::jsonb,
+           case when a.status = 'approved' then '/account done ' || left(a.id::text, 8) || ' <login>' else '/account' end
+      from account_requests a
+     where a.status = 'approved'
+        or (a.status = 'awaiting_owner' and not exists (select 1 from pend x where x.ref_table = 'account_requests' and x.ref_id = a.id))
+    union all
+    -- outreach drafts -------------------------------------------------------------------------------------------------------------------
+    select 'draft', 'outbox', b.id::text, left('To ' || coalesce(b.to_ref, 'unknown') || ': ' || regexp_replace(b.body, '\s+', ' ', 'g'), 140), b.created_at, null,
+           case when b.status = 'approved' then 'Approved: send it from your business email, then mark it sent' else 'Outreach draft waiting for your review' end,
+           case when b.status = 'approved' then 60 else 40 end, case when b.status = 'approved' then 'send' else 'review' end, '[]'::jsonb,
+           case when b.status = 'approved' then '/sent ' || left(b.id::text, 8) else '/drafts' end
+      from outbox b
+     where b.status = 'approved'
+        or (b.status in ('draft', 'qa_passed') and not exists (select 1 from pend x where x.ref_table = 'outbox' and x.ref_id = b.id))
+    union all
+    -- blocked tasks outside missions (missions are listed above) -----------------------------------------------------------------------------
+    select 'task', 'tasks', t.id::text, left(t.title, 140), t.updated_at, null,
+           coalesce('Blocked: ' || nullif(left(regexp_replace(coalesce(t.result, ''), '\s+', ' ', 'g'), 160), ''), 'Blocked'), 30, 'review', '[]'::jsonb, null
+      from tasks t
+     where t.status = 'blocked' and t.mission_id is null and t.updated_at > now() - interval '3 days'
+       and coalesce(t.result, '') not ilike '%credit balance is too low%'
+    union all
+    -- expiring: a request that lapses with no message carrying its buttons, and finished idea tests -------------------------------------------
+    select 'expiring', 'approval_requests', ar.id::text, left(ar.action || ' by ' || ar.actor, 140), ar.created_at, ar.expires_at,
+           'Expires ' || to_char(ar.expires_at at time zone 'America/Toronto', 'Mon DD HH24:MI') || '; ' || left(ar.recommendation, 120), 85, 'review', '[]'::jsonb, null
+      from approval_requests ar
+     where ar.status = 'pending' and ar.expires_at > now() and ar.expires_at < now() + interval '48 hours'
+       and not exists (select 1 from pend p where p.ref_table = 'approval_requests' and p.ref_id = ar.id)
+    union all
+    select 'expiring', 'ideas', i.id::text, left(i.name, 140), i.test_ends_on::timestamp at time zone 'America/Toronto', i.test_ends_on::timestamp at time zone 'America/Toronto',
+           '7-day test ended ' || i.test_ends_on || '; decide: scale or park' || coalesce(' (kill if: ' || left(i.kill_metric, 80) || ')', ''), 62, 'review', '[]'::jsonb, '/ideas'
+      from ideas i where i.status = 'testing' and i.test_ends_on is not null and i.test_ends_on <= (now() at time zone 'America/Toronto')::date),
+  scored as (
+    select raw.*, greatest(0, extract(epoch from now() - raw.created_at) / 60)::bigint age_minutes,
+           raw.base + least(10, (greatest(0, extract(epoch from now() - raw.created_at)) / 43200)::int)
+                    + case when raw.expires_at is not null and raw.expires_at <= now() + interval '24 hours' then 15
+                           when raw.expires_at is not null and raw.expires_at <= now() + interval '48 hours' then 8 else 0 end score
+      from raw),
+  capped as (select s.*, row_number() over (partition by s.kind order by s.score desc, s.created_at) k_n from scored s),
+  ranked as (select c.*, row_number() over (order by c.score desc, c.created_at asc, c.ref_id) rn from capped c where c.k_n <= case c.kind when 'task' then 8 when 'alert' then 5 else 25 end)
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'rank', rn, 'kind', kind, 'ref_table', ref_table, 'ref_id', ref_id, 'title', title, 'created_at', created_at,
+           'age_minutes', age_minutes, 'why', why, 'score', score, 'expires_at', expires_at, 'action', action,
+           'actions', coalesce(actions, '[]'::jsonb), 'command', command) order by rn), '[]'::jsonb)
+    into r from ranked where rn <= v_lim;
+  return r;
+end $$;
+revoke all on function public.needs_you(int) from public, anon, authenticated;
+grant execute on function public.needs_you(int) to service_role;
+
+create or replace function public.app_needs_you() returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+begin
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
+  return public.needs_you(50);
+end $$;
+revoke all on function public.app_needs_you() from public, anon, authenticated;
+grant execute on function public.app_needs_you() to service_role;
+
+-- ===== 20261116_audit_hardening_v1.sql =====
+-- Audit hardening (AUDIT_PATHS.md findings F1 and F2). Safe to re-run. Replaces two CASL/do-not-contact helpers from
+-- 20261115_venture_deals_replies_v1.sql with stricter versions. Touches NO protected control: authorize_action, outbox_send_policy,
+-- enforce_outbox_rules, spend gateway, capital, kill switch, dry-run and permissions are not read or changed here. Nothing here sends anything.
+--
+--   normalize_addr(text)   F1: the old version returned a non-null, NON-MATCHING key for forms a mail server delivers to the same mailbox
+--                          (trailing dot "a@b.com.", quoted local part "\"a\"@b.com", comments "a(x)@b.com") and kept lookalike or invisible
+--                          characters (NBSP, zero-width, fullwidth) in the key, so an opted-out address could be re-drafted and approved.
+--                          Now: ONE strict, ASCII-only, single-address form, else NULL (= "not one clean address", which every caller
+--                          already treats as "do not send"). Trailing dots on the domain are dropped. Python mirror: hq_mail.normalize_addr.
+--   outbox_dnc_guard()     F1b: with a NULL key the old guard silently let the row through. Now an email row whose address is not one clean
+--                          address cannot be drafted, QA-passed, approved or sent and a retarget
+--                          (to_ref / channel / lead_id changed) of a live row is re-checked, not only a status change.
+--   mark_do_not_contact    F13: an unsubscribe could not be recorded while the lead had an open draft (see the comment on the function).
+--   contact_suppressions   F6: restores the address CHECK that a sprint rollback (DROP FUNCTION ... CASCADE) removes.
+-- Dots in the local part are still NOT folded (gmail-only rule; folding would silently change the meaning of stored opt-outs).
+
+create or replace function public.normalize_addr(p text) returns text
+language sql immutable set search_path to 'public' as $$
+  select case
+    when s.bad or s.a is null or s.a !~ '^[^@]+@[^@]+$' or s.loc is null then null
+    when s.loc !~ '^[a-z0-9.!#$%&''*+/=?^_`{|}~-]+$' then null
+    when s.dom !~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$' then null
+    else s.loc || '@' || s.dom end
+  from (
+    select b.a, b.bad,
+           nullif(regexp_replace(split_part(b.a, '@', 1), '\+.*$', ''), '') as loc,
+           regexp_replace(split_part(b.a, '@', 2), '\.+$', '') as dom
+    from (select
+            lower(btrim(coalesce(substring(btrim(p) from '<([^<>]*)>'), btrim(p)))) as a,
+            (p is null
+             or p ~ '[;,]'
+             or p ~ '[^\x20-\x7e]'                                        -- tabs, newlines, NBSP, zero-width, fullwidth and every other non-ASCII char
+             or length(p) - length(replace(p, '<', '')) > 1                -- two address-bracket pairs: ambiguous
+             or length(p) - length(replace(p, '>', '')) > 1
+             or (btrim(p) ~ '<[^<>]*>' and btrim(regexp_replace(btrim(p), '^[^<]*<[^<>]*>', '')) <> '')   -- anything after the closing bracket
+            ) as bad) b
+  ) s
+$$;
+
+create or replace function public.outbox_dnc_guard() returns trigger
+language plpgsql set search_path to 'public' as $$
+declare dnc boolean := false;
+begin
+  if new.status not in ('draft','qa_passed','approved','sent') then return new; end if;
+  if tg_op = 'UPDATE' and new.status is not distinct from old.status
+     and new.to_ref is not distinct from old.to_ref and new.channel is not distinct from old.channel
+     and new.lead_id is not distinct from old.lead_id then
+    return new;   -- nothing that decides WHO is contacted or WHETHER it advances changed
+  end if;
+  if new.lead_id is not null then
+    select do_not_contact into dnc from public.leads where id = new.lead_id;
+  end if;
+  if new.channel = 'email' and new.to_ref ~ '[;,]' then
+    raise exception 'One recipient per email: a list of addresses is not allowed.' using errcode = 'P0001';
+  end if;
+  if new.channel = 'email' and new.to_ref is not null and public.normalize_addr(new.to_ref) is null then
+    raise exception 'The recipient is not one clean email address (CASL check cannot be done). Fix the address first.' using errcode = 'P0001';
+  end if;
+  if coalesce(dnc, false) or (new.channel = 'email' and public.is_suppressed(new.to_ref)) then
+    raise exception 'Do-not-contact: this lead or address has opted out (CASL). No draft, approval or send is allowed.' using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+
+-- F13 (High): with the live trigger outbox_rules (enforce_outbox_rules) in place, UPDATE-ing a draft whose lead is already do-not-contact is
+-- refused ("Recipient is on the do-not-contact list"), and mark_do_not_contact flagged the leads BEFORE it rejected the drafts. So an unsubscribe
+-- on a lead that had an open draft raised, rolled back the suppression too, and the opt-out could not be recorded at all (the replica has no such
+-- trigger, so this never showed in tests). Now: suppress, reject the drafts FIRST (leads not yet flagged), flag the leads last; a draft that is still
+-- refused (the raw-flag cascade path flags the lead before calling this) is rejected with its lead and address detached (kept in qa_notes).
+create or replace function public.mark_do_not_contact(p_lead uuid, p_reason text, p_by text) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare l public.leads; addr text; n_leads int := 0; n_drafts int := 0; ids uuid[]; d record;
+begin
+  select * into l from public.leads where id = p_lead;
+  if not found then raise exception 'No such lead.'; end if;
+  addr := public.normalize_addr(l.email);
+  if addr is not null then
+    insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+    values (addr, left(coalesce(nullif(btrim(p_reason), ''), 'do not contact'), 300), coalesce(p_by, 'unknown'), l.id)
+    on conflict do nothing;
+    select coalesce(array_agg(id), '{}') into ids from public.leads where public.normalize_addr(email) = addr or id = l.id;
+  else
+    addr := null;
+    ids := array[l.id];
+  end if;
+  for d in select id, lead_id, to_ref from public.outbox
+            where status in ('draft','qa_passed','approved')
+              and (lead_id = any(ids) or (addr is not null and public.normalize_addr(to_ref) = addr)) loop
+    begin
+      update public.outbox set status = 'rejected', decided_at = now() where id = d.id;
+    exception when others then
+      update public.outbox set status = 'rejected', decided_at = now(), to_ref = null, lead_id = null,
+             qa_notes = left('opt-out: was to ' || coalesce(d.to_ref, '?') || ', lead ' || coalesce(d.lead_id::text, '?'), 300) where id = d.id;
+    end;
+    n_drafts := n_drafts + 1;
+  end loop;
+  update public.leads set do_not_contact = true, status = 'do_not_contact', next_followup_at = null where id = any(ids);
+  get diagnostics n_leads = row_count;
+  insert into public.audit_log (actor, action, target, detail)
+  values (coalesce(p_by, 'unknown'), 'do_not_contact', 'leads/' || l.id,
+          jsonb_build_object('leads_marked', n_leads, 'drafts_rejected', n_drafts, 'address_suppressed', addr is not null,
+                             'reason', left(coalesce(p_reason, ''), 300)));
+  return jsonb_build_object('leads_marked', n_leads, 'drafts_rejected', n_drafts, 'address_suppressed', addr is not null);
+end $$;
+
+-- F6: DROP FUNCTION normalize_addr ... CASCADE (ops/rollback_sprint12.sql) silently drops the suppression table's CHECK that depends on it,
+-- and re-applying 20261115 does not put it back because the table already exists. Restore it (NOT VALID: new rows are checked, rows stored
+-- by an earlier version are not re-validated).
+do $$ begin
+  if to_regclass('public.contact_suppressions') is not null
+     and not exists (select 1 from pg_constraint where conrelid = 'public.contact_suppressions'::regclass and contype = 'c') then
+    alter table public.contact_suppressions add constraint contact_suppressions_address_check
+      check (coalesce(address = public.normalize_addr(address), false)) not valid;
+  end if;
+end $$;
+
+revoke all on function public.normalize_addr(text) from public, anon, authenticated;
+grant execute on function public.normalize_addr(text) to service_role;
+revoke all on function public.outbox_dnc_guard() from public, anon, authenticated;
+grant execute on function public.outbox_dnc_guard() to service_role;
+revoke all on function public.mark_do_not_contact(uuid, text, text) from public, anon, authenticated;
+grant execute on function public.mark_do_not_contact(uuid, text, text) to service_role;
+
+
+-- Review finding 1 (Major): an unclean email (e.g. jane@my_company.com) made the raw-flag cascade loop forever: the trigger called
+-- mark_do_not_contact, which updated leads.do_not_contact again (the trigger fires on "update of" even when the value is unchanged), and with a
+-- NULL key is_suppressed() is never true. Now the cascade only acts on the transition false -> true, so the nested update ends the recursion.
+create or replace function public.leads_dnc_cascade() returns trigger
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  if tg_op = 'UPDATE' and old.do_not_contact then return null; end if;
+  if new.do_not_contact and (new.email is null or not public.is_suppressed(new.email)) then
+    perform public.mark_do_not_contact(new.id, 'lead flagged do-not-contact', 'system:trigger');
+  end if;
+  return null;
+end $$;
+
+-- Review finding 3: rows stored by 20261115 used the OLD normaliser, so e.g. "jane@acme.com." no longer matched the new key. Re-key every
+-- stored suppression and every do-not-contact lead under the strict form (insert-only; the table is append-only).
+insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+select distinct on (public.normalize_addr(address)) public.normalize_addr(address), reason, 'migration:rekey', source_lead
+from public.contact_suppressions where public.normalize_addr(address) is not null
+on conflict do nothing;
+insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+select distinct on (public.normalize_addr(email)) public.normalize_addr(email), 'lead flagged do-not-contact (re-keyed)', 'migration:rekey', id
+from public.leads where do_not_contact and public.normalize_addr(email) is not null
+on conflict do nothing;
+revoke all on function public.leads_dnc_cascade() from public, anon, authenticated;
+grant execute on function public.leads_dnc_cascade() to service_role;
+
+-- ===== 20261116_evidence_sources_v1.sql =====
+-- Evidence verification v2, phase 1 (EVIDENCE_VERIFICATION_DESIGN.md s.2): a snapshot of the page / search text the engine actually
+-- retrieved during a mission task, so a claim can later be compared with the SOURCE TEXT instead of the researcher's paraphrase.
+-- Additive: one new table, two new functions. Touches no existing table, function, policy, cap, kill switch or grant.
+-- The rows are UNTRUSTED DATA (flag column is fixed true): nothing in this table is ever executed or parsed for instructions.
+--   * append-only: UPDATE is refused (the single exception is the FK clearing task_id when the researching task is deleted)
+--   * default-deny: RLS on with no policy; anon/authenticated have nothing; service_role may select and insert, nothing else
+--   * retention: purge_evidence_sources(days) deletes snapshots of FINISHED missions older than `days` (min 7); service_role only
+create table if not exists public.evidence_sources (
+  id uuid primary key default gen_random_uuid(),
+  mission_id uuid references public.missions(id) on delete cascade,
+  task_id uuid references public.tasks(id) on delete set null,
+  kind text not null check (kind in ('page', 'search_snippet')),
+  title text,
+  url text not null,
+  final_url text not null,
+  host_norm text not null,
+  status_code integer,
+  content_type text,
+  fetched_at timestamptz not null default now(),
+  published_at timestamptz,
+  content_sha256 text not null check (content_sha256 ~ '^[0-9a-f]{64}$'),
+  text text not null check (length(text) <= 40000),
+  truncated boolean not null default false,
+  bytes_original integer,
+  untrusted boolean not null default true check (untrusted),
+  flags jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists evidence_sources_mission_idx on public.evidence_sources (mission_id);
+create index if not exists evidence_sources_task_idx on public.evidence_sources (task_id);
+create unique index if not exists evidence_sources_dedupe_idx on public.evidence_sources (task_id, content_sha256, final_url);
+alter table public.evidence_sources enable row level security;   -- no policy on purpose: only the service role (which bypasses RLS) reads or writes
+
+create or replace function public.evidence_sources_immutable() returns trigger
+language plpgsql set search_path to 'public' as $$
+begin
+  if new.task_id is null and old.task_id is not null and (to_jsonb(new) - 'task_id') = (to_jsonb(old) - 'task_id') then
+    return new;   -- only the foreign key detaching a deleted task is allowed
+  end if;
+  raise exception 'evidence_sources is append-only: stored source text cannot be changed.' using errcode = 'P0001';
+end $$;
+drop trigger if exists evidence_sources_immutable on public.evidence_sources;
+create trigger evidence_sources_immutable before update on public.evidence_sources
+  for each row execute function public.evidence_sources_immutable();
+
+revoke all on public.evidence_sources from public, anon, authenticated;
+grant select, insert on public.evidence_sources to service_role;   -- explicit, so the revoke below is a real narrowing
+revoke update, delete, truncate on public.evidence_sources from public, anon, authenticated, service_role;
+
+create or replace function public.purge_evidence_sources(p_days integer default 90) returns integer
+language plpgsql security definer set search_path to 'public' as $$
+declare n integer;
+begin
+  with gone as (
+    delete from public.evidence_sources e
+     where e.created_at < now() - make_interval(days => greatest(coalesce(p_days, 90), 7))
+       and (e.mission_id is null or exists (select 1 from public.missions m where m.id = e.mission_id
+                                            and m.status in ('completed', 'failed', 'rejected', 'abandoned')))
+    returning 1)
+  select count(*) into n from gone;
+  return n;
+end $$;
+
+revoke all on function public.evidence_sources_immutable() from public, anon, authenticated;
+revoke all on function public.purge_evidence_sources(integer) from public, anon, authenticated;
+grant execute on function public.evidence_sources_immutable() to service_role;
+grant execute on function public.purge_evidence_sources(integer) to service_role;
+
 -- ===== 20261112_lockdown_v1.sql =====
 -- Security lockdown (found on first live apply): functions made with plain CREATE FUNCTION are executable by anon/authenticated by default.
 -- Several take a caller-supplied "p_by" string, so an anonymous caller could have passed 'owner'. Close everything except the
