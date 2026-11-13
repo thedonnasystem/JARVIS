@@ -70,3 +70,7 @@ Gates: AZ = authorize_action, SG = spend gateway (reserve_llm_budget / reserve_s
 - Make/n8n triggers do not check dry-run.
 - Double authorize count halves the effective send cap.
 - Pending sign-off items need a human decision before use; F2 also needs a coordinated Python change.
+
+
+## Final-review addendum (2026-11-13)
+F4 status: MITIGATED, not fixed. The Bash/Read gates and env scrub raise the bar, but the build session shares a uid with the bot; real isolation needs a separate uid/container (owner/infra decision). `ANTHROPIC_API_KEY` is intentionally still passed.
