@@ -128,3 +128,36 @@ class Allocation(unittest.TestCase):
         with mock.patch.object(hq, "_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("404"))):
             self.assertIn("Could not set", V.set_budget("acme", "50"))
             self.assertIn("not installed", V.allocation_text())
+
+
+class Kpis(unittest.TestCase):
+    K = {"venture": "acme", "leads": 4, "emailable_leads": 2, "drafted": 3, "approved": 2, "sent": 1, "won_deals": 1,
+         "deals_by_stage": {"pitched": 2, "won": 1}, "revenue_cents": 123456}
+
+    def test_kpis_text_reports_real_numbers_and_only_reads(self):
+        calls = []
+
+        def req(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body)); return self.K
+        with mock.patch.object(hq, "_request", req):
+            t = V.kpis_text("Acme!")
+        self.assertEqual(calls, [("POST", "/rest/v1/rpc/venture_kpis", {"p_venture": "acme"})])   # one read-only RPC, slug sanitised
+        self.assertIn("Leads 4 (2 emailable)", t); self.assertIn("Drafted 3, approved 2, sent 1", t)
+        self.assertIn("Won deals 1 (all stages: pitched: 2, won: 1)", t); self.assertIn("$1,234.56", t)
+
+    def test_unknown_venture_and_missing_migration(self):
+        with mock.patch.object(hq, "_request", lambda *a, **k: None):
+            self.assertIn("No venture 'zzz'", V.kpis_text("zzz"))
+        with mock.patch.object(hq, "_request", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("404"))):
+            self.assertIn("not installed", V.kpis_text("acme"))
+
+    def test_ensure_agents_reports_created_existing_and_limit_refusal(self):
+        with mock.patch.object(hq, "_request", lambda *a, **k: {"created": ["acme-researcher", "acme-division"], "existing": []}):
+            self.assertIn("Created paused: acme-researcher, acme-division", V.ensure_agents("acme"))
+        with mock.patch.object(hq, "_request", lambda *a, **k: {"created": [], "existing": ["acme-researcher", "acme-division"]}):
+            self.assertIn("already has", V.ensure_agents("acme"))
+
+        class Boom(Exception):
+            def read(self): return b'{"message": "Agent creation limit: 3 created in the last 7 days"}'
+        with mock.patch.object(hq, "_request", lambda *a, **k: (_ for _ in ()).throw(Boom())):
+            self.assertIn("Agent creation limit", V.ensure_agents("acme"))

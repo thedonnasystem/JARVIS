@@ -250,7 +250,9 @@ class D(unittest.TestCase):
                 if method == "PATCH" and "owner_messages" in path:
                     return [{"id": "m2", "body": "draft", "ref_table": "outbox", "ref_id": "abcdef12-0000"}]
                 if method == "GET" and "outbox" in path:
-                    return [{"to_ref": "info@coolair.example.ca", "body": "Subject: Hi\n\nHello", "lead_id": "L7"}]
+                    return [{"to_ref": "info@coolair.example.ca", "body": "Subject: Hi\n\nHello", "lead_id": "L7", "venture_id": "v-d"}]
+                if method == "GET" and path.startswith("/rest/v1/leads"): return [{"venture_id": "v-d"}]
+                if method == "GET" and path.startswith("/rest/v1/ventures?id="): return [{"slug": "donna"}]
                 return []
         f = F()
         with mock.patch.object(hq, "_request", f):
@@ -289,6 +291,218 @@ class D(unittest.TestCase):
         with mock.patch.object(hq, "_request", f):
             self.assertEqual(C.apply_decision("m1", False), "Already decided.")
         self.assertFalse(any(c[0] == "POST" for c in f.calls))
+
+
+class World:
+    """Tiny in-memory PostgREST stand-in for the venture-resolution and CASL tests."""
+    def __init__(self, profiles=None, outbox=None):
+        self.ventures = [{"id": "v-donna", "slug": "donna", "name": "Donna", "manager_agent": "donna-manager"},
+                         {"id": "v-dj", "slug": "day-job-sales", "name": "Day Job Sales", "manager_agent": None},
+                         {"id": "v-cl", "slug": "ottawa-cleanouts", "name": "Ottawa Cleanouts Co", "manager_agent": "ottawa-cleanouts-manager"}]
+        self.profiles = profiles if profiles is not None else {}
+        self.outbox = outbox or {}
+        self.calls = []
+
+    def __call__(self, method, path, body=None, timeout=30, prefer=None):
+        import urllib.parse as up
+        self.calls.append((method, path, body))
+        if path.startswith("/rest/v1/ventures"):
+            q = up.parse_qs(path.split("?", 1)[1]) if "?" in path else {}
+            rows = self.ventures
+            if "slug" in q: rows = [v for v in rows if "eq." + v["slug"] == q["slug"][0]]
+            if "id" in q: rows = [v for v in rows if "eq." + v["id"] == q["id"][0]]
+            return rows
+        if path.startswith("/rest/v1/company_profile") and method == "GET":
+            slug = up.parse_qs(path.split("?", 1)[1])["venture_slug"][0][3:]
+            return [self.profiles[slug]] if slug in self.profiles else []
+        if path.startswith("/rest/v1/company_profile") and method == "POST":
+            row = self.profiles.setdefault(body["venture_slug"], {})
+            row.update({k: v for k, v in body.items() if k != "venture_slug"})
+            return []
+        if path.startswith("/rest/v1/owner_messages") and method == "PATCH":
+            return [{"id": "m9", "body": "draft", "ref_table": "outbox", "ref_id": "ob123456-0"}] if body and body.get("decision") == "approved" else []
+        if path.startswith("/rest/v1/outbox?id=eq.ob123456-0&select"):
+            return [self.outbox] if self.outbox else []
+        if path.startswith("/rest/v1/leads?id="):
+            return [{"venture_id": self.outbox.get("lead_venture")}] if self.outbox.get("lead_venture") else []
+        if path.startswith("/rest/v1/agents"):
+            return [{"slug": "ottawa-cleanouts-manager", "venture_id": "v-cl", "status": "paused"}] if "slug=eq.ottawa-cleanouts-manager" in path else []
+        return []
+
+
+FULL = {"sender_name": "Moe", "brand": "Ottawa Cleanouts Co", "mailing_address": "9 Elm St, Ottawa ON K1A 0A9"}
+
+
+class Resolve(unittest.TestCase):
+    def setUp(self):
+        os.environ["JARVIS_OWNER_ID"] = "42"
+
+    def test_old_aliases_resolve_identically(self):
+        with mock.patch.object(hq, "_request", World()):
+            self.assertEqual(C._venture_id("donna"), ("v-donna", "donna"))
+            self.assertEqual(C._venture_id("hvac"), ("v-donna", "donna"))
+
+    def test_real_slug_name_and_at_prefix(self):
+        with mock.patch.object(hq, "_request", World()):
+            self.assertEqual(C.resolve_venture("ottawa-cleanouts"), ("v-cl", "ottawa-cleanouts", None))
+            self.assertEqual(C.resolve_venture("@Ottawa-Cleanouts")[1], "ottawa-cleanouts")
+            self.assertEqual(C.resolve_venture("Ottawa_Cleanouts_Co")[1], "ottawa-cleanouts")  # by name
+            self.assertEqual(C.resolve_venture(None), (None, None, None))
+
+    def test_unknown_is_an_error_not_company_wide(self):
+        with mock.patch.object(hq, "_request", World()):
+            vid, slug, err = C.resolve_venture("nonexistent")
+        self.assertEqual((vid, slug), (None, None)); self.assertIn("No venture called 'nonexistent'", err)
+
+    def test_money_new_venture_logs_to_it(self):
+        w, u = World(), upd()
+        with mock.patch.object(hq, "_request", w):
+            asyncio.run(C.hq_money(u, SimpleNamespace(args=["in", "200", "ottawa-cleanouts", "first", "job"])))
+        post = [c for c in w.calls if c[0] == "POST" and "ledger" in c[1]][0][2]
+        self.assertEqual((post["venture_id"], post["note"]), ("v-cl", "first job"))
+        self.assertIn("ottawa-cleanouts", u.message.sent[0])
+
+    def test_money_unknown_venture_refused_and_nothing_logged(self):
+        w, u = World(), upd()
+        with mock.patch.object(hq, "_request", w):
+            asyncio.run(C.hq_money(u, SimpleNamespace(args=["in", "200", "ottawa-cleanoutz", "first", "job"])))
+        self.assertFalse([c for c in w.calls if c[0] == "POST"])
+        self.assertIn("No venture called", u.message.sent[0])
+
+    def test_money_company_word_and_no_venture_stay_company_wide(self):
+        for args, note in ((["out", "29", "company", "twilio"], "twilio"), (["out", "29"], None)):
+            w, u = World(), upd()
+            with mock.patch.object(hq, "_request", w):
+                asyncio.run(C.hq_money(u, SimpleNamespace(args=args)))
+            post = [c for c in w.calls if c[0] == "POST" and "ledger" in c[1]][0][2]
+            self.assertEqual((post["venture_id"], post["note"]), (None, note))
+
+    def test_ask_routes_venture_name_to_its_manager_and_rejects_unknown(self):
+        w, u = World(), upd()
+        with mock.patch.object(hq, "_request", w):
+            asyncio.run(C.hq_ask(u, SimpleNamespace(args=["ottawa-cleanouts", "plan", "week", "one"])))
+        task = [c for c in w.calls if c[0] == "POST" and "tasks" in c[1]][0][2]
+        self.assertEqual(task["assigned_agent"], "ottawa-cleanouts-manager")
+
+        class NoAgents(World):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                if path.startswith("/rest/v1/agents"): s.calls.append((method, path, body)); return []
+                return super().__call__(method, path, body, timeout, prefer)
+        w2, u2 = NoAgents(), upd()
+        with mock.patch.object(hq, "_request", w2):
+            asyncio.run(C.hq_ask(u2, SimpleNamespace(args=["nothingness", "do", "x"])))
+        self.assertFalse([c for c in w2.calls if c[0] == "POST"]); self.assertIn("No agent or venture", u2.message.sent[0])
+
+    def test_mission_new_at_venture_and_unknown(self):
+        u = upd()
+        with mock.patch.object(hq, "_request", World()), mock.patch.object(C.hq_missions, "create_mission", return_value={"id": "m-1234567", "title": "T"}) as cm:
+            asyncio.run(C.hq_mission_cmd(u, SimpleNamespace(args=["new", "@ottawa-cleanouts", "find", "customers"])))
+            self.assertEqual((cm.call_args[0][0], cm.call_args[0][1]), ("find customers", "ottawa-cleanouts"))
+            u2 = upd()
+            cm.reset_mock()
+            asyncio.run(C.hq_mission_cmd(u2, SimpleNamespace(args=["new", "@nope", "find", "customers"])))
+            cm.assert_not_called(); self.assertIn("No venture called", u2.message.sent[0])
+            cm.reset_mock()
+            asyncio.run(C.hq_mission_cmd(upd(), SimpleNamespace(args=["new", "plain", "objective"])))
+            self.assertEqual(cm.call_args[0], ("plain objective",))  # old behaviour unchanged
+
+
+class Casl(unittest.TestCase):
+    def setUp(self):
+        os.environ["JARVIS_OWNER_ID"] = "42"
+
+    def test_donna_footer_unchanged_and_other_ventures_fail_closed(self):
+        with mock.patch.object(hq, "_request", World(profiles={"donna": {"mailing_address": "1 Main St, Ottawa ON"}})):
+            f = C.casl_footer()
+            self.assertIn("Moe, The Donna System", f); self.assertIn("1 Main St, Ottawa ON", f)
+            with self.assertRaises(C.hq_mail.ProfileMissing): C.casl_footer("ottawa-cleanouts")
+        with mock.patch.object(hq, "_request", World(profiles={"ottawa-cleanouts": {"mailing_address": "9 Elm St, Ottawa ON"}})):  # no brand/sender
+            with self.assertRaises(C.hq_mail.ProfileMissing): C.casl_footer("ottawa-cleanouts")
+        with mock.patch.object(hq, "_request", World(profiles={"ottawa-cleanouts": FULL, "donna": {"mailing_address": "1 Main St, Ottawa ON"}})):
+            f = C.casl_footer("ottawa-cleanouts")
+            self.assertIn("Ottawa Cleanouts Co", f); self.assertIn("9 Elm St", f); self.assertNotIn("Donna", f); self.assertIn("unsubscribe", f)
+
+    def test_setaddress_default_is_donna_and_venture_form_writes_only_that_row(self):
+        w, u = World(), upd()
+        with mock.patch.object(hq, "_request", w):
+            asyncio.run(C.hq_setaddress(u, SimpleNamespace(args="123 Example St, Ottawa ON K1A 0A1".split())))
+        self.assertEqual(list(w.profiles), ["donna"])
+        w, u = World(), upd()
+        with mock.patch.object(hq, "_request", w):
+            asyncio.run(C.hq_setaddress(u, SimpleNamespace(args="ottawa-cleanouts 9 Elm St, Ottawa ON K1A 0A9".split())))
+        self.assertEqual(list(w.profiles), ["ottawa-cleanouts"]); self.assertEqual(w.profiles["ottawa-cleanouts"]["mailing_address"], "9 Elm St, Ottawa ON K1A 0A9")
+        self.assertIn("Not ready yet", u.message.sent[0])  # brand and sender still missing
+
+    def test_setaddress_unknown_venture_writes_nothing(self):
+        w, u = World(), upd()
+        with mock.patch.object(hq, "_request", w):
+            asyncio.run(C.hq_setaddress(u, SimpleNamespace(args="ottawa-cleanoutz 9 Elm St, Ottawa ON K1A 0A9".split())))
+        self.assertEqual(w.profiles, {}); self.assertFalse([c for c in w.calls if c[0] == "POST"]); self.assertIn("No venture called", u.message.sent[0])
+
+    def test_profile_command_completes_the_profile(self):
+        w = World(profiles={"ottawa-cleanouts": {"mailing_address": "9 Elm St, Ottawa ON K1A 0A9"}})
+        with mock.patch.object(hq, "_request", w):
+            asyncio.run(C.hq_venture_cmd(upd(), SimpleNamespace(args=["profile", "ottawa-cleanouts", "brand", "Ottawa", "Cleanouts", "Co"])))
+            self.assertIsNone(C.hq_mail.profile("ottawa-cleanouts"))  # sender still missing
+            u = upd()
+            asyncio.run(C.hq_venture_cmd(u, SimpleNamespace(args=["profile", "ottawa-cleanouts", "sender", "Moe"])))
+            self.assertIn("can now carry", u.message.sent[0]); self.assertIsNotNone(C.hq_mail.profile("ottawa-cleanouts"))
+            self.assertEqual(w.profiles["ottawa-cleanouts"]["brand"], "Ottawa Cleanouts Co")
+
+    def _approve(self, world):
+        with mock.patch.object(hq, "_request", world):
+            return C.apply_decision("m9", True)
+
+    def test_approving_a_new_venture_draft_without_profile_is_refused_and_untouched(self):
+        w = World(outbox={"to_ref": "a@b.co", "body": "Hi", "lead_id": "L1", "venture_id": "v-cl", "lead_venture": "v-cl"})
+        out = self._approve(w)
+        self.assertIn("Cannot approve yet", out); self.assertIn("/setaddress ottawa-cleanouts", out)
+        self.assertFalse([c for c in w.calls if c[0] == "PATCH" and "/outbox?id=" in c[1]])        # draft status never changed
+        self.assertFalse([c for c in w.calls if "approved_to_send" in str(c[2])])                   # lead not advanced
+        release = [c for c in w.calls if "owner_messages" in c[1] and c[0] == "PATCH" and c[2] == {"decision": None, "decided_at": None}]
+        self.assertEqual(len(release), 1)                                                          # the tap is released so it can be retried
+
+    def test_approving_with_profile_uses_that_ventures_footer_from_the_lead(self):
+        # the draft row says donna but its LEAD belongs to the new venture: the lead wins
+        w = World(profiles={"ottawa-cleanouts": FULL}, outbox={"to_ref": "a@b.co", "body": "Hi", "lead_id": "L1", "venture_id": "v-donna", "lead_venture": "v-cl"})
+        out = self._approve(w)
+        self.assertIn("9 Elm St", out); self.assertIn("Ottawa Cleanouts Co", out); self.assertNotIn("Donna System", out)
+
+    def test_donna_draft_approval_keeps_legacy_address_warning(self):
+        w = World(profiles={}, outbox={"to_ref": "a@b.co", "body": "Hi", "lead_id": "L1", "venture_id": "v-donna", "lead_venture": "v-donna"})
+        out = self._approve(w)
+        self.assertIn("ADD YOUR BUSINESS MAILING ADDRESS", out); self.assertIn("/setaddress", out)
+
+    def test_draft_whose_venture_cannot_be_found_is_refused(self):
+        w = World(profiles={"donna": {"mailing_address": "1 Main St"}}, outbox={"to_ref": "a@b.co", "body": "Hi", "lead_id": "L1", "venture_id": "v-ghost"})
+        self.assertIn("cannot be found", self._approve(w))
+        self.assertFalse([c for c in w.calls if c[0] == "PATCH" and "/outbox?id=" in c[1]])
+
+
+class KpiCommand(unittest.TestCase):
+    def setUp(self):
+        os.environ["JARVIS_OWNER_ID"] = "42"
+
+    def test_venture_kpis_and_agents_paths(self):
+        k = {"venture": "ottawa-cleanouts", "leads": 5, "emailable_leads": 3, "drafted": 2, "approved": 1, "sent": 1, "won_deals": 1,
+             "deals_by_stage": {"won": 1, "pitched": 2}, "revenue_cents": 25000}
+
+        class W(World):
+            def __call__(s, method, path, body=None, timeout=30, prefer=None):
+                if path.endswith("/rpc/venture_kpis"): s.calls.append((method, path, body)); return k
+                if path.endswith("/rpc/ensure_venture_agents"): s.calls.append((method, path, body)); return {"created": ["ottawa-cleanouts-researcher"], "existing": []}
+                return super().__call__(method, path, body, timeout, prefer)
+        w, u = W(), upd()
+        with mock.patch.object(hq, "_request", w):
+            asyncio.run(C.hq_venture_cmd(u, SimpleNamespace(args=["kpis", "ottawa-cleanouts"])))
+            self.assertIn("Revenue received $250.00", u.message.sent[0]); self.assertIn("Leads 5 (3 emailable)", u.message.sent[0])
+            u2 = upd()
+            asyncio.run(C.hq_venture_cmd(u2, SimpleNamespace(args=["kpis", "nope"])))
+            self.assertIn("No venture called", u2.message.sent[0])
+            u3 = upd()
+            asyncio.run(C.hq_venture_cmd(u3, SimpleNamespace(args=["agents", "ottawa-cleanouts"])))
+            self.assertIn("Created paused", u3.message.sent[0])
+        self.assertEqual([c[2] for c in w.calls if c[1].endswith("ensure_venture_agents")][0]["p_slug"], "ottawa-cleanouts")
 
 
 if __name__ == "__main__":

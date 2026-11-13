@@ -198,3 +198,36 @@ def allocation_text() -> str:
 def list_text() -> str:
     rows = hq._request("GET", "/rest/v1/ventures?order=created_at.asc&select=slug,name,status,stage") or []
     return "\n".join(f"{r['slug']}: {r['status']}" + (f" / {r.get('stage')}" if r.get("stage") else "") + f" - {r['name']}" for r in rows) or "No ventures."
+
+
+def kpis(slug: str) -> dict | None:
+    """Read-only KPIs for one venture from real rows (leads, outbox, deals, ledger). None if the venture does not exist."""
+    k = _rpc("venture_kpis", {"p_venture": re.sub(r"[^a-z0-9-]", "", (slug or "").lower())})
+    return k if isinstance(k, dict) else None
+
+
+def kpis_text(slug: str) -> str:
+    try:
+        k = kpis(slug)
+    except Exception:
+        return "Venture KPIs are not installed yet (migration pending)."
+    if not k:
+        return f"No venture '{slug}'."
+    stages = ", ".join(f"{s}: {n}" for s, n in sorted((k.get("deals_by_stage") or {}).items())) or "none"
+    return "\n".join([
+        f"{k['venture']} KPIs (from real rows):",
+        f"Leads {k['leads']} ({k['emailable_leads']} emailable)",
+        f"Drafted {k['drafted']}, approved {k['approved']}, sent {k['sent']}",
+        f"Won deals {k['won_deals']} (all stages: {stages})",
+        f"Revenue received {_d(k['revenue_cents'])}"])
+
+
+def ensure_agents(slug: str, by: str = "owner:telegram") -> str:
+    """Create the venture's researcher and division agents PAUSED, inside the existing agent-creation limits."""
+    try:
+        r = _rpc("ensure_venture_agents", {"p_slug": re.sub(r"[^a-z0-9-]", "", (slug or "").lower()), "p_by": by})
+    except Exception as e:
+        return _err(e) or f"Could not create the agents for {slug}."
+    made = (r or {}).get("created") or []
+    return (f"Created paused: {', '.join(made)}. They wake when the venture is activated." if made
+            else f"{slug} already has its researcher and division agents.")

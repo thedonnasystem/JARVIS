@@ -12,3 +12,8 @@ queue_outreach_drafts()
 queue_valuation_task()
 reserve_llm_budget(text,integer,text,text)
 # enforce_build_rules() is re-created identically from live (md5 must NOT change)
+# Venture generic loop (20261114_venture_generic_v1): all NEW, service_role only
+ensure_venture_agents(text,text)
+queue_prospect_task(text)
+queue_all_prospect_tasks()
+venture_kpis(text)
