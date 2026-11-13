@@ -36,6 +36,7 @@ import hq_capital
 import hq_payments
 import hq_accounts
 import hq_office
+import hq_inbox  # hqui
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +218,9 @@ async def hq_brief(update, context) -> None:
         text = hq._request("POST", "/rest/v1/rpc/daily_brief_text", {}) or "No brief available."
     except Exception as e:
         text = f"Brief failed: {str(e)[:200]}"
+    # --- hqui begin: inbox count in the brief ---
+    text = hq_inbox.append_to_brief(str(text))
+    # --- hqui end ---
     await update.message.reply_text(str(text)[:4000])
 
 
@@ -1121,12 +1125,35 @@ async def hq_backup_cmd(update, context) -> None:
     await update.message.reply_text(text[:4000])
 
 
+# --- hqui begin: /needs (unified Needs-you inbox; read-only, buttons reuse the existing hqd:/hqq: callbacks) ---
+async def hq_needs_cmd(update, context) -> None:
+    if not _owner(update):
+        return
+    try:
+        items = hq_inbox.fetch()
+    except Exception as e:
+        logger.exception("HQ /needs failed")
+        await update.message.reply_text(f"Could not read the inbox: {type(e).__name__}. Is migration 20261115_inbox_needs_you_v1 applied?")
+        return
+    await update.message.reply_text(hq_inbox.format_inbox(items))
+    for it in items[:3]:  # tap-to-act for the top items only, through the same Approve/Reject and answer callbacks as the original message
+        markup = hq_inbox.action_buttons(it)
+        if markup is not None:
+            await update.message.reply_text(f"{it.get('title', '')[:200]}", reply_markup=markup)
+
+
+MENU_HQUI = [("needs", "Everything waiting on you, ranked")]
+# --- hqui end ---
+
+
 MENU = [
     ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
 ]
+
+MENU += MENU_HQUI  # hqui
 
 
 async def set_menu(app) -> None:
@@ -1202,6 +1229,9 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd)):
         app.add_handler(CommandHandler(name, fn))
     register_venture2(app, CommandHandler)  # venture2 hook
+    # --- hqui begin ---
+    app.add_handler(CommandHandler("needs", hq_needs_cmd))
+    # --- hqui end ---
     try:
         from telegram.ext import MessageHandler, filters
         app.add_handler(MessageHandler(filters.Document.ALL & filters.CaptionRegex(r"(?i)^/?bank"), hq_bank_file))

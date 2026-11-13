@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt
-      - run: scripts/gate.sh --only unit,scripts-tests,lint,bundle
+      - run: scripts/gate.sh --only unit,scripts-tests,lint,bundle,appcheck,webjs
   migrations:
     # the full gate: everything in `unit` plus the replica run (migrations, e2e, integration, rollback drill), the generated
     # function manifest, and the backup drill when the branch has one. --strict: a skipped required step is a failure.

@@ -115,7 +115,13 @@ async def deliver_owner_messages(context) -> None:
                 markup = option_buttons(msg["id"], msg["options"])
             else:
                 markup = decision_buttons(msg["id"]) if msg.get("needs_decision") else None
-            await context.bot.send_message(int(JARVIS_OWNER_ID), format_owner_message(msg), reply_markup=markup)
+            text = format_owner_message(msg)
+            # --- hqui begin: the morning/evening brief carries the inbox count (read-only; '' if unreadable) ---
+            if msg.get("kind") == "brief":
+                import hq_inbox
+                text = hq_inbox.append_to_brief(text)
+            # --- hqui end ---
+            await context.bot.send_message(int(JARVIS_OWNER_ID), text, reply_markup=markup)
             try:
                 import hq_push
                 await hq_push.notify(msg)

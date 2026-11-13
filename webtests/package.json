@@ -1,0 +1,8 @@
+{
+  "name": "hq-webapp-smoke",
+  "private": true,
+  "description": "Browser-less smoke tests for the HQ PWA. Dev only: not part of the Python runtime and not deployed.",
+  "type": "module",
+  "scripts": { "test": "node --test" },
+  "devDependencies": { "jsdom": "24.1.3" }
+}
