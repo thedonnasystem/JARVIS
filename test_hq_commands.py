@@ -356,6 +356,8 @@ class World:
     def __call__(self, method, path, body=None, timeout=30, prefer=None):
         import urllib.parse as up
         self.calls.append((method, path, body))
+        if path.startswith("/rest/v1/rpc/venture_config_get"):  # venture2: offer + CTA on file (ready by default so the CASL tests stay about CASL)
+            return {"venture": (body or {}).get("p_venture"), "drafts_ready": True}
         if path.startswith("/rest/v1/ventures"):
             q = up.parse_qs(path.split("?", 1)[1]) if "?" in path else {}
             rows = self.ventures

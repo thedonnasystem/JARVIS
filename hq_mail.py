@@ -96,6 +96,36 @@ def refusal(row: dict, lead: dict | None = None) -> str | None:
     return None
 
 
+def normalize_addr(p) -> str | None:
+    """Mirror of SQL public.normalize_addr (a test runs one table of inputs through both): address inside <...> if present, lowercased,
+    +tag dropped from the local part, dots untouched. None = no usable single address (including any ';' or ',' list)."""
+    if p is None or re.search(r"[;,]", str(p)):
+        return None
+    s = str(p).strip(" ")
+    m = re.search(r"<([^<>]*)>", s)
+    a = (m.group(1) if m else s).strip(" ").lower()
+    if re.search(r"\s", a) or "@" not in a[1:] or not re.fullmatch(r"[^@]+@[^@]+", a):
+        return None
+    local, domain = a.split("@")
+    local = re.sub(r"\+.*$", "", local)
+    return f"{local}@{domain}" if local else None
+
+
+def suppressed(address) -> bool:
+    """True when the address is on the do-not-contact list, or when that cannot be checked (fail closed: never send on doubt)."""
+    if not (address or "").strip():
+        return False
+    a = normalize_addr(address)
+    if a is None:
+        return True  # not one clean address (a list, or unparseable): never send on doubt
+    try:
+        return bool(_get(f"contact_suppressions?address=eq.{_q(a)}&select=address&limit=1"))
+    except urllib.error.HTTPError as e:
+        return e.code != 404  # table absent = migration not applied, nothing suppressed yet; any other failure blocks
+    except Exception:
+        return True
+
+
 def _post(row: dict) -> bool:
     payload = {"from": os.environ["MAIL_FROM"], "to": [row["to_ref"].strip()], "subject": (row.get("subject") or "Quick question")[:200],
                "text": row["body"]}
@@ -141,6 +171,8 @@ def deliver_approved(limit: int = 5) -> dict:
                 leads = _get(f"leads?id=eq.{_q(row['lead_id'])}&select=do_not_contact&limit=1")
                 lead = leads[0] if leads else None
             if refusal(row, lead):
+                out["skipped"] += 1; continue
+            if suppressed(row.get("to_ref")):  # opt-out is per ADDRESS, across ventures (CASL); fails closed on any error
                 out["skipped"] += 1; continue
             slug = venture_slug(row.get("venture_id"))
             if profile_refusal(row, profile(slug), slug):
