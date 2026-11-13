@@ -31,3 +31,6 @@ Sprint 3 candidates: hq_db.py REST-helper consolidation; wire offer/CTA into the
 
 ## Blockers / owner actions
 See SPRINT report; none new yet.
+
+## Checkpoint 2026-11-13 (hardening closed)
+Sprint 2 hardening items 1-7 done. Code head f10228ee; PR #4 head 81a760ed (docs-only on top). CI green. PRODUCTION_APPROVAL_PACKAGE.md independently verified (5 corrections applied). Next: wait for owner authorization; Sprint 3 not started.
