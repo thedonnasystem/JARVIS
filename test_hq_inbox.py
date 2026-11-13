@@ -74,7 +74,7 @@ class Fetch(unittest.TestCase):
         f = mock.Mock(return_value=[APPROVAL, "junk"])
         with mock.patch.object(hq, "_request", f):
             self.assertEqual(I.fetch(7), [APPROVAL])
-        f.assert_called_once_with("POST", "/rest/v1/rpc/needs_you", {"p_limit": 7})
+        f.assert_called_once_with("POST", "/rest/v1/rpc/needs_you", {"p_limit": 7}, timeout=5)   # short: it runs inside the async delivery job
 
     def test_non_list_is_an_error_not_an_empty_inbox(self):
         with mock.patch.object(hq, "_request", return_value=None):
@@ -101,6 +101,15 @@ class Brief(unittest.TestCase):
     def test_unreadable_inbox_gives_no_line_and_keeps_the_brief(self):
         with mock.patch.object(hq, "_request", side_effect=RuntimeError("down")):
             self.assertEqual(I.brief_line(), "")
+            self.assertEqual(I.append_to_brief("Health: GREEN"), "Health: GREEN")
+
+    def test_malformed_rows_give_no_line_not_an_exception(self):
+        bad = [dict(APPROVAL, age_minutes="soon")]
+        self.assertEqual(I.brief_line(bad), "")
+        self.assertEqual(I.append_to_brief("Health: GREEN", bad), "Health: GREEN")
+
+    def test_timeout_gives_no_line(self):
+        with mock.patch.object(hq, "_request", side_effect=TimeoutError("slow")):
             self.assertEqual(I.append_to_brief("Health: GREEN"), "Health: GREEN")
 
     def test_append(self):
@@ -233,6 +242,15 @@ class Delivery(unittest.TestCase):
     def test_other_kinds_are_untouched(self):
         sent = self.run_job([{"id": "m1", "kind": "money", "channel": "telegram", "body": "Profit: $0"}], [APPROVAL])
         self.assertEqual(sent, ["Money\n\nProfit: $0"])
+
+    def test_malformed_inbox_rows_never_block_the_brief(self):
+        sent = self.run_job([{"id": "b1", "kind": "brief", "channel": "telegram", "body": "Health: GREEN"}], [dict(APPROVAL, age_minutes="soon")])
+        self.assertEqual(sent, ["Daily brief\n\nHealth: GREEN"])
+
+    def test_even_a_broken_inbox_module_cannot_block_the_brief(self):
+        with mock.patch.object(I, "append_to_brief", side_effect=RuntimeError("boom")):
+            sent = self.run_job([{"id": "b1", "kind": "brief", "channel": "telegram", "body": "Health: GREEN"}], [APPROVAL])
+        self.assertEqual(sent, ["Daily brief\n\nHealth: GREEN"])
 
     def test_inbox_failure_never_blocks_the_brief(self):
         sent = self.run_job([{"id": "b1", "kind": "brief", "channel": "telegram", "body": "Health: GREEN"}], RuntimeError("down"))

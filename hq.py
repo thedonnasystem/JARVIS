@@ -118,8 +118,11 @@ async def deliver_owner_messages(context) -> None:
             text = format_owner_message(msg)
             # --- hqui begin: the morning/evening brief carries the inbox count (read-only; '' if unreadable) ---
             if msg.get("kind") == "brief":
-                import hq_inbox
-                text = hq_inbox.append_to_brief(text)
+                try:
+                    import hq_inbox
+                    text = hq_inbox.append_to_brief(text)
+                except Exception:  # never let the count block the brief
+                    logger.exception("HQ: inbox line skipped")
             # --- hqui end ---
             await context.bot.send_message(int(JARVIS_OWNER_ID), text, reply_markup=markup)
             try:

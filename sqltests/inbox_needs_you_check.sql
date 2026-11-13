@@ -4,7 +4,7 @@
 begin;
 do $$
 declare r jsonb; ids text[]; e jsonb; msg_a1 uuid; msg_a2 uuid; msg_q uuid; msg_stale uuid; msg_dec uuid; msg_esc uuid; esc_pending uuid; esc_free uuid;
-        ar_live uuid; ar_dead uuid; mis uuid; pay uuid; t_ok uuid; t_credit uuid; t_old uuid; t_mis uuid; n int; kinds text[]; denied boolean;
+        ar_live uuid; ar_dead uuid; mis uuid; pay uuid; t_ok uuid; t_credit uuid; t_old uuid; t_mis uuid; n int; kinds text[]; denied boolean; ob_done uuid; ob_live uuid;
 begin
   delete from owner_messages; delete from escalations; delete from payment_instructions; delete from approval_requests;
   update tasks set status = 'cancelled' where status = 'blocked'; update missions set status = 'paused' where status = 'blocked';
@@ -68,14 +68,31 @@ begin
   insert into tasks (title, status, result, updated_at) values ('INBOX-T-OLD', 'blocked', 'old', now() - interval '5 days') returning id into t_old;
   insert into tasks (title, status, result, mission_id) values ('INBOX-T-MISSION', 'blocked', 'in a mission', mis) returning id into t_mis;
 
+  -- approval messages whose referenced row is gone or no longer pending are hidden (random ref_id, an outbox row already approved, an account already created)
+  insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-GHOST-OUTBOX missing row', true, 'outbox', gen_random_uuid());
+  insert into outbox (channel, body, status, created_at) values ('email', 'INBOX-OB approved already', 'approved', now() - interval '1 day') returning id into ob_done;
+  insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-GHOST-OUTBOX2 not pending', true, 'outbox', ob_done);
+  insert into outbox (channel, body, status) values ('email', 'INBOX-OB draft', 'draft') returning id into ob_live;
+  insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id, created_at) values ('jarvis', 'proposal', 'INBOX-LIVE-OUTBOX pending draft', true, 'outbox', ob_live, now() - interval '10 minutes');
+  insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-GHOST-ACCT missing row', true, 'account_requests', gen_random_uuid());
+  insert into owner_messages (from_agent, kind, body, needs_decision, ref_table) values ('jarvis', 'proposal', 'INBOX-GHOST-VENT no such venture', true, 'activate_venture:no-such-venture-xyz');
+  insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, created_at) values ('jarvis', 'proposal', 'INBOX-CAP set_cap has no row to check', true, 'set_cap:500', now() - interval '5 minutes');
+  -- NULL payee / vendor must never give a NULL title
+  alter table payment_instructions alter column payee drop not null; alter table account_requests alter column vendor drop not null;
+  insert into payment_instructions (payee, amount_cents, purpose, status, requested_by) values (null, 2000, 'null payee purpose', 'approved', 'jarvis');
+  insert into account_requests (vendor, purpose, status, requested_by) values (null, 'null vendor purpose', 'approved', 'jarvis');
+
   r := public.needs_you(200);
+  if exists (select 1 from jsonb_array_elements(r) x where x->>'title' is null) then raise exception 'T24 a NULL title was produced: %', r; end if;
+  if not exists (select 1 from jsonb_array_elements(r) x where x->>'title' = '$20.00 to unknown payee') then raise exception 'T25 null payee not handled'; end if;
+  if not exists (select 1 from jsonb_array_elements(r) x where x->>'kind' = 'account' and x->>'title' like 'unknown vendor: null vendor%') then raise exception 'T26 null vendor not handled'; end if;
   if jsonb_typeof(r) <> 'array' then raise exception 'T9 not an array: %', r; end if;
   select array_agg(x->>'title' order by (x->>'rank')::int) into ids from jsonb_array_elements(r) x where x->>'title' like '%INBOX-%' or x->>'title' like '$15.00 to INBOX%';
 
   -- present exactly once, in this order (scores: A2 105 incl. expiry, E 100, A1 82 incl. age, A3 and the two TIE rows 80 (equal scores: oldest first), payment 75, question 65+6 for 72h of age (so it outranks the fresh health alert at 70), mission 60, escalation 55, task 30)
   if ids is distinct from array[
-       'INBOX-A2 red action expiring', 'INBOX-E on fire', 'INBOX-A1 old plain approval', 'INBOX-TIE-OLD same score, older', 'INBOX-TIE-NEW same score, newer', 'INBOX-A3 escalation buttons', '$15.00 to INBOX-PAYEE',
-       'INBOX-Q which way?', 'INBOX-H heartbeat stale', 'INBOX-M stuck', 'INBOX-ES free escalation', 'INBOX-T blocked task']
+       'INBOX-A2 red action expiring', 'INBOX-E on fire', 'INBOX-A1 old plain approval', 'INBOX-TIE-OLD same score, older', 'INBOX-TIE-NEW same score, newer', 'INBOX-LIVE-OUTBOX pending draft', 'INBOX-CAP set_cap has no row to check', 'INBOX-A3 escalation buttons', '$15.00 to INBOX-PAYEE',
+       'INBOX-Q which way?', 'INBOX-H heartbeat stale', 'To unknown: INBOX-OB approved already', 'INBOX-M stuck', 'INBOX-ES free escalation', 'INBOX-T blocked task']
   then raise exception 'T10 wrong list/order: %', ids; end if;
 
   -- ranks are 1..n without gaps, sorted by score desc

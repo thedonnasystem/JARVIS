@@ -55,7 +55,10 @@ begin
              when 'payment_instructions' then exists (select 1 from payment_instructions p where p.id = o.ref_id and p.status = 'awaiting_owner')
              when 'org_changes' then exists (select 1 from org_changes c where c.id = o.ref_id and c.status = 'proposed')
              when 'escalations' then exists (select 1 from escalations e where e.id = o.ref_id and e.status not in ('closed', 'resolved'))
+             when 'outbox' then exists (select 1 from outbox b where b.id = o.ref_id and b.status in ('draft', 'qa_passed'))
+             when 'account_requests' then exists (select 1 from account_requests a where a.id = o.ref_id and a.status = 'awaiting_owner')
              else true end
+       and case when o.ref_table like 'activate_venture:%' then exists (select 1 from ventures v where v.slug = substr(o.ref_table, 18) and v.status = 'proposed') else true end
     union all
     -- questions (Task Brief options) ------------------------------------------------------------------------------------------
     select 'question', 'owner_messages', o.id::text, left(coalesce(nullif(split_part(o.body, E'\n', 1), ''), o.kind), 140), o.created_at, null,
@@ -104,7 +107,7 @@ begin
      where v.status = 'proposed' and not exists (select 1 from pend p where p.ref_table = 'activate_venture:' || v.slug)
     union all
     -- payments ------------------------------------------------------------------------------------------------------------------------
-    select 'payment', 'payment_instructions', p.id::text, '$' || to_char(p.amount_cents / 100.0, 'FM999,990.00') || ' to ' || p.payee, p.created_at,
+    select 'payment', 'payment_instructions', p.id::text, '$' || to_char(p.amount_cents / 100.0, 'FM999,990.00') || ' to ' || coalesce(p.payee, 'unknown payee'), p.created_at,
            case when p.due_on is not null then (p.due_on::timestamp at time zone 'America/Toronto') end,
            case when p.status = 'approved' then 'Approved: pay it in RBC yourself, then confirm with the reference' else 'Waiting for your OK' end
              || ' (' || left(p.purpose, 100) || ')' || coalesce('. Due ' || p.due_on, ''),
@@ -115,7 +118,7 @@ begin
         or (p.status = 'awaiting_owner' and not exists (select 1 from pend x where x.ref_table = 'payment_instructions' and x.ref_id = p.id))
     union all
     -- accounts ------------------------------------------------------------------------------------------------------------------------
-    select 'account', 'account_requests', a.id::text, a.vendor || ': ' || left(a.purpose, 100), a.created_at, null,
+    select 'account', 'account_requests', a.id::text, coalesce(a.vendor, 'unknown vendor') || ': ' || coalesce(left(a.purpose, 100), ''), a.created_at, null,
            case when a.status = 'approved' then 'Approved: sign up yourself' || coalesce(' (needs ' || array_to_string(a.needs, ', ') || ')', '') || ', then confirm'
                 else 'Waiting for your OK' end,
            case when a.status = 'approved' then 55 else 45 end, case when a.status = 'approved' then 'create' else 'review' end, '[]'::jsonb,
