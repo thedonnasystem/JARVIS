@@ -203,7 +203,24 @@ begin
     ('a@b@c.com', null),
     ('a b@x.com', null),
     ('<>', null),
-    ('', null)
+    ('', null),
+    -- audit hardening (migrations/20261116_audit_hardening_v1.sql): one strict form, anything odd is NULL
+    ('bob@x.com.', 'bob@x.com'),
+    ('Bob@X.com...', 'bob@x.com'),
+    ('<bob@x.com.>', 'bob@x.com'),
+    ('"bob"@x.com', null),
+    ('bob(comment)@x.com', null),
+    ('bob@x.com>', null),
+    ('<bob@x.com', null),
+    ('<a@x.com> <bob@x.com>', null),
+    ('Bob <bob@x.com> extra', null),
+    ('bob@[1.2.3.4]', null),
+    ('mailto:bob@x.com', null),
+    ('bob@-x.com', null),
+    ('bob@x..com', null),
+    ('bob@x_y.com', null),
+    ('bob@xn--bcher-kva.de', 'bob@xn--bcher-kva.de'),
+    ('a.b+c@sub.x.co.uk', 'a.b@sub.x.co.uk')
     -- normalize cases end
   ) as c(input, expected) where public.normalize_addr(c.input) is distinct from c.expected;
   if bad is not null then raise exception 'N1 normalize_addr mismatches: %', bad; end if;

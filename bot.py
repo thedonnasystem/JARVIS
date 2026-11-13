@@ -846,6 +846,27 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Conversation history cleared.")
 
 
+# Audit hardening (AUDIT_PATHS.md F4, F5).
+# F4: a /build session runs shell commands with the bot's own environment, so a command as simple as `printenv` would hand the model the
+# database service key, the mail key and every other secret, and with them a way around every gate in HQ. Blank them for the child process
+# (the Agent SDK lets options.env override the inherited environment). Only the model key the session itself needs is kept.
+BUILD_ENV_KEEP = frozenset({"ANTHROPIC_API_KEY"})
+_SECRET_ENV_NAME = re.compile(
+    r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|WEBHOOK|DATABASE_URL|SUPABASE|RESEND|MAIL_|TELEGRAM|N8N|GOOGLE|^BW_|^B2_|BACKUP|JARVIS_OWNER", re.I)
+
+
+def _build_env() -> dict[str, str]:
+    return {k: "" for k in os.environ if k not in BUILD_ENV_KEEP and _SECRET_ENV_NAME.search(k)}
+
+
+# F5: Make.com and n8n triggers are external actions. They were only owner-gated (Make not even approved per call) and neither looked at
+# the kill switch. Fails closed: an unreadable kill switch counts as ON.
+def _external_action_blocked() -> str | None:
+    if hq_meter.kill_switch_on(ttl=0):
+        return "Kill switch is ON (or unreadable): no external automation runs until it is switched off."
+    return None
+
+
 # Claude decides when to call this based on the description below - no need
 # to match an exact phrase like "kick off my Make scenario".
 MAKE_SCENARIO_TOOL = {
@@ -869,6 +890,9 @@ async def trigger_make_webhook() -> str:
     """POST to MAKE_WEBHOOK_URL. Returns a short status string for Claude."""
     if not MAKE_WEBHOOK_URL:
         return "The Make.com webhook isn't configured - MAKE_WEBHOOK_URL is missing from .env."
+    blocked = _external_action_blocked()
+    if blocked:
+        return f"REFUSED: {blocked}"
 
     def _post() -> str:
         req = urllib.request.Request(
@@ -1036,6 +1060,9 @@ def _extract_webhook_path(workflow_json: dict) -> str | None:
 
 
 async def trigger_webhook_path(path: str) -> str:
+    blocked = _external_action_blocked()
+    if blocked:
+        return f"REFUSED: {blocked}"
     url = f"{N8N_BASE_URL}/webhook/{path.lstrip('/')}"
 
     def _post() -> int:
@@ -2017,6 +2044,8 @@ async def dispatch_tool_call(
     redact: list[str] | None = None,
 ) -> str:
     if tool_name == "trigger_make_scenario":
+        if not await request_approval(context, chat_id, "▶️ Trigger the Make.com scenario?\n\nIt runs outside HQ and can message or change things. Approve?"):
+            return "DENIED: the user did not approve this. Do not trigger the scenario."
         return await trigger_make_webhook()
     if tool_name == "build_n8n_workflow":
         return await handle_build_n8n_workflow(tool_input, context, chat_id)
@@ -2241,6 +2270,7 @@ async def run_plan_phase(
                 allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch"],
                 disallowed_tools=["Write", "Edit", "Bash", "NotebookEdit", "AskUserQuestion"],
                 max_budget_usd=sess.max_usd,
+                env=_build_env(),
             ),
         ):
             if await asyncio.to_thread(hq_meter.kill_switch_on):
@@ -2381,6 +2411,7 @@ async def run_build_phase(
                 disallowed_tools=["AskUserQuestion"],
                 can_use_tool=build_permission_gate,
                 max_budget_usd=sess.max_usd,
+                env=_build_env(),
             )
         ) as client:
             await client.query(build_prompt)
