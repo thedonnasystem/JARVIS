@@ -16,17 +16,17 @@ import psycopg2.extras
 OPS = {"eq": "=", "neq": "<>", "lt": "<", "lte": "<=", "gt": ">", "gte": ">=", "like": "like", "ilike": "ilike"}
 
 
-def _clean(v):
+def _clean(v, dec=False):
     if isinstance(v, (datetime.datetime, datetime.date)):
         return v.isoformat()
     if isinstance(v, uuid.UUID):
         return str(v)
     if isinstance(v, decimal.Decimal):
-        return float(v)
+        return v if dec else float(v)
     if isinstance(v, list):
-        return [_clean(x) for x in v]
+        return [_clean(x, dec) for x in v]
     if isinstance(v, dict):
-        return {k: _clean(x) for k, x in v.items()}
+        return {k: _clean(x, dec) for k, x in v.items()}
     return v
 
 
@@ -93,6 +93,8 @@ def parse_query(qs):
             order = " order by " + ", ".join(cols)
         elif k == "limit":
             limit = f" limit {int(v)}"
+        elif k == "offset":
+            limit += f" offset {int(v)}"
         elif k in ("on_conflict", "columns"):
             continue
         elif k in ("or", "and"):
@@ -108,17 +110,17 @@ class PgAdapter:
         self.conn.autocommit = True
         self.calls = []
 
-    def sql(self, query, params=None):
+    def sql(self, query, params=None, dec=False):
         with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(query, params)
-            return [_clean(dict(r)) for r in cur.fetchall()] if cur.description else None
+            return [_clean(dict(r), dec) for r in cur.fetchall()] if cur.description else None
 
     def _err(self, e):
         code = 409 if getattr(e, "pgcode", "") == "23505" else 400
         msg = (getattr(e.diag, "message_primary", None) or str(e)).strip()
         return urllib.error.HTTPError("u", code, msg, {}, io.BytesIO(json.dumps({"message": msg}).encode()))
 
-    def __call__(self, method, path, body=None, timeout=30, prefer=None):
+    def __call__(self, method, path, body=None, timeout=30, prefer=None, exact=False):
         self.calls.append((method, path))
         path = path.replace("/rest/v1/", "", 1)
         try:
@@ -138,7 +140,7 @@ class PgAdapter:
             where, params, order, limit, select = parse_query(qs)
             rep = prefer and "return=representation" in prefer
             if method == "GET":
-                return self.sql(f'select {select} from public."{table}"{where}{order}{limit}', params) or []
+                return self.sql(f'select {select} from public."{table}"{where}{order}{limit}', params, dec=exact) or []
             if method == "POST":
                 rows = body if isinstance(body, list) else [body]
                 out = []

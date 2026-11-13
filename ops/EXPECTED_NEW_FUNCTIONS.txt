@@ -1,6 +1,7 @@
 # Functions that the Phase 1 migrations ADD (ops/verify_live.sql drift output should show exactly these as new, nothing else)
 _queue_alert(text,interval,text)
 audit_task_bulk_delete()
+backup_schema()
 audit_task_bulk_update()
 enforce_mission_plan_limit()
 enforce_mission_step_limit()

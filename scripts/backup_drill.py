@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""End-to-end backup + restore drill on LOCAL scratch databases only (no production, no real storage).
+
+  source DB  (drill_src)      = the replica schema, seeded with awkward data. Stands in for production.
+  hq_backup.run()             = the real production code, talking to the source DB through the PostgREST stand-in and uploading to a fake B2 server.
+  restore_backup.py           = the real restore tool, run as a separate process, downloading with a READ-only key into drill_restore.
+Then the source and the restored database are compared directly, and negative controls prove the checks can fail.
+
+Usage: REPLICA_URL=postgresql://postgres:pw@localhost:5432/drill_src  RESTORE_URL=postgresql://postgres:pw@localhost:5432/drill_restore  python3 scripts/backup_drill.py
+What this proves: our code paths and the restore procedure. What it cannot prove: Backblaze's real behaviour, PostgREST's real JSON, production data volumes."""
+import hashlib, json, os, subprocess, sys, tempfile
+from unittest import mock
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path[:0] = [ROOT, os.path.join(HERE, "replica"), os.path.join(ROOT, "ops")]
+
+import psycopg2
+from cryptography.fernet import Fernet
+
+SRC = os.environ["REPLICA_URL"]
+DST = os.environ["RESTORE_URL"]
+results = []
+
+
+def check(name, ok, detail=""):
+    results.append((name, bool(ok), detail))
+    print(("PASS  " if ok else "FAIL  ") + name + (f"  [{detail}]" if detail else ""))
+    return ok
+
+
+def seed(conn):
+    cur = conn.cursor()
+    cur.execute("select id from ventures order by slug limit 1")
+    v = cur.fetchone()[0]
+    cur.execute("select slug from agents where status='active' order by slug limit 1")
+    ag = cur.fetchone()[0]
+    big = ("Lorem ipsum éèê \U0001F600 line\nbreak \"quoted\" 'single' back\\slash tab\t " * 3000)
+    for i in range(1, 41):
+        cur.execute("insert into leads (venture_id, name, email, phone, source, score, status, notes, next_followup_at) values (%s,%s,%s,%s,%s,%s,'new',%s,%s)",
+                    (v, f"Lead {i} Ñoño \U0001F680" if i % 3 == 0 else f"Lead {i}", f"lead{i}@example.com" if i % 5 else None, None if i % 2 else f"+1613555{i:04d}",
+                     "scrape", i % 100, big[:500] if i % 7 == 0 else "", f"2026-12-{(i % 28) + 1:02d}"))
+    cur.execute("select id from leads order by short_id nulls last, name limit 20")
+    for n, (lid,) in enumerate(cur.fetchall()):
+        cur.execute("insert into outbox (venture_id, agent, channel, to_ref, body, status, lead_id, sources) values (%s,%s,'email',%s,%s,'draft',%s,%s)",
+                    (v, ag, f"lead{n}@example.com", f"Hi À {n}\n\nDraft body \U0001F4E7 " + ("x" * (n * 50)), lid, json.dumps({"urls": ["https://example.com/a?b=1&c=é"], "n": n, "nested": {"f": 1.50, "z": None}})))
+    for i in range(120):
+        cur.execute("insert into memory (venture_id, agent, kind, content, source, confidence) values (%s,%s,%s,%s,'web','high')",
+                    (v, ag, ["fact", "decision", "lesson"][i % 3], (big if i == 0 else f"Memory {i}: 美味 — “smart quotes”")))
+    cur.execute("insert into handbook (version, content, active) values (99, %s, false)", (big,))
+    for i in range(30):
+        cur.execute("insert into ledger (venture_id, kind, amount_cents, currency, note, occurred_on, fx_rate, original_amount_cents) values (%s,%s,%s,'CAD',%s,'2026-11-12',%s,%s)",
+                    (v, "revenue" if i % 2 else "expense", i * 137 - 900, f"entry {i} ¢", "1.23456789" if i % 4 == 0 else None, i * 100))
+    for i in range(60):
+        cur.execute("insert into tasks (venture_id, assigned_agent, created_by, title, detail, status, priority, result) values (%s,%s,'system',%s,%s,%s,2,%s)",
+                    (v, ag, f"Task {i} \U0001F527", None if i % 4 == 0 else big[:300], ["todo", "done", "blocked", "cancelled"][i % 4], big if i == 5 else None))
+    conn.commit()
+
+
+WHERE = {"audit_log": " where action <> 'backup_ok'"}     # the backup writes its own audit row AFTER it has dumped the table
+
+
+def counts(dsn, tables):
+    out = {}
+    with psycopg2.connect(dsn) as c, c.cursor() as cur:
+        for t in tables:
+            cur.execute(f'select count(*), md5(coalesce(string_agg(to_jsonb(x)::text, \'|\' order by to_jsonb(x)::text), \'\')) from public."{t}" x{WHERE.get(t, "")}')
+            out[t] = cur.fetchone()
+    return out
+
+
+def restore_cmd(extra, env_extra, report):
+    env = {**os.environ, **env_extra}
+    p = subprocess.run([sys.executable, os.path.join(ROOT, "ops", "restore_backup.py"), "--report", report] + extra, env=env, capture_output=True, text=True, timeout=600)
+    try:
+        rep = json.load(open(report))
+    except Exception:
+        rep = {"error": p.stdout[-300:] + p.stderr[-300:]}
+    return p.returncode, rep
+
+
+def main():
+    from fake_b2 import FakeB2
+    from pg_adapter import PgAdapter
+    import hq_backup as B
+
+    src = psycopg2.connect(SRC); seed(src); src.close()
+    key = Fernet.generate_key().decode()           # throwaway key for this drill only
+    work = tempfile.mkdtemp(prefix="drill_")
+    with FakeB2() as fake:
+        ps = [mock.patch.object(B, "B2_AUTH_URL", fake.auth_url), mock.patch.object(B, "_b2_ok_url", lambda u: u.startswith(fake.url))]
+        env = {"BACKUP_KEY": key, "BACKUP_PUT_URL": f"b2://{fake.bucket_id}/hq", "BACKUP_AUTH": "keyW:secretW"}
+        adapter = PgAdapter(SRC + ("&" if "?" in SRC else "?") + "options=-c%20timezone%3DUTC")
+        with mock.patch.dict(os.environ, env), mock.patch("hq._request", side_effect=adapter), ps[0], ps[1]:
+            out = B.run(force=True)
+        check("1 backup ran through hq_backup.run() and uploaded", out.get("ok"), f'{out.get("rows")} rows, sha256 {str(out.get("sha256"))[:16]}..., complete={out.get("complete")}')
+        check("2 off-site store holds the encrypted file + sha256 sidecar", sorted(f["fileName"].rsplit(".", 1)[-1] for f in fake.files) == ["enc", "sha256"], ", ".join(f["fileName"] for f in fake.files))
+        enc = next(f["bytes"] for f in fake.files if f["fileName"].endswith(".enc"))
+        check("3 stored object is ciphertext (no plaintext leak)", b"Lead 3" not in enc and b"example.com" not in enc and b"caf" not in enc)
+        check("4 stored sha256 equals sha256 of stored bytes", out["sha256"] == hashlib.sha256(enc).hexdigest())
+        audit = adapter("GET", "/rest/v1/audit_log?action=eq.backup_ok&select=detail&limit=1")
+        check("5 audit_log recorded backup_ok with checksum and no secret", bool(audit) and audit[0]["detail"]["sha256"] == out["sha256"]
+              and key not in json.dumps(audit) and "secretW" not in json.dumps(audit))
+
+        renv = {"BACKUP_KEY": key, "RESTORE_B2_AUTH": "keyR:secretR", "RESTORE_B2_BUCKET_ID": fake.bucket_id, "RESTORE_B2_PREFIX": "hq/",
+                "RESTORE_B2_AUTH_URL": fake.auth_url, "RESTORE_DB_URL": DST}
+        rep_path = os.path.join(work, "report.json")
+        code, rep = restore_cmd(["--b2-latest", "--wipe", "--expect-sha256", out["sha256"]], renv, rep_path)
+        check("6 restore tool: download with READ-only key, sha256 sidecar + audit checksum match, decrypts", rep.get("file", {}).get("sidecar_sha256_ok") and rep.get("file", {}).get("expected_sha256_ok") and rep.get("file", {}).get("decrypts"), rep.get("error", ""))
+        check("7 restore tool: overall result", code == 0 and rep.get("result") == "PASS", json.dumps(rep.get("steps", {})) + " " + rep.get("error", ""))
+        for k, v in (rep.get("business_data") or {}).items():
+            check(f"8 business data survives: {k}", v["all_identical"], json.dumps(v["tables"]))
+        sc = rep.get("schema", {})
+        for cat in ("functions", "triggers", "indexes", "constraints", "table_grants", "views", "tables"):
+            if cat in sc:
+                check(f"9 schema identical after restore: {cat}", sc[cat]["identical"], f'{sc[cat]["backup"]} -> {sc[cat]["restored"]}')
+        for name, r in (rep.get("smoke") or {}).items():
+            check(f"10 smoke test on restored DB: {name}", r["ok"], r.get("detail") or r.get("result") or "")
+        check("11 constraint warnings (rows violating FKs)", not rep.get("constraint_warnings"), "; ".join(rep.get("constraint_warnings", [])[:3]))
+
+        # independent comparison, not using the restore tool's own checks: source database vs restored database, row content hash per table
+        names = [t for t in (rep.get("rows") or {})]
+        a, b = counts(SRC, names), counts(DST, names)
+        diff = [t for t in names if a[t] != b[t]]
+        check("12 independent check: every table's content hash is identical in source and restored DB", names and not diff, f"{len(names)} tables, {sum(v[0] for v in a.values())} rows; differing: {diff[:5]}")
+
+        # ---- negative controls: the checks must be able to fail
+        bad = bytearray(enc); bad[len(bad) // 2] ^= 1
+        fake.files.append({"fileId": "4_zfake_bad", "fileName": "hq/hq-99990101T000000Z.tar.gz.enc", "bytes": bytes(bad), "sha1": hashlib.sha1(bytes(bad)).hexdigest()})
+        fake.files.append({"fileId": "4_zfake_bad2", "fileName": "hq/hq-99990101T000000Z.tar.gz.enc.sha256", "bytes": f"{out['sha256']}  x\n".encode(), "sha1": hashlib.sha1(f"{out['sha256']}  x\n".encode()).hexdigest()})
+        code, rep2 = restore_cmd(["--b2-latest", "--wipe"], renv, os.path.join(work, "neg1.json"))
+        check("N1 corrupted object in storage is rejected by checksum", code != 0 and "checksum mismatch" in rep2.get("error", ""), rep2.get("error", "")[:100])
+        fake.files[:] = [f for f in fake.files if "9999" not in f["fileName"]]
+        code, rep3 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "BACKUP_KEY": Fernet.generate_key().decode()}, os.path.join(work, "neg2.json"))
+        check("N2 wrong BACKUP_KEY is rejected", code != 0 and "cannot decrypt" in rep3.get("error", ""), rep3.get("error", "")[:100])
+        code, rep4 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": "postgresql://postgres:pw@db.ihxzvpwbqydqtblvazbq.supabase.co:5432/postgres"}, os.path.join(work, "neg3.json"))
+        check("N3 production-looking target is refused before any connection", code != 0 and "refusing" in rep4.get("error", ""), rep4.get("error", "")[:100])
+        code, rep5 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": "postgresql://postgres:pw@localhost:5432/postgres"}, os.path.join(work, "neg4.json"))
+        check("N4 local database with a real-looking name is refused", code != 0 and "refusing" in rep5.get("error", ""), rep5.get("error", "")[:100])
+        code, rep6 = restore_cmd(["--b2-latest"], renv, os.path.join(work, "neg5.json"))
+        check("N5 non-empty scratch DB is not overwritten without --wipe", code != 0 and "not empty" in rep6.get("error", ""), rep6.get("error", "")[:100])
+        code, rep7 = restore_cmd(["--b2-latest", "--wipe", "--expect-sha256", "0" * 64], renv, os.path.join(work, "neg6.json"))
+        check("N6 mismatching expected checksum is rejected", code != 0 and "checksum mismatch" in rep7.get("error", ""), rep7.get("error", "")[:100])
+
+        # row-level verifier must notice a damaged restore
+        import restore_backup as R
+        conn = psycopg2.connect(DST); conn.autocommit = False
+        cur = conn.cursor()
+        cur.execute("delete from public.ledger where ctid = (select ctid from public.ledger order by created_at, note limit 1)")
+        cur.execute("update public.memory set content = content || 'X' where ctid = (select ctid from public.memory order by created_at limit 1)")
+        data = {}
+        import io, tarfile
+        from cryptography.fernet import Fernet as F
+        tar = tarfile.open(fileobj=io.BytesIO(F(key.encode()).decrypt(enc)), mode="r:gz")
+        for t in ("ledger", "memory", "tasks"):
+            data[t] = [json.loads(ln) for ln in tar.extractfile(f"data/{t}.jsonl").read().decode().split("\n") if ln.strip()]
+        rr = {}
+        ok_dmg = R.verify_rows(cur, data, rr)
+        conn.rollback(); conn.close()
+        check("N7 row verifier catches a deleted row and an altered value", (not ok_dmg) and not rr["rows"]["ledger"]["identical"] and not rr["rows"]["memory"]["identical"] and rr["rows"]["tasks"]["identical"],
+              f'ledger={rr["rows"]["ledger"]}, memory={rr["rows"]["memory"]}')
+
+        # schema verifier must notice a damaged restore (dropped index, edited function, revoked grant, dropped trigger)
+        schema = json.loads(tar.extractfile("schema.json").read().decode())
+        conn = psycopg2.connect(DST); conn.autocommit = False
+        cur = conn.cursor()
+        base = {}
+        ok_clean = R.verify_schema(cur, schema, base)
+        idx = schema["indexes"][0]
+        cur.execute(f'drop index if exists public."{idx["name"]}"')
+        cur.execute("create or replace function public.capital_mode() returns text language sql as $$ select 'tampered'::text $$")
+        sr = {}
+        ok_bad = R.verify_schema(cur, schema, sr)
+        conn.rollback(); conn.close()
+        check("N8 schema verifier passes clean restore and catches dropped index + edited function",
+              ok_clean and (not ok_bad) and not sr["schema"]["indexes"]["identical"] and not sr["schema"]["functions"]["identical"],
+              str({k: v.get("identical") for k, v in sr.get("schema", {}).items()})[:200])
+
+    bad_n = [r for r in results if not r[1]]
+    print(f"\n{len(results) - len(bad_n)}/{len(results)} checks passed")
+    open(os.path.join(work, "drill_results.json"), "w").write(json.dumps([{"check": n, "pass": ok, "detail": d} for n, ok, d in results], indent=1))
+    print("results file:", os.path.join(work, "drill_results.json"))
+    sys.exit(1 if bad_n else 0)
+
+
+if __name__ == "__main__":
+    main()

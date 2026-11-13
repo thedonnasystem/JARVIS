@@ -226,11 +226,8 @@ Migrations: `migrations/20261112_missions_v1.sql`, then `migrations/20261112_bri
 - A failed send stays approved and retries next tick. Sent mail is marked `sent_by = system` and the 3-day follow-up is set.
 - Unsubscribe replies are not read automatically yet: when someone replies "unsubscribe", mark the lead do-not-contact.
 
-## Backups (dormant until you add storage)
-- Set in Railway: `BACKUP_KEY` (generate one: `python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"` and KEEP A COPY OFFLINE, without it backups cannot be read) and `BACKUP_PUT_URL` (an HTTPS endpoint that accepts a PUT; `{name}` becomes the file name). Optional `BACKUP_AUTH` header value.
-- Put the backup somewhere that is not this Supabase project. Runs nightly 02:00-05:00 Toronto, encrypts, then decrypts and recounts every table before uploading. A failure messages you once.
-- Not exported: `push_config` (private keys) and push subscriptions.
-
+## Backups (encrypted, off-site)
+Full setup, schedule, retention, recovery steps and limits: **BACKUP_RECOVERY.md**. Short version: Backblaze B2 (free tier), set `BACKUP_KEY`, `BACKUP_PUT_URL=b2://<bucketId>/hq` and `BACKUP_AUTH=<keyId>:<applicationKey>` in Railway only. Nightly 02:00-05:00 Toronto. `/backup` shows the last good backup, `/backup now` runs one.
 
 ## Releases
 See DEPLOY_RUNBOOK.md (gates, exact order, verification, rollback), SECURITY_REVIEW_PHASE1.md, and the read-only tools in `ops/` (`verify_deploy.sh`, `verify_live.sql`, `rollback_phase1.sql`).

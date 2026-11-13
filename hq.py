@@ -18,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def hq_enabled() -> bool:
     return bool(HQ_SUPABASE_URL and HQ_SUPABASE_SERVICE_KEY and JARVIS_OWNER_ID)
 
 
-def _request(method: str, path: str, body: dict | None = None, timeout: int = 30, prefer: str | None = None):
+def _request(method: str, path: str, body: dict | None = None, timeout: int = 30, prefer: str | None = None, exact: bool = False):
     url = f"{HQ_SUPABASE_URL}{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -50,7 +51,10 @@ def _request(method: str, path: str, body: dict | None = None, timeout: int = 30
         req.add_header("Prefer", prefer)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
-        return json.loads(raw) if raw else None
+        if not raw:
+            return None
+        # exact=True keeps decimal numbers as Decimal (scale and precision intact); used by the backup so money columns are not rounded through float
+        return json.loads(raw, parse_float=Decimal) if exact else json.loads(raw)
 
 
 def format_owner_message(msg: dict) -> str:
