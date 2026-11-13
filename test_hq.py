@@ -57,7 +57,8 @@ class HQBridge(unittest.TestCase):
     def test_failed_telegram_send_stays_unsent(self):
         bot = FakeBot(fail=True)
         calls = self.run_job([{"id": "a1", "kind": "brief", "channel": "telegram", "body": "x"}], bot)
-        self.assertEqual([c[0] for c in calls], ["GET"])  # no PATCH, so it retries next minute
+        # no PATCH, so it retries next minute (the only other call is the read-only inbox count appended to a brief)
+        self.assertEqual([c[0] for c in calls if not c[1].endswith("/rpc/needs_you")], ["GET"])
 
     def test_disabled_without_config(self):
         with mock.patch.object(hq, "HQ_SUPABASE_SERVICE_KEY", ""):
