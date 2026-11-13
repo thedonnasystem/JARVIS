@@ -31,3 +31,8 @@ Agents created by step 2 for a venture that is already `active` stay paused unti
 - `hq_mail.deliver_approved` requires the body to already contain the venture's footer address; the footer is currently appended only in the owner's approval message (the send-it-yourself flow). The automated sender stays dormant, and strict, until that is wired deliberately.
 - A hand-made draft with no venture and no lead can still be approved on the legacy Donna path; the automated sender refuses it.
 - `scripts/replica/run.sh` does not run `sqltests/venture_generic_check.sql`; run it after the replica (see its header), since run.sh's rollback drill drops the new functions at the end.
+
+## Review follow-ups (Nov 13)
+- Approval of a draft stamps `outbox.venture_id` with the venture resolved from the draft's lead (one resolver, `_outbox_venture_id`), so the approval gate and `hq_mail.deliver_approved` always agree.
+- `sqltests/*.sql` now run inside `scripts/replica/run.sh` (so CI), including the service_role-only grant checks for the new functions.
+- Known limit unchanged: Donna's legacy address check is a warning, not a block.

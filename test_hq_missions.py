@@ -554,7 +554,7 @@ class BlockedStepRecoveryTests(MissionEngineBase):
         self.assertEqual(calls, [])
 
     def test_kill_switch_credit_and_focus_blocks_are_never_requeued_or_announced(self):
-        for res in ("Stopped: Kill switch is on.", "error: credit balance is too low", "Focus mode: only mission 1111 may use AI"):
+        for res in ("Stopped: Kill switch is on.", "error: credit balance is too low", "Stopped: Focus mode: only mission 1111 may use AI"):
             db = FakeDB(); mid = self.new(db)["id"]
             self.to_executing(db, mid)
             step = self.current_step(db); step["status"], step["result"] = "blocked", res
@@ -619,7 +619,7 @@ class BlockedVerifierTests(MissionEngineBase):
             self.assertEqual(self.told(db, "Mission stuck"), 0 if res.startswith("waiting") else 1)
 
     def test_credit_kill_focus_blocked_verifier_is_not_a_failed_attempt_and_silent(self):
-        for res in ("error: credit balance is too low", "Stopped: Kill switch is on", "Focus mode: only mission x may use AI"):
+        for res in ("error: credit balance is too low", "Stopped: Kill switch is on", "Stopped: Focus mode: only mission x may use AI"):
             db = FakeDB(); mid = self.new(db)["id"]
             ver = self.to_verifying(db, mid)
             ver["status"], ver["result"] = "blocked", res
@@ -703,6 +703,34 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(c({"result": M.RETRY_MARK + " y"}), "error")
         self.assertEqual(c({"result": "Cancelled: x", "status": "cancelled"}), "cancelled")
         self.assertEqual(c({"result": None}), "other")
+
+    def test_agent_prose_is_not_mistaken_for_an_engine_state(self):
+        c = M.classify_block
+        # review finding: model-written text mentioning these phrases must not park a mission silently
+        self.assertEqual(c({"result": "ESCALATE the kill switch is on in their docs"}), "escalate")
+        self.assertEqual(c({"result": "Research notes: customers say focus mode and the kill switch confuse them"}), "other")
+        self.assertEqual(c({"result": "The credit balance is too low for them to buy"}), "other")
+        self.assertEqual(c({"result": "error: credit balance is too low"}), "credit")
+
+
+class RetryVerbTests(MissionEngineBase):
+    def test_retry_clears_markers_only_when_blocked(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        db.missions[mid]["checkpoint"] = {"task_retries": {"t1": 1}, "told_blocked": True, "budget_marks": {"t2": 5}}
+        with mock.patch.object(hq, "_request", db):
+            self.assertIn("not blocked", M.set_status(mid[:8], "retry"))
+            self.assertEqual(db.missions[mid]["checkpoint"]["task_retries"], {"t1": 1})
+            db.missions[mid]["status"] = "blocked"
+            M.set_status(mid[:8], "retry")
+        cp = db.missions[mid]["checkpoint"]
+        self.assertNotIn("task_retries", cp); self.assertNotIn("told_blocked", cp); self.assertEqual(cp["budget_marks"], {"t2": 5})
+        self.assertEqual(db.missions[mid]["status"], "blocked")  # retry never un-blocks by itself or skips the spend gateway
+
+    def test_double_abandon_writes_one_lesson(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        with mock.patch.object(hq, "_request", db):
+            M.set_status(mid[:8], "abandon"); M.set_status(mid[:8], "abandon")
+        self.assertEqual(len(self.lessons(db)), 1)
 
 
 class LearningTests(MissionEngineBase):

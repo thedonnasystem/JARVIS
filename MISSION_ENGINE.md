@@ -57,3 +57,9 @@ requeued task still runs through the existing metered path (kill switch, caps, f
 - Sequential steps lengthen a mission's wall-clock time (one engine tick per step plus the task's own latency).
 - Budget restart relies on the owner raising `/mission budget`; there is no automatic top-up.
 - Handoff truncation is by characters, not by meaning: a long step result is cut at 1200 chars.
+
+## Review follow-ups (independent review, Nov 13)
+- `classify_block` now checks `ESCALATE` and the owner-question marker first, and treats credit / kill-switch / focus-mode only inside the engine's own `error:` / `Stopped:` wrappers, so agent prose that mentions those phrases can no longer park a mission silently.
+- `/mission retry <id>`: for a blocked mission whose step already used its one automatic retry. It only clears the retry markers; the next tick still runs the task through the spend gateway and the mission budget, and fails closed if spend is unreadable. `/mission resume` is unchanged.
+- Abandoning an already finished mission no longer writes a second lesson.
+- Mission fact storage reuses `parse_verification`, so a quoted `VERIFIED: YES` cannot store facts when the verdict is NO.

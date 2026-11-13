@@ -517,6 +517,8 @@ class Casl(unittest.TestCase):
         w = World(profiles={"ottawa-cleanouts": FULL}, outbox={"to_ref": "a@b.co", "body": "Hi", "lead_id": "L1", "venture_id": "v-donna", "lead_venture": "v-cl"})
         out = self._approve(w)
         self.assertIn("9 Elm St", out); self.assertIn("Ottawa Cleanouts Co", out); self.assertNotIn("Donna System", out)
+        stamped = [c for c in w.calls if c[0] == "PATCH" and "/outbox?id=" in c[1] and isinstance(c[2], dict) and c[2].get("status") == "qa_passed"]
+        self.assertEqual(stamped[0][2].get("venture_id"), "v-cl")  # the sender reads outbox.venture_id: it must equal the lead's venture
 
     def test_donna_draft_approval_keeps_legacy_address_warning(self):
         w = World(profiles={}, outbox={"to_ref": "a@b.co", "body": "Hi", "lead_id": "L1", "venture_id": "v-donna", "lead_venture": "v-donna"})

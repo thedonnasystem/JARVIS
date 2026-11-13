@@ -440,14 +440,16 @@ def classify_block(t: dict) -> str:
     low = r.lower()
     if r.startswith("waiting on owner:"):
         return "owner"
-    if "credit balance is too low" in low:
-        return "credit"  # the engine paused for credit and requeues these itself when credit is back
+    if re.search(r"(?im)^\s*ESCALATE\b", r):
+        return "escalate"  # checked before any phrase test: model-written text must not be mistaken for an engine state
     if low.startswith("stopped: mission budget") or low.startswith("mission budget"):
         return "budget"
-    if "kill switch" in low or "focus mode" in low:
-        return "gateway"
-    if re.search(r"(?im)^\s*ESCALATE\b", r):
-        return "escalate"
+    # credit / gateway states only count when they arrive in the engine's own wrappers, never as a phrase inside agent prose
+    if low.startswith(("error:", "stopped:")):
+        if "credit balance is too low" in low:
+            return "credit"  # the engine paused for credit and requeues these itself when credit is back
+        if "kill switch" in low or "focus mode" in low:
+            return "gateway"
     if low.startswith("error:") or low.startswith(RETRY_MARK):
         return "error"
     if t.get("status") == "cancelled":
@@ -670,7 +672,7 @@ def _block(m: dict, why: str) -> None:
     if not cp.get("told_blocked"):
         cp["told_blocked"] = True
         _set(m, checkpoint=cp)
-        _tell_owner(f"Mission blocked: {m['title']}\nWhy: {why}\nA failed step is retried once automatically; beyond that it needs you. Tell me in chat if you want to change course.")
+        _tell_owner(f"Mission blocked: {m['title']}\nWhy: {why}\nA failed step is retried once automatically; beyond that it needs you. Use /mission retry <id> for one more try, or /mission abandon <id>.")
 
 
 def _check_budget(m: dict) -> bool:
@@ -791,6 +793,14 @@ def set_status(prefix: str, status: str) -> str:
     m = rows[0]
     target = {"pause": "paused", "abandon": "abandoned"}.get(status)
     body: dict = {}
+    if status == "retry":
+        # Owner decision to give a failed step one more automatic retry. Only clears the retry markers; the next tick still
+        # runs the task through the spend gateway and the mission budget, and fails closed if spend is unreadable.
+        if m["status"] != "blocked":
+            return f"{m['title']} is {m['status']}, not blocked: nothing to retry."
+        cp = {k: v for k, v in (m.get("checkpoint") or {}).items() if k not in ("task_retries", "told_blocked")}
+        _patch(f"missions?id=eq.{_q(m['id'])}", {"checkpoint": cp})
+        return f"{m['title']}: its failed step gets one more automatic retry on the next tick (still inside the mission budget)."
     if status == "resume":
         plan = m.get("plan") or []
         for s in plan:  # steps cancelled by the pause run again
@@ -810,7 +820,7 @@ def set_status(prefix: str, status: str) -> str:
             if t["status"] == "todo":
                 _patch(f"tasks?id=eq.{_q(t['id'])}&status=eq.todo", {"status": "cancelled", "updated_at": _now(),
                        "result": f"Cancelled: mission {target} by the owner."})
-    if target == "abandoned":
+    if target == "abandoned" and m["status"] not in ("completed", "failed", "rejected", "abandoned"):
         _write_lesson(m, "abandoned")
     return f"{m['title']}: {target}."
 

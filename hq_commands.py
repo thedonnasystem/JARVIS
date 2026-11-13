@@ -666,14 +666,21 @@ async def hq_setaddress(update, context) -> None:
             f"Not ready yet: also set the sender and brand with /venture profile {slug} sender <name> and /venture profile {slug} brand <name>."))
 
 
-def _outbox_casl_gate(outbox_id: str) -> tuple[str | None, str | None]:
-    """(venture slug, problem) for approving this draft. The venture comes from the draft's LEAD (else the draft itself).
-    Donna keeps its legacy flow (a warning, not a block); every other venture is refused without a complete profile."""
+def _outbox_venture_id(outbox_id: str) -> tuple[str | None, bool]:
+    """(venture id, has a lead). The one place that decides which venture a draft belongs to: the LEAD's venture wins,
+    else the draft's own. The sender (hq_mail.deliver_approved) reads outbox.venture_id, so approval stamps this value there."""
     ob = (_get(f"outbox?id=eq.{_q(outbox_id)}&select=venture_id,lead_id&limit=1") or [{}])[0]
     vid = ob.get("venture_id")
     if ob.get("lead_id"):
         vid = (_get(f"leads?id=eq.{_q(ob['lead_id'])}&select=venture_id&limit=1") or [{}])[0].get("venture_id") or vid
-    if not vid and not ob.get("lead_id"):
+    return vid, bool(ob.get("lead_id"))
+
+
+def _outbox_casl_gate(outbox_id: str) -> tuple[str | None, str | None]:
+    """(venture slug, problem) for approving this draft. The venture comes from the draft's LEAD (else the draft itself).
+    Donna keeps its legacy flow (a warning, not a block); every other venture is refused without a complete profile."""
+    vid, has_lead = _outbox_venture_id(outbox_id)
+    if not vid and not has_lead:
         return hq_mail.DONNA, None  # legacy hand-made draft with no venture at all: today's Donna flow (hq_mail still refuses to SEND it)
     slug = hq_mail.venture_slug(vid)
     if not slug:
@@ -745,9 +752,11 @@ def apply_decision(msg_id: str, approved: bool) -> str:
                 return problem
             # The owner is a reviewer independent of the writing agent, so his approval is the QA step too.
             # The database requires draft -> qa_passed -> approved; before this, Approve on a draft was refused.
-            hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=eq.draft",
-                        {"status": "qa_passed", "qa_agent": "owner", "qa_notes": "Reviewed by the owner on Telegram"},
-                        prefer="return=minimal")
+            gate_vid, _hl = _outbox_venture_id(ref_id)
+            qa = {"status": "qa_passed", "qa_agent": "owner", "qa_notes": "Reviewed by the owner on Telegram"}
+            if gate_vid:
+                qa["venture_id"] = gate_vid  # sender and approval gate must agree on the venture (review finding)
+            hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=eq.draft", qa, prefer="return=minimal")
         hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(ref_id)}&status=in.(draft,qa_passed)",
                     {"status": verdict, "decided_at": now}, prefer="return=minimal")
         if approved:
@@ -826,7 +835,7 @@ async def hq_mission_cmd(update, context) -> None:
                 args = args[:1] + args[2:]
             r = hq_missions.create_mission(" ".join(args[1:]), vslug, created_by="owner") if vslug else hq_missions.create_mission(" ".join(args[1:]), created_by="owner")
             text = r.get("error") or f"Mission opened: {r['title']} ({str(r['id'])[:8]}). Evaluation starts on the next tick."
-        elif verb in ("pause", "resume", "abandon") and len(args) >= 2:
+        elif verb in ("pause", "resume", "abandon", "retry") and len(args) >= 2:
             text = hq_missions.set_status(args[1], verb)
         elif verb == "steps" and len(args) >= 3 and args[2].isdigit():
             text = hq_missions.set_steps(args[1], int(args[2]))

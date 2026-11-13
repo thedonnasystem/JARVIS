@@ -640,7 +640,7 @@ def _store_facts(t: dict, text: str) -> int:
     is_mission_verify = t["title"].startswith(hq_missions.TITLE_PREFIX + "Verify")
     if not (t["assigned_agent"].endswith("auditor") or is_mission_verify):  # a mission verifier may be compliance-qa
         return 0
-    if is_mission_verify and not re.search(r"(?im)^\s*\**VERIFIED:\**\s*YES\b", text):
+    if is_mission_verify and not hq_missions.parse_verification(text)["verified"]:
         return 0  # facts from a verification that did not pass are not trusted
     venture = t.get("venture_id")
     if re.search(r"(?im)^\s*VERDICT:\s*FAIL\b", text):
