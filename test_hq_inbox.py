@@ -6,9 +6,9 @@ import urllib.error
 from types import SimpleNamespace
 from unittest import mock
 
-os.environ["HQ_SUPABASE_URL"] = "https://example.supabase.co"
-os.environ["HQ_SUPABASE_SERVICE_KEY"] = "test-key"
-os.environ["JARVIS_OWNER_ID"] = "42"
+os.environ.setdefault("HQ_SUPABASE_URL", "https://example.supabase.co")
+os.environ.setdefault("HQ_SUPABASE_SERVICE_KEY", "test-key")
+os.environ.setdefault("JARVIS_OWNER_ID", "12345")
 
 import hq  # noqa: E402
 import hq_commands as C  # noqa: E402

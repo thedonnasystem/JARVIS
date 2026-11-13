@@ -9,6 +9,7 @@ begin
   delete from owner_messages; delete from escalations; delete from payment_instructions; delete from approval_requests;
   update tasks set status = 'cancelled' where status = 'blocked'; update missions set status = 'paused' where status = 'blocked';
 
+  grant usage on schema public to anon, authenticated;   -- as on Supabase; without it every call below would fail on the schema, not on the function
   -- who may call it ---------------------------------------------------------------------------------------------------------------
   if has_function_privilege('anon', 'public.needs_you(int)', 'execute') then raise exception 'T1 anon can execute needs_you'; end if;
   if has_function_privilege('anon', 'public.app_needs_you()', 'execute') then raise exception 'T2 anon can execute app_needs_you'; end if;
@@ -28,6 +29,21 @@ begin
   if not denied then raise exception 'T8 non-owner call returned data'; end if;
   reset role;
 
+  -- the owner check itself, with the function temporarily opened to signed-in users (this is exactly what the sign-off change does; rolled back below)
+  insert into auth.users (id, email) values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'inbox-owner@example.com'), ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'inbox-stranger@example.com');
+  insert into app_owners (email) values ('inbox-owner@example.com');
+  grant execute on function public.app_needs_you() to authenticated;
+  set local role authenticated;
+  perform set_config('app.uid', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', true); perform set_config('app.email', 'inbox-stranger@example.com', true);
+  begin perform public.app_needs_you(); denied := false; exception when insufficient_privilege then denied := true; end;
+  if not denied then raise exception 'T8b a signed-in non-owner got the inbox'; end if;
+  perform set_config('app.uid', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', true); perform set_config('app.email', 'inbox-owner@example.com', true);
+  if jsonb_typeof(public.app_needs_you()) <> 'array' then raise exception 'T8c owner did not get the inbox'; end if;
+  begin perform public.needs_you(5); denied := false; exception when insufficient_privilege then denied := true; end;
+  if not denied then raise exception 'T8d the owner can call the internal needs_you directly'; end if;
+  reset role;
+  revoke execute on function public.app_needs_you() from authenticated;
+
   -- seed: one of every kind ---------------------------------------------------------------------------------------------------------
   insert into approval_requests (actor, action, cents, recommendation, status, expires_at) values ('jarvis', 'inbox-live', 0, 'rec live', 'pending', now() + interval '10 hours') returning id into ar_live;
   insert into approval_requests (actor, action, cents, recommendation, status, expires_at) values ('jarvis', 'inbox-dead', 0, 'rec dead', 'expired', now() - interval '1 hour') returning id into ar_dead;
@@ -35,7 +51,7 @@ begin
   insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-A2 red action expiring', true, 'approval_requests', ar_live) returning id into msg_a2;
   insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-STALE expired request', true, 'approval_requests', ar_dead) returning id into msg_stale;
   insert into owner_messages (from_agent, kind, body, needs_decision, decision, decided_at) values ('jarvis', 'proposal', 'INBOX-DECIDED already decided', true, 'approved', now()) returning id into msg_dec;
-  insert into owner_messages (from_agent, kind, body, options) values ('jarvis', 'proposal', E'INBOX-Q which way?\nlong text', '["Go left","Go right"]'::jsonb) returning id into msg_q;
+  insert into owner_messages (from_agent, kind, body, options, created_at) values ('jarvis', 'proposal', E'INBOX-Q which way?\nlong text', '["Go left","Go right"]'::jsonb, now() - interval '72 hours') returning id into msg_q;
   insert into owner_messages (from_agent, kind, body) values ('jarvis', 'emergency', 'INBOX-E on fire');
   insert into owner_messages (from_agent, kind, body, created_at) values ('jarvis', 'health', 'ALERT: INBOX-H heartbeat stale', now() - interval '2 hours'), ('jarvis', 'health', 'ALERT: INBOX-H heartbeat stale', now() - interval '1 hour');
   insert into owner_messages (from_agent, kind, body, created_at) values ('jarvis', 'health', 'ALERT: INBOX-OLDALERT', now() - interval '3 days');
@@ -44,6 +60,7 @@ begin
   update missions set status = 'blocked', next_action = 'Blocked: step failed' where id = mis;
   insert into escalations (from_agent, kind, summary, status) values ('jarvis', 'uncertain', 'INBOX-ES free escalation', 'sent_to_owner') returning id into esc_free;
   insert into escalations (from_agent, kind, summary, status) values ('jarvis', 'uncertain', 'INBOX-ES2 escalation that has buttons', 'sent_to_owner') returning id into esc_pending;
+  insert into owner_messages (from_agent, kind, body, needs_decision, created_at) values ('jarvis', 'proposal', 'INBOX-TIE-NEW same score, newer', true, now() - interval '1 hour'), ('jarvis', 'proposal', 'INBOX-TIE-OLD same score, older', true, now() - interval '2 hours');
   insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-A3 escalation buttons', true, 'escalations', esc_pending) returning id into msg_esc;
   insert into payment_instructions (payee, amount_cents, purpose, status, requested_by) values ('INBOX-PAYEE', 1500, 'inbox test purpose', 'approved', 'jarvis') returning id into pay;
   insert into tasks (title, status, result) values ('INBOX-T blocked task', 'blocked', 'error: boom') returning id into t_ok;
@@ -55,10 +72,10 @@ begin
   if jsonb_typeof(r) <> 'array' then raise exception 'T9 not an array: %', r; end if;
   select array_agg(x->>'title' order by (x->>'rank')::int) into ids from jsonb_array_elements(r) x where x->>'title' like '%INBOX-%' or x->>'title' like '$15.00 to INBOX%';
 
-  -- present exactly once, in this order (scores: A2 105 incl. expiry, E 100, A1 82 incl. age, A3 80, payment 75, health 70, question 65, mission 60, escalation 55, task 30)
+  -- present exactly once, in this order (scores: A2 105 incl. expiry, E 100, A1 82 incl. age, A3 and the two TIE rows 80 (equal scores: oldest first), payment 75, question 65+6 for 72h of age (so it outranks the fresh health alert at 70), mission 60, escalation 55, task 30)
   if ids is distinct from array[
-       'INBOX-A2 red action expiring', 'INBOX-E on fire', 'INBOX-A1 old plain approval', 'INBOX-A3 escalation buttons', '$15.00 to INBOX-PAYEE', 'INBOX-H heartbeat stale',
-       'INBOX-Q which way?', 'INBOX-M stuck', 'INBOX-ES free escalation', 'INBOX-T blocked task']
+       'INBOX-A2 red action expiring', 'INBOX-E on fire', 'INBOX-A1 old plain approval', 'INBOX-TIE-OLD same score, older', 'INBOX-TIE-NEW same score, newer', 'INBOX-A3 escalation buttons', '$15.00 to INBOX-PAYEE',
+       'INBOX-Q which way?', 'INBOX-H heartbeat stale', 'INBOX-M stuck', 'INBOX-ES free escalation', 'INBOX-T blocked task']
   then raise exception 'T10 wrong list/order: %', ids; end if;
 
   -- ranks are 1..n without gaps, sorted by score desc

@@ -148,6 +148,13 @@ test('fallback: while app_needs_you is closed to the owner, the inbox still show
   assert.match(t, /Showing approvals, questions and blocked missions/);
   await app.click(app.button('#v-inbox', 'Approve'));
   assert.deepEqual(app.callsTo('app_send').at(-1).args, { p_body: '', p_kind: 'decision', p_payload: { msg_id: 'm-appr', approved: true } });
+  await app.click(app.button('#v-inbox', 'Reject'));
+  assert.deepEqual(app.callsTo('app_send').at(-1).args, { p_body: '', p_kind: 'decision', p_payload: { msg_id: 'm-appr', approved: false } });
+  await app.click(app.button('#v-inbox', 'Toronto'));
+  assert.deepEqual(app.callsTo('app_send').at(-1).args, { p_body: '', p_kind: 'answer', p_payload: { msg_id: 'm-q', idx: 1 } });
+  await app.click(app.button('#v-inbox', 'Resume'));
+  assert.deepEqual(app.callsTo('app_send').at(-1).args, { p_body: '', p_kind: 'mission', p_payload: { verb: 'resume', id: 'mis-blocked' } });
+  assert.equal(app.callsTo('app_send').length, 4, 'one send per tap, nothing else');
   app.stop();
 });
 
