@@ -25,4 +25,5 @@
 20261113_phase1_repair_v1.sql
 20261113_mission_guard_v1.sql
 20261113_backup_schema_v1.sql
+20261114_venture_generic_v1.sql
 20261112_lockdown_v1.sql

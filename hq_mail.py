@@ -31,6 +31,58 @@ def live() -> bool:
     return s.get("mode") == "live" and not s.get("kill_switch")
 
 
+DONNA = "donna"
+PLACEHOLDER = "[ADD YOUR BUSINESS MAILING ADDRESS - required by CASL]"
+
+
+class ProfileMissing(Exception):
+    """A venture has no complete CASL sender profile (sender, brand, mailing address). Nothing may be queued or sent for it."""
+
+
+def venture_slug(venture_id) -> str | None:
+    if not venture_id:
+        return None
+    rows = _get(f"ventures?id=eq.{_q(venture_id)}&select=slug&limit=1")
+    return rows[0]["slug"] if rows else None
+
+
+def profile(slug: str | None) -> dict | None:
+    """The venture's CASL profile as {sender_name, brand, mailing_address}, or None when it is incomplete.
+    Donna keeps its long-standing defaults for sender and brand (address is still required); every other venture needs all three,
+    so a new venture can never go out under Donna's brand or without a real address."""
+    if not slug:
+        return None
+    rows = _get(f"company_profile?venture_slug=eq.{_q(slug)}&select=sender_name,brand,mailing_address&limit=1")
+    p = (rows or [{}])[0] if isinstance(rows, list) else {}
+    sender, brand, addr = (p.get("sender_name") or "").strip(), (p.get("brand") or "").strip(), (p.get("mailing_address") or "").strip()
+    if slug == DONNA:
+        sender, brand = sender or "Moe", brand or "The Donna System"
+    if not (sender and brand and addr) or PLACEHOLDER in addr:
+        return None
+    return {"sender_name": sender, "brand": brand, "mailing_address": addr}
+
+
+def footer(slug: str) -> str:
+    """CASL footer for a venture. Raises ProfileMissing for a venture without a complete profile (fail closed)."""
+    p = profile(slug)
+    if not p:
+        raise ProfileMissing(slug)
+    return (f"\n\n--\n{p['sender_name']}, {p['brand']}\n{p['mailing_address']}\n"
+            "To stop receiving emails from us, reply \"unsubscribe\" and we will remove you within 10 business days.")
+
+
+def profile_refusal(row: dict, prof: dict | None, slug: str | None) -> str | None:
+    """Per-venture CASL gate, on top of refusal(): the draft must belong to a venture, that venture needs a complete profile, and the
+    footer in the body must carry THAT venture's mailing address (so one venture's footer can never ride on another's email)."""
+    if not slug:
+        return "draft has no venture, so no CASL sender profile applies"
+    if not prof:
+        return f"venture {slug} has no complete CASL profile (sender, brand, mailing address)"
+    if prof["mailing_address"] not in (row.get("body") or ""):
+        return f"email footer does not carry the mailing address of venture {slug}"
+    return None
+
+
 def refusal(row: dict, lead: dict | None = None) -> str | None:
     """Why this draft must NOT be sent right now, or None if it may."""
     to = (row.get("to_ref") or "").strip()
@@ -82,13 +134,16 @@ def deliver_approved(limit: int = 5) -> dict:
         if not live():
             out["reason"] = "not live"; return out
         rows = _get(f"outbox?status=eq.approved&channel=eq.email&sent_at=is.null&order=created_at.asc&limit={int(limit)}"
-                    "&select=id,to_ref,body,subject,lead_id,agent")
+                    "&select=id,to_ref,body,subject,lead_id,agent,venture_id")
         for row in rows:
             lead = None
             if row.get("lead_id"):
                 leads = _get(f"leads?id=eq.{_q(row['lead_id'])}&select=do_not_contact&limit=1")
                 lead = leads[0] if leads else None
             if refusal(row, lead):
+                out["skipped"] += 1; continue
+            slug = venture_slug(row.get("venture_id"))
+            if profile_refusal(row, profile(slug), slug):
                 out["skipped"] += 1; continue
             d = hq_policy.authorize(row.get("agent") or "donna-ops", "send_email", ref=row["id"])
             if d.decision != "allow":

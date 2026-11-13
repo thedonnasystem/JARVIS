@@ -77,13 +77,18 @@ def strip_sql(text):
 
 
 def split_args(s):
-    parts, depth, cur = [], 0, []
+    parts, depth, cur, quote = [], 0, [], None
     for ch in s:
-        if ch == "(":
+        if quote:                       # commas inside 'string' / "identifier" defaults are not argument separators
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch in "([":
             depth += 1
-        elif ch == ")":
+        elif ch in ")]":
             depth -= 1
-        if ch == "," and depth == 0:
+        if ch == "," and depth == 0 and not quote:
             parts.append("".join(cur)); cur = []
         else:
             cur.append(ch)

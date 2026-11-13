@@ -286,3 +286,10 @@ class Cli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SplitArgsDefaults(unittest.TestCase):
+    def test_commas_inside_array_and_string_defaults_are_one_argument(self):
+        import lint_migrations as L
+        self.assertEqual(len(L.split_args("skip text[] default array['a', 'b']")), 1)
+        self.assertEqual(len(L.split_args("a text default 'x,y', b int")), 2)
