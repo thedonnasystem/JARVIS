@@ -15,9 +15,11 @@ Exact heads, checksums, order: `PRODUCTION_APPROVAL_PACKAGE.md`.
 | B1 | Send-policy patch (`ops/pending_signoff/send_policy_single_authorization.sql`) | One send consumes one allowance, not two | Edits a protected trigger | Approve, but only before any live email | No (no live send is possible today) | Yes, must precede live email |
 | B2 | Dead `live()` gate (mode `live` forbidden by CHECK) | Decides how real sending is ever enabled | Wrong fix could open sending | Leave as is until you want live email | No | Yes |
 | B3 | `app_needs_you()` access (`ops/pending_signoff/inbox_open_app_needs_you.txt`) | PWA inbox shows items | Opens one read RPC to the PWA role; leaks names/ids of open items | Approve (read-only, owner-only PWA) | No (inbox stays empty without it) | Yes |
+| B5 | Protected spend/send hardening (`ops/pending_signoff/audit_spend_send_hardening.sql`, F2/F3/F7-F9/F12) | Rejects negative/re-settled LLM amounts, bounds settle_spend, blocks `sent_by=owner` bypass of kill switch/dry-run, blocks sent->draft, blocks API role adding policy rows | Edits protected spend/permission functions; F2 also needs a small `hq_commands.mark_sent` change | Approve before any live email or real spend; all findings are latent today | No | Yes, but before going live |
 | B4 | Unsuppression policy | Today opt-outs are permanent | Re-mailing an opt-out breaks CASL | Keep permanent; any exception = written owner-signed re-consent record | No | Yes |
 
 ## C. Evidence verification D1-D8
+Built and merged into PR #4 in **shadow mode** (audits, downgrades nothing; env `HQ_EVIDENCE_V2=off|shadow|enforce`). Migration `20261116_evidence_sources_v1` is part of the release. Flipping to enforce = D2.
 D1 snapshot capture on (yes); D2 shadow 2 weeks then enforce material claims (yes); D3 judge off at first (off); D4 retention 90/180 days (yes); D5 corroboration 2 domains for money/legal/medical (yes); D6 judge ceiling min(10% budget, 30c), 6 calls (yes); D7 staleness 24 months (yes); D8 legacy evidence ok for non-material claims, flagged (yes). Risk: only that stricter checks downgrade more missions. Blocks release: **No.** Can wait: yes (build is on a dev branch).
 
 ## D. E1 agent tools D1-D12 (design only, nothing built live)
