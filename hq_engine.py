@@ -637,8 +637,11 @@ def _standing_decisions(limit: int = 20) -> str:
 
 def _store_facts(t: dict, text: str) -> int:
     """Auditor output -> company memory. Facts only when the verdict is not FAIL; a FAIL becomes a lesson."""
-    if not t["assigned_agent"].endswith("auditor"):
+    is_mission_verify = t["title"].startswith(hq_missions.TITLE_PREFIX + "Verify")
+    if not (t["assigned_agent"].endswith("auditor") or is_mission_verify):  # a mission verifier may be compliance-qa
         return 0
+    if is_mission_verify and not re.search(r"(?im)^\s*\**VERIFIED:\**\s*YES\b", text):
+        return 0  # facts from a verification that did not pass are not trusted
     venture = t.get("venture_id")
     if re.search(r"(?im)^\s*VERDICT:\s*FAIL\b", text):
         why = re.search(r"(?im)^\s*VERDICT:\s*FAIL\b[^\n]*", text)
@@ -900,7 +903,7 @@ def _work_tasks() -> bool:
         f"&or=(due_at.is.null,due_at.lte.{now})"
         + (f"&mission_id=eq.{_q(_FOCUS)}" if _FOCUS else "")
         + f"&order=priority.asc,created_at.asc&limit={MAX_TASKS_PER_TICK}"
-        "&select=id,assigned_agent,title,detail,venture_id,result"
+        "&select=id,assigned_agent,title,detail,venture_id,result,mission_id"
     )
     for t in tasks:
         if not _patch(f"tasks?id=eq.{_q(t['id'])}&status=eq.todo", {"status": "doing", "updated_at": now}, claim=True):
@@ -991,7 +994,9 @@ def _attached_research(t: dict) -> str:
     researcher = next((r for r, a in AUDITOR_FOR.items() if a == agent), None)
     if not researcher:
         return ""
-    rows = _get(f"tasks?assigned_agent=eq.{_q(researcher)}&status=in.(done,blocked)&result=not.is.null"
+    # Scope by mission: a mission's task sees only its own mission's research; an ordinary audit never sees mission output.
+    scope = f"&mission_id=eq.{_q(t['mission_id'])}" if t.get("mission_id") else "&mission_id=is.null"
+    rows = _get(f"tasks?assigned_agent=eq.{_q(researcher)}&status=in.(done,blocked)&result=not.is.null{scope}"
                 "&order=updated_at.desc&limit=1&select=title,result")
     if not rows or not (rows[0].get("result") or "").strip():
         return ""
@@ -1048,7 +1053,7 @@ def _queue_audit(task: dict, text: str) -> None:
 
 
 PLAN_PREFIX = "Daily planning"
-SOURCING_RE = re.compile(r"\b(find|source|scrape|search for|list|hunt)\b.{0,60}\b(houses?|propert|listings?|sellers?|homes?)\b", re.I)
+SOURCING_RE = hq_missions.SOURCING_RE  # one shared definition (owner decision: HQ never sources houses)
 MAX_NEW_PER_PLAN = 3
 MAX_TODO_QUEUE = 8
 PLAN_SUFFIX = "\n\nRules for this task: research or drafting only. No contacting anyone, no spending, no signing."
