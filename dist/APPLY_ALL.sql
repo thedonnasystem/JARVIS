@@ -2630,7 +2630,7 @@ base := jsonb_build_object(
                   from pg_constraint k join pg_class c on c.oid = k.conrelid where k.connamespace = 'public'::regnamespace and k.conrelid <> 0),
   'indexes', (select coalesce(jsonb_agg(jsonb_build_object('table', tc.relname, 'name', ic.relname, 'def', pg_get_indexdef(i.indexrelid)) order by tc.relname, ic.relname), '[]'::jsonb)
               from pg_index i join pg_class ic on ic.oid = i.indexrelid join pg_class tc on tc.oid = i.indrelid
-              where tc.relnamespace = 'public'::regnamespace and not exists (select 1 from pg_constraint k where k.conindid = i.indexrelid)),
+              where tc.relnamespace = 'public'::regnamespace and not exists (select 1 from pg_constraint k where k.conindid = i.indexrelid and k.contype in ('p', 'u', 'x'))),
   'triggers', (select coalesce(jsonb_agg(jsonb_build_object('table', c.relname, 'name', g.tgname, 'def', pg_get_triggerdef(g.oid), 'enabled', g.tgenabled::text) order by c.relname, g.tgname), '[]'::jsonb)
                from pg_trigger g join pg_class c on c.oid = g.tgrelid where not g.tgisinternal and c.relnamespace = 'public'::regnamespace),
   'functions', (select coalesce(jsonb_agg(jsonb_build_object('sig', p.oid::regprocedure::text, 'def', pg_get_functiondef(p.oid), 'md5', md5(pg_get_functiondef(p.oid)),
@@ -2638,7 +2638,7 @@ base := jsonb_build_object(
                           left join pg_roles r on r.oid = a.grantee where a.privilege_type = 'EXECUTE')) order by p.oid::regprocedure::text), '[]'::jsonb)
                 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p')
                   and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')),
-  'views', (select coalesce(jsonb_agg(jsonb_build_object('name', c.relname, 'kind', c.relkind::text, 'def', pg_get_viewdef(c.oid, true)) order by c.relname), '[]'::jsonb)
+  'views', (select coalesce(jsonb_agg(jsonb_build_object('name', c.relname, 'kind', c.relkind::text, 'def', pg_get_viewdef(c.oid, true), 'options', coalesce(to_jsonb(c.reloptions), '[]'::jsonb)) order by c.relname), '[]'::jsonb)
             from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('v', 'm')),
   'policies', (select coalesce(jsonb_agg(jsonb_build_object('table', tablename, 'name', policyname, 'permissive', permissive, 'roles', roles, 'cmd', cmd, 'using', qual, 'check', with_check)
                 order by tablename, policyname), '[]'::jsonb) from pg_policies where schemaname = 'public'),

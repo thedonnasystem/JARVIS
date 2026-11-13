@@ -314,6 +314,15 @@ class BackupCmd(unittest.TestCase):
         self.assertIn("hq-x.tar.gz.enc", out)
         self.assertNotIn("SECRET", out)
 
+    def test_check_reports_without_secrets(self):
+        import hq_backup
+        u = upd()
+        res = [{"check": "BACKUP_KEY is set", "status": "pass", "detail": ""}, {"check": "Key can write files", "status": "fail", "detail": "key needs writeFiles"}]
+        with mock.patch.object(hq_backup, "preflight", return_value=res):
+            asyncio.run(C.hq_backup_cmd(u, SimpleNamespace(args=["check"])))
+        out = u.message.sent[0]
+        self.assertIn("FAIL Key can write files", out); self.assertIn("1 problem", out)
+
     def test_now_runs_forced(self):
         import hq_backup
         u = upd()

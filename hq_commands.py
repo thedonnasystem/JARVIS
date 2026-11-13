@@ -960,7 +960,13 @@ async def hq_backup_cmd(update, context) -> None:
     import hq_backup
     args = [a.lower() for a in (context.args or [])]
     try:
-        if args and args[0] == "now":
+        if args and args[0] == "check":
+            res = await asyncio.to_thread(hq_backup.preflight)
+            icon = {"pass": "OK  ", "warn": "WARN", "fail": "FAIL"}
+            lines = [f"{icon.get(r['status'], '?   ')} {r['check']}" + (f" - {r['detail']}" if r.get("detail") else "") for r in res]
+            bad = sum(r["status"] == "fail" for r in res)
+            text = "Backup configuration check (read-only, nothing uploaded):\n" + "\n".join(lines) + ("\n\nReady for /backup now." if not bad else f"\n\n{bad} problem(s) to fix first.")
+        elif args and args[0] == "now":
             if not hq_backup.configured():
                 text = "Backup is not configured (BACKUP_KEY or BACKUP_PUT_URL missing)."
             else:
@@ -983,7 +989,7 @@ async def hq_backup_cmd(update, context) -> None:
 
 
 MENU = [
-    ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, /backup now"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),

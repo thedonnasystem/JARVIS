@@ -40,14 +40,36 @@ def qi(x: str) -> str:
 
 # ------------------------------------------------------------------ safety
 
+FORBIDDEN_DSN_KEYS = ("hostaddr", "service", "servicefile", "passfile", "options", "target_session_attrs")
+SUPABASE_SCHEMAS = ("auth", "storage", "realtime", "vault", "supabase_functions", "pgbouncer", "graphql", "graphql_public", "_realtime", "pgsodium")
+SUPABASE_ROLES = ("supabase_admin", "supabase_auth_admin", "supabase_storage_admin", "supabase_read_only_user", "authenticator", "pgbouncer")
+MAX_ENC_BYTES = 512 * 1024 * 1024         # a real backup is under 1 MB; refuse absurd inputs (memory bombs)
+MAX_UNPACKED_BYTES = 1024 * 1024 * 1024
+
+
+def scrub_environment() -> None:
+    """libpq reads host/service defaults from the environment; a stray PGHOST must never redirect a 'local' restore."""
+    for k in ("PGHOST", "PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "PGOPTIONS", "PGTARGETSESSIONATTRS"):
+        os.environ.pop(k, None)
+
+
 def assert_scratch(dsn: str) -> dict:
-    """Refuse anything that is not a local database whose name says it is disposable."""
+    """Refuse anything that is not an explicitly local database whose name says it is disposable. (Name + host checks here; the connected
+    server is checked again by assert_not_supabase() before anything is dropped.)"""
     import psycopg2.extensions as ext
-    p = ext.parse_dsn(dsn)
+    try:
+        p = ext.parse_dsn(dsn)
+    except Exception:
+        raise Fail("refusing: connection string could not be parsed")
+    bad = [k for k in FORBIDDEN_DSN_KEYS if k in p]
+    if bad:
+        raise Fail(f"refusing: connection string uses {', '.join(bad)}, which can redirect the connection away from the host that was checked.")
     host, db = (p.get("host") or ""), (p.get("dbname") or "")
-    if host.startswith("/"):
-        host = ""                                   # unix socket directory
-    if host not in LOCAL_HOSTS:
+    if not host:
+        raise Fail("refusing: give an explicit local host (localhost, 127.0.0.1, ::1 or a unix socket directory); an empty host falls back to environment defaults.")
+    if "," in host:
+        raise Fail("refusing: multiple hosts are not allowed.")
+    if not (host.startswith("/") or host in LOCAL_HOSTS):
         raise Fail(f"refusing: host '{host}' is not local. This tool only restores into a scratch database on this machine.")
     if not SAFE_DB.match(db):
         raise Fail(f"refusing: database name '{db}' must start with restore_, drill_, scratch_ or tmp (so it cannot be a real database).")
@@ -56,7 +78,21 @@ def assert_scratch(dsn: str) -> dict:
     prod = urllib.parse.urlparse(os.environ.get("HQ_SUPABASE_URL", "")).hostname
     if prod and prod in dsn:
         raise Fail("refusing: connection string mentions the production host.")
-    return {"host": host or "unix-socket", "database": db}
+    return {"host": "unix-socket" if host.startswith("/") else host, "database": db}
+
+
+def assert_not_supabase(cur) -> None:
+    """After connecting (and before dropping anything): the server must not look like a Supabase project, e.g. one reached through a tunnel."""
+    cur.execute("select current_database()")
+    db = cur.fetchone()[0]
+    if not SAFE_DB.match(db):
+        raise Fail(f"refusing: connected database is '{db}', not a scratch name.")
+    cur.execute("select nspname from pg_namespace where nspname = any(%s)", (list(SUPABASE_SCHEMAS),))
+    found = [r[0] for r in cur.fetchall()]
+    cur.execute("select rolname from pg_roles where rolname = any(%s)", (list(SUPABASE_ROLES),))
+    found += [r[0] for r in cur.fetchall()]
+    if found:
+        raise Fail("refusing: the connected server looks like a Supabase project (" + ", ".join(sorted(set(found))[:4]) + "). Nothing was changed.")
 
 
 # ------------------------------------------------------------------ fetch
@@ -94,6 +130,8 @@ def b2_get(s, f) -> bytes:
     st, body, hdr = _http("GET", f"{s['api']}/b2api/v4/b2_download_file_by_id?fileId={urllib.parse.quote(f['fileId'])}", {"Authorization": s["token"]})
     if st != 200:
         raise Fail(f"B2 download failed (HTTP {st}); the key needs readFiles")
+    if len(body) > MAX_ENC_BYTES:
+        raise Fail("download refused: implausibly large for a backup")
     sha1 = {k.lower(): v for k, v in hdr.items()}.get("x-bz-content-sha1", "")
     if sha1 and not sha1.startswith("unverified") and sha1 != hashlib.sha1(body).hexdigest():
         raise Fail("downloaded bytes do not match B2's SHA-1")
@@ -103,6 +141,8 @@ def b2_get(s, f) -> bytes:
 def fetch(args) -> tuple[bytes, str | None, str]:
     """Returns (encrypted bytes, sidecar text or None, name)."""
     if args.file:
+        if os.path.getsize(args.file) > MAX_ENC_BYTES:
+            raise Fail("file refused: implausibly large for a backup")
         enc = open(args.file, "rb").read()
         side = args.sidecar or args.file + ".sha256"
         return enc, (open(side).read() if os.path.exists(side) else None), os.path.basename(args.file)
@@ -147,6 +187,8 @@ def open_archive(enc: bytes, sidecar: str | None, name: str, expect: str | None,
         raise Fail("cannot decrypt: wrong BACKUP_KEY or the file is damaged")
     rep["file"]["decrypts"] = True
     tar = tarfile.open(fileobj=io.BytesIO(plain), mode="r:gz")
+    if sum(m.size for m in tar.getmembers() if m.isfile()) > MAX_UNPACKED_BYTES:
+        raise Fail("archive refused: unpacked size is implausibly large")
     members = {m.name: tar.extractfile(m).read() for m in tar.getmembers() if m.isfile()}
     manifest = json.loads(members["manifest.json"])
     if manifest.get("format") != 2:
@@ -169,7 +211,8 @@ def open_archive(enc: bytes, sidecar: str | None, name: str, expect: str | None,
     extra = sorted(n for n in members if n.startswith("data/") and n[5:-6] not in manifest["tables"])
     rep["archive"] = {"format": 2, "created_utc": manifest["created_utc"], "engine_build": manifest.get("engine_build"), "complete": manifest["complete"],
                       "tables": len(manifest["tables"]), "total_rows": manifest["total_rows"], "problems": bad, "unlisted_data_files": extra,
-                      "table_list_source": manifest.get("table_list_source")}
+                      "table_list_source": manifest.get("table_list_source"),
+                      "consistency": manifest.get("consistency")}
     if bad:
         raise Fail("archive integrity: " + "; ".join(bad[:5]))
     data = {t: [json.loads(ln) for ln in members[f"data/{t}.jsonl"].decode().split("\n") if ln.strip()] for t in manifest["tables"]}
@@ -275,11 +318,26 @@ def load_data(cur, schema: dict, data: dict, rep: dict):
             cur.execute("select to_regclass(%s)", (f"public.{qi(s['name'])}",))
             if cur.fetchone()[0]:
                 cur.execute("select setval(%s, %s)", (f"public.{qi(s['name'])}", s["last_value"]))
+    # Sequences: never behind the data. Use the larger of the saved position and the highest id actually present in the owning column.
+    for t in schema["tables"]:
+        for c in t["columns"]:
+            if c.get("identity") in ("a", "d") or "nextval(" in (c.get("default") or ""):
+                cur.execute("select pg_get_serial_sequence(%s, %s)", (f"public.{qi(t['name'])}", c["name"]))
+                seq = cur.fetchone()[0]
+                if seq:
+                    cur.execute(f"select coalesce(max({qi(c['name'])}), 0) from public.{qi(t['name'])}")
+                    top = cur.fetchone()[0] or 0
+                    cur.execute(f"select last_value from {seq}")
+                    cur_val = cur.fetchone()[0]
+                    if isinstance(top, int) and top > cur_val:
+                        cur.execute("select setval(%s, %s)", (seq, top))
     rep["loaded_rows"] = sum(loaded.values())
 
 
 def rebuild_constraints(cur, schema: dict, rep: dict):
     warnings = []
+    for i in schema.get("indexes", []):      # first: a foreign key may rely on a plain unique index that is not itself a constraint
+        cur.execute(i["def"])
     for kind in FK_LAST:
         for c in schema.get("constraints", []):
             if c["type"] != kind and not (kind == "x" and c["type"] not in FK_LAST):
@@ -296,8 +354,6 @@ def rebuild_constraints(cur, schema: dict, rep: dict):
 
 
 def rebuild_rest(cur, schema: dict, rep: dict):
-    for i in schema.get("indexes", []):
-        cur.execute(i["def"])
     for t in schema.get("triggers", []):
         cur.execute(t["def"])
         if t.get("enabled") in ("D", "A", "R"):
@@ -315,6 +371,11 @@ def rebuild_rest(cur, schema: dict, rep: dict):
         if not pending:
             break
     rep["views_failed"] = [v["name"] for v in pending]
+    for v in schema.get("views", []):
+        if v["kind"] == "v":
+            for opt in v.get("options") or []:
+                if re.fullmatch(r"[a-z_]+=[A-Za-z0-9_.]+", str(opt)):      # e.g. security_invoker=true; anything else is ignored, never executed
+                    _try(cur, f'ALTER VIEW public.{qi(v["name"])} SET ({opt})')
     for t in schema["tables"]:
         if t.get("rls"):
             cur.execute(f'ALTER TABLE public.{qi(t["name"])} ENABLE ROW LEVEL SECURITY')
@@ -496,10 +557,12 @@ def main():
             dsn = args.target or os.environ.get("RESTORE_DB_URL") or ""
             if not dsn:
                 raise Fail("set RESTORE_DB_URL (or --target) to a scratch database")
+            scrub_environment()
             rep["target"] = assert_scratch(dsn)
             conn = psycopg2.connect(dsn)
             conn.autocommit = False
             cur = conn.cursor()
+            assert_not_supabase(cur)
             cur.execute("select count(*) from pg_tables where schemaname='public'")
             if cur.fetchone()[0]:
                 if not args.wipe:
@@ -521,11 +584,14 @@ def main():
             rep["migration_ledger_rows"] = led
             if not all(v for _, v in checks) or rep["views_failed"]:
                 code = 1
+            elif rep.get("constraint_warnings"):
+                code = 4          # data restored and identical, but some rows violate foreign keys: not a clean recovery
+                rep["note"] = "foreign-key violations present in the backed-up data"
     except Fail as e:
         rep["error"] = str(e); code = 2
     except Exception as e:                      # never print connection strings or keys
         rep["error"] = f"{type(e).__name__}: {str(e).splitlines()[0][:160] if str(e) else ''}"; code = 3
-    rep["result"] = "PASS" if code == 0 else "FAIL"
+    rep["result"] = "PASS" if code == 0 else ("PASS_WITH_WARNINGS" if code == 4 else "FAIL")
     text = json.dumps(rep, indent=2, default=str)
     if args.report:
         open(args.report, "w").write(text)
