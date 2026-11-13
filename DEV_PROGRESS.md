@@ -19,12 +19,15 @@ hq_commands.py is shared: streams add commands only through small, clearly delim
 ## Checkpoint (Nov 13, mid-shift)
 - `integration/sprint2` = sprint1 + stream/mission2 (A4 evidence check, A5 tolerant parse + one repair, A6 due dates + opt-in recurrence) + stream/venture2 (B5 deals, replies, CASL suppression, venture config, funnel) + stream/e1-design (E1_AGENT_ACTIONS.md). Both streams independently reviewed; blockers/majors fixed and re-tested (mission2 d09acec, venture2 fe3da74).
 - Gate: `scripts/gate.sh --strict` 7/7 on PG16 and PG17.11 (unit 449+, script tests, lint, bundle, replica incl. rollback drill, manifest, backup drill).
-- Pending: stream/hq-ui (C2 smoke tests, D1 Needs You inbox) not yet reported.
+- stream/hq-ui merged (C2 PWA smoke tests + RPC drift checker, D1 `needs_you()` inbox, `/needs`, brief line, PWA Inbox tab). Reviewed; 5 minors fixed (c0e58f4).
+- FINAL for the shift: `integration/sprint2` gate 9/9 on PG16 and PG17.11, 536 repo tests, 62 script tests, 27 JS tests.
+- Owner sign-off pending: open `app_needs_you()` to the signed-in owner (edits applied lockdown list + lint allowlist); exact steps in `ops/pending_signoff/inbox_open_app_needs_you.txt`. Until then the PWA Inbox shows a reduced fallback.
+- To verify in replica (sprint 3): one email send authorizes twice (Python hq_mail + outbox_send_policy trigger), each allow writes an action_log row and the daily limit counts them, so send_email/day is likely halved. Touches protected permission controls: owner decision.
 - Known limits: evidence check proves a cited source appears in mission output, not that it supports the claim; a lone decorated `## Verified - yes` line counts when it is the only label; suppression list has no unsuppress path (owner decision).
 - Refactor candidate (not started): REST helpers (_q/_get/_rpc/_patch) duplicated across up to 12 modules; extract hq_db.py after streams settle.
 
 ## Next task
-Collect stream/hq-ui report, independent review, merge into integration/sprint2, rerun gate on PG16 + PG17.11, open draft PR (REST API), write final workday report.
+Sprint 3 candidates: hq_db.py REST-helper consolidation; wire offer/CTA into the draft prompt (hq_engine); schedule weekly digest; fix double authorize (needs owner OK); E1a read-only tools (needs E1 design approval); real mission dry-run after owner authorization.
 
 ## Blockers / owner actions
 See SPRINT report; none new yet.
