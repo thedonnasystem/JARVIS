@@ -177,6 +177,7 @@ def main():
                 taken += 1; bad += (a != b)
         finally:
             stop.set(); th.join()
+        committed_2c = wrote["n"]   # the negative control below reuses the same writer/counter; capture this phase's count now
         ddl.cursor().execute("drop table public.drill_pair_a, public.drill_pair_b"); ddl.close()
         with psycopg2.connect(SRC) as sc, sc.cursor() as scur:
             scur.execute("select p.proname, p.provolatile, has_function_privilege('anon', p.oid, 'execute'), has_function_privilege('authenticated', p.oid, 'execute'), has_function_privilege('service_role', p.oid, 'execute') from pg_proc p where p.proname in ('backup_snapshot', 'backup_schema')")
@@ -200,7 +201,7 @@ def main():
             stop.set(); th.join()
         ddl2.cursor().execute("drop table public.drill_pair_a, public.drill_pair_b"); ddl2.close()
         check("2e negative control: two separate statements DO show cross-table skew under the same writer (so 2c can fail)", split_bad > 0, f"skewed reads seen: {split_bad}")
-        check("2c under concurrent two-table transactions, every snapshot is internally consistent", bad == 0 and wrote["n"] > 50, f"{taken} snapshots while {wrote['n']} paired transactions committed; inconsistent snapshots: {bad}")
+        check("2c under concurrent two-table transactions, every snapshot is internally consistent", bad == 0 and committed_2c > 50, f"{taken} snapshots while {committed_2c} paired transactions committed; inconsistent snapshots: {bad}")
         check("13 restored sequences continue after the data (next serial id does not collide) and view keeps security_invoker", nid > 25 and ("true",) in opts, f"next id {nid}, view options {opts}")
         # ---- negative controls: the checks must be able to fail
         bad = bytearray(enc); bad[len(bad) // 2] ^= 1

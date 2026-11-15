@@ -1,0 +1,59 @@
+# Backup activation runbook (minimal owner steps)
+
+Status Nov 14 2026: dormant by design. `/backup check` FAILs on the 3 variables below and is OK on the `backup_schema` database check. Validated in the sandbox (no secrets, no external hosts), NOT yet against a real destination or production data.
+Companion docs (longer, click-by-click for Backblaze): `BACKUP_SETUP_OWNER.md`, `BACKUP_PROOF_PROCEDURE.md`, `BACKUP_RECOVERY.md`. This page is the short path plus the end-to-end facts.
+
+## 1. How the flow works (verified in code and by drill)
+- **Trigger**: the Railway bot's engine tick calls `hq_backup.run()`. Automatic: once per ~20 h inside 02:00-05:00 Toronto; after a failure it waits 90 min and tries at most 3 times per night, and messages you ONCE per day. Manual: Telegram `/backup now` (owner only). `/backup` = status, `/backup check` = read-only config test (uploads nothing).
+- **What is exported**: every table in schema `public` (53 in production) EXCEPT `push_config` and `push_subscriptions` (private push keys), as JSON lines, plus `schema.json` from `public.backup_schema()` (tables, columns, constraints, indexes, triggers, function bodies, views, RLS policies, grants, sequences, enums, extensions) plus `manifest.json` (per-table row counts and sha256, `complete`, `consistent`). All tables and schema come from ONE SQL statement (`backup_snapshot()`), so they are mutually consistent. If the snapshot function is missing it falls back to a double read and says so in the manifest. If `backup_schema()` is missing the backup is data-only (`complete: False`) and cannot be fully restored: apply migration `20261113_backup_schema_v1.sql` first.
+- **Packaging and encryption**: gzip tar -> Fernet (AES-128-CBC + HMAC) with `BACKUP_KEY`. Before upload the bot decrypts its own file and re-checks every table against the manifest. Plain sidecar `<name>.sha256` is uploaded next to it (`sha256sum` format) so integrity can be checked without the key.
+- **Where it goes** (`BACKUP_PUT_URL`): `b2://<bucketId>/hq` (Backblaze native API, `BACKUP_AUTH` = `keyId:applicationKey`, B2 verifies SHA-1) OR any `https://.../{name}` that accepts a raw HTTP PUT of the file body (`{name}` mandatory; `BACKUP_AUTH` is sent VERBATIM as the `Authorization` header, so include the scheme word: `Basic ...` / `Bearer ...`). `http://` is refused. Redirects are not followed. Object names: `hq-<UTC timestamp>.tar.gz.enc` and `.enc.sha256`.
+- **Failure handling** (after this branch's fixes): generic PUT retries network errors, 408, 429, 5xx up to 3 times with backoff; 401/403/404/413 fail at once with a message naming what to check (never the URL or secret). Failure is written to `audit_log` (`backup_failed`) and you get one Telegram message per day; success writes `backup_ok` with file, bytes, sha256, rows. A half-uploaded pair (object stored, sidecar failed) is reported as failed and says so; the next run uses a new name.
+- **Restore path**: `ops/restore_local.sh` (Docker, throwaway Postgres on your computer; hidden prompts for key) or `ops/restore_backup.py --file <downloaded .enc> --expect-sha256 <hash from /backup>`. It verifies sidecar and expected hash, decrypts, rebuilds schema, loads rows, compares every row and the full schema, runs smoke tests, writes a report with no secrets. It refuses any target that is not a local scratch DB. B2 download is built in (`--b2-latest`, read-only key); for a generic destination, download the file by hand and use `--file`.
+- **NOT backed up**: `push_config`/`push_subscriptions`; Supabase platform state (auth users, storage objects, service keys, project secrets); anything outside schema `public`; cron jobs and future default privileges (recorded, not replayed); non-`postgres` owners and column ACLs (zero today); Railway variables and source code (GitHub has the code). Web push needs new keys after a disaster; Telegram is unaffected.
+- **Retention**: the bot never deletes anything. Retention is the destination's job: for B2 a lifecycle rule (suggested 90 days hide + 1 day delete; set in the console). Nothing set = kept forever (about 1 MB per backup: ~365 MB a year, inside any free tier). Caution: a lifecycle rule also deletes the newest copy if the bot silently stops, so look at `/backup` "Last good" weekly.
+- **A restore proof requires** (`BACKUP_PROOF_PROCEDURE.md`): a real `/backup now` from production; both objects visible at the destination with the same size; local restore exit 0 (or 4 with FK warnings understood) with the hash taken from `/backup`, not from the bucket; `complete: true`, consistency `single SQL statement snapshot`; row/md5 fingerprint of the restore diffed against `ops/table_fingerprint.sql` run on production (only constantly-changing tables may differ). It proves ONE backup restores; repeat monthly.
+
+## 2. Choose the destination ($0, no paid infrastructure)
+| Option | Works with today's code? | Cost | Verdict |
+|---|---|---|---|
+| **Backblaze B2** (native `b2://`) | Yes, fully built and drilled against a faithful fake; supports a write-only bot key and a separate read-only restore key; built-in restore download | Free 10 GB, per the existing setup doc no card needed (STOP if it asks for one). Needs one new account (email only) | **Recommended.** Only option where the bot's key cannot read or delete past backups, and off the Supabase project. |
+| Another WebDAV/PUT host with a free tier (e.g. Koofr, via `https://.../{name}`) | Yes in principle (raw PUT + `Authorization: Basic <base64 user:app-password>`); NOT tested against any real host; the folder must already exist; restore is a manual download + `--file` | Free tier, new account | Fallback only. The password you give the bot can usually also read/delete everything in that account. |
+| Google Drive (the connector you already use) | **No.** The connector belongs to Claude's session, not to the Railway bot. The bot would need its own Google OAuth token (expires hourly, needs refresh logic) and Drive's multipart/resumable POST upload, not a plain PUT. | $0 but needs new code + OAuth app | Not feasible without building a new uploader. |
+| Supabase Storage on the existing project | **No.** Storage creates objects with POST (PUT only replaces an existing object), so a new `{name}` returns 404. It also needs a bucket created (owner action) and the service key as auth. | $0 (1 GB free) | **Reject on principle too:** same project, same provider, same service key = one outage or one key leak takes the data and its backup together (the code's own docstring says to avoid this). |
+| GitHub private repo release / contents API | **No.** Release assets are POSTed to `uploads.github.com`; the contents API PUTs a JSON body with base64, not raw bytes. A token with repo write would also expose the code repo. | $0 | Not feasible without new code; poor security (token scope). |
+| Railway bucket | No (S3 signing, not PUT with a header) and usage-billed | Not free | Do not use. |
+
+Decision for you: **Backblaze B2.** Everything below assumes it. If you refuse any new account, tell Claude; the honest alternative is a small code change (new uploader), which is a separate build approval.
+
+## 3. Owner steps (about 20 minutes; click-by-click in `BACKUP_SETUP_OWNER.md` sections A and B)
+Secrets go ONLY into your password manager, Railway Variables, and the hidden prompts on your own computer. Never into chat, Telegram, email or any AI.
+1. Backblaze: create account (email only), enable B2, create a **Private** bucket, copy its Bucket ID (not secret), add the lifecycle rule (90 / 1).
+2. Create TWO bucket-scoped application keys: A `fendezy-bot-write` (Write Only; goes to Railway) and B `fendezy-restore-read` (Read Only; never leaves your computer). Do not use the master key. Save both pairs in the password manager when shown (shown once).
+3. Generate BACKUP_KEY on your computer: `python3 -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"` (or open `ops/generate_backup_key.html` locally). It prints 44 characters ending in `=`. Copy it straight into the password manager as "Fendezy BACKUP_KEY" and into a SECOND place (printed sheet in a safe). Clear the terminal afterwards. Do not paste it anywhere else. **If this key is lost every backup is permanently unreadable; there is no recovery. If you change the key later, keep the old one: old backups need the key they were made with.**
+4. Railway, Jarvis bot service, Variables tab. Exactly these names:
+   - `BACKUP_KEY` = the 44-character key
+   - `BACKUP_PUT_URL` = `b2://<Bucket ID>/hq`
+   - `BACKUP_AUTH` = `<keyId of key A>:<applicationKey of key A>` (one colon, no spaces/quotes)
+   Saving redeploys the bot; wait for "deployed". Do NOT add any `RESTORE_*` variable to Railway.
+5. Optional self-check without exposing values: `railway run ops/backup_activation_preflight.sh --network` (prints only PASS/WARN/FAIL lines).
+6. Separate approvals still required before it can actually run in production: merge/deploy of the branch containing `/backup` (PR #2 plus this branch's fixes) and applying migration `20261113_backup_schema_v1.sql` (read-only functions). Until then `/backup check` does not exist in production.
+
+## 4. Verify
+1. Telegram `/backup check`: every line OK (3 variables set, valid key, URL format, Backblaze accepts key, can write, limited to the bucket, no delete/read/admin powers, upload address issued, `backup_schema` installed). WARN on the key being too powerful or on `backup_schema`: fix, rerun. It does not test: bucket Private, lifecycle rule, key B, or your second key copy.
+2. `/backup now` then `/backup`: file name, size (hundreds of KB), rows, `complete: True`, sha256. Note the sha256.
+3. Backblaze console: both files under `hq/`, sizes match.
+4. Restore proof on your computer: `ops/restore_local.sh --b2-latest --expect-sha256 <hash from /backup>`; then fingerprint comparison. Show Claude only the two output files. Pass criteria: `BACKUP_PROOF_PROCEDURE.md` steps C-E.
+5. Calendar: weekly glance at `/backup` ("Last good" under 2 days), monthly restore drill.
+
+## 5. Rollback / disable
+- Stop backups instantly: delete `BACKUP_PUT_URL` (or `BACKUP_KEY`) in Railway; the bot goes back to "NOT configured" and does nothing. Existing backups are untouched.
+- Rotate a leaked bot key: revoke key A in Backblaze (backups can no longer be written, nothing readable is lost), create a new Write Only key, update `BACKUP_AUTH`. Rotating `BACKUP_KEY`: keep the old key forever for old files.
+- Undo the DB side: `ops/rollback_sprint12.sql` removes the backup functions (only if you also want the schema snapshot gone).
+- Remove everything: delete the bucket and keys in Backblaze after emptying the bucket.
+
+## 6. Sandbox validation evidence (this branch, Nov 14)
+- `bash scripts/backup_drill.sh`: 45/45 (real `run()` -> fake B2 -> restore tool -> scratch Postgres 16; 53 tables identical; negative controls).
+- `python3 scripts/backup_put_e2e.py`: 18/18 over a local HTTPS PUT server (throwaway cert, random key and token, never printed): ciphertext only at the target (no row values, no gzip magic), sidecar hash matches, restore into a second scratch DB row-for-row (65 tables, independent per-table hash identical), wrong key refused, bad auth/oversize/redirect/target-down/persistent 5xx fail clearly with nothing stored, transient 5xx retried, failures audited and owner alerted once, no secret in audit rows, messages or logs.
+- `python3 -m pytest test_hq_backup.py`: 61 pass.
+- Limits: fake servers only. Real Backblaze, real PostgREST output, production volumes and aarch64 are unproven until section 4 is done.

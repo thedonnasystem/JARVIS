@@ -562,6 +562,52 @@ class GenericPut(unittest.TestCase):
             self.assertFalse(B.upload("x", b"y"))
 
 
+class GenericPutRetry(unittest.TestCase):
+    def test_transient_5xx_and_network_errors_are_retried_then_succeed(self):
+        seq = iter([(503, b""), urllib.error.URLError("down"), (201, b"")])
+        def call(method, url, headers, body=None, timeout=120):
+            r = next(seq)
+            if isinstance(r, Exception): raise r
+            return r
+        with mock.patch.dict(os.environ, ENV), mock.patch.object(B, "_call", side_effect=call):
+            self.assertEqual(B.put_files({"a": b"x"})["files"]["a"]["bytes"], 1)
+
+    def test_final_errors_are_not_retried_and_name_what_to_check(self):
+        calls = []
+        def call(method, url, headers, body=None, timeout=120):
+            calls.append(1); return 401, b"secret-body"
+        with mock.patch.dict(os.environ, {**ENV, "BACKUP_AUTH": "tok-123"}), mock.patch.object(B, "_call", side_effect=call):
+            with self.assertRaises(B.BackupError) as cm: B.put_files({"a": b"x"})
+        self.assertEqual(len(calls), 1); self.assertIn("BACKUP_AUTH", str(cm.exception)); self.assertNotIn("tok-123", str(cm.exception)); self.assertNotIn("store.example.com", str(cm.exception))
+
+    def test_network_down_gives_bounded_retries_and_clear_message(self):
+        n = []
+        def call(*a, **k):
+            n.append(1); raise urllib.error.URLError("refused https://store.example.com/b/x?token=SECRET")
+        with mock.patch.dict(os.environ, ENV), mock.patch.object(B, "_call", side_effect=call):
+            with self.assertRaises(B.BackupError) as cm: B.put_files({"a": b"x"})
+        self.assertEqual(len(n), B.PUT_ATTEMPTS); self.assertIn("unreachable", str(cm.exception)); self.assertNotIn("SECRET", str(cm.exception))
+
+    def test_sidecar_failure_is_reported_as_partial(self):
+        def call(method, url, headers, body=None, timeout=120):
+            return (201, b"") if url.endswith("/f.enc") else (500, b"")
+        with mock.patch.dict(os.environ, ENV), mock.patch.object(B, "_call", side_effect=call):
+            with self.assertRaises(B.BackupError) as cm: B.put_files({"f.enc": b"x", "f.enc.sha256": b"y"})
+        self.assertIn("checksum file was not", str(cm.exception))
+
+    def test_invalid_key_message_is_clear_and_does_not_echo_the_value(self):
+        with mock.patch.dict(os.environ, {**ENV, "BACKUP_KEY": "super-secret-not-a-key"}):
+            with self.assertRaises(B.BackupError) as cm: B.encrypt(b"x")
+        self.assertIn("BACKUP_KEY", str(cm.exception)); self.assertNotIn("super-secret", str(cm.exception))
+
+    def test_owner_alert_uses_a_kind_the_table_allows(self):
+        store = FakeStore()
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=store), mock.patch.object(B, "put_files", side_effect=B.BackupError("x")):
+            B.run(force=True)
+        kinds = [b["kind"] for p, b in store.posts if p.endswith("/owner_messages")]
+        self.assertTrue(kinds); self.assertTrue(set(kinds) <= {"brief", "money", "health", "contract", "proposal", "emergency"})
+
+
 class Run(unittest.TestCase):
     def test_run_success_and_failure_paths(self):
         store = FakeStore()
