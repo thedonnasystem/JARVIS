@@ -62,7 +62,7 @@ if [ "$replica_ok" = 1 ]; then
   if want backup; then
     if [ -x scripts/backup_drill.sh ] && python3 -c "import cryptography, psycopg2" 2>/dev/null; then
       hostport="$(echo "$REPLICA_URL" | sed -E 's#^[a-z]+://[^@]*@([^/]*)/.*#\1#')"
-      run backup "backup + restore drill (scripts/backup_drill.sh; uses its own scratch DBs)" env PGHOST="${hostport%%:*}" PGPORT="$( [[ "$hostport" == *:* ]] && echo "${hostport##*:}" || echo 5432)" scripts/backup_drill.sh
+      run backup "backup + restore drill (scripts/backup_drill.sh; uses its own scratch DBs)" env -u REPLICA_URL -u RESTORE_URL PGHOST="${hostport%%:*}" PGPORT="$( [[ "$hostport" == *:* ]] && echo "${hostport##*:}" || echo 5432)" scripts/backup_drill.sh
     elif [ -x scripts/backup_drill.sh ]; then skip backup "scripts/backup_drill.sh present but cryptography/psycopg2 missing (pip install cryptography psycopg2-binary)"
     else skip backup "(optional) scripts/backup_drill.sh not present on this branch"; fi
   fi
