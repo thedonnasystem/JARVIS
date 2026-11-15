@@ -1,4 +1,5 @@
 import re
+import hashlib
 import io, json, logging, os, sys, tarfile, unittest, urllib.error
 from datetime import datetime, timezone
 from unittest import mock
@@ -141,6 +142,76 @@ class Dump(unittest.TestCase):
         with mock.patch("hq._request", side_effect=req):
             _, m = B.dump()
         self.assertEqual(m["tables"]["ideas"]["rows"], 3)
+
+
+class SuppressionSection(unittest.TestCase):
+    """The keyed-hash suppression list in the off-site file (consent integrity): hashes only, whitelisted fields, never fatal, always declared in the manifest."""
+    import hq_consent as _hc
+    MACS = [("email", "a" * 64), ("email", "b" * 64), ("phone", "c" * 64)]
+
+    def export(self, macs=None, **over):
+        macs = self.MACS if macs is None else macs
+        e = {"version": 1, "included": True, "key_check": "f" * 64, "macs": [list(m) for m in sorted(macs)], **self._hc.suppression_digest(macs)}
+        e.update(over); return e
+
+    def req(self, result=None, exc=None):
+        def f(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_suppression_export"):
+                if exc: raise exc
+                return result
+            return fake_request(method, path, body, prefer)
+        return f
+
+    def dump(self, **kw):
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(**kw)):
+            return B.dump()
+
+    def test_included_and_declared(self):
+        blob, m = self.dump(result=self.export())
+        tar = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz")
+        self.assertIn("suppression/hashes.json", tar.getnames())
+        raw = tar.extractfile("suppression/hashes.json").read()
+        self.assertEqual(m["suppression"]["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual((m["suppression"]["included"], m["suppression"]["count"], m["suppression"]["email_count"], m["suppression"]["phone_count"]), (True, 3, 2, 1))
+        self.assertEqual(json.loads(raw)["macs"], [["email", "a" * 64], ["email", "b" * 64], ["phone", "c" * 64]])
+
+    def test_extra_fields_cannot_ride_along(self):
+        blob, m = self.dump(result=self.export(note="alice@example.com", addresses=["alice@example.com"]))
+        raw = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").extractfile("suppression/hashes.json").read().decode()
+        self.assertNotIn("alice", raw); self.assertEqual(sorted(json.loads(raw)), ["count", "email_count", "hash", "included", "key_check", "macs", "phone_count", "version"])
+
+    def test_not_included_cases_never_fail_the_backup_and_say_why(self):
+        cases = [dict(result=None), dict(result={"version": 1, "included": False, "reason": "the owner has not set the suppression key"}),
+                 dict(exc=urllib.error.HTTPError("u", 404, "no fn", {}, None)), dict(exc=urllib.error.HTTPError("u", 500, "boom", {}, None)), dict(exc=OSError("net")),
+                 dict(result=self.export(count=99)), dict(result=self.export(macs=[], hash="0" * 64)), dict(result={**self.export(), "macs": [["email", "alice@example.com"]]})]
+        for kw in cases:
+            blob, m = self.dump(**kw)
+            self.assertFalse(m["suppression"]["included"], kw); self.assertTrue(m["suppression"]["reason"], kw)
+            self.assertNotIn("suppression/hashes.json", tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").getnames())
+            self.assertTrue(m["complete"])
+
+    def test_verify_checks_the_suppression_member(self):
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(result=self.export())):
+            blob, m = B.dump()
+            self.assertEqual(B.verify(B.encrypt(blob), m), [])
+            bad = json.loads(json.dumps(m)); bad["suppression"]["sha256"] = "0" * 64
+            self.assertTrue(any("suppression" in p for p in B.verify(B.encrypt(blob), bad)))
+
+    def test_no_plaintext_and_no_key_in_the_file(self):
+        blob, m = self.dump(result=self.export())
+        tar = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz")
+        everything = b"".join(tar.extractfile(n).read() for n in tar.getnames() if tar.getmember(n).isfile())
+        for needle in (b"@", b"suppression_hmac_key"):
+            self.assertNotIn(needle, everything)
+
+    def test_preflight_warns_without_the_list(self):
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(result={"version": 1, "included": False, "reason": "no key"})):
+            pf = B.preflight()
+        row = next(r for r in pf if r["check"].startswith("Suppression list exports"))
+        self.assertEqual(row["status"], "warn"); self.assertIn("NO checkpoint", row["detail"])
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(result=self.export())):
+            row = next(r for r in B.preflight() if r["check"].startswith("Suppression list exports"))
+        self.assertEqual(row["status"], "pass")
 
 
 class Consistency(unittest.TestCase):

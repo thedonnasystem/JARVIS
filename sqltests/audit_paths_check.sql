@@ -13,6 +13,11 @@
 begin;
 -- live Supabase grants USAGE on schema public to the API roles; a freshly created replica schema does not
 grant usage on schema public to anon, authenticated, service_role;
+-- fixture: the outreach gate (20261121_suppression_integrity_v1) is closed by default; the legacy outbox tests below approve and send drafts, so open it for them
+set local session_replication_role = replica;
+insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture' where id = 1;
+set local session_replication_role = origin;
 
 create or replace function pg_temp.refused(p_sql text) returns text language plpgsql as $f$
 begin execute p_sql; return null; exception when others then return sqlerrm; end $f$;

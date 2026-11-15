@@ -5,6 +5,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; root="$here/../.."
 : "${REPLICA_URL:?set REPLICA_URL to a scratch Postgres database}"
+cd "$root"   # sqltests use \copy with repo-relative paths (sqltests/data/...)
 psql_() { psql -q -v ON_ERROR_STOP=1 "$REPLICA_URL" "$@" 2>&1 | grep -v "NOTICE\|^DETAIL\|^drop cascades" || true; }
 psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -c "drop schema if exists public cascade; create schema public; drop schema if exists auth cascade; drop schema if exists cron cascade;" >/dev/null 2>&1
 psql "$REPLICA_URL" -q -c "do \$\$ begin create role authenticated nologin; exception when duplicate_object then null; end \$\$; do \$\$ begin create role service_role nologin; exception when duplicate_object then null; end \$\$; do \$\$ begin create role anon nologin; exception when duplicate_object then null; end \$\$;" >/dev/null
@@ -31,6 +32,19 @@ for f in "$root"/sqltests/*.sql; do   # SQL-level checks (grants, behaviour) run
   echo "sqltest: $(basename "$f")"
   psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$f" >/dev/null 2>"${TMPDIR:-/tmp}/sqltest.err" || { cat "${TMPDIR:-/tmp}/sqltest.err"; echo "SQLTEST FAILED: $f"; exit 1; }
 done
+echo "consent-integrity rollback drill: ops/rollback_consent_integrity.sql removes the evidence/suppression/gate objects, restores the previous functions, and the migrations re-apply"
+psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/ops/rollback_consent_integrity.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "CONSENT ROLLBACK FAILED to run"; exit 1; }
+psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/ops/rollback_consent_integrity.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "CONSENT ROLLBACK is not idempotent"; exit 1; }
+left="$(psql "$REPLICA_URL" -At -c "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname in ('ffm_hmac_sha256','normalize_phone','ffm_set_key','ffm_ingest_capture','ffm_register_capture_owner','ffm_outreach_gate_open','ffm_verify_suppression','backup_suppression_export','ffm_is_phone_suppressed','ffm_suppression_mac','ffm_close_outreach_gate')")"
+tabs="$(psql "$REPLICA_URL" -At -c "select count(*) from pg_class where relnamespace='public'::regnamespace and relname in ('ffm_secrets','ffm_consent_captures','ffm_consent_wordings','ffm_phone_suppressions','ffm_suppression_hashes','ffm_suppression_expected','ffm_outreach_gate')")"
+[ "$left" = "0" ] && [ "$tabs" = "0" ] || { echo "CONSENT ROLLBACK left $left functions and $tabs tables behind"; exit 1; }
+old="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where proname='ffm_can_contact' and pronamespace='public'::regnamespace and pg_get_functiondef(oid) like '%ffm_contact_status%'), (select count(*) from pg_proc where proname='ffm_contact_status' and pronamespace='public'::regnamespace and pg_get_functiondef(oid) not like '%ffm_outreach_gate_open%'), (select count(*) from pg_proc where proname='outbox_dnc_guard' and pg_get_functiondef(oid) not like '%ffm_outreach_gate_open%'), (select count(*) from pg_proc where proname='is_suppressed' and pg_get_functiondef(oid) not like '%ffm_suppression_hashes%')")"
+[ "$old" = "1|1|1|1" ] || { echo "CONSENT ROLLBACK did not restore the previous function definitions: $old"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the consent-integrity rollback: $f"; exit 1; }
+done
+psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/consent_integrity_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "consent_integrity_check failed after rollback + re-apply"; exit 1; }
+echo "consent-integrity rollback drill OK (previous behaviour restored, then migrations re-apply and the consent checks pass again)"
 echo "sprint rollback drill: ops/rollback_sprint12.sql removes only the Sprint 1-2 objects and leaves Phase 1 and the suppression list in place"
 psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/ops/rollback_sprint12.sql" >/dev/null 2>&1 || { echo "SPRINT ROLLBACK FAILED to run"; exit 1; }
 psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/ops/rollback_sprint12.sql" >/dev/null 2>&1 || { echo "SPRINT ROLLBACK is not idempotent"; exit 1; }

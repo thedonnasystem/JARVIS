@@ -3,6 +3,11 @@
 -- existing guarantees (caps, kill switch, dry-run, approvals, suppression, daily limits) still hold afterwards.
 -- The "BEFORE" lines record today's behaviour as NOTICEs (they ARE the findings, so they never fail); every "AFTER" line is an assertion.
 begin;
+-- fixture: the outreach gate is closed by default (20261121_suppression_integrity_v1); this test approves drafts, so open it for the transaction
+set local session_replication_role = replica;
+insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture' where id = 1;
+set local session_replication_role = origin;
 
 create or replace function pg_temp.refused(p_sql text) returns text language plpgsql as $f$
 begin execute p_sql; return null; exception when others then return sqlerrm; end $f$;

@@ -20,6 +20,9 @@ What it checks, in order (any failure => non-zero exit, and the report says whic
   6 the restored database describes itself (public.backup_schema()) exactly as the backup said: functions (body hash + who may run them), triggers,
     indexes, constraints, views, policies, grants
   7 smoke tests that exercise restored functions (spend gateway refuses when the kill switch is on; capital_mode() runs)
+  8 SUPPRESSION: the keyed-hash suppression list in the file is checked (sha256, count, digest recomputed here), staged in the restored database as the EXPECTED CHECKPOINT,
+    and the outreach gate is set to 'unverified' (default-deny). The restored database must refuse all outreach (ffm_outreach_gate_open() = false) or the restore FAILS.
+    Nothing is verified automatically: the owner re-supplies the suppression key, imports/restores the list and runs the owner-only verification (printed at the end).
 Limits are printed in the report ("not_restored"): cron jobs, default privileges for FUTURE objects, extensions the scratch server lacks, anything outside public."""
 import argparse, base64, collections, datetime as dt, hashlib, io, json, os, re, sys, tarfile, urllib.error, urllib.parse, urllib.request
 from decimal import Decimal
@@ -164,7 +167,7 @@ def fetch(args) -> tuple[bytes, str | None, str]:
 
 # ------------------------------------------------------------------ verify the file
 
-def open_archive(enc: bytes, sidecar: str | None, name: str, expect: str | None, rep: dict) -> tuple[dict, dict, dict]:
+def open_archive(enc: bytes, sidecar: str | None, name: str, expect: str | None, rep: dict) -> tuple[dict, dict, dict, dict | None]:
     from cryptography.fernet import Fernet, InvalidToken
     sha = hashlib.sha256(enc).hexdigest()
     rep["file"] = {"name": name, "bytes": len(enc), "sha256": sha}
@@ -208,6 +211,20 @@ def open_archive(enc: bytes, sidecar: str | None, name: str, expect: str | None,
             bad.append("schema.json: content differs from manifest")
         else:
             schema = json.loads(raw)
+    sup, sup_info = None, manifest.get("suppression") or {"included": False, "reason": "this backup predates the suppression export"}
+    if sup_info.get("included"):
+        raw = members.get("suppression/hashes.json")
+        if raw is None or hashlib.sha256(raw).hexdigest() != sup_info.get("sha256"):
+            bad.append("suppression/hashes.json: missing or content differs from manifest")
+        else:
+            sup = json.loads(raw)
+            probs = check_suppression_payload(sup)
+            if probs or any(sup.get(k) != sup_info.get(k) for k in ("count", "hash", "key_check")):
+                bad.append("suppression list is inconsistent: " + ("; ".join(probs) if probs else "it differs from the manifest summary"))
+                sup = None
+    elif "suppression/hashes.json" in members:
+        bad.append("suppression/hashes.json present but not declared in the manifest")
+    rep["suppression_in_backup"] = {k: sup_info.get(k) for k in ("included", "count", "email_count", "phone_count", "hash", "key_check", "reason") if k in sup_info}
     extra = sorted(n for n in members if n.startswith("data/") and n[5:-6] not in manifest["tables"])
     rep["archive"] = {"format": 2, "created_utc": manifest["created_utc"], "engine_build": manifest.get("engine_build"), "complete": manifest["complete"],
                       "tables": len(manifest["tables"]), "total_rows": manifest["total_rows"], "problems": bad, "unlisted_data_files": extra,
@@ -216,7 +233,78 @@ def open_archive(enc: bytes, sidecar: str | None, name: str, expect: str | None,
     if bad:
         raise Fail("archive integrity: " + "; ".join(bad[:5]))
     data = {t: [json.loads(ln) for ln in members[f"data/{t}.jsonl"].decode().split("\n") if ln.strip()] for t in manifest["tables"]}
-    return manifest, schema, data
+    return manifest, schema, data, sup
+
+
+# ------------------------------------------------------------------ suppression checkpoint and the outreach gate
+
+def check_suppression_payload(sup) -> list:
+    """Independent re-check of the keyed-hash list in the file (this tool does not import the bot's code). [] = well-formed and self-consistent."""
+    if not isinstance(sup, dict) or sup.get("version") != 1 or sup.get("included") is not True or not isinstance(sup.get("macs"), list):
+        return ["not a version 1 suppression list"]
+    seen = []
+    for e in sup["macs"]:
+        if not (isinstance(e, list) and len(e) == 2 and e[0] in ("email", "phone") and isinstance(e[1], str) and re.fullmatch(r"[0-9a-f]{64}", e[1])):
+            return ["malformed entry"]
+        seen.append(f"{e[0]}:{e[1]}")
+    probs = []
+    if len(set(seen)) != len(seen):
+        probs.append("duplicate entries")
+    lines = sorted(set(seen))
+    if sup.get("count") != len(lines):
+        probs.append("count does not match the list")
+    if sup.get("hash") != hashlib.sha256("\n".join(lines).encode()).hexdigest():
+        probs.append("hash does not match the list")
+    if not (isinstance(sup.get("key_check"), str) and re.fullmatch(r"[0-9a-f]{64}", sup["key_check"])):
+        probs.append("key_check missing")
+    return probs
+
+
+GATE_STEPS = [
+    "1. Do NOT send, schedule or approve any outreach from this database. The outreach gate is CLOSED and ffm_can_contact() returns false for everyone.",
+    "2. Owner only (from the SQL editor, with the owner session, see ops/OWNER_CONSENT_INTEGRITY.sql): set the SAME suppression key you stored offline: ffm_set_key('suppression_hmac_key', ...). It was never in this backup.",
+    "3. Re-establish the suppression list, best source first: (a) the database PROVIDER backup (restore contact_suppressions / ffm_phone_suppressions rows into this database), or (b) this file's keyed hashes: select ffm_import_suppression_hashes() (hash-only entries are honoured by is_suppressed / ffm_can_contact).",
+    "4. Owner only: select ffm_verify_suppression('owner'). It opens the gate ONLY if every entry of the staged checkpoint is present in the live list. 'incomplete', 'key differs' or 'altered after staging' mean: keep the gate closed and use the provider backup.",
+    "5. If the backup has NO checkpoint, or verification keeps failing: outreach stays blocked. Rebuild the list from the provider backup or from the unsubscribe/reply history, stage a checkpoint you trust (ffm_stage_suppression_checkpoint), then verify.",
+]
+
+
+def apply_gate(cur, rep: dict, sup: dict | None) -> bool:
+    """Put the RESTORED database into 'suppression unverified': default-deny until the owner verifies. Runs as the restoring superuser (this is the one place that may write the
+    gate directly: it only ever CLOSES it). Returns False when the restored database would still allow outreach (the restore then FAILS)."""
+    g = {"state": None, "open": None, "checkpoint_staged": False}
+    cur.execute("select to_regclass('public.ffm_outreach_gate') is not null and to_regclass('public.ffm_suppression_expected') is not null")
+    if not cur.fetchone()[0]:
+        g.update(state="NOT PRESENT", note="this backup's schema has no outreach gate (it predates migration 20261121_suppression_integrity_v1). Apply that migration BEFORE any outreach; until then nothing here is gated.")
+        rep["outreach_gate"] = g
+        rep["next_steps"] = ["APPLY migrations 20261121_consent_evidence_v1 and 20261121_suppression_integrity_v1 to this database, then follow the steps below."] + GATE_STEPS
+        return True
+    cur.execute("delete from public.ffm_suppression_expected")
+    reason = "restored from backup: suppression list NOT verified (default-deny until the owner verifies)"
+    if sup:
+        for i in range(0, len(sup["macs"]), 500):
+            cur.executemany("insert into public.ffm_suppression_expected (kind, mac) values (%s, %s)", [(k, m) for k, m in sup["macs"][i:i + 500]])
+        cur.execute("""insert into public.ffm_outreach_gate (id, state, reason, expected_count, expected_hash, expected_key_check, expected_staged_at)
+                       values (1, 'unverified', %s, %s, %s, %s, clock_timestamp())
+                       on conflict (id) do update set state = 'unverified', reason = excluded.reason, expected_count = excluded.expected_count, expected_hash = excluded.expected_hash,
+                         expected_key_check = excluded.expected_key_check, expected_staged_at = excluded.expected_staged_at, verified_raw_count = null, verified_at = null, verified_by = null, updated_at = clock_timestamp()""",
+                    (reason + "; checkpoint from the backup staged", sup["count"], sup["hash"], sup["key_check"]))
+        g["checkpoint_staged"] = True
+        g["checkpoint"] = {"count": sup["count"], "email_count": sup.get("email_count"), "phone_count": sup.get("phone_count"), "hash": sup["hash"]}
+    else:
+        cur.execute("""insert into public.ffm_outreach_gate (id, state, reason) values (1, 'unverified', %s)
+                       on conflict (id) do update set state = 'unverified', reason = excluded.reason, expected_count = null, expected_hash = null, expected_key_check = null,
+                         expected_staged_at = null, verified_raw_count = null, verified_at = null, verified_by = null, updated_at = clock_timestamp()""",
+                    (reason + "; the backup carries NO suppression checkpoint",))
+        g["note"] = "no checkpoint in this backup (the owner had not set the suppression key, or the backup predates the export): verification is impossible from this file"
+    cur.execute("select public.ffm_outreach_gate_open()")
+    g["open"] = bool(cur.fetchone()[0])
+    cur.execute("select state from public.ffm_outreach_gate where id = 1")
+    g["state"] = cur.fetchone()[0]
+    cur.execute("select count(*) from public.contact_suppressions"); g["plaintext_email_suppressions_restored"] = cur.fetchone()[0]
+    rep["outreach_gate"] = g
+    rep["next_steps"] = GATE_STEPS
+    return g["open"] is False and g["state"] == "unverified"
 
 
 # ------------------------------------------------------------------ rebuild
@@ -615,7 +703,7 @@ def main():
     code = 0
     try:
         enc, side, name = fetch(args)
-        manifest, schema, data = open_archive(enc, side, name, args.expect_sha256, rep)
+        manifest, schema, data, sup = open_archive(enc, side, name, args.expect_sha256, rep)
         rep["steps"]["file_checksum_decrypt_manifest"] = "PASS"
         if args.verify_only:
             pass
@@ -644,7 +732,9 @@ def main():
             rep["steps"]["constraints_indexes_triggers_views_policies_grants"] = "PASS" if not rep["views_failed"] else "FAIL"
             rep.setdefault("not_restored", {}).update(dict(skipped))
             conn.commit()
-            checks = [("every_row_identical", verify_rows(cur, data, rep)), ("schema_identical", verify_schema(cur, schema, rep)), ("smoke_tests", smoke(cur, rep))]
+            gate_ok = apply_gate(cur, rep, sup); conn.commit()        # the gate is part of the restored state: it PERSISTS (closed), unlike the smoke tests
+            checks = [("every_row_identical", verify_rows(cur, data, rep)), ("schema_identical", verify_schema(cur, schema, rep)), ("smoke_tests", smoke(cur, rep)),
+                      ("outreach_gate_closed_default_deny", gate_ok)]
             conn.rollback()      # smoke tests changed nothing that persists
             for k, v in checks:
                 rep["steps"][k] = "PASS" if v else "FAIL"
@@ -660,6 +750,10 @@ def main():
         rep["error"] = str(e); code = 2
     except Exception as e:                      # never print connection strings or keys
         rep["error"] = f"{type(e).__name__}: {str(e).splitlines()[0][:160] if str(e) else ''}"; code = 3
+    if rep.get("outreach_gate") is not None:
+        print("\nSUPPRESSION UNVERIFIED - outreach stays blocked until the owner verifies:", file=sys.stderr)
+        for line in rep.get("next_steps", []):
+            print("  " + line, file=sys.stderr)
     rep["result"] = "PASS" if code == 0 else ("PASS_WITH_WARNINGS" if code == 4 else "FAIL")
     text = json.dumps(rep, indent=2, default=str)
     if args.report:

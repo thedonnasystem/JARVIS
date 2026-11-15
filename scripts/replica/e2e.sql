@@ -112,6 +112,11 @@ do $$ declare w jsonb; i int; begin
 end $$;
 select 'finance_rules_ok';
 
+-- fixture: the outreach gate (20261121_suppression_integrity_v1) is closed by default; the legacy outbox tests below approve and send drafts, so open it for them
+set session_replication_role = replica;
+insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture' where id = 1;
+set session_replication_role = origin;
 -- autonomy_v1
 do $$ declare r jsonb; begin
   insert into public.outbox (channel, to_ref, body, status, decided_at) select 'email', 'x'||g||'@e.com', 'b', case when g <= 3 then 'rejected' else 'approved' end, now() from generate_series(1, 25) g;
@@ -459,4 +464,9 @@ begin
 end $$;
 select 'credit_probe_exemption_ok';
 
-
+-- close the fixture gate again: a database that finished the e2e run must be default-deny
+set session_replication_role = replica;
+delete from public.ffm_secrets where name = 'suppression_hmac_key' and set_by = 'fixture';
+update public.ffm_outreach_gate set state = 'unverified', verified_raw_count = null, reason = 'fresh database: the suppression list has not been verified' where id = 1;
+set session_replication_role = origin;
+select 'outreach_gate_default_closed_after_e2e', not public.ffm_outreach_gate_open();
