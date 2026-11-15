@@ -46,7 +46,7 @@ begin
     if not has_function_privilege('service_role', f, 'execute') then raise exception 'F6 service_role cannot execute %', f; end if;
   end loop;
   select count(*) into n from pg_proc where pronamespace = 'public'::regnamespace and proname like 'ffm\_%';
-  if n <> 21 then raise exception 'F6b expected 21 ffm functions, found %', n; end if;
+  if n <> 28 then raise exception 'F6b expected 28 ffm functions (21 onboarding + 7 consent), found %', n; end if;
 
   -- two clients
   insert into public.client_workspaces (slug, name, vertical) values ('f-mortgage', 'Test Mortgage Broker', 'mortgage') returning id into a;
@@ -158,6 +158,9 @@ begin
   -- routing: default deny, allow-list only, never free text, approved-only, same workspace, dry run
   lead_a := public.ws_add_lead(a, ca, 'Pat Example', 'pat@example.com', '613-555-0142', 'web form', 'wants a callback about renewal');
   lead_b := public.ws_add_lead(b, cb, 'Sam Other', 'sam@example.com', null, 'referral');
+  -- (20261119) routing preview now needs current consent: record an express consent for both test leads so this section keeps testing routing, not consent
+  perform public.ffm_record_consent(a, lead_a, 'email', 'express', 'v1', 'web form', now(), 'form-001', 'test');
+  perform public.ffm_record_consent(b, lead_b, 'email', 'express', 'v1', 'web form', now(), 'form-002', 'test');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_routing_rule(%L, 'bad', 'email', 'x@example.com', array['name','note'])$q$, a), '%violates check%');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_routing_rule(%L, 'bad', 'email', 'x@example.com', array['name','sin'])$q$, a), '%violates check%');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_routing_rule(%L, 'bad', 'email', 'bank statement inbox', array['name'])$q$, a), 'Sensitive data refused%');
