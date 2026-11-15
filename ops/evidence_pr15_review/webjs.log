@@ -1,0 +1,172 @@
+TAP version 13
+# Subtest: app boots: login hidden, app shown, one button per tab, status pill
+ok 1 - app boots: login hidden, app shown, one button per tab, status pill
+  ---
+  duration_ms: 130.487487
+  type: 'test'
+  ...
+# Subtest: no session: the login form shows and nothing from the database is requested
+ok 2 - no session: the login form shows and nothing from the database is requested
+  ---
+  duration_ms: 73.971661
+  type: 'test'
+  ...
+# Subtest: a signed-in stranger is refused with a visible message and signed out
+ok 3 - a signed-in stranger is refused with a visible message and signed out
+  ---
+  duration_ms: 50.903862
+  type: 'test'
+  ...
+# Subtest: tab "chat" renders from fixture data and is the only visible view
+ok 4 - tab "chat" renders from fixture data and is the only visible view
+  ---
+  duration_ms: 93.392959
+  type: 'test'
+  ...
+# Subtest: tab "inbox" renders from fixture data and is the only visible view
+ok 5 - tab "inbox" renders from fixture data and is the only visible view
+  ---
+  duration_ms: 105.781535
+  type: 'test'
+  ...
+# Subtest: tab "home" renders from fixture data and is the only visible view
+ok 6 - tab "home" renders from fixture data and is the only visible view
+  ---
+  duration_ms: 126.98739
+  type: 'test'
+  ...
+# Subtest: tab "missions" renders from fixture data and is the only visible view
+ok 7 - tab "missions" renders from fixture data and is the only visible view
+  ---
+  duration_ms: 99.703152
+  type: 'test'
+  ...
+# Subtest: tab "agents" renders from fixture data and is the only visible view
+ok 8 - tab "agents" renders from fixture data and is the only visible view
+  ---
+  duration_ms: 115.819294
+  type: 'test'
+  ...
+# Subtest: tab "money" renders from fixture data and is the only visible view
+ok 9 - tab "money" renders from fixture data and is the only visible view
+  ---
+  duration_ms: 106.740981
+  type: 'test'
+  ...
+# Subtest: tab "feed" renders from fixture data and is the only visible view
+ok 10 - tab "feed" renders from fixture data and is the only visible view
+  ---
+  duration_ms: 87.439797
+  type: 'test'
+  ...
+# Subtest: every tab still draws with an empty database (new install)
+ok 11 - every tab still draws with an empty database (new install)
+  ---
+  duration_ms: 419.788932
+  type: 'test'
+  ...
+# Subtest: inbox Approve / Reject use app_send kind "decision" with {msg_id, approved}
+ok 12 - inbox Approve / Reject use app_send kind "decision" with {msg_id, approved}
+  ---
+  duration_ms: 179.522558
+  type: 'test'
+  ...
+# Subtest: inbox answer options use kind "answer" with {msg_id, idx}
+ok 13 - inbox answer options use kind "answer" with {msg_id, idx}
+  ---
+  duration_ms: 136.6414
+  type: 'test'
+  ...
+# Subtest: inbox mission Resume uses kind "mission"; Abandon asks first and sends nothing when declined
+ok 14 - inbox mission Resume uses kind "mission"; Abandon asks first and sends nothing when declined
+  ---
+  duration_ms: 209.475689
+  type: 'test'
+  ...
+# Subtest: home "Needs you" Approve / Reject (existing path) still sends the same decision rows
+ok 15 - home "Needs you" Approve / Reject (existing path) still sends the same decision rows
+  ---
+  duration_ms: 177.026877
+  type: 'test'
+  ...
+# Subtest: inbox can only trigger decision / answer / mission: any other action kind from the server renders no button
+ok 16 - inbox can only trigger decision / answer / mission: any other action kind from the server renders no button
+  ---
+  duration_ms: 85.339328
+  type: 'test'
+  ...
+# Subtest: items with no tap action show the Telegram command instead
+ok 17 - items with no tap action show the Telegram command instead
+  ---
+  duration_ms: 88.106329
+  type: 'test'
+  ...
+# Subtest: tab label carries the inbox count
+ok 18 - tab label carries the inbox count
+  ---
+  duration_ms: 49.028526
+  type: 'test'
+  ...
+# Subtest: fallback: while app_needs_you is closed to the owner, the inbox still shows approvals, questions and blocked missions from app_snapshot
+ok 19 - fallback: while app_needs_you is closed to the owner, the inbox still shows approvals, questions and blocked missions from app_snapshot
+  ---
+  duration_ms: 256.558764
+  type: 'test'
+  ...
+# Subtest: a denied app_needs_you is remembered: no failing request every refresh; retried when the Inbox tab is opened; network errors are not remembered
+ok 20 - a denied app_needs_you is remembered: no failing request every refresh; retried when the Inbox tab is opened; network errors are not remembered
+  ---
+  duration_ms: 373.66008
+  type: 'test'
+  ...
+# Subtest: a failed refresh shows a banner and keeps the last screen
+ok 21 - a failed refresh shows a banner and keeps the last screen
+  ---
+  duration_ms: 170.502143
+  type: 'test'
+  ...
+# Subtest: a malformed snapshot shows an error on the page and in the banner instead of a blank tab
+ok 22 - a malformed snapshot shows an error on the page and in the banner instead of a blank tab
+  ---
+  duration_ms: 135.144506
+  type: 'test'
+  ...
+# Subtest: a failed send shows the reason in the banner
+ok 23 - a failed send shows the reason in the banner
+  ---
+  duration_ms: 124.844612
+  type: 'test'
+  ...
+# Subtest: every database function the running app calls is open to the owner (lockdown list) or knowingly pending sign-off
+ok 24 - every database function the running app calls is open to the owner (lockdown list) or knowingly pending sign-off
+  ---
+  duration_ms: 468.890046
+  type: 'test'
+  ...
+# Subtest: the app never uses innerHTML and its CSP allows exactly its own Supabase project
+ok 25 - the app never uses innerHTML and its CSP allows exactly its own Supabase project
+  ---
+  duration_ms: 0.656953
+  type: 'test'
+  ...
+# Subtest: service worker install caches every shipped asset and every asset exists
+ok 26 - service worker install caches every shipped asset and every asset exists
+  ---
+  duration_ms: 1.654388
+  type: 'test'
+  ...
+# Subtest: service worker serves from cache when offline, ignores writes and other origins, drops old caches
+ok 27 - service worker serves from cache when offline, ignores writes and other origins, drops old caches
+  ---
+  duration_ms: 1.2171
+  type: 'test'
+  ...
+1..27
+# tests 27
+# suites 0
+# pass 27
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4248.597053
