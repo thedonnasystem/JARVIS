@@ -161,6 +161,18 @@ async def hq_resume(update, context) -> None:
     await _set_kill(update, False)
 
 
+LEDGER_CATEGORIES = {"ads", "advertising", "tools", "software", "hosting", "travel", "meals", "fees", "fee", "refund", "deposit", "payout", "commission", "tax", "taxes",
+                     "subscription", "insurance", "supplies", "equipment", "phone", "internet", "salary", "bonus", "rent", "interest", "transfer", "other"}
+
+
+def ledger_note(text: str) -> str | None:
+    """The ledger note is exported off-site, so it never carries typed text (a memo can name a person or company). Only a known category word is kept: 'commission', 'hosting'..."""
+    for w in re.findall(r"[a-z]+", (text or "").lower()):
+        if w in LEDGER_CATEGORIES:
+            return w
+    return None
+
+
 async def hq_money(update, context) -> None:
     if not _owner(update):
         return
@@ -177,12 +189,13 @@ async def hq_money(update, context) -> None:
     if err and not company:
         await update.message.reply_text(err + " Use a venture name, or the word 'company' for a company-wide entry.")
         return
-    note = " ".join(args[3:] if (vid or company) else args[2:])[:300]
+    note = ledger_note(" ".join(args[3:] if (vid or company) else args[2:]))
     kind = "revenue" if args[0].lower() == "in" else "expense"
     hq._request("POST", "/rest/v1/ledger", {"venture_id": vid, "kind": kind, "amount_cents": cents, "currency": "CAD",
                                             "status": "received", "note": note or None,
                                             "occurred_on": datetime.now().date().isoformat()}, prefer="return=minimal")
-    await update.message.reply_text(f"Logged {kind}: ${cents/100:,.2f} CAD{(' to ' + vslug) if vslug else ''}.")
+    await update.message.reply_text(f"Logged {kind}: ${cents/100:,.2f} CAD{(' to ' + vslug) if vslug else ''}"
+                                    + (f" ({note})." if note else ". Free-text memos are not stored in the ledger (they could name a client): add a category word such as ads, tools, hosting, travel, fees, refund, payout, commission, tax."))
 
 
 async def hq_ask(update, context) -> None:
@@ -395,8 +408,7 @@ async def hq_day(update, context) -> None:
 
 
 def log_paid(who: str = "") -> str:
-    """A deal paid out after install: counts toward the weekly target and logs revenue. Shared by /paid and the app."""
-    who = (who or "")[:120]
+    """A deal paid out after install: counts toward the weekly target and logs revenue. Shared by /paid and the app. `who` is accepted for the commands' sake but is NOT stored (the ledger is exported)."""
     t = (_get("dayjob_targets?id=eq.1&select=payout_cents_per_deal") or [{}])[0]
     cents = int(t.get("payout_cents_per_deal") or 100000)
     today = _toronto_today().isoformat()
@@ -407,7 +419,7 @@ def log_paid(who: str = "") -> str:
                 prefer="resolution=merge-duplicates,return=minimal")
     vid, _ = _venture_id("dayjob")
     hq._request("POST", "/rest/v1/ledger", {"venture_id": vid, "kind": "revenue", "amount_cents": cents, "currency": "CAD",
-                                            "status": "received", "note": f"Paid deal {who}".strip(),
+                                            "status": "received", "note": f"Paid deal {int(row.get('paid_deals') or 0) + 1} of {today}",   # a count, never the name the owner typed (it is exported off-site)
                                             "occurred_on": today}, prefer="return=minimal")
     week = hq._request("POST", "/rest/v1/rpc/dayjob_week_text", {}) or ""
     return f"Paid deal logged (+${cents/100:,.0f}).\n{week}"

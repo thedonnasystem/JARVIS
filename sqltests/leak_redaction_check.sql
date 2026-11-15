@@ -248,10 +248,10 @@ begin
   -- every column that is not on the spec is untouched in every exported table (cheap structural check on the tables this test touched)
   if exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'ventures') x where x ->> 'slug' = 'zz-visible-leak' and x ->> 'name' <> 'ZZVISIBLELEAK venture') then raise exception 'D8 unlisted table altered'; end if;
   -- the spec is the reviewed one
-  if (select count(*) from public.backup_redaction_spec() where mode = 'strict') <> 5 or not exists (select 1 from public.backup_redaction_spec() where (table_name, column_name) in (('audit_log', 'detail'), ('ledger', 'note'), ('tasks', 'result'), ('agent_runs', 'summary'))) then raise exception 'D9 spec lost a leak path'; end if;
+  if (select count(*) from public.backup_redaction_spec() where mode = 'strict') < 5 or (select count(*) from public.backup_redaction_spec() where mode = 'strict' and (table_name, column_name) in (('audit_log', 'detail'), ('ledger', 'note'), ('tasks', 'result'), ('agent_runs', 'summary'), ('escalations', 'summary'))) <> 5 or not exists (select 1 from public.backup_redaction_spec() where (table_name, column_name) in (('audit_log', 'detail'), ('ledger', 'note'), ('tasks', 'result'), ('agent_runs', 'summary'))) then raise exception 'D9 spec lost a leak path'; end if;
 
   -- ============================================================ E. shape, grants
-  if snap -> 'redaction' ->> 'version' <> '1' or (snap -> 'redaction' ->> 'known_client_terms')::int < 6 or (snap -> 'redaction')::text ilike '%tremblay%' or (snap -> 'redaction')::text ilike '%name_re%' then raise exception 'E1 redaction block wrong/leaky: %', snap -> 'redaction'; end if;
+  if snap -> 'redaction' ->> 'version' <> '2' or (snap -> 'redaction' ->> 'known_client_terms')::int < 6 or (snap -> 'redaction')::text ilike '%tremblay%' or (snap -> 'redaction')::text ilike '%name_re%' then raise exception 'E1 redaction block wrong/leaky: %', snap -> 'redaction'; end if;
   if snap -> 'policy' <> public.backup_export_policy() or jsonb_typeof(snap -> 'schema') <> 'object' or snap ->> 'method' <> 'single statement snapshot' then raise exception 'E2 snapshot lost policy/schema/method'; end if;
   foreach f in array array['public.backup_fold_text(text)', 'public.backup_unescape_text(text)', 'public.backup_redaction_context()', 'public.backup_redact_patterns(text,jsonb)', 'public.backup_probe_encoded(text,jsonb,integer)',
                            'public.backup_redact_text(text,jsonb,integer,text)', 'public.backup_redact_json(jsonb,jsonb,integer,text)', 'public.backup_redaction_spec()', 'public.backup_redact_row(text,jsonb,jsonb)', 'public.backup_snapshot(text[])',
@@ -266,11 +266,111 @@ begin
   end loop;
   if (select provolatile from pg_proc where oid = 'public.backup_snapshot(text[])'::regprocedure) <> 's' then raise exception 'E5 backup_snapshot must stay STABLE'; end if;
   j := public.backup_redaction_status();
-  if not ((j ->> 'snapshot_redacts')::boolean and (j ->> 'sources_fixed')::boolean and (j ->> 'redactor_installed')::boolean and (j ->> 'agent_runs_trigger')::boolean) then raise exception 'E6 status: %', j; end if;
+  if not ((j ->> 'snapshot_redacts')::boolean and (j ->> 'sources_fixed')::boolean and (j ->> 'redactor_installed')::boolean and (j ->> 'agent_runs_trigger')::boolean and (j ->> 'denylist')::boolean) then raise exception 'E6 status: %', j; end if;
   -- the old unchecked behaviours are really gone: a repeat of the original leak scenario, end to end, leaves nothing
   perform public.record_lead_reply(l2, 'unsubscribe', 'second try: Éloïse Bédard, 514-555-0177, eloise@bedard-renos.example', 'owner:test');
   snap := public.backup_snapshot();
   if position('bedard' in lower(public.backup_fold_text(snap::text))) > 0 or snap::text like '%514-555%' then raise exception 'E7 original leak scenario still leaks'; end if;
+
+  -- ============================================================ F. SPEC COMPLETE BY CONSTRUCTION (finding 3)
+  -- every text-like column of every exported table must be in the spec with a mode and a one-line reason; a new column is strict until classified
+  select count(*) into n from (
+    select c.table_name, c.column_name from information_schema.columns c
+     where c.table_schema = 'public' and c.table_name in (select jsonb_array_elements_text(public.backup_export_policy() -> 'exported'))
+       and (c.udt_name in ('text', 'varchar', 'bpchar', 'citext', 'json', 'jsonb', '_text', '_varchar', '_bpchar') or c.data_type = 'USER-DEFINED' and exists (select 1 from pg_type t where t.typname = c.udt_name and t.typtype = 'e'))
+    except select table_name, column_name from public.backup_redaction_spec()) q;
+  if n > 0 then raise exception 'F1 % exported text-like column(s) are not in backup_redaction_spec()', n; end if;
+  if exists (select 1 from public.backup_redaction_spec() where mode not in ('strict', 'light', 'keep', 'blank') or coalesce(btrim(reason), '') = '') then raise exception 'F2 a spec row has no valid mode or no reason'; end if;
+  if (select count(*) from public.backup_effective_spec(public.backup_export_policy() -> 'exported') where not classified) > 0 then raise exception 'F3 effective spec has unclassified columns: %', public.backup_redaction_meta() -> 'unclassified_columns'; end if;
+  select count(*) into n from (values ('web_messages', 'body'), ('web_messages', 'payload'), ('action_log', 'reason'), ('action_log', 'detail'), ('action_log', 'result'), ('action_log', 'evidence'), ('action_log', 'ref'),
+      ('bank_transactions', 'description'), ('bank_transactions', 'note'), ('missions', 'title'), ('missions', 'objective'), ('missions', 'evidence'), ('missions', 'plan'), ('missions', 'checkpoint'),
+      ('ideas', 'description'), ('ideas', 'result'), ('owner_messages', 'answer'), ('owner_messages', 'options'), ('approval_requests', 'recommendation'), ('payment_instructions', 'payee'),
+      ('reconciliation_flags', 'detail'), ('executor_runs', 'refusal_reason'), ('evidence_sources', 'text'), ('venture_assets', 'notes')) v (t, c)
+    where exists (select 1 from public.backup_redaction_spec() s where s.table_name = v.t and s.column_name = v.c);
+  if n <> 24 then raise exception 'F4 a column named in the review is missing from the spec (% of 24)', n; end if;
+  if (select mode from public.backup_redaction_spec() where table_name = 'bank_transactions' and column_name = 'description') <> 'strict' or (select mode from public.backup_redaction_spec() where table_name = 'payment_instructions' and column_name = 'payee') <> 'strict' then raise exception 'F5 bank_transactions.description and payment_instructions.payee must be strict'; end if;
+  if (select mode from public.backup_redaction_spec() where table_name = 'evidence_sources' and column_name = 'text') <> 'blank' then raise exception 'F6 evidence_sources.text is blank (bulk public page bodies, rebuildable) by decision'; end if;
+  alter table public.ideas add column zz_new_note text;
+  insert into public.ideas (name, zz_new_note) values ('zz new column idea', 'ring Jean Tremblay on 613-555-0142');
+  snap := public.backup_snapshot();
+  if not (snap -> 'redaction' -> 'unclassified_columns') ? 'ideas.zz_new_note' then raise exception 'F7 an unclassified column must be reported: %', snap -> 'redaction' -> 'unclassified_columns'; end if;
+  if exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'ideas') x where x ->> 'zz_new_note' ilike '%tremblay%' or x ->> 'zz_new_note' like '%0142%') then raise exception 'F8 an unclassified column was exported raw'; end if;
+  alter table public.ideas drop column zz_new_note;
+
+  -- ============================================================ G. THE REVIEW FINDINGS 1, 3, 4
+  insert into public.leads (venture_id, name, email, phone, notes, status) values (v, 'Zorba Trov', 'zt@zt-fixture.example', '613-555-0199', 'n', 'new'), (v, 'Wf Fother', 'wf@wf-fixture.example', '613-555-0198', 'n', 'new'), (v, 'Bob Ng', 'bn@bn-fixture.example', '613-555-0197', 'n', 'new');
+  ctx := public.backup_redaction_context();
+  foreach f in array array['tel:613-555-0199', 'x613.555.0199', 'phone-613-555-0199', 'z.o.r.b.a.t.r.o.v', 'z_o_r_b_a_t_r_o_v', 'zorba.trov', 'wf.fother', 'b-o-b-n-g'] loop
+    r := public.backup_redact_text(f, ctx, 500, 'strict');
+    if r = f or lower(regexp_replace(r, '[^a-zA-Z0-9]', '', 'g')) ~ '(zorbatrov|wffother|bobng)' or regexp_replace(r, '[^0-9]', '', 'g') ~ '61355501(97|98|99)' then raise exception 'G1 short-code shortcut leaked "%": %', f, r; end if;
+  end loop;
+  foreach f in array array['do_not_contact', 'owner_text', 'received', 'unsubscribe_reply', 'bot-status-ok'] loop
+    if public.backup_redact_text(f, ctx, 500, 'strict') <> f then raise exception 'G1b a plain code was altered: %', f; end if;
+  end loop;
+  j := public.backup_redact_json('{"detail":{"ph":6135550199,"ssn":123456789,"amount":12345678,"cents":250000,"txid":99887766,"count":3,"note":"Wf Fother"}}'::jsonb, ctx, 500, 'strict');
+  if j::text like '%6135550199%' or j::text like '%123456789%' or j::text ilike '%fother%' then raise exception 'G4 JSON number or name survived: %', j; end if;
+  if (j #>> '{detail,amount}')::bigint <> 12345678 or (j #>> '{detail,cents}')::int <> 250000 or (j #>> '{detail,txid}')::bigint <> 99887766 or (j #>> '{detail,count}')::int <> 3 then raise exception 'G4b an amount was altered: %', j; end if;
+  insert into public.web_messages (role, body, kind, payload, status) values ('owner', 'call Wf Fother at 613-555-0198', 'chat', '{"x":"Wf Fother 613-555-0198","ph":6135550198}', 'new');
+  insert into public.ideas (name, description, result) values ('zz idea g3', 'idea for Wf Fother, call 613-555-0198', 'Bob Ng said yes');
+  snap := public.backup_snapshot();
+  txt := lower(public.backup_fold_text((snap -> 'data')::text)); dg := regexp_replace((snap -> 'data')::text, '[^0-9]', '', 'g');
+  foreach f in array array['zorbatrov', 'zorba trov', 'wf fother', 'wffother', 'bob ng', '613-555-0199', '613-555-0198'] loop
+    if position(f in txt) > 0 then raise exception 'G3 "%" is in the snapshot: %', f, substr(txt, greatest(position(f in txt) - 80, 1), 200); end if;
+  end loop;
+  if position('6135550198' in dg) > 0 or position('6135550199' in dg) > 0 then raise exception 'G3b a seeded phone is in the snapshot'; end if;
+
+  -- ============================================================ H. DENY-LIST (finding 2)
+  if (public.redaction_denylist_status() ->> 'hashes')::int < 10 or not (public.redaction_denylist_status() ->> 'key_present')::boolean or (public.redaction_denylist_status() ->> 'triggers')::int < 5 then raise exception 'H0 deny-list not populated by the triggers: %', public.redaction_denylist_status(); end if;
+  if (select count(*) from public.ffm_redaction_denylist where length(h) <> 64 or h !~ '^[0-9a-f]+$') > 0 then raise exception 'H1 the deny-list holds something other than hashes'; end if;
+  foreach k in array array['anon', 'authenticated'] loop
+    if has_table_privilege(k, 'public.ffm_redaction_denylist', 'select') or has_table_privilege(k, 'public.ffm_redaction_keys', 'select') then raise exception 'H2 % can read the deny-list or its key', k; end if;
+  end loop;
+  if exists (select 1 from public.backup_export_policy() p, jsonb_array_elements_text(p -> 'exported') e where e like 'ffm_redaction%') then raise exception 'H3 the deny-list is in the export'; end if;
+  begin delete from public.ffm_redaction_denylist; raise exception 'H4 the deny-list can be deleted from'; exception when others then if sqlerrm like 'H4%' then raise; end if; end;
+  begin truncate public.ffm_redaction_denylist; raise exception 'H4b the deny-list can be truncated'; exception when others then if sqlerrm like 'H4b%' then raise; end if; end;
+  insert into public.tasks (assigned_agent, title, detail, status, result, created_by) values (ag, 'zz erasure fixture', 'x', 'done', 'Spoke with Zorba Trov (613-555-0199) about the quote; zt@zt-fixture.example confirmed', 'owner');
+  insert into public.audit_log (actor, action, target, detail) values ('test', 'note', 'zz/erasure', jsonb_build_object('who', 'Bob Ng', 'k', 'asked for Wf Fother'));
+  insert into public.ledger (kind, amount_cents, currency, note, status) values ('expense', 100, 'CAD', 'lunch with Bob Ng', 'received');
+  delete from public.leads where name = 'Zorba Trov';
+  update public.leads set name = '[erased]', email = null, phone = null where name = 'Wf Fother';
+  delete from public.leads where name = 'Bob Ng';
+  ctx := public.backup_redaction_context();
+  if ctx ->> 'name_re' ilike '%zorba%' then raise exception 'H5 premise: the live context should no longer know the deleted name'; end if;
+  snap := public.backup_snapshot();
+  txt := lower(public.backup_fold_text((snap -> 'data')::text)); dg := regexp_replace((snap -> 'data')::text, '[^0-9]', '', 'g');
+  foreach f in array array['zorba', 'trov', 'fother', 'bob ng', 'bobng', 'zt@zt-fixture'] loop
+    if position(f in txt) > 0 then raise exception 'H6 erased/deleted name "%" is exported: %', f, substr(txt, greatest(position(f in txt) - 80, 1), 200); end if;
+  end loop;
+  if position('6135550199' in dg) > 0 or position('6135550198' in dg) > 0 then raise exception 'H7 an erased phone is exported'; end if;
+  if (snap -> 'redaction' ->> 'deny_list_terms_found')::int < 1 then raise exception 'H8 the response must say the deny-list was used: %', snap -> 'redaction'; end if;
+  insert into public.tasks (assigned_agent, title, detail, status, result, created_by) values (ag, 'zz never known', 'x', 'done', 'Spoke with Quentin Raskolnikov about the quote', 'owner');
+  snap := public.backup_snapshot();
+  if not exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'tasks') x where x ->> 'title' = 'zz never known' and x ->> 'result' like '%Raskolnikov%') then raise exception 'H9 documented limit changed: a name that was never in the database is not caught by name'; end if;
+
+  -- ============================================================ I. cheap path = full path; paged export = single statement; grants
+  ctx := public.backup_ctx_hot(public.backup_redaction_context(), '{}'::jsonb) || '{"scanned":true}'::jsonb;
+  for rec in select input from lv loop
+    if public.backup_redact_text(rec.input, ctx, 20000, 'strict') is distinct from public.backup_redact_text_full(rec.input, ctx, 20000, 'strict') then raise exception 'I1 cheap and full path differ for: %', rec.input; end if;
+  end loop;
+  snap := public.backup_snapshot();
+  for rec in select e as t from public.backup_export_policy() p, jsonb_array_elements_text(p -> 'exported') e where e not in ('push_config', 'push_subscriptions') order by e loop
+    j := '[]'::jsonb;
+    for i in 0..((public.backup_table_digest(rec.t) ->> 'rows')::int / 50) loop
+      j := j || (public.backup_snapshot_page(rec.t, i * 50, 50) -> 'rows');
+    end loop;
+    if jsonb_array_length(j) <> jsonb_array_length(snap -> 'data' -> rec.t) then raise exception 'I2 paged row count differs for %: % vs %', rec.t, jsonb_array_length(j), jsonb_array_length(snap -> 'data' -> rec.t); end if;
+  end loop;
+  begin perform public.backup_snapshot_page('leads', 0, 10); raise exception 'I3 a client table can be paged out'; exception when others then if sqlerrm like 'I3%' then raise; end if; end;
+  begin perform public.backup_snapshot_page('tasks', -1, 10); raise exception 'I3b bad offset accepted'; exception when others then if sqlerrm like 'I3b%' then raise; end if; end;
+  begin perform public.backup_table_digest('ffm_redaction_denylist'); raise exception 'I3c deny-list digest allowed'; exception when others then if sqlerrm like 'I3c%' then raise; end if; end;
+  if (public.backup_snapshot_cost() ->> 'est_seconds')::numeric is null then raise exception 'I4 cost estimate missing'; end if;
+  foreach f in array array['public.backup_snapshot_page(text,integer,integer)', 'public.backup_table_digest(text)', 'public.backup_snapshot_cost()', 'public.backup_redaction_meta(jsonb)', 'public.redaction_denylist_status()'] loop
+    foreach k in array array['anon', 'authenticated'] loop
+      if has_function_privilege(k, f, 'execute') then raise exception 'I5 % can execute %', k, f; end if;
+    end loop;
+    if not has_function_privilege('service_role', f, 'execute') then raise exception 'I5b service_role cannot execute %', f; end if;
+  end loop;
+
   raise notice 'LEAK REDACTION CHECKS PASSED (% redactor vectors)', cnt;
 end $$;
 rollback;

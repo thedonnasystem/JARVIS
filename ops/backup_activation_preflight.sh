@@ -48,7 +48,7 @@ for v in RESTORE_B2_AUTH RESTORE_B2_BUCKET_ID RESTORE_DB_URL; do
   [ -n "${!v:-}" ] && bad "$v is set here; restore variables must never live in Railway" || ok "$v is not set (good)"
 done
 # 5 repo pieces the flow depends on
-for f in hq_backup.py hq_scrub.py ops/restore_backup.py ops/restore_local.sh migrations/20261113_backup_schema_v1.sql migrations/20261120_backup_redact_leak_paths_v1.sql migrations/20261120_leak_source_prevention_v1.sql; do
+for f in hq_backup.py hq_scrub.py ops/restore_backup.py ops/restore_local.sh migrations/20261113_backup_schema_v1.sql migrations/20261120_backup_redact_leak_paths_v1.sql migrations/20261120_redaction_denylist_v1.sql migrations/20261120_leak_source_prevention_v1.sql; do
   [ -f "$root/$f" ] && ok "found $f" || bad "missing $f"
 done
 python3 -c "import psycopg2" 2>/dev/null && ok "psycopg2 available (needed by the restore tool on YOUR computer)" || warn "psycopg2-binary not installed here (needed only where you run the restore drill)"
@@ -88,15 +88,15 @@ else
   fi
 fi
 # 8 the known client-text leak paths (audit_log.detail.reason, ledger.note of setter payouts, tasks.result, agent_runs.summary; DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2) are CLOSED when both
-# layers are installed in the target database: the source fixes (migration 20261120_leak_source_prevention_v1) and the export redaction inside backup_snapshot() (20261120_backup_redact_leak_paths_v1).
+# layers are installed in the target database: the source fixes (migration 20261120_leak_source_prevention_v1), the export redaction inside backup_snapshot() (20261120_backup_redact_leak_paths_v1) and the deny-list that remembers erased names (20261120_redaction_denylist_v1).
 # The check reads public.backup_redaction_status(), which inspects the definitions actually in force (not a flag anyone can set). BACKUP_LEAK_PATHS_ACCEPTED=1 no longer passes this check:
 # accepting the leak was option (c); the owner chose (a)+(b), so the only way to pass is to have the redaction installed.
 if [ -z "$dburl" ] || ! command -v psql >/dev/null 2>&1; then pii_flag "KNOWN LEAK PATHS: cannot check whether the redaction is installed (set PII_CHECK_DB_URL, psql needed)"
 else
-  st="$(psql "$dburl" -Atqc "select concat_ws(' ', coalesce(s->>'snapshot_redacts','f'), coalesce(s->>'sources_fixed','f'), coalesce(s->>'redactor_installed','f'), coalesce(s->>'agent_runs_trigger','f')) from (select public.backup_redaction_status() s) q" 2>/dev/null)"; rc=$?
+  st="$(psql "$dburl" -Atqc "select concat_ws(' ', coalesce(s->>'snapshot_redacts','f'), coalesce(s->>'sources_fixed','f'), coalesce(s->>'redactor_installed','f'), coalesce(s->>'agent_runs_trigger','f'), coalesce(s->>'denylist','f')) from (select public.backup_redaction_status() s) q" 2>/dev/null)"; rc=$?
   if [ $rc != 0 ] || [ -z "$st" ]; then pii_flag "KNOWN LEAK PATHS: backup_redaction_status() is not installed - apply migrations 20261120_backup_redact_leak_paths_v1 and 20261120_leak_source_prevention_v1 (see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2)"
-  elif [ "$st" = "true true true true" ]; then ok "client-text leak paths closed: source fixes + export redaction are installed (backup_redaction_status)"
-  else pii_flag "KNOWN LEAK PATHS: redaction only partly installed (snapshot_redacts/sources_fixed/redactor_installed/agent_runs_trigger = $st) - DO NOT ACTIVATE"; fi
+  elif [ "$st" = "true true true true true" ]; then ok "client-text leak paths closed: source fixes + export redaction + deny-list triggers are installed (backup_redaction_status)"
+  else pii_flag "KNOWN LEAK PATHS: redaction only partly installed (snapshot_redacts/sources_fixed/redactor_installed/agent_runs_trigger/denylist = $st) - DO NOT ACTIVATE"; fi
   [ "${BACKUP_LEAK_PATHS_ACCEPTED:-0}" = 1 ] && warn "BACKUP_LEAK_PATHS_ACCEPTED=1 is ignored: it no longer substitutes for the redaction (owner decision: close the leak paths, do not accept them)"
 fi
 echo; echo "Result: $fails FAIL, $warns WARN."; echo "Not checked here (check by eye): bucket is Private; lifecycle rule set; BACKUP_KEY stored in 2 places; migration 20261113_backup_schema_v1.sql applied (the Telegram /backup check shows it)."

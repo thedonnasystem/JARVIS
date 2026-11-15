@@ -145,9 +145,41 @@ class Known:
 EMPTY = Known()
 
 
-def _patterns(t: str, k: Known) -> str:
+# SOURCE mode (what the engine stores): remove direct contact data but keep the text WORKING. A URL is evidence the missions code extracts again later (hq_missions._URL_RE),
+# and a JSON number is an amount or an id the next step reads, so neither is rewritten unless it really carries contact data. The export layer (backup_redact_text, strict)
+# stays the authority and still removes whatever is left, so this layer may be gentler than it.
+_URL_HANDLE = re.compile(r"linkedin\.com/(?:in|pub|profile|sales/people)/|facebook\.com/(?!pages/|groups/|events/|business/|marketplace/)[^/?#]+|fb\.com/|instagram\.com/|twitter\.com/|x\.com/|tiktok\.com/@|snapchat\.com/add|"
+                         r"youtube\.com/(?:@|user/|c/|channel/)|github\.com/[^/?#]+|/(?:~|@)[^/?#]+|[?&](?:email|e-mail|mail|phone|tel|mobile)=", re.I)
+_AMOUNT_CTX = re.compile(r"(?:[$€£]\s*|(?:amount|amt|cents|total|count|qty|quantity|sum|price|cost|fees?|balance|bytes|rows|chars|length|spent|budget|cap|usd|cad|value|revenue|payout|txid|xid|pid|seq|epoch|id|ms)[\"'_a-z]*[\"']?\s*[:=]\s*[\"']?\s*)$", re.I)
+
+
+def _url_has_contact(m: str, k: Known) -> bool:
+    d = unquote_all(m)
+    return bool(_URL_HANDLE.search(d) or (k.name_re and k.name_re.search(d)) or any(p.search(d) for p in _EMAIL_PATS) or _NANP.search(d) or _HANDLE.search(d.split("://", 1)[-1])
+                or any(len(re.sub(r"[^0-9]", "", c)) >= 10 for c in _PHONE_CAND.findall(d)))
+
+
+def unquote_all(u: str) -> str:
+    try:
+        return urllib.parse.unquote(u)
+    except Exception:
+        return u
+
+
+def _run_ids(t: str, mode: str) -> str:
+    if mode != "source":
+        return _RUN7.sub("[redacted:id]", t)
+    def sub(m):
+        n = len(m.group(0))
+        if n < 9 or _AMOUNT_CTX.search(t[max(0, m.start() - 40):m.start()]) or re.match(r"\.[0-9]{1,2}(?![0-9])", t[m.end():m.end() + 3]):
+            return m.group(0)       # 7-8 digits: an amount or an id; 9+ after an amount key, a currency sign or with cents: an amount
+        return "[redacted:id]"     # 9+ digits otherwise: SIN-like / phone-like / account-like
+    return _RUN7.sub(sub, t)
+
+
+def _patterns(t: str, k: Known, mode: str = "light") -> str:
     for m in sorted(set(_URL.findall(t)), key=len, reverse=True):
-        if _PERSONAL_URL.search(m) or (k.name_re and k.name_re.search(m)):
+        if (_url_has_contact(m, k) if mode == "source" else (_PERSONAL_URL.search(m) or (k.name_re and k.name_re.search(m)))):
             t = t.replace(m, "[redacted:url]")
     for p in _EMAIL_PATS:
         t = p.sub("[redacted:email]", t)
@@ -155,16 +187,18 @@ def _patterns(t: str, k: Known) -> str:
     t = _NANP.sub("[redacted:phone]", t)
     for m in sorted(set(_PHONE_CAND.findall(t)), key=len, reverse=True):
         d = re.sub(r"[^0-9]", "", m)
+        if mode == "source" and (d == m or re.fullmatch(r"[0-9]+\.[0-9]{1,2}", m)):
+            continue                  # a bare digit run is judged by _run_ids (amount context), not as a phone
         if len(d) >= 9 or (m[:1] == "+" and len(d) >= 7) or (len(d) == 7 and re.fullmatch(r"[0-9]{3}[ .\-][0-9]{4}", m)):
             t = t.replace(m, "[redacted:phone]")
-    t = _RUN7.sub("[redacted:id]", t)
+    t = _run_ids(t, mode)
     t = _DIGIT_WORDS.sub("[redacted:phone] ", t)
     if k.name_re:
         t = k.name_re.sub("[redacted:name]", t)
     return t
 
 
-def _probe(t: str, k: Known, depth: int = 0) -> str:
+def _probe(t: str, k: Known, depth: int = 0, mode: str = "light") -> str:
     if depth > 2:
         return t
     for rx, kind in ((_HEX, "hex"), (_B64, "b64")):
@@ -183,12 +217,12 @@ def _probe(t: str, k: Known, depth: int = 0) -> str:
             if not _PRINTABLE.match(dec):
                 continue
             f = fold(dec)
-            if _patterns(f, k) != f or _probe(f, k, depth + 1) != f:
+            if _patterns(f, k, mode) != f or _probe(f, k, depth + 1, mode) != f:
                 t = t.replace(m, "[redacted:encoded]")
     return t
 
 
-def scrub(text, known: Known = EMPTY, max_len: int | None = None) -> str | None:
+def scrub(text, known: Known = EMPTY, max_len: int | None = None, mode: str = "light") -> str | None:
     """Scrubbed copy of `text` (LIGHT mode: never blanks a field for its topic). Text in which nothing is found is returned UNCHANGED. Any error returns the marker."""
     if text is None:
         return None
@@ -202,9 +236,9 @@ def scrub(text, known: Known = EMPTY, max_len: int | None = None) -> str | None:
             prot.append(m.group(0))
             return chr(0xE000 + len(prot) - 1)
         t = _PROTECT.sub(hold, t)
-        t = _probe(t, known)
+        t = _probe(t, known, 0, mode)
         t = re.sub(r"[0-9a-f]{32,}", lambda m: hold(m) if re.search(r"[a-f]", m.group(0), re.I) else m.group(0), t, flags=re.I)
-        r = _patterns(t, known)
+        r = _patterns(t, known, mode)
         for i in range(len(prot) - 1, -1, -1):
             r = r.replace(chr(0xE000 + i), prot[i])
         sq = re.sub(r"[^a-z0-9]", "", r.lower())
@@ -278,4 +312,4 @@ def scrub_stored(text, get) -> str | None:
         k = known(get)
     except Exception:
         k = EMPTY
-    return scrub(text, k)
+    return scrub(text, k, None, "source")

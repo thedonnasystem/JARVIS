@@ -19,7 +19,7 @@ SCHEMA = {"server_version": "17.0", "tables": [{"name": "ideas"}, {"name": "ledg
 ROWS = {"ideas": 3, "ledger": 3, "tasks": 2, "push_config": 1}
 
 
-REDACTION = {"version": 1, "known_client_terms": 4, "spec": [{"table_name": t, "column_name": c, "kind": "text", "mode": "strict", "max_len": 500}
+REDACTION = {"version": 2, "known_client_terms": 4, "spec": [{"table_name": t, "column_name": c, "kind": "text", "mode": "strict", "max_len": 500}
                                                               for t, c in (("audit_log", "detail"), ("ledger", "note"), ("tasks", "result"), ("agent_runs", "summary"))]}
 POLICY = {"exported": ["ideas", "ledger", "tasks"], "excluded": [{"table": "leads", "class": "client_pii", "reason": "client personal data"}, {"table": "push_config", "class": "secret", "reason": "keys"}], "unclassified": []}
 
@@ -688,7 +688,7 @@ class LeakRedaction(unittest.TestCase):
             self.assertFalse(B.run(force=True)["ok"])
 
     def test_redaction_spec_must_cover_all_four_paths(self):
-        thin = {"version": 1, "spec": [{"table_name": "ledger", "column_name": "note"}]}
+        thin = {"version": 2, "spec": [{"table_name": "ledger", "column_name": "note"}]}
         with mock.patch("hq._request", side_effect=self.req({"ideas": [], "ledger": [], "tasks": []}, redaction=thin)):
             with self.assertRaises(B.BackupError) as e:
                 B.dump()
@@ -739,3 +739,82 @@ class LeakRedaction(unittest.TestCase):
         out = B.blank_leak_columns("audit_log", [{"id": 7, "action": "do_not_contact", "detail": {"leads_marked": 2, "ok": True, "reason": "Jean 613-555-0142", "ids": ["a", 3]}}])[0]
         self.assertEqual(out["detail"], {"leads_marked": 2, "ok": True, "reason": B.UNCERTAIN, "ids": [B.UNCERTAIN, 3]}); self.assertEqual(out["action"], "do_not_contact")
         self.assertEqual(B.blank_leak_columns("ideas", [{"id": 1, "v": "x"}]), [{"id": 1, "v": "x"}])
+
+
+class LeakRedactionV2(unittest.TestCase):
+    """Findings 3, 4 and 6 in code: spec-driven strict columns, JSON numbers, table.column reporting without values, paged export."""
+    SPEC = REDACTION["spec"] + [{"table_name": "ideas", "column_name": "v", "kind": "text", "mode": "strict", "max_len": 500},
+                                {"table_name": "ledger", "column_name": "detail", "kind": "json", "mode": "strict", "max_len": 500}]
+
+    def test_strict_columns_come_from_the_snapshot_spec(self):
+        sc = B.strict_columns(self.SPEC)
+        self.assertIn("v", sc["ideas"]); self.assertIn("detail", sc["ledger"]); self.assertIn("note", sc["ledger"])
+        data = {"ideas": [{"id": 1, "v": "mail jane.doe@example.com"}]}
+        with self.assertRaises(B.BackupError) as e:
+            B.assert_redacted(data, self.SPEC)
+        self.assertIn("ideas.v", str(e.exception)); self.assertNotIn("jane", str(e.exception))
+        B.assert_redacted(data)   # without the spec only the four floor columns are known: shows why the spec is passed
+
+    def test_json_numbers_phone_sin_like_are_refused_but_amounts_pass(self):
+        for bad in ({"detail": {"ph": 6135550199, "ssn": 123456789}}, {"detail": {"contact": 6135550199}}, {"detail": [{"x": 123456789}]}):
+            with self.assertRaises(B.BackupError) as e:
+                B.assert_redacted({"audit_log": [{"id": 1, **bad}]})
+            self.assertIn("audit_log.detail", str(e.exception)); self.assertNotIn("6135550199", str(e.exception))
+        B.assert_redacted({"audit_log": [{"id": 1, "detail": {"amount": 12345678, "cents": 1500000, "txid": 99887766, "count": 3, "price": 1234567.5}}]})
+
+    def test_report_names_table_and_column_for_every_failing_column_never_the_value(self):
+        data = {"ledger": [{"id": 1, "note": "ab@cd.example"}], "tasks": [{"id": 1, "result": "613-555-0199"}, {"id": 2, "result": "612-555-0100"}]}
+        with self.assertRaises(B.BackupError) as e:
+            B.assert_redacted(data)
+        m = str(e.exception)
+        self.assertIn("ledger.note (1 field(s))", m); self.assertIn("tasks.result (2 field(s))", m)
+        for v in ("ab@cd.example", "613-555", "612-555"):
+            self.assertNotIn(v, m)
+
+    def test_fallback_blanks_every_listed_free_text_column(self):
+        for t, c in (("web_messages", "body"), ("action_log", "reason"), ("bank_transactions", "description"), ("missions", "objective"), ("payment_instructions", "payee"), ("evidence_sources", "text")):
+            self.assertEqual(B.blank_leak_columns(t, [{"id": 1, c: "Jean Tremblay"}])[0][c], B.UNCERTAIN, (t, c))
+
+    def _paged_req(self, mutate_after_pages=False):
+        state = {"digest": 0, "pages": []}
+        rows = {"ideas": [{"id": i, "v": f"idea{i}"} for i in range(450)], "ledger": [], "tasks": []}
+        def r(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_snapshot_cost"):
+                return {"est_seconds": 600.0, "strict_chars": 1, "light_chars": 1, "field_count": 1}
+            if path.endswith("/rpc/backup_redaction_meta"):
+                return {"version": 2, "spec": REDACTION["spec"], "unclassified_columns": []}
+            if path.endswith("/rpc/backup_table_digest"):
+                if mutate_after_pages and state["pages"]:
+                    state["digest"] += 1
+                return {"rows": 1, "md5": f"{body['p_table']}-{state['digest']}"}
+            if path.endswith("/rpc/backup_snapshot_page"):
+                state["pages"].append((body["p_table"], body["p_offset"]))
+                return {"rows": rows[body["p_table"]][body["p_offset"]: body["p_offset"] + body["p_limit"]], "n": 0, "ms": 1}
+            if path.endswith("/rpc/backup_snapshot"):
+                raise AssertionError("single statement used although the cost estimate is over the budget")
+            return fake_request(method, path, body, prefer, exact=exact)
+        return r, state
+
+    def test_paged_export_when_estimate_is_over_budget(self):
+        r, state = self._paged_req()
+        with mock.patch("hq._request", side_effect=r):
+            blob, m = B.dump()
+        self.assertEqual(m["redaction"]["mode"], "database_paged"); self.assertEqual(m["tables"]["ideas"]["rows"], 450)
+        self.assertTrue(m["consistency"]["consistent"])
+        self.assertEqual([o for t, o in state["pages"] if t == "ideas"], [0, 200, 400, 450])
+
+    def test_paged_export_flags_a_table_that_changed_while_reading(self):
+        r, _ = self._paged_req(mutate_after_pages=True)
+        with mock.patch("hq._request", side_effect=r):
+            _, m = B.dump()
+        self.assertFalse(m["consistency"]["consistent"]); self.assertTrue(m["consistency"]["changing_tables"])
+
+    def test_paged_export_without_redaction_meta_is_refused(self):
+        r, _ = self._paged_req()
+        def r2(method, path, *a, **k):
+            if path.endswith("/rpc/backup_redaction_meta"):
+                return {"version": 1, "spec": []}
+            return r(method, path, *a, **k)
+        with mock.patch("hq._request", side_effect=r2):
+            with self.assertRaises(B.BackupError):
+                B.dump()

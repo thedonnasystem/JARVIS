@@ -164,9 +164,10 @@ create trigger agent_runs_scrub before insert or update of summary on public.age
 -- what the backup preflight checks: both the export redaction and the source fixes are installed AND are the definitions in force
 create or replace function public.backup_redaction_status() returns jsonb
 language sql stable security definer set search_path to 'pg_catalog', 'public' as $$
-  select jsonb_build_object('version', 1,
-    'snapshot_redacts', coalesce((select p.prosrc like '%backup_redact_row%' and p.prosrc like '%backup_redaction_context%' from pg_proc p where p.oid = to_regprocedure('public.backup_snapshot(text[])')), false),
+  select jsonb_build_object('version', 2,
+    'snapshot_redacts', coalesce((select p.prosrc like '%backup_table_expr%' and p.prosrc like '%backup_deny_scan%' and p.prosrc like '%backup_redaction_context%' from pg_proc p where p.oid = to_regprocedure('public.backup_snapshot(text[])')), false),
     'redactor_installed', to_regprocedure('public.backup_redact_text(text,jsonb,integer,text)') is not null and to_regprocedure('public.backup_redaction_spec()') is not null,
+    'denylist', coalesce((select (public.redaction_denylist_status() ->> 'key_present')::boolean and (public.redaction_denylist_status() ->> 'triggers')::int >= 2 from (select 1) z where to_regprocedure('public.redaction_denylist_status()') is not null), false),
     'sources_fixed', coalesce((select bool_and(p.prosrc like '%LEAK-SOURCE-FIX v1%') from pg_proc p where p.oid in (
         to_regprocedure('public.mark_do_not_contact(uuid,text,text)'), to_regprocedure('public.record_lead_reply(uuid,text,text,text)'), to_regprocedure('public.setter_record_payout(text,text,integer,text,text)'),
         to_regprocedure('public.set_deal_stage(uuid,text,text,text)'), to_regprocedure('public.confirm_deal_won(uuid,integer,text,text,text)'), to_regprocedure('public.agent_runs_scrub()'))), false),

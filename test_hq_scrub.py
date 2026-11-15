@@ -206,3 +206,32 @@ class Engine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SourceMode(unittest.TestCase):
+    """Stored text keeps its structure: URLs and amounts survive, direct contact data does not (the export layer stays strict)."""
+    def sc(self, t, k=S.EMPTY):
+        return S.scrub(t, k, None, "source")
+
+    def test_urls_without_contact_data_are_kept(self):
+        for u in ("https://example.ca/staff/directory", "https://example.com/team/contact?page=2", "https://stats.example/ottawa/2026"):
+            self.assertEqual(self.sc(f"see {u} ok"), f"see {u} ok")
+
+    def test_urls_carrying_email_phone_name_or_handle_are_removed(self):
+        k = S.Known(names=["Zorbatrov Plumbing"])
+        for u in ("https://x.ca/c?email=a@b.co", "https://x.ca/call/613-555-0199", "https://www.linkedin.com/in/someone", "https://x.ca/zorbatrov/about", "https://x.ca/@someone"):
+            out = self.sc(f"see {u} ok", k)
+            self.assertIn("[redacted:url]", out, u)
+
+    def test_json_amounts_survive_and_phone_like_numbers_do_not(self):
+        self.assertEqual(self.sc('{"price": 1234567}'), '{"price": 1234567}')
+        self.assertEqual(self.sc('{"amount": 12345678.50, "total": 9876543210}'), '{"amount": 12345678.50, "total": 9876543210}')
+        self.assertNotIn("6135550199", self.sc('{"ph": 6135550199}')); self.assertNotIn("123456789", self.sc("SIN 123456789"))
+
+    def test_light_mode_is_unchanged(self):
+        self.assertEqual(S.scrub("see https://example.ca/staff/directory ok"), "see [redacted:url] ok")
+        self.assertEqual(S.scrub('{"price": 1234567}'), '{"price": [redacted:id]}')
+
+    def test_stored_default_is_source_mode(self):
+        self.assertEqual(S.scrub_stored("see https://example.ca/staff/directory", lambda p: []), "see https://example.ca/staff/directory")
+        self.assertNotIn("@", S.scrub_stored("mail jean@example.ca", lambda p: []))

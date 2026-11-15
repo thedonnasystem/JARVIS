@@ -1,4 +1,4 @@
-import asyncio, os, unittest
+import asyncio, os, re, unittest
 from types import SimpleNamespace
 from unittest import mock
 import hq, hq_commands as C
@@ -38,7 +38,7 @@ class T(unittest.TestCase):
         with mock.patch.object(hq, "_request", f):
             asyncio.run(C.hq_money(u, SimpleNamespace(args=["in", "450", "dayjob", "Nov", "commission"])))
         post = [c for c in f.calls if c[0] == "POST" and "ledger" in c[1]][0][2]
-        self.assertEqual((post["kind"], post["amount_cents"], post["venture_id"], post["note"]), ("revenue", 45000, "v-dj", "Nov commission"))
+        self.assertEqual((post["kind"], post["amount_cents"], post["venture_id"], post["note"]), ("revenue", 45000, "v-dj", "commission"))
         self.assertIn("$450.00", u.message.sent[0])
 
     def test_non_owner_ignored(self):
@@ -411,7 +411,7 @@ class Resolve(unittest.TestCase):
         with mock.patch.object(hq, "_request", w):
             asyncio.run(C.hq_money(u, SimpleNamespace(args=["in", "200", "ottawa-cleanouts", "first", "job"])))
         post = [c for c in w.calls if c[0] == "POST" and "ledger" in c[1]][0][2]
-        self.assertEqual((post["venture_id"], post["note"]), ("v-cl", "first job"))
+        self.assertEqual((post["venture_id"], post["note"]), ("v-cl", None))
         self.assertIn("ottawa-cleanouts", u.message.sent[0])
 
     def test_money_unknown_venture_refused_and_nothing_logged(self):
@@ -422,7 +422,7 @@ class Resolve(unittest.TestCase):
         self.assertIn("No venture called", u.message.sent[0])
 
     def test_money_company_word_and_no_venture_stay_company_wide(self):
-        for args, note in ((["out", "29", "company", "twilio"], "twilio"), (["out", "29"], None)):
+        for args, note in ((["out", "29", "company", "twilio", "hosting"], "hosting"), (["out", "29"], None)):
             w, u = World(), upd()
             with mock.patch.object(hq, "_request", w):
                 asyncio.run(C.hq_money(u, SimpleNamespace(args=args)))
@@ -561,3 +561,29 @@ class KpiCommand(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LedgerSourceNotes(unittest.TestCase):
+    """Finding 2: /in, /out and /paid wrote typed names into ledger.note (exported off-site). Only a category word, a count or an id may be stored."""
+
+    def _post(self, args):
+        w, u = World(), upd()
+        with mock.patch.object(hq, "_request", w):
+            asyncio.run(C.hq_money(u, SimpleNamespace(args=args)))
+        return [c for c in w.calls if c[0] == "POST" and "ledger" in c[1]][0][2]
+
+    def test_in_out_memo_naming_a_person_or_company_is_not_stored(self):
+        for args in (["in", "450", "dayjob", "Paid", "by", "Zorbatrov", "Plumbing", "Inc"], ["out", "20", "company", "lunch", "with", "Jane", "Zorbatrov"]):
+            note = self._post(args)["note"]
+            self.assertTrue(note is None or note in C.LEDGER_CATEGORIES, note)
+            self.assertNotIn("Zorbatrov", str(note))
+        self.assertEqual(self._post(["in", "450", "dayjob", "Zorbatrov", "commission"])["note"], "commission")
+        self.assertEqual(self._post(["in", "450", "dayjob", "Zorbatrov", "commission"])["amount_cents"], 45000)   # the amount is kept
+
+    def test_paid_deal_note_is_a_count_not_the_name(self):
+        w = World()
+        with mock.patch.object(hq, "_request", w):
+            C.log_paid("Jane Zorbatrov 613-555-0199")
+        post = [c for c in w.calls if c[0] == "POST" and "ledger" in c[1]][0][2]
+        self.assertTrue(re.fullmatch(r"Paid deal \d+ of \d{4}-\d{2}-\d{2}", post["note"]), post["note"])
+        self.assertNotIn("Zorbatrov", post["note"]); self.assertEqual(post["kind"], "revenue"); self.assertEqual(post["amount_cents"], 100000)

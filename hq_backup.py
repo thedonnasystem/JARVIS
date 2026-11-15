@@ -34,13 +34,23 @@ ALWAYS_EXCLUDE = re.compile(r"^(ws_|ffm_)|^(client_workspaces|leads|outbox|lead_
 #   * the two-read fallback never exports these columns' text (it blanks them: REDACTION_BLANK);
 #   * after redaction, any email address or phone number still found in a strict column makes the backup REFUSE to be written.
 UNCERTAIN = "[redacted:uncertain]"
-REDACTION_VERSION = 1
+REDACTION_VERSION = 2
 REQUIRED_REDACTION = {("audit_log", "detail"), ("ledger", "note"), ("tasks", "result"), ("agent_runs", "summary")}
-REDACTION_BLANK = {   # table -> [(column, kind)]; kind json keeps keys, numbers and booleans and blanks every string
+REDACTION_BLANK = {   # table -> [(column, kind)]; the two-read fallback has no database redactor, so EVERY free-text column of the spec (finding list) is blanked; kind json keeps keys, numbers and booleans and blanks every string
     "audit_log": [("detail", "json")], "ledger": [("note", "text")], "tasks": [("result", "text"), ("title", "text"), ("detail", "text")], "agent_runs": [("summary", "text")],
-    "escalations": [("summary", "text"), ("evidence", "json")], "memory": [("content", "text")], "owner_messages": [("body", "text")], "human_handoffs": [("task", "text"), ("why_human", "text")],
-    "missions": [("result", "text")]}
-STRICT_COLUMNS = {"audit_log": ["detail"], "ledger": ["note"], "tasks": ["result"], "agent_runs": ["summary"], "escalations": ["summary"]}
+    "escalations": [("summary", "text"), ("evidence", "json")], "memory": [("content", "text")], "owner_messages": [("body", "text"), ("answer", "text"), ("options", "json")], "human_handoffs": [("task", "text"), ("why_human", "text")],
+    "missions": [("result", "text"), ("title", "text"), ("objective", "text"), ("evidence", "json"), ("plan", "json"), ("checkpoint", "json")],
+    "web_messages": [("body", "text"), ("payload", "json")],
+    "action_log": [("reason", "text"), ("detail", "json"), ("result", "text"), ("evidence", "text")],
+    "bank_transactions": [("description", "text"), ("note", "text")],
+    "ideas": [("description", "text"), ("result", "text")],
+    "approval_requests": [("recommendation", "text")],
+    "payment_instructions": [("payee", "text")],
+    "reconciliation_flags": [("detail", "text")],
+    "executor_runs": [("refusal_reason", "text")],
+    "evidence_sources": [("text", "text")],
+    "venture_assets": [("notes", "text")]}
+STRICT_COLUMNS = {"audit_log": ["detail"], "ledger": ["note"], "tasks": ["result"], "agent_runs": ["summary"], "escalations": ["summary"]}   # floor only: the snapshot spec adds every other strict column
 _EMAIL = re.compile(r"[A-Za-z0-9._%+'-]{2,}@[A-Za-z0-9-]{2,}(?:\.[A-Za-z0-9-]{2,})+")
 _UUID_ISO = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9:.]+(?:Z|[+-][0-9:]+)?)?|[0-9a-fA-F]{32,}")   # ids, timestamps and hashes are not phone numbers
 _PHONE = re.compile(r"(?<![0-9])\(?[0-9]{3}\)?[ .\-][0-9]{3}[ .\-][0-9]{4}(?![0-9])|(?<![0-9])[0-9]{10,}(?![0-9])")
@@ -50,6 +60,8 @@ ORDER = {"company_profile": "venture_slug", "departments": "slug", "agents": "sl
          "integration_status": "key", "alert_state": "key"}
 PAGE = 1000
 MAX_ROWS_PER_TABLE = 500_000
+PAGE_REDACT = 200              # rows per backup_snapshot_page() call (each page scans and redacts its own rows)
+SNAPSHOT_BUDGET_S = 60         # above this estimated cost one backup_snapshot() statement is too risky (statement_timeout) and the export is paged
 
 B2_AUTH_URL = "https://api.backblazeb2.com/b2api/v4/b2_authorize_account"
 B2_HOST_SUFFIXES = (".backblazeb2.com", ".backblaze.com")   # every URL B2 hands back (api, upload pods) must be https on a Backblaze domain, or we refuse to send data to it
@@ -99,6 +111,39 @@ def _strings(o):
             yield from _strings(v)
 
 
+# JSON numbers cannot be read as text, so the key decides (same rules as public.backup_redact_json_k): a number of 7+ digits under a key that is not an amount / count / size key is a phone, SIN or long id
+_AMOUNT_KEY = re.compile(r"(^|_)(txid|xid|pid|seq|epoch|attempts|retries|amount|amt|cents|total|count|qty|quantity|sum|price|cost|fee|fees|balance|bytes|rows|chars|length|ms|secs|seconds|minutes|hours|days|limit|max|min|in|out|tokens|searches|spent|budget|cap|usd|cad|per_[a-z]+|to_cents|from_cents)($|_)")
+_PII_KEY = re.compile(r"(^|[^a-z])(ph|phone|phones|tel|telephone|mobile|cell|cellphone|fax|ssn|sin|nas|dob|birthdate|birthday|birth|passport|licen[sc]e|card|iban|routing|transit|acct|account|accounts)([^a-z]|$)")
+
+
+def _leaves(o, key=None):
+    """(kind, value) for every string (also object keys) and every number in a JSON value; numbers carry the key they sit under."""
+    if isinstance(o, str):
+        yield "s", o
+    elif isinstance(o, bool) or o is None:
+        return
+    elif isinstance(o, (int, float, Decimal)):
+        yield "n", (key or "", o)
+    elif isinstance(o, dict):
+        for k, v in o.items():
+            yield "s", str(k)
+            yield from _leaves(v, str(k))
+    elif isinstance(o, list):
+        for v in o:
+            yield from _leaves(v, key)
+
+
+def _number_is_contact_like(key: str, n) -> bool:
+    k = key.lower()
+    if _PII_KEY.search(k):
+        return True
+    try:
+        whole = str(abs(Decimal(str(n)))).split(".")[0]
+    except Exception:
+        return True
+    return len(re.sub(r"[^0-9]", "", whole)) >= 7 and not _AMOUNT_KEY.search(k)
+
+
 def _blank(o):
     if isinstance(o, str):
         return UNCERTAIN
@@ -136,17 +181,37 @@ def check_redaction(snap: dict) -> dict:
     return red
 
 
-def assert_redacted(data: dict) -> dict:
-    """Second lock: after redaction no email address or phone number may remain in a strict column. Returns {table.column: number of fields that fail closed}."""
-    uncertain = {}
+def strict_columns(spec) -> dict:
+    """{table: [column]} of every strict column in the snapshot's own spec (so a new column the database treats as strict is checked here too)."""
+    out = {}
+    for sp in spec or []:
+        if isinstance(sp, dict) and sp.get("mode") == "strict":
+            out.setdefault(str(sp.get("table_name")), []).append(str(sp.get("column_name")))
     for t, cols in STRICT_COLUMNS.items():
+        for c in cols:
+            if c not in out.setdefault(t, []):
+                out[t].append(c)
+    return out
+
+
+def assert_redacted(data: dict, spec=None) -> dict:
+    """Second lock (a backstop: the database redactor applies the same tests last and blanks what it would refuse). After redaction no email address, phone number or contact-like JSON number may remain in a strict column.
+    Returns {table.column: number of fields that fail closed}. On a hit it names TABLE.COLUMN and the number of fields, NEVER a value, and still refuses the whole backup (fail closed)."""
+    uncertain, bad = {}, {}
+    for t, cols in strict_columns(spec).items():
         for row in data.get(t) or []:
             for c in cols:
-                for sv in _strings(row.get(c)):
-                    if sv == UNCERTAIN:
+                v = row.get(c)
+                for kind, sv in _leaves(v):
+                    if kind == "n":
+                        if _number_is_contact_like(*sv):
+                            bad[f"{t}.{c}"] = bad.get(f"{t}.{c}", 0) + 1
+                    elif sv == UNCERTAIN:
                         uncertain[f"{t}.{c}"] = uncertain.get(f"{t}.{c}", 0) + 1
                     elif _EMAIL.search(sv) or _PHONE.search(_UUID_ISO.sub(" ", sv)):
-                        raise BackupError(f"contact data is still present in {t}.{c} after redaction; refusing to write the backup")
+                        bad[f"{t}.{c}"] = bad.get(f"{t}.{c}", 0) + 1
+    if bad:
+        raise BackupError("contact data is still present after redaction in " + ", ".join(f"{k} ({n} field(s))" for k, n in sorted(bad.items())) + "; refusing to write the backup (the database redactor should have blanked it: report this)")
     return uncertain
 
 
@@ -251,6 +316,46 @@ def _encode_rows(rows: list) -> tuple[bytes, int]:
     return "\n".join(lines).encode(), len(rows)
 
 
+def _snapshot_cost() -> dict | None:
+    try:
+        c = hq._request("POST", "/rest/v1/rpc/backup_snapshot_cost", {}, timeout=60)
+        return c if isinstance(c, dict) and isinstance(c.get("est_seconds"), (int, float)) else None
+    except Exception:
+        return None
+
+
+def _read_paged(pol: dict, schema: dict) -> tuple[dict, dict, dict]:
+    """Redacted export in pages for volumes one statement cannot cover. Every table's RAW digest (a hash, no data) is read before and after the pages;
+    equal digests prove nothing changed while we read (the same claim as two identical full reads, with no raw text leaving the database). Retries, then flags consistent=False."""
+    names = [t for t in pol["exported"] if t not in SKIP]
+    meta = hq._request("POST", "/rest/v1/rpc/backup_redaction_meta", {}, timeout=60)
+    check_redaction({"redaction": meta})
+    last = None
+    for attempt in range(1, CONSISTENCY_ATTEMPTS + 1):
+        before = {t: hq._request("POST", "/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
+        data = {}
+        for t in names:
+            rows, off = [], 0
+            while off < MAX_ROWS_PER_TABLE:
+                page = hq._request("POST", "/rest/v1/rpc/backup_snapshot_page", {"p_table": t, "p_offset": off, "p_limit": PAGE_REDACT}, timeout=180)
+                got = page.get("rows") if isinstance(page, dict) else None
+                if not isinstance(got, list):
+                    raise BackupError(f"{t}: backup_snapshot_page() returned an unexpected result")
+                if not got:
+                    break
+                rows.extend(got)
+                off += len(got)
+            else:
+                raise BackupError(f"{t}: more than {MAX_ROWS_PER_TABLE} rows; refusing to write a partial backup")
+            data[t] = rows
+        after = {t: hq._request("POST", "/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
+        moved = sorted(t for t in names if before[t] != after[t])
+        last = (data, meta, moved)
+        if not moved:
+            return data, meta, {"consistent": True, "method": "paged redacted read between two identical raw table digests", "attempts": attempt}
+    return last[0], last[1], {"consistent": False, "method": "paged redacted read between two raw table digests", "attempts": CONSISTENCY_ATTEMPTS, "changing_tables": last[2][:10]}
+
+
 def _try_snapshot() -> tuple[dict | None, str]:
     """One database call that returns every table AND the schema from a single SQL statement, so they are mutually consistent.
     Returns (snapshot, "") or (None, reason). Any problem falls back to the two-read method rather than failing the backup."""
@@ -275,11 +380,34 @@ def dump() -> tuple[bytes, dict]:
     manifest = {"format": FORMAT, "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "engine_build": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("GIT_COMMIT") or "unknown")[:40],
                 "skipped": sorted(SKIP), "tables": {}, "schema": None}
-    snap, why = _try_snapshot()
-    if snap:
+    cost = _snapshot_cost()
+    paged = bool(cost and cost["est_seconds"] > SNAPSHOT_BUDGET_S)
+    if paged:
+        schema = get_schema()
+        pol = get_policy()
+        if not schema:
+            raise BackupError("paged export needs the schema; refusing to write a partial backup")
+        pdata, meta, cons = _read_paged(pol, schema)
+        unc = assert_redacted(pdata, meta.get("spec"))
+        manifest["redaction"] = {"mode": "database_paged", "version": meta["version"], "estimated_single_statement_seconds": cost["est_seconds"],
+                                 "columns": sorted(f"{s['table_name']}.{s['column_name']}" for s in meta["spec"] if isinstance(s, dict)), "fields_failed_closed": unc}
+        data_by_table = {t: _encode_rows(rows) for t, rows in sorted(pdata.items())}
+        manifest["table_list_source"] = "database export policy"
+        manifest["consistency"] = cons
+        names = list(data_by_table)
+        after = get_schema()
+        if not after or sorted(t["name"] for t in after["tables"]) != sorted(t["name"] for t in schema["tables"]) or get_policy()["exported"] != pol["exported"]:
+            raise BackupError("tables were added or removed while the backup was being read; will retry later")
+        schema = after
+        snap, why = None, ""
+    else:
+        snap, why = _try_snapshot()
+    if paged:
+        pass
+    elif snap:
         pol = snap["policy"]
         schema = snap["schema"]
-        unc = assert_redacted(snap["data"])
+        unc = assert_redacted(snap["data"], snap["redaction"]["spec"])
         manifest["redaction"] = {"mode": "database", "version": snap["redaction"]["version"], "known_client_terms": snap["redaction"].get("known_client_terms"),
                                  "columns": sorted(f"{s['table_name']}.{s['column_name']}" for s in snap["redaction"]["spec"] if isinstance(s, dict)), "fields_failed_closed": unc}
         data_by_table = {t: _encode_rows(rows) for t, rows in sorted(snap["data"].items())}
