@@ -1,0 +1,26 @@
+name: action-pin-verify
+# Verifies that each SHA-pinned action IS the release its `# vX.Y.Z` comment says (git ls-remote, annotated tags peeled) and, as an advisory,
+# that the commit sits on the upstream default branch. check_workflow_pins.py only checks the FORM of a pin; this checks the CONTENT.
+# Separate workflow and job name: the required checks `unit` and `migrations` are untouched. Read-only token, no secrets, installs nothing.
+on:
+  pull_request:
+    paths: [".github/workflows/**", "scripts/verify_action_pins.py", "scripts/check_workflow_pins.py"]
+  schedule:
+    - cron: "41 6 * * 1"
+permissions:
+  contents: read
+concurrency:
+  group: pins-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  action-pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tag -> commit mapping of every pinned action (blocking) and default-branch ancestry (advisory)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/verify_action_pins.py

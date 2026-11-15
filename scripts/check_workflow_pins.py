@@ -6,6 +6,7 @@ Rules, for every file under .github/workflows and .github/actions:
   P2  a pinned `uses:` carries a trailing `# <version>` comment (so a human can see what the SHA is)
   P3  every workflow file declares a top-level `permissions:` block (least privilege; jobs may narrow or widen explicitly)
   P4  every actions/checkout step sets `persist-credentials: false` in its `with:` block
+  P5  every service/job-container `image:` in a workflow is pinned by @sha256:<64 hex> (a moving tag such as postgres:16 is refused)
 Usage: scripts/check_workflow_pins.py [repo_root]    exit 0 clean, 1 violations.
 """
 import os
@@ -13,6 +14,7 @@ import re
 import sys
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
+IMAGE = re.compile(r"^\s*image:\s*(?P<ref>[^\s#]+)\s*(?:#.*)?$")
 USES = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<ref>[^\s#]+)\s*(?P<comment>#.*)?$")
 
 
@@ -24,6 +26,12 @@ def check_text(path, text):
         errs.append(f"{path}: P3 no top-level `permissions:` block")
     for i, line in enumerate(lines):
         if line.lstrip().startswith("#"):
+            continue
+        im = IMAGE.match(line) if is_workflow else None
+        if im:
+            iref = im.group("ref").strip("'\"")
+            if not re.search(r"@sha256:[0-9a-f]{64}$", iref):
+                errs.append(f"{path}:{i + 1}: P5 container image not pinned by @sha256 digest: {iref}")
             continue
         m = USES.match(line)
         if not m:

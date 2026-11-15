@@ -48,6 +48,16 @@ class T(unittest.TestCase):
         t = OK + "      - uses: docker://alpine@sha256:" + "b" * 64 + "\n"
         self.assertEqual(c.check_text(".github/workflows/x.yml", t), [])
 
+    def test_service_image_needs_digest(self):
+        t = OK + "    services:\n      postgres:\n        image: postgres:16\n"
+        e = c.check_text(".github/workflows/x.yml", t)
+        self.assertTrue(any("P5" in x for x in e), e)
+        t = OK + "    services:\n      postgres:\n        image: postgres:16@sha256:" + "c" * 64 + "   # 16.16\n"
+        self.assertEqual(c.check_text(".github/workflows/x.yml", t), [])
+        # a bare tag with a trailing comment is still refused; a non-workflow file is not scanned for images
+        self.assertTrue(any("P5" in x for x in c.check_text(".github/workflows/x.yml", OK + "        image: ubuntu:24.04   # x\n")))
+        self.assertEqual(c.check_text(".github/actions/y/action.yml", OK + "        image: ubuntu:24.04\n"), [])
+
     def test_commented_uses_ignored(self):
         self.assertEqual(c.check_text(".github/workflows/x.yml", OK + "      # uses: evil/x@v1\n"), [])
 
