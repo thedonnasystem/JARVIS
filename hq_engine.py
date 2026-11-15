@@ -862,24 +862,35 @@ def resume_after_credits() -> int:
 
 
 STARTUP_GRACE_MINUTES = 2  # a deploy can briefly overlap the old container; leave very fresh work alone
-_started = False
+_started = False         # the startup-grace requeue of 'doing' tasks has run; later ticks use the normal stale timeout
+_llm_recovered = False   # the orphaned llm_calls reservations have been released (retried until it succeeds)
 
 
 def _recover_stale() -> None:
     """A restart mid-run leaves tasks stuck in 'doing' and spend held in 'reserved'.
     Only one engine runs, so on the first tick after a start anything older than the grace period is orphaned:
-    requeue it and release its hold right away. After that, fall back to the normal stale timeout."""
-    global _started
+    requeue it and release its hold right away. After that, fall back to the normal stale timeout.
+    The two steps have separate flags: an unreadable executor_runs table delays only the spend release, it must
+    never make the next tick reuse the startup grace and requeue fresh 'doing' tasks again."""
+    global _started, _llm_recovered
     minutes = STARTUP_GRACE_MINUTES if not _started else STALE_MINUTES
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
     _patch(f"tasks?status=eq.doing&updated_at=lt.{cutoff}", {"status": "todo", "updated_at": _now()})
-    if not _started:
+    _started = True
+    if not _llm_recovered:
         keep = _running_executor_calls()
         if keep is None:  # cannot tell which reservations belong to a live executor run: release nothing now, retry next tick (over-counting spend is the safe side)
             return
         skip = f"&id=not.in.({','.join(keep)})" if keep else ""
         _patch(f"llm_calls?status=eq.reserved&started_at=lt.{cutoff}{skip}", {"status": "released", "finished_at": _now()})
-        _started = True
+        _llm_recovered = True
+
+
+def _is_pgrst205(e: "urllib.error.HTTPError") -> bool:
+    try:
+        return "PGRST205" in (e.read() or b"").decode("utf-8", "replace")
+    except Exception:
+        return False
 
 
 def _running_executor_calls() -> "list[str] | None":
@@ -888,7 +899,7 @@ def _running_executor_calls() -> "list[str] | None":
     try:
         rows = _get("executor_runs?status=eq.running&llm_call_id=not.is.null&select=llm_call_id")
     except urllib.error.HTTPError as e:
-        if e.code in (400, 404):  # table not installed yet (executor migrations not applied): nothing to protect
+        if e.code == 404 or _is_pgrst205(e):  # table not installed yet (executor migrations not applied): nothing to protect
             return []
         logger.warning("could not read running executor runs: HTTP %s", e.code)
         return None
