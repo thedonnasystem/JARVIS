@@ -622,6 +622,8 @@ def main():
         check("R4 empty bucket fails loudly instead of restoring nothing", code != 0 and "no backups found" in rr4.get("error", ""), rr4.get("error", "")[:80])
 
     bad_n = [r for r in results if not r[1]]
+    for n, ok, d in bad_n:      # failures are listed right above the total so a CI log tail (the gate shows only the last lines) always names them
+        print(f"    FAILED CHECK  {n}  [{str(d)[:300]}]")
     print(f"\n{len(results) - len(bad_n)}/{len(results)} checks passed")
     open(os.path.join(work, "drill_results.json"), "w").write(json.dumps([{"check": n, "pass": ok, "detail": d} for n, ok, d in results], indent=1))
     print("results file:", os.path.join(work, "drill_results.json"))
