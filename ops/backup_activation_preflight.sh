@@ -70,20 +70,24 @@ PY
     echo "$out"; echo "$out" | grep -q '^FAIL' && fails=$((fails+1)); echo "$out" | grep -q '^WARN' && warns=$((warns+1))
   fi
 fi
-# 7 client-PII exclusion: DO NOT ACTIVATE until it ships. backup_schema()/backup_snapshot() enumerate every public table dynamically, so
-# ws_* / ffm_* / client_workspaces would be exported off-site. WARN (FAIL with --require-pii-exclusion) if any such table exists.
+# 7 client-PII exclusion. The DATABASE decides what is exported (public.backup_export_policy(), migration 20261119_backup_exclude_client_pii_v1). This check reads that decision
+# (table NAMES only, never rows or the URL) and requires: the function exists; no client table is on the exported list; nothing is unclassified.
+# WARN (FAIL with --require-pii-exclusion) otherwise. Then the KNOWN LEAK PATHS below need an explicit owner decision (BACKUP_LEAK_PATHS_ACCEPTED=1).
 pii_flag() { if [ "$reqpii" = 1 ]; then bad "$1"; else warn "$1"; fi; }
 dburl="${PII_CHECK_DB_URL:-${REPLICA_URL:-}}"
-if [ -z "$dburl" ]; then pii_flag "client-PII table check could not run: set PII_CHECK_DB_URL (read-only connection string of the target DB)"
-elif ! command -v psql >/dev/null 2>&1; then pii_flag "client-PII table check could not run: psql not installed"
+if [ -z "$dburl" ]; then pii_flag "client-PII policy check could not run: set PII_CHECK_DB_URL (read-only connection string of the target DB)"
+elif ! command -v psql >/dev/null 2>&1; then pii_flag "client-PII policy check could not run: psql not installed"
 else
-  tl="$(psql "$dburl" -Atqc "select relname from pg_class where relnamespace='public'::regnamespace and relkind in ('r','p') and relname not in ('push_config','push_subscriptions') order by 1" 2>/dev/null)"; rc=$?
-  if [ $rc != 0 ]; then pii_flag "client-PII table check could not run: database not reachable"
+  pol="$(psql "$dburl" -Atqc "select jsonb_array_length(p->'exported') || ' ' || jsonb_array_length(p->'unclassified') || ' ' || coalesce((select string_agg(e, ',') from jsonb_array_elements_text(p->'exported') e where e ~ '^(ws_|ffm_)' or e in ('client_workspaces','leads','outbox','lead_replies','deals','contact_suppressions','setters','setter_events','setter_payouts')), '-') || ' ' || coalesce((select string_agg(e, ',') from jsonb_array_elements_text(p->'unclassified') e), '-') from (select public.backup_export_policy() p) q" 2>/dev/null)"; rc=$?
+  if [ $rc != 0 ] || [ -z "$pol" ]; then pii_flag "client-PII policy check could not run: database not reachable or backup_export_policy() is not installed (apply migration 20261119_backup_exclude_client_pii_v1 first)"
   else
-    hits="$(printf '%s\n' "$tl" | grep -E '^(ws_|ffm_|client_workspaces$)' | tr '\n' ' ')"
-    if [ -n "$hits" ]; then pii_flag "client-PII tables would be included in off-site backups: ${hits}- DO NOT ACTIVATE until the PII exclusion ships (see BACKUP_ACTIVATION_RUNBOOK.md)"
-    else ok "no ws_* / ffm_* / client_workspaces tables in the backup table list ($(printf '%s\n' "$tl" | grep -c .) tables checked)"; fi
+    set -- $pol; nexp="$1"; nun="$2"; bad_exp="$3"; uncl="$4"
+    if [ "$bad_exp" != "-" ]; then pii_flag "client tables are on the EXPORT list: ${bad_exp} - DO NOT ACTIVATE"
+    elif [ "$nun" != "0" ]; then pii_flag "unclassified tables (not exported until classified in a migration): ${uncl} - review before activating"
+    else ok "export policy: ${nexp} tables exported, no client table on the list, nothing unclassified"; fi
   fi
 fi
+if [ "${BACKUP_LEAK_PATHS_ACCEPTED:-0}" = 1 ]; then ok "owner has accepted the known client-text leak paths (BACKUP_LEAK_PATHS_ACCEPTED=1)"
+else pii_flag "KNOWN LEAK PATHS need an owner decision: client names/notes can be copied into EXPORTED tables (audit_log.detail.reason, ledger.note for setter payouts, tasks.result, agent_runs.summary). See DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2. Set BACKUP_LEAK_PATHS_ACCEPTED=1 only after the owner decides"; fi
 echo; echo "Result: $fails FAIL, $warns WARN."; echo "Not checked here (check by eye): bucket is Private; lifecycle rule set; BACKUP_KEY stored in 2 places; migration 20261113_backup_schema_v1.sql applied (the Telegram /backup check shows it)."
 [ "$fails" = 0 ]

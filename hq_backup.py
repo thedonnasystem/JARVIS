@@ -24,15 +24,11 @@ logger = logging.getLogger(__name__)
 
 FORMAT = 2
 SKIP = {"push_config", "push_subscriptions"}   # hold private keys / endpoints: never exported
-# Used only when public.backup_schema() is not installed yet. With the function present the table list comes from the database itself,
-# so a table added later cannot be silently left out.
-TABLES = ["departments", "deals", "audit_log", "build_requests", "company_profile", "dayjob_days", "dayjob_targets", "agents",
-          "accounts_registry", "handbook", "ledger", "ideas", "escalations", "leads", "human_handoffs", "owner_messages", "model_prices",
-          "predictions", "tool_registry", "reconciliation_flags", "tasks", "systems", "llm_calls", "ventures", "memory", "outbox",
-          "system_state", "missions", "agent_runs", "action_policy", "action_log", "approval_requests", "capital_policy",
-          "spend_reservations", "bank_accounts", "bank_balances", "bank_transactions", "mission_outcomes", "org_changes", "venture_goals",
-          "app_owners", "web_messages", "payment_instructions", "venture_assets", "venture_procedures", "account_requests",
-          "setter_terms", "setters", "setter_events", "setter_payouts", "waterfall_policy", "integration_status", "alert_state", "contact_suppressions", "lead_replies", "venture_config"]
+# Client personal data is NOT exported off-site (owner decision C, Nov 2026; DATA_CLASSIFICATION_AND_BACKUP_POLICY.md). The database decides what is exported
+# (public.backup_export_policy(), migration 20261119_backup_exclude_client_pii_v1). This pattern is a SECOND, independent lock in this code: whatever the database says,
+# a table that matches it is never written to a backup file. It is deliberately narrower than the database list; it exists so one wrong allow-list entry cannot leak.
+ALWAYS_EXCLUDE = re.compile(r"^(ws_|ffm_)|^(client_workspaces|leads|outbox|lead_replies|deals|contact_suppressions|setters|setter_events|setter_payouts)$")
+# (the old built-in table list is gone on purpose: with no database export policy there is no off-site export, so a table can never be exported just because a list here names it)
 ORDER = {"company_profile": "venture_slug", "departments": "slug", "agents": "slug", "app_owners": "email", "dayjob_days": "day",
          "tool_registry": "slug", "systems": "name", "action_policy": "action", "model_prices": "model", "setters": "id",
          "integration_status": "key", "alert_state": "key"}
@@ -74,6 +70,26 @@ def get_schema() -> dict | None:
     if not isinstance(s, dict) or not s.get("tables"):
         raise BackupError("backup_schema() returned an unexpected result")
     return s
+
+
+def _check_policy(p) -> dict:
+    if not (isinstance(p, dict) and isinstance(p.get("exported"), list) and isinstance(p.get("excluded"), list) and isinstance(p.get("unclassified"), list)):
+        raise BackupError("backup_export_policy() returned an unexpected result; refusing to export")
+    bad = sorted(t for t in p["exported"] if ALWAYS_EXCLUDE.search(str(t)))
+    if bad:
+        raise BackupError("export policy lists client tables as exportable (" + ", ".join(bad[:5]) + "); refusing to export")
+    return p
+
+
+def get_policy() -> dict:
+    """Which tables may leave the database. FAIL CLOSED: without the policy function there is no off-site export at all (never 'export everything')."""
+    try:
+        p = hq._request("POST", "/rest/v1/rpc/backup_export_policy", {}, timeout=60)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise BackupError("backup_export_policy() is not installed (migration 20261119_backup_exclude_client_pii_v1); refusing to export client data off-site") from None
+        raise
+    return _check_policy(p)
 
 
 def _pk_order(schema: dict | None, table: str) -> str:
@@ -168,9 +184,10 @@ def _try_snapshot() -> tuple[dict | None, str]:
         return None, f"backup_snapshot() failed ({type(e).__name__})"
     if not isinstance(snap, dict) or not isinstance(snap.get("data"), dict) or not isinstance(snap.get("schema"), dict) or not snap["schema"].get("tables"):
         return None, "backup_snapshot() returned an unexpected result"
-    want = sorted(t["name"] for t in snap["schema"]["tables"] if t["name"] not in SKIP)
-    if sorted(snap["data"]) != want or SKIP & set(snap["data"]):
-        return None, "backup_snapshot() table list does not match its own schema"
+    pol = _check_policy(snap.get("policy"))            # a snapshot without a policy is from the old function, which exports client data: refuse (raises BackupError)
+    want = sorted(t for t in pol["exported"] if t not in SKIP)
+    if sorted(snap["data"]) != want or SKIP & set(snap["data"]) or any(ALWAYS_EXCLUDE.search(t) for t in snap["data"]):
+        return None, "backup_snapshot() table list does not match its own policy"
     return snap, ""
 
 
@@ -181,25 +198,31 @@ def dump() -> tuple[bytes, dict]:
                 "skipped": sorted(SKIP), "tables": {}, "schema": None}
     snap, why = _try_snapshot()
     if snap:
+        pol = snap["policy"]
         schema = snap["schema"]
         data_by_table = {t: _encode_rows(rows) for t, rows in sorted(snap["data"].items())}
-        manifest["table_list_source"] = "database"
+        manifest["table_list_source"] = "database export policy"
         manifest["consistency"] = {"consistent": True, "method": "single SQL statement snapshot (all tables + schema)", "attempts": 1}
         names = list(data_by_table)
     else:
         schema = get_schema()
-        names = [t["name"] for t in schema["tables"]] if schema else list(TABLES)
-        names = [t for t in names if t not in SKIP]
-        manifest["table_list_source"] = "database" if schema else "built-in list (backup_schema() not installed)"
+        pol = get_policy()
+        names = [t for t in pol["exported"] if t not in SKIP]
+        manifest["table_list_source"] = "database export policy"
         data_by_table, manifest["consistency"] = _read_consistent(names, schema)
         manifest["consistency"]["snapshot_unavailable"] = why
         if schema:
             # Read the schema AGAIN after the data: sequence positions must not be older than the rows we saved (a restored sequence behind the
             # data would hand out ids that already exist). If the table list changed while we were reading, refuse: tomorrow's run starts clean.
             after = get_schema()
-            if not after or sorted(t["name"] for t in after["tables"]) != sorted(t["name"] for t in schema["tables"]):
+            if not after or sorted(t["name"] for t in after["tables"]) != sorted(t["name"] for t in schema["tables"]) or get_policy()["exported"] != pol["exported"]:
                 raise BackupError("tables were added or removed while the backup was being read; will retry later")
             schema = after
+    if any(ALWAYS_EXCLUDE.search(t) for t in names):
+        raise BackupError("a client table reached the export list; refusing to write the backup")
+    manifest["excluded"] = sorted((str(e.get("table")), str(e.get("class"))) for e in pol["excluded"] if isinstance(e, dict))    # names and classes only, never data
+    manifest["excluded"] = [list(x) for x in manifest["excluded"]]
+    manifest["unclassified_excluded"] = sorted(str(t) for t in pol["unclassified"])
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for t in names:

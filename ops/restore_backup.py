@@ -583,7 +583,10 @@ def smoke(cur, rep: dict) -> bool:
     return ok
 
 
-CATEGORIES = {"Tasks and missions": ["tasks", "missions"], "Leads and outbox drafts": ["leads", "outbox"], "Company memory": ["memory", "company_profile", "handbook"],
+# Client personal data is deliberately NOT in off-site backups (DATA_CLASSIFICATION_AND_BACKUP_POLICY.md): for these, "correct" means ABSENT from the backup file.
+# Their data is recovered from the database provider's own backups, never from this file.
+EXCLUDED_BY_POLICY = {"Leads and outbox drafts (excluded by policy)": ["leads", "outbox", "lead_replies", "deals", "contact_suppressions", "setters", "client_workspaces"]}
+CATEGORIES = {"Tasks and missions": ["tasks", "missions"], "Company memory": ["memory", "company_profile", "handbook"],
               "Spending ledger and LLM calls": ["ledger", "llm_calls", "spend_reservations", "capital_policy"], "Audit logs": ["audit_log", "action_log"]}
 
 
@@ -593,6 +596,10 @@ def summarize(rep: dict) -> None:
     for name, tabs in CATEGORIES.items():
         pr = [t for t in tabs if t in rows]
         cat[name] = {"tables": {t: f'{rows[t]["backup_rows"]} -> {rows[t]["restored_rows"]}' for t in pr}, "all_identical": all(rows[t]["identical"] for t in pr) and bool(pr)}
+    for name, tabs in EXCLUDED_BY_POLICY.items():
+        leaked = [t for t in tabs if t in rows or t.startswith(("ws_", "ffm_")) and t in rows]
+        leaked += sorted(t for t in rows if t.startswith(("ws_", "ffm_")))
+        cat[name] = {"tables": {t: "present in backup (POLICY VIOLATION)" for t in sorted(set(leaked))} or {"(none)": "absent from backup, as required"}, "all_identical": not leaked}
     rep["business_data"] = cat
 
 

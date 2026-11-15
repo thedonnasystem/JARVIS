@@ -18,7 +18,7 @@ Do not write recruiting ad copy, funnel stages or earnings claims until `recruit
 5. Owner approves activation (owner-only); later changes make it stale. Going live is a separate owner gate.
 
 ## What the AI may and may not touch
-Same split as Client 1: marketing drafts and counts only. It must not handle policy applications, health information, banking, ID or other sensitive personal or financial data (life insurance leads often volunteer health details; the note field is NOT routed, and the guard refuses banking/ID/income terms. Health terms are not in the detector: treat any health detail in a lead note as a human-only matter and CONFIRM whether to add health terms to the guard).
+Same split as Client 1: marketing drafts and counts only. It must not handle policy applications, health information, banking, ID or other sensitive personal or financial data (life insurance leads often volunteer health details; the note field is NOT routed, and the guard refuses banking/ID/income terms. Health terms are in the detector (20261119): treat any health detail in a lead note as a human-only matter and CONFIRM whether to add health terms to the guard).
 
 ## Compliance guardrails to confirm with the client
 1. Insurance advertising in Ontario: FSRA regulates insurance agents; O. Reg. 7/00 (Unfair or Deceptive Acts or Practices, under the Insurance Act) exists and governs misleading conduct. Title: https://www.ontario.ca/laws/regulation/r00007 (existence confirmed by search; operative wording NOT reviewed in this build). CONFIRM with the client's agency/MGA: required licence disclosures, titles, product claims and comparison rules in ads.
@@ -37,4 +37,4 @@ Same weekly report. If recruiting is in scope, the owner defines what "booked" m
 Same list as Client 1 (Meta account, landing page/form, client CRM or inbox, booking link, owner approvals). All need the client's own credentials; none are built.
 
 ## Open items for the owner
-Recruiting model; client acquisition vs recruiting scope; budget; geography; CRM; sponsoring-agency sign-off route; consent wording; Meta category confirmation; whether to add health terms to the guard.
+Recruiting model; client acquisition vs recruiting scope; budget; geography; CRM; sponsoring-agency sign-off route; consent wording; Meta category confirmation; consent wording. (Health terms ARE now in the guard as of 20261119; this blocks ordinary insurance wording such as "health insurance", "disability insurance", "critical illness" in lead/campaign text - decide how to describe products, see policy doc section 5.)

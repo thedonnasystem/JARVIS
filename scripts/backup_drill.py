@@ -67,6 +67,12 @@ def seed(conn):
                    comment on view public.drill_ref_v is 'view comment';
                    comment on function public.capital_mode() is 'returns the capital mode';
                    grant usage on schema public to anon, authenticated, service_role;""")
+    # scratch DB only: the drill's own fixture tables are not on the reviewed classification list, so by design (fail closed) they would not be exported.
+    # Re-declare the classification here WITH them so the drill can prove restore fidelity on tables that are exported.
+    cur.execute("alter function public.backup_classification() rename to __orig_backup_classification")
+    cur.execute("""create function public.backup_classification() returns table (table_name text, data_class text, note text) language sql immutable set search_path to 'pg_catalog','public' as $f$
+        select o.table_name, o.data_class, o.note from public.__orig_backup_classification() o
+        union all select * from (values ('drill_ref','internal','drill fixture'),('drill_child','internal','drill fixture'),('drill_pair_a','internal','drill fixture'),('drill_pair_b','internal','drill fixture')) v $f$""")
     conn.commit()
 
 
@@ -152,6 +158,11 @@ def main():
         check("14 comments (table, column, view, function) and schema USAGE grants are restored", cm == ("Reference table: it's \"quoted\" 美味", "human label", "view comment", "returns the capital mode") and sp == (True, True), f"{cm} {sp}")
         import io as _io, tarfile as _tf
         mf = json.loads(_tf.open(fileobj=_io.BytesIO(Fernet(key.encode()).decrypt(enc)), mode="r:gz").extractfile("manifest.json").read())
+        _tar = _tf.open(fileobj=_io.BytesIO(Fernet(key.encode()).decrypt(enc)), mode="r:gz")
+        _names = _tar.getnames(); _blob = b"".join(_tar.extractfile(n).read() for n in _names if n.startswith("data/"))
+        _client = [n for n in _names if n.startswith("data/") and (n[5:].split(".")[0] in ("leads", "outbox", "lead_replies", "deals", "contact_suppressions", "setters", "setter_events", "setter_payouts", "client_workspaces") or n[5:].startswith(("ws_", "ffm_")))]
+        check("P1 CLIENT PII IS NOT IN THE OFF-SITE FILE: no client table files, and none of the seeded lead names/emails/phones appear in any data file", not _client and b"lead1@example.com" not in _blob and b"Lead 3" not in _blob and b"+1613555" not in _blob and "schema.json" in _names, f"client files: {_client}")
+        check("P2 the file carries the export policy (what was excluded and why) and the schema still rebuilds the empty client tables", any(t["name"] == "leads" for t in json.loads(_tar.extractfile("schema.json").read())["tables"]) and any(e[0] == "leads" for e in mf.get("excluded", [])), "")
         check("2b the backup used the single-statement database snapshot (consistent=True)", mf["consistency"]["consistent"] and "single SQL statement" in mf["consistency"]["method"], json.dumps(mf["consistency"]))
         # live-concurrency proof: a writer commits paired rows into two tables (one transaction each) while snapshots are taken; every snapshot must show matching pairs
         import threading, time
