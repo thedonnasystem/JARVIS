@@ -7,6 +7,10 @@ title = "JARVIS / Fendezy HQ"
 [extend]
 useDefault = true
 
+# Exact-commit allowlist (the ONLY commit-level entry; never add path-wide or rule-wide ones).
+# 5828a5e = head of closed PR #14 (superseded by #15). It carries synthetic suppression-key test fixtures
+# ("fixture-key-..." in sqltests/*_check.sql and scripts/replica/e2e.sql), no real secret. GitHub keeps refs/pull/14/head forever and the
+# scan walks every fetched ref, so the commit must be named here. Its content is not in overnight-build; the successor PR uses repeat('fixture-key-', 4).
 [[allowlists]]
 description = "Swarm hardening evidence log: probe seeded FAKE_GLOBAL_SECRET with a throwaway value (stored form shown)"
 condition = "AND"
@@ -55,3 +59,7 @@ condition = "AND"
 paths = ['''^webapp/vendor/supabase\.js$''']
 regexTarget = "line"
 regexes = ['''exports\.supabase=t\(\)''']
+
+[[allowlists]]
+description = "Closed PR #14 head 5828a5e: synthetic suppression-key test fixtures only (exact commit; see comment at top)"
+commits = ["5828a5e4f05e5c53c66f9a911e024161d46fd325"]
