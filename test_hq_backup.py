@@ -16,6 +16,8 @@ ENV = {"BACKUP_KEY": KEY, "BACKUP_PUT_URL": "https://store.example.com/b/{name}"
 SCHEMA = {"server_version": "17.0", "tables": [{"name": "ideas"}, {"name": "ledger"}, {"name": "push_config"}, {"name": "tasks"}],
           "constraints": [{"table": "tasks", "type": "p", "def": "PRIMARY KEY (id)"}, {"table": "ledger", "type": "p", "def": "PRIMARY KEY (day, kind)"}],
           "functions": [{"sig": "f()", "def": "create function f()"}], "indexes": [], "triggers": []}
+# the fake rows use made-up columns (v, note): treat the made-up ones as KEEP, the real spec columns stay as they are
+B.KEEP_COLUMNS = B.KEEP_COLUMNS | {("ideas", "v"), ("ideas", "note"), ("tasks", "v"), ("ledger", "v")}
 ROWS = {"ideas": 3, "ledger": 3, "tasks": 2, "push_config": 1}
 
 
@@ -818,3 +820,36 @@ class LeakRedactionV2(unittest.TestCase):
         with mock.patch("hq._request", side_effect=r2):
             with self.assertRaises(B.BackupError):
                 B.dump()
+
+
+class FallbackMatchesSpec(unittest.TestCase):
+    """Re-review finding 3: the fallback blanked 35 of 117 strict/light columns (a hand list). It is now derived from backup_redaction_spec()."""
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
+        import gen_backup_keep
+        cls.gen = gen_backup_keep
+        cls.rows = gen_backup_keep.spec()
+
+    def test_generated_keep_file_is_current(self):
+        self.assertEqual(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "hq_backup_keep.py")).read(), self.gen.render(), "run python3 scripts/gen_backup_keep.py")
+
+    def test_the_spec_has_the_expected_shape(self):
+        self.assertGreater(len(self.rows), 200)
+        self.assertGreater(sum(1 for r in self.rows if r[3] in ("strict", "light")), 100)
+
+    def test_every_strict_light_and_blank_column_is_blanked_by_the_fallback(self):
+        import hq_backup_keep
+        real_keep = hq_backup_keep.KEEP
+        for t, c, kind, mode in self.rows:
+            val = {"a": "Jean Tremblay 613-555-0142"} if kind == "json" else ["Jean Tremblay"] if kind == "array" else "Jean Tremblay 613-555-0142"
+            out = B.blank_leak_columns(t, [{"id": 1, c: val}])[0]
+            if mode == "keep":
+                self.assertEqual(out[c], val, (t, c))
+            else:
+                self.assertNotIn("Tremblay", json.dumps(out[c]), (t, c, mode))
+                self.assertNotIn("613-555", json.dumps(out[c]), (t, c, mode))
+
+    def test_a_column_nobody_classified_is_blanked_and_plain_ids_survive(self):
+        out = B.blank_leak_columns("ideas", [{"id": "3f2a1b4c-1111-4222-8333-444455556666", "zz_new_note": "Jean Tremblay", "created_at": "2026-11-15T10:30:00+00:00", "n": 5, "ok": True, "status": "new"}])[0]
+        self.assertEqual((out["zz_new_note"], out["id"], out["created_at"], out["n"], out["ok"], out["status"]), (B.UNCERTAIN, "3f2a1b4c-1111-4222-8333-444455556666", "2026-11-15T10:30:00+00:00", 5, True, "new"))

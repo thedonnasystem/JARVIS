@@ -48,7 +48,7 @@ for v in RESTORE_B2_AUTH RESTORE_B2_BUCKET_ID RESTORE_DB_URL; do
   [ -n "${!v:-}" ] && bad "$v is set here; restore variables must never live in Railway" || ok "$v is not set (good)"
 done
 # 5 repo pieces the flow depends on
-for f in hq_backup.py hq_scrub.py ops/restore_backup.py ops/restore_local.sh migrations/20261113_backup_schema_v1.sql migrations/20261120_backup_redact_leak_paths_v1.sql migrations/20261120_redaction_denylist_v1.sql migrations/20261120_leak_source_prevention_v1.sql; do
+for f in hq_backup.py hq_backup_keep.py hq_scrub.py ops/restore_backup.py ops/restore_local.sh migrations/20261113_backup_schema_v1.sql migrations/20261120_backup_redact_leak_paths_v1.sql migrations/20261120_redaction_denylist_v1.sql migrations/20261120_leak_source_prevention_v1.sql; do
   [ -f "$root/$f" ] && ok "found $f" || bad "missing $f"
 done
 python3 -c "import psycopg2" 2>/dev/null && ok "psycopg2 available (needed by the restore tool on YOUR computer)" || warn "psycopg2-binary not installed here (needed only where you run the restore drill)"

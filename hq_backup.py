@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import hq
+from hq_backup_keep import KEEP as KEEP_COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -31,25 +32,14 @@ ALWAYS_EXCLUDE = re.compile(r"^(ws_|ffm_)|^(client_workspaces|leads|outbox|lead_
 # Client text that the system copies into EXPORTED tables (DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2). The database redacts these columns inside backup_snapshot()
 # (migration 20261120_backup_redact_leak_paths_v1, mirrored by public.backup_redaction_spec()); this is the SECOND, independent lock in code:
 #   * a snapshot that does not say it was redacted for all four required paths is refused (an old backup_snapshot() would export the raw text);
-#   * the two-read fallback never exports these columns' text (it blanks them: REDACTION_BLANK);
-#   * after redaction, any email address or phone number still found in a strict column makes the backup REFUSE to be written.
+#   * the two-read fallback exports no string outside the spec's KEEP columns (blank_leak_columns, hq_backup_keep.KEEP generated from the spec);
+#   * after redaction, any email address, phone number or contact-like JSON number still found in a strict column (the snapshot's own spec) makes the backup REFUSE to be written.
 UNCERTAIN = "[redacted:uncertain]"
 REDACTION_VERSION = 2
 REQUIRED_REDACTION = {("audit_log", "detail"), ("ledger", "note"), ("tasks", "result"), ("agent_runs", "summary")}
-REDACTION_BLANK = {   # table -> [(column, kind)]; the two-read fallback has no database redactor, so EVERY free-text column of the spec (finding list) is blanked; kind json keeps keys, numbers and booleans and blanks every string
-    "audit_log": [("detail", "json")], "ledger": [("note", "text")], "tasks": [("result", "text"), ("title", "text"), ("detail", "text")], "agent_runs": [("summary", "text")],
-    "escalations": [("summary", "text"), ("evidence", "json")], "memory": [("content", "text")], "owner_messages": [("body", "text"), ("answer", "text"), ("options", "json")], "human_handoffs": [("task", "text"), ("why_human", "text")],
-    "missions": [("result", "text"), ("title", "text"), ("objective", "text"), ("evidence", "json"), ("plan", "json"), ("checkpoint", "json")],
-    "web_messages": [("body", "text"), ("payload", "json")],
-    "action_log": [("reason", "text"), ("detail", "json"), ("result", "text"), ("evidence", "text")],
-    "bank_transactions": [("description", "text"), ("note", "text")],
-    "ideas": [("description", "text"), ("result", "text")],
-    "approval_requests": [("recommendation", "text")],
-    "payment_instructions": [("payee", "text")],
-    "reconciliation_flags": [("detail", "text")],
-    "executor_runs": [("refusal_reason", "text")],
-    "evidence_sources": [("text", "text")],
-    "venture_assets": [("notes", "text")]}
+# The two-read fallback has no database redactor, so it blanks EVERY string except (a) columns the export spec classifies KEEP (hq_backup_keep.KEEP, generated from
+# backup_redaction_spec() by scripts/gen_backup_keep.py; a unit test fails when it is stale) and (b) values that are plainly not text (uuid, ISO timestamp / date, number).
+# A column nobody classified yet is therefore blanked too: fail closed. json keeps keys, numbers and booleans.
 STRICT_COLUMNS = {"audit_log": ["detail"], "ledger": ["note"], "tasks": ["result"], "agent_runs": ["summary"], "escalations": ["summary"]}   # floor only: the snapshot spec adds every other strict column
 _EMAIL = re.compile(r"[A-Za-z0-9._%+'-]{2,}@[A-Za-z0-9-]{2,}(?:\.[A-Za-z0-9-]{2,})+")
 _UUID_ISO = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9:.]+(?:Z|[+-][0-9:]+)?)?|[0-9a-fA-F]{32,}")   # ids, timestamps and hashes are not phone numbers
@@ -61,7 +51,7 @@ ORDER = {"company_profile": "venture_slug", "departments": "slug", "agents": "sl
 PAGE = 1000
 MAX_ROWS_PER_TABLE = 500_000
 PAGE_REDACT = 200              # rows per backup_snapshot_page() call (each page scans and redacts its own rows)
-SNAPSHOT_BUDGET_S = 60         # above this estimated cost one backup_snapshot() statement is too risky (statement_timeout) and the export is paged
+SNAPSHOT_BUDGET_S = 40         # above this estimated cost one backup_snapshot() statement is too risky (statement_timeout) and the export is paged
 
 B2_AUTH_URL = "https://api.backblazeb2.com/b2api/v4/b2_authorize_account"
 B2_HOST_SUFFIXES = (".backblazeb2.com", ".backblaze.com")   # every URL B2 hands back (api, upload pods) must be https on a Backblaze domain, or we refuse to send data to it
@@ -154,18 +144,24 @@ def _blank(o):
     return o
 
 
+_NOT_TEXT = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9:.]+(?:Z|[+-][0-9:]+)?)?|-?[0-9]+(?:\.[0-9]+)?")
+
+
+def _blank_value(o):
+    if isinstance(o, str):
+        return o if _NOT_TEXT.fullmatch(o) else UNCERTAIN
+    if isinstance(o, dict):
+        return {k: _blank_value(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_blank_value(v) for v in o]
+    return o
+
+
 def blank_leak_columns(table: str, rows: list) -> list:
-    """Two-read fallback only: the database did not redact, so the free-text leak columns of these rows are replaced by the marker (ids, numbers, statuses and keys are kept)."""
-    cols = REDACTION_BLANK.get(table)
-    if not cols:
-        return rows
+    """Two-read fallback only (the database did not redact): every string of every column that is not KEEP in the export spec is replaced by the marker."""
     out = []
     for r in rows:
-        r = dict(r)
-        for c, _kind in cols:
-            if r.get(c) is not None:
-                r[c] = _blank(r[c])
-        out.append(r)
+        out.append({c: (v if (table, c) in KEEP_COLUMNS or v is None else _blank_value(v)) for c, v in r.items()})
     return out
 
 
@@ -421,7 +417,7 @@ def dump() -> tuple[bytes, dict]:
         manifest["table_list_source"] = "database export policy"
         data_by_table, manifest["consistency"] = _read_consistent(names, schema)
         manifest["consistency"]["snapshot_unavailable"] = why
-        manifest["redaction"] = {"mode": "fallback_blanked", "columns": sorted(f"{t}.{c}" for t, cs in REDACTION_BLANK.items() for c, _ in cs if t in names)}
+        manifest["redaction"] = {"mode": "fallback_blanked", "rule": "every string outside the spec's KEEP columns is blanked", "keep_columns": len(KEEP_COLUMNS)}
         if schema:
             # Read the schema AGAIN after the data: sequence positions must not be older than the rows we saved (a restored sequence behind the
             # data would hand out ids that already exist). If the table list changed while we were reading, refuse: tomorrow's run starts clean.

@@ -374,6 +374,107 @@ begin
     if not has_function_privilege('service_role', f, 'execute') then raise exception 'I5b service_role cannot execute %', f; end if;
   end loop;
 
+
+  -- ============================================================ J. HOT CONTEXT KEEPS THE SQUASHED FORM OF EVERY LIVE NAME (re-review finding 1)
+  -- Property: for every variant of every name, in every strict/light column, backup_snapshot() == the direct redactor with the FULL live context, and the single-statement
+  -- snapshot == the paged export. (The hot context narrows whole-word phrases to names that occur; the squashed check must not be narrowed.)
+  insert into public.leads (venture_id, name, email, phone, status) values (v, 'Jean-Luc Picardeau', 'jlp@picardeau-fixture.example', '613-555-0171', 'new'), (v, 'Jean Tremblay', 'jt2@tremblay-fixture.example', '613-555-0172', 'new')
+    on conflict do nothing;
+  ctx := public.backup_redaction_context();
+  create temp table jv (id serial, s text, col text) on commit drop;
+  foreach f in array array['p i c a r d e a u', 'the Picardeaus', 'jpicardeau', 'www.jpicardeau.ca', 'LucPicardeau', 'picardeau1', 'picardeaucontracting', 'contact T r e m b l a y asap', 'tremblay1', 'Jean-Luc Picardeau', 'jeanluc picardeau', 'PICARDEAU', 'notes: tremblay_invoice'] loop
+    insert into jv (s, col) values (f, 'tasks.result'), (f, 'ledger.note'), (f, 'audit_log.detail.v'), (f, 'audit_log.detail.key'), (f, 'agent_runs.summary'), (f, 'ideas.name');
+  end loop;
+  set local session_replication_role = replica;                       -- the source triggers are bypassed on purpose: this section tests the EXPORT layer alone
+  for rec in select * from jv order by id loop
+    case rec.col
+      when 'tasks.result' then insert into public.tasks (assigned_agent, title, detail, status, result, created_by) values (ag, 'zzj ' || rec.id, 'x', 'done', rec.s, 'owner');
+      when 'ledger.note' then insert into public.ledger (kind, amount_cents, currency, note, status) values ('expense', 100 + rec.id, 'CAD', rec.s, 'received');
+      when 'audit_log.detail.v' then insert into public.audit_log (actor, action, target, detail) values ('zzj', 'note', 'zzj/' || rec.id, jsonb_build_object('v', rec.s));
+      when 'audit_log.detail.key' then insert into public.audit_log (actor, action, target, detail) values ('zzj', 'note', 'zzj/' || rec.id, jsonb_build_object(rec.s, 1));
+      when 'agent_runs.summary' then insert into public.agent_runs (agent_id, status, summary) select id, 'ok', rec.s || ' #zzj' || rec.id from public.agents order by slug limit 1;
+      when 'ideas.name' then insert into public.ideas (name) values (rec.s || ' zzj' || rec.id);
+    end case;
+  end loop;
+  set local session_replication_role = origin;
+  snap := public.backup_snapshot();
+  for rec in select * from jv order by id loop
+    case rec.col
+      when 'tasks.result' then
+        r := (select x ->> 'result' from jsonb_array_elements(snap -> 'data' -> 'tasks') x where x ->> 'title' = 'zzj ' || rec.id);
+        if r is distinct from public.backup_redact_text(rec.s, ctx, 20000, 'strict') then raise exception 'J1 tasks.result "%": snapshot % vs direct %', rec.s, r, public.backup_redact_text(rec.s, ctx, 20000, 'strict'); end if;
+      when 'ledger.note' then
+        r := (select x ->> 'note' from jsonb_array_elements(snap -> 'data' -> 'ledger') x where (x ->> 'amount_cents')::int = 100 + rec.id and x ->> 'kind' = 'expense' and x ->> 'status' = 'received' and x ->> 'note' is not null limit 1);
+        if r is distinct from public.backup_redact_text(rec.s, ctx, 500, 'strict') then raise exception 'J2 ledger.note "%": snapshot % vs direct %', rec.s, r, public.backup_redact_text(rec.s, ctx, 500, 'strict'); end if;
+      when 'audit_log.detail.v' then
+        j := (select x -> 'detail' from jsonb_array_elements(snap -> 'data' -> 'audit_log') x where x ->> 'target' = 'zzj/' || rec.id);
+        if j is distinct from public.backup_redact_json(jsonb_build_object('v', rec.s), ctx, 500, 'strict') then raise exception 'J3 audit_log.detail value "%": snapshot % vs direct %', rec.s, j, public.backup_redact_json(jsonb_build_object('v', rec.s), ctx, 500, 'strict'); end if;
+      when 'audit_log.detail.key' then
+        j := (select x -> 'detail' from jsonb_array_elements(snap -> 'data' -> 'audit_log') x where x ->> 'target' = 'zzj/' || rec.id);
+        if j is distinct from public.backup_redact_json(jsonb_build_object(rec.s, 1), ctx, 500, 'strict') then raise exception 'J4 audit_log.detail key "%": snapshot % vs direct %', rec.s, j, public.backup_redact_json(jsonb_build_object(rec.s, 1), ctx, 500, 'strict'); end if;
+      when 'agent_runs.summary' then
+        r := (select x ->> 'summary' from jsonb_array_elements(snap -> 'data' -> 'agent_runs') x where x ->> 'summary' like '%#zzj' || rec.id or x ->> 'summary' = '[redacted:uncertain]' and false limit 1);
+        if r is null then
+          -- a failed-closed row has lost its marker: find it by exclusion below
+          null;
+        elsif r is distinct from public.backup_redact_text(rec.s || ' #zzj' || rec.id, ctx, 4000, 'strict') then raise exception 'J5 agent_runs.summary "%": snapshot % vs direct %', rec.s, r, public.backup_redact_text(rec.s || ' #zzj' || rec.id, ctx, 4000, 'strict'); end if;
+      when 'ideas.name' then
+        r := (select x ->> 'name' from jsonb_array_elements(snap -> 'data' -> 'ideas') x where x ->> 'name' like '% zzj' || rec.id or x ->> 'name' like '%zzj' || rec.id limit 1);
+        if r is not null and r is distinct from public.backup_redact_text(rec.s || ' zzj' || rec.id, ctx, 20000, 'light') and r <> '[redacted:uncertain]' then raise exception 'J6 ideas.name "%": snapshot % vs direct %', rec.s, r, public.backup_redact_text(rec.s || ' zzj' || rec.id, ctx, 20000, 'light'); end if;
+    end case;
+  end loop;
+  -- (light columns, e.g. ideas.name, only remove patterns and whole known names by design: a letter-spaced name survives there, see the policy; they are checked for equality with the direct redactor above)
+  -- nothing of either surname in any exported value of the seeded rows, in any column (squash the whole data block)
+  txt := lower(regexp_replace(public.backup_fold_text((snap -> 'data')::text), '[^a-zA-Z0-9]', '', 'g'));
+  for rec in select e.key tname, x from jsonb_each(snap -> 'data') e, jsonb_array_elements(e.value) x where e.key <> 'ideas' and lower(regexp_replace(public.backup_fold_text(x::text), '[^a-zA-Z0-9]', '', 'g')) ~ '(picardeau|tremblay)' limit 3 loop
+    raise exception 'J7 a surname survives in %: %', rec.tname, left(rec.x::text, 300);
+  end loop;
+  -- paged export gives the same rows as the single statement for the tables that hold the seeded rows
+  for rec in select t from (values ('tasks'), ('ledger'), ('audit_log'), ('agent_runs')) v (t) loop
+    j := '[]'::jsonb;
+    for i in 0..((public.backup_table_digest(rec.t) ->> 'rows')::int / 40) loop j := j || (public.backup_snapshot_page(rec.t, i * 40, 40) -> 'rows'); end loop;
+    if (select count(*) from jsonb_array_elements(j) x where lower(regexp_replace(x::text, '[^a-zA-Z0-9]', '', 'g')) ~ '(picardeau|tremblay)') > 0 then raise exception 'J8 paged export of % leaks a surname', rec.t; end if;
+    if j <> (snap -> 'data' -> rec.t) and not (select bool_and(x = any (select jsonb_array_elements(snap -> 'data' -> rec.t))) from jsonb_array_elements(j) x) then raise exception 'J9 paged rows differ from the snapshot rows for %', rec.t; end if;
+  end loop;
+
+
+  -- ============================================================ K. COLUMN TYPES THE REDACTOR DOES NOT READ (re-review finding 5) and L. INTERNALS AFTER LOCKDOWN (finding 2)
+  create type public.zz_comp as (a text, b int);
+  create domain public.zz_dom_json as jsonb;
+  create domain public.zz_dom_text as text;
+  create type public.zz_enum as enum ('a', 'b');
+  foreach f in array array['bytea', 'name', 'xml', 'tsvector', '"char"', 'jsonb[]', 'inet', 'public.zz_comp', 'public.zz_dom_json', 'public.zz_enum[]', 'public.zz_dom_text[]', 'point', 'json[]', 'citext[]', 'cidr', 'macaddr', 'tsquery', 'int4range', 'bit(3)', 'oid'] loop
+    begin
+      if public.backup_type_ok(f::regtype::oid) then raise exception 'K1 type % is accepted but the redactor does not read it', f; end if;
+    exception when undefined_object or invalid_text_representation then if f = 'citext[]' then null; else raise; end if; end;
+  end loop;
+  foreach f in array array['text', 'varchar(20)', 'bpchar', 'json', 'jsonb', 'text[]', 'varchar[]', 'boolean', 'smallint', 'integer', 'bigint', 'numeric(10,2)', 'real', 'double precision', 'uuid', 'date', 'time', 'timetz', 'timestamp', 'timestamptz', 'interval', 'money', 'integer[]', 'uuid[]', 'bigint[]', 'numeric[]', 'timestamptz[]', 'public.zz_enum', 'public.zz_dom_text'] loop
+    if not public.backup_type_ok(f::regtype::oid) then raise exception 'K2 type % must be accepted', f; end if;
+  end loop;
+  -- end to end: an exported table that gains a bytea (or any unread type) column leaves the export and is listed as unclassified
+  alter table public.ideas add column zz_blob bytea;
+  insert into public.ideas (name, zz_blob) values ('zz blob idea', convert_to('Jean Tremblay 613-555-0142', 'UTF8'));
+  j := public.backup_export_policy();
+  if (j -> 'exported') ? 'ideas' or not (j -> 'unclassified') ? 'ideas' then raise exception 'K3 a table with an unread column type is still exported / not listed unclassified: %', j -> 'unclassified'; end if;
+  snap := public.backup_snapshot();
+  if (snap -> 'data') ? 'ideas' or position('tremblay' in lower((snap -> 'data')::text)) > 0 then raise exception 'K4 the table with an unread column type is in the snapshot data'; end if;
+  alter table public.ideas drop column zz_blob;
+  if not (public.backup_export_policy() -> 'exported') ? 'ideas' then raise exception 'K5 ideas should be exported again once the column is gone'; end if;
+
+  -- L. after the full replica (the lockdown migration is LAST and re-grants execute on every function to service_role) the key-equivalent internals are still not usable by service_role
+  grant usage on schema public to service_role;
+  set local role service_role;
+  begin perform public.redaction_pads(); reset role; raise exception 'L1 service_role can read the key pads'; exception when others then reset role; if sqlerrm like 'L1%' then raise; end if; end;
+  set local role service_role;
+  begin perform public.redaction_capture('n', 'Poison Pill'); reset role; raise exception 'L2 service_role can write the deny-list through redaction_capture'; exception when others then reset role; if sqlerrm like 'L2%' then raise; end if; end;
+  set local role service_role;
+  begin insert into public.ffm_redaction_denylist (h, kind) values (repeat('a', 64), 'n'); reset role; raise exception 'L3 service_role can insert into the deny-list'; exception when others then reset role; if sqlerrm like 'L3%' then raise; end if; end;
+  set local role service_role;
+  begin perform 1 from public.ffm_redaction_keys; reset role; raise exception 'L4 service_role can read the key table'; exception when others then reset role; if sqlerrm like 'L4%' then raise; end if; end;
+  -- the intended entry points still work for service_role
+  set local role service_role;
+  begin perform public.backup_snapshot_cost(); perform public.backup_redaction_status(); reset role; exception when others then reset role; raise exception 'L5 service_role lost an intended entry point: %', sqlerrm; end;
+
   raise notice 'LEAK REDACTION CHECKS PASSED (% redactor vectors)', cnt;
 end $$;
 rollback;

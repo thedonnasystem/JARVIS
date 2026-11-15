@@ -193,7 +193,7 @@ declare
   src text; tbl text; col text; kind text; v text; f text; tok text[]; w text; d text; pads text; deny boolean := false; fast boolean := false;
   stop text[] := public.backup_stopwords();
   phrases text[] := '{}'; parts text[] := '{}'; squashed text[] := '{}'; phones text[] := '{}';
-  live jsonb := '[]'::jsonb; ent_t text[]; ent_p text[]; ent_s text;
+  live jsonb := '[]'::jsonb; ent_t text[]; ent_p text[]; ent_s text; ent_ss text[];
 begin
   foreach src in array array['leads.name:n', 'leads.phone:c', 'leads.email:e', 'setters.name:n', 'setters.contact:c', 'ws_leads.name:n', 'ws_leads.phone:c', 'ws_leads.email:e',
                               'client_workspaces.name:n', 'setter_events.client:n', 'contact_suppressions.address:e', 'outbox.to_ref:c'] loop
@@ -209,18 +209,18 @@ begin
       tok := array(select x from unnest(regexp_split_to_array(f, '[\s.,;:/\\|()<>\[\]{}"''`~!?@#$%^&*+=_-]+')) x where x <> '');
       continue when cardinality(tok) = 0;
       continue when cardinality(tok) = 1 and length(tok[1]) < 3;
-      ent_t := '{}'; ent_p := '{}'; ent_s := null;
+      ent_t := '{}'; ent_p := '{}'; ent_s := null; ent_ss := '{}';
       phrases := phrases || array_to_string(array(select public.backup_re_escape(x) from unnest(tok) x), '[^a-z0-9]{0,3}');
-      if length(array_to_string(tok, '')) >= 5 then ent_s := regexp_replace(array_to_string(tok, ''), '[^a-z0-9]', '', 'g'); squashed := squashed || ent_s; end if;
+      if length(array_to_string(tok, '')) >= 5 then ent_s := regexp_replace(array_to_string(tok, ''), '[^a-z0-9]', '', 'g'); squashed := squashed || ent_s; ent_ss := ent_ss || ent_s; end if;
       if kind <> 'e' then
         foreach w in array tok loop
           if length(w) >= 3 and not (w = any (stop)) and w !~ '^[0-9]+$' then
             parts := parts || public.backup_re_escape(w); ent_t := ent_t || w; ent_p := ent_p || public.backup_re_escape(w);
-            if length(w) >= 5 then squashed := squashed || regexp_replace(w, '[^a-z0-9]', '', 'g'); end if;
+            if length(w) >= 5 then squashed := squashed || regexp_replace(w, '[^a-z0-9]', '', 'g'); ent_ss := ent_ss || regexp_replace(w, '[^a-z0-9]', '', 'g'); end if;
           end if;
         end loop;
       end if;
-      live := live || jsonb_build_object('re', phrases[cardinality(phrases)], 't', to_jsonb(ent_t), 's', ent_s);
+      live := live || jsonb_build_object('re', phrases[cardinality(phrases)], 't', to_jsonb(ent_t), 's', ent_s, 'ss', to_jsonb(ent_ss));
     end loop;
   end loop;
   if to_regprocedure('public.redaction_pads()') is not null and to_regclass('public.ffm_redaction_denylist') is not null then
@@ -242,6 +242,7 @@ begin
   if coalesce(p_ctx ->> 'deny', 'false') <> 'true' or p_found is null then return p_ctx || jsonb_build_object('alts_full', coalesce(substring(p_ctx ->> 'name_re' from '^\(\?<!\[a-z0-9\]\)\(\?:(.*)\)\(\?!\[a-z0-9\]\)$'), '')); end if;
   names := array(select jsonb_array_elements_text(p_found -> 'names')); chains := array(select jsonb_array_elements_text(p_found -> 'chains'));
   for e in select * from jsonb_array_elements(p_ctx -> 'live') loop
+    sq := sq || array(select jsonb_array_elements_text(coalesce(e -> 'ss', '[]'::jsonb)));       -- the squashed (spaced / glued / suffixed) forms of EVERY live name stay in the context: a token that does not occur whole can still occur letter-spaced or glued ('p i c a r d e a u', 'jpicardeau', 'picardeau1')
     keep := jsonb_array_length(e -> 't') = 0;                                     -- a name made only of operating words (a business called "Barrhaven Plumbing") is always kept
     if not keep then keep := exists (select 1 from jsonb_array_elements_text(e -> 't') z where z = any (names)); end if;
     if not keep and (e ->> 's') is not null then keep := (e ->> 's') = any (chains) or (e ->> 's') = any (names); end if;
@@ -307,6 +308,72 @@ begin
 end $$;
 
 -- every TEXT-LIKE column of the exported tables, with its class from backup_redaction_spec(); a column that is not in the spec is STRICT (fail closed) and marked unclassified
+
+-- RE-REVIEW FIX: a column whose type the redactor does not read (bytea, name, xml, tsvector, composite, "char", jsonb[], inet, domain over json, array of enum / domain...) would be exported
+-- unredacted and unflagged. backup_type_ok() lists the types that are either handled by backup_effective_spec() (text-like, json, enums, text arrays, domains over text) or cannot carry
+-- a name (numbers, booleans, uuid, date/time, money, arrays of those). Any other type makes its TABLE "unclassified": not exported, listed in backup_export_policy()->unclassified.
+create or replace function public.backup_type_ok(p_oid oid) returns boolean
+language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+declare t record; b record;
+  safe constant text[] := array['bool', 'int2', 'int4', 'int8', 'numeric', 'float4', 'float8', 'uuid', 'date', 'time', 'timetz', 'timestamp', 'timestamptz', 'interval', 'money'];
+  txt constant text[] := array['text', 'varchar', 'bpchar'];
+begin
+  select typname, typtype, typbasetype, typelem, typcategory into t from pg_type where oid = p_oid;
+  if not found then return false; end if;
+  if t.typtype = 'e' then return true; end if;
+  if t.typname = any (safe || txt || array['citext', 'json', 'jsonb']) then return true; end if;
+  if t.typtype = 'd' then
+    select typname, typtype into b from pg_type where oid = t.typbasetype;
+    return b.typtype = 'b' and b.typname = any (safe || txt || array['citext']);
+  end if;
+  if t.typcategory = 'A' and t.typelem <> 0 then
+    select typname, typtype into b from pg_type where oid = t.typelem;
+    return b.typtype = 'b' and b.typname = any (safe || txt);
+  end if;
+  return false;
+end $$;
+
+create or replace function public.backup_export_policy() returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+declare res jsonb;
+begin
+  with recursive tabs as (
+    select c.relname::text n from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p')
+  ), base as (
+    select t.n,
+           case when t.n ~ '^(ws_|ffm_)' or t.n = 'client_workspaces' then 'client_pii'
+                when exists (select 1 from pg_attribute a join pg_class c on c.oid = a.attrelid where c.relnamespace = 'public'::regnamespace and c.relname = t.n and a.attnum > 0 and not a.attisdropped and not public.backup_type_ok(a.atttypid)) then 'unclassified'
+                else coalesce(k.data_class, 'unclassified') end as cls,
+           case
+             when t.n ~ '^(ws_|ffm_)' or t.n = 'client_workspaces' then 'denied by rule: client workspace tables are never exported'
+             when exists (select 1 from pg_attribute a join pg_class c on c.oid = a.attrelid where c.relnamespace = 'public'::regnamespace and c.relname = t.n and a.attnum > 0 and not a.attisdropped and not public.backup_type_ok(a.atttypid))
+               then 'unclassified: a column has a type the export redactor does not cover (bytea, name, xml, tsvector, composite, "char", jsonb[], inet, domains over json, arrays of enums or domains...): extend backup_type_ok() and the spec, or leave the table out'
+             when k.data_class is null then 'unclassified: add it to backup_classification() in a migration'
+             when k.data_class not in ('public', 'internal') then 'class ' || k.data_class
+             when exists (select 1 from pg_attribute a join pg_class c on c.oid = a.attrelid
+                          where c.relnamespace = 'public'::regnamespace and c.relname = t.n and a.attnum > 0 and not a.attisdropped
+                            and a.attname ~* '(^|_)(email|e_mail|phone|mobile|first_?name|last_?name|full_?name|to_ref|address|payee|dob|birth[a-z]*)($|_)'
+                            and not exists (select 1 from public.backup_pii_column_exceptions() x where x.table_name = t.n and x.column_name = a.attname))
+               then 'column that looks like personal contact data is not on the reviewed exception list'
+           end as why
+      from tabs t left join public.backup_classification() k on k.table_name = t.n
+  ), ex as (
+    select n from base where why is not null
+    union
+    select c.relname::text
+      from pg_constraint f join pg_class c on c.oid = f.conrelid join pg_class r on r.oid = f.confrelid join ex on ex.n = r.relname::text
+     where f.contype = 'f' and c.relnamespace = 'public'::regnamespace and r.relnamespace = 'public'::regnamespace
+  ), ex1 as (
+    select b.n, b.cls, coalesce(b.why, 'references a table that is not exported (foreign key); a restore would load rows that point at missing data') as why
+      from base b where b.n in (select n from ex)
+  )
+  select jsonb_build_object(
+    'exported', coalesce((select jsonb_agg(n order by n) from tabs where n not in (select n from ex1)), '[]'::jsonb),
+    'excluded', coalesce((select jsonb_agg(jsonb_build_object('table', n, 'class', cls, 'reason', why) order by n) from ex1), '[]'::jsonb),
+    'unclassified', coalesce((select jsonb_agg(n order by n) from base where cls = 'unclassified'), '[]'::jsonb))
+  into res;
+  return res;
+end $$;
 create or replace function public.backup_effective_spec(p_exported jsonb) returns table (table_name text, column_name text, kind text, mode text, max_len integer, reason text, classified boolean)
 language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
 begin
@@ -560,7 +627,10 @@ begin
       if digits >= 7 and k !~ '(^|_)(txid|xid|pid|seq|epoch|attempts|retries|amount|amt|cents|total|count|qty|quantity|sum|price|cost|fee|fees|balance|bytes|rows|chars|length|ms|secs|seconds|minutes|hours|days|limit|max|min|in|out|tokens|searches|spent|budget|cap|usd|cad|per_[a-z]+|to_cents|from_cents)($|_)'
         then return to_jsonb('[redacted:id]'::text); end if;
       return j;
-    when 'object' then return coalesce((select jsonb_object_agg(public.backup_redact_text(e.k, p_ctx, null, 'light'), public.backup_redact_json_k(e.v, e.k, p_ctx, p_max, p_mode)) from jsonb_each(j) e (k, v)), '{}'::jsonb);
+    when 'object' then return coalesce((select jsonb_object_agg(
+        case when p_mode = 'strict' and coalesce(p_ctx ->> 'sq_re', '') <> '' and regexp_replace(lower(public.backup_fold_text(e.k)), '[^a-z0-9]', '', 'g') ~ (p_ctx ->> 'sq_re') then '[redacted:key]'     -- a key that holds a known name in spaced / glued form
+             else public.backup_redact_text(e.k, p_ctx, null, 'light') end,
+        public.backup_redact_json_k(e.v, e.k, p_ctx, p_max, p_mode)) from jsonb_each(j) e (k, v)), '{}'::jsonb);
     when 'array' then return coalesce((select jsonb_agg(public.backup_redact_json_k(a.v, p_key, p_ctx, p_max, p_mode) order by a.ord) from jsonb_array_elements(j) with ordinality a (v, ord)), '[]'::jsonb);
     else return j;
   end case;
@@ -672,7 +742,7 @@ language sql immutable set search_path to 'pg_catalog', 'public' as $$
     ('escalations', 'summary', 'text', 'strict', 4000, 'agent output'),
     ('evidence_sources', 'content_sha256', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('evidence_sources', 'content_type', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('evidence_sources', 'final_url', 'text', 'keep', null, 'unique key or system reference (table/id, dedupe key, url key): altering it could collide on restore or break lookups; written by code, not typed text'),
+    ('evidence_sources', 'final_url', 'text', 'light', null, 'the URL that was fetched (a prospect page can carry a name or an email): the light twin of url; same pattern and known-name redaction, never blanked. Uniqueness on restore also rests on content_sha256'),
     ('evidence_sources', 'flags', 'json', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('evidence_sources', 'host_norm', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('evidence_sources', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -956,9 +1026,11 @@ begin
     rows := rows + n;
   end loop;
   return jsonb_build_object('strict_chars', strict_chars, 'light_chars', light_chars, 'field_count', rows,
-                            'est_seconds', round((strict_chars * 0.00000094 + light_chars * 0.00000035 + rows * 0.00004)::numeric, 1));
+                            'est_seconds', round((strict_chars * 0.00000115 + light_chars * 0.00000035 + rows * 0.00004)::numeric, 1));
 end $$;
 
+revoke all on function public.backup_type_ok(oid) from public, anon, authenticated;
+revoke all on function public.backup_export_policy() from public, anon, authenticated;
 revoke all on function public.backup_fold_text(text) from public, anon, authenticated;
 revoke all on function public.backup_unescape_text(text) from public, anon, authenticated;
 revoke all on function public.backup_normalise(text) from public, anon, authenticated;
@@ -995,6 +1067,7 @@ revoke all on function public.backup_redaction_meta(jsonb) from public, anon, au
 revoke all on function public.backup_snapshot_page(text, integer, integer) from public, anon, authenticated;
 revoke all on function public.backup_table_digest(text) from public, anon, authenticated;
 revoke all on function public.backup_snapshot_cost() from public, anon, authenticated;
+grant execute on function public.backup_export_policy() to service_role;
 grant execute on function public.backup_fold_text(text) to service_role;
 grant execute on function public.backup_unescape_text(text) to service_role;
 grant execute on function public.backup_normalise(text) to service_role;

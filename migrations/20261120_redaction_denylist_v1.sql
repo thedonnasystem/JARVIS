@@ -49,8 +49,10 @@ drop trigger if exists keys_no_truncate on public.ffm_redaction_keys;
 create trigger keys_no_truncate before truncate on public.ffm_redaction_keys for each statement execute function public.redaction_denylist_immutable();
 
 -- the HMAC pads of the key (ipad/opad XOR, hex 'ipad:opad'): derived once per snapshot, so each hash is two SHA-256 calls. Secret-derived: no API role may call this.
+-- SECURITY INVOKER on purpose: the lockdown migration (last) grants execute on EVERY function to service_role, so a definer function here would be callable by it. As invoker it needs the caller to be able to read
+-- the key table, which only the owner (and so the definer functions backup_redaction_context / the capture trigger) can: a direct call by service_role fails with 'permission denied'.
 create or replace function public.redaction_pads() returns text
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
 declare kv text; k bytea; ik bytea := decode(repeat('00', 64), 'hex'); ok bytea := decode(repeat('00', 64), 'hex'); i int;
 begin
   select value into kv from public.ffm_redaction_keys where name = 'denylist_hmac';
@@ -75,7 +77,7 @@ revoke all on function public.redaction_h(text, text, text) from public, anon, a
 
 -- records one value. kind: n name, e email, p phone, c contact (email if it has an @, else phone). Returns the number of new hashes.
 create or replace function public.redaction_capture(p_kind text, p_value text) returns integer
-language plpgsql volatile security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql volatile set search_path to 'pg_catalog', 'public' as $$
 declare pads text; f text; tok text[]; w text; sq text; d text; n int := 0; stop text[] := public.backup_stopwords(); kind text := p_kind;
 begin
   if p_value is null or btrim(p_value) = '' then return 0; end if;

@@ -48,3 +48,6 @@ drop function if exists public.backup_snapshot_page(text, integer, integer);
 drop function if exists public.backup_table_digest(text);
 drop function if exists public.backup_snapshot_cost();
 commit;
+begin;
+drop function if exists public.backup_type_ok(oid);
+commit;
