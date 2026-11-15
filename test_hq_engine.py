@@ -221,6 +221,35 @@ class T(unittest.TestCase):
         self.assertTrue(any("llm_calls?status=eq.reserved" in p[0] and p[1]["status"] == "released" for p in first))
         self.assertEqual(sum("llm_calls" in p[0] for p in b.patches), 1)  # only on the first tick
 
+    def _recover_with(self, get_runs):
+        b = Board()
+        orig = b.__call__
+        def req(method, path, body=None, timeout=30, prefer=None):
+            if method == "GET" and path.startswith("/rest/v1/executor_runs"): return get_runs(path)
+            return orig(method, path, body, timeout, prefer)
+        E._started = False
+        with mock.patch.object(hq, "_request", req):
+            E._recover_stale()
+        return b
+
+    def test_restart_keeps_running_executor_reservations(self):
+        b = self._recover_with(lambda p: [{"llm_call_id": "bbb"}, {"llm_call_id": "aaa"}, {"llm_call_id": "aaa"}])
+        rel = [p[0] for p in b.patches if "llm_calls" in p[0]]
+        self.assertEqual(len(rel), 1); self.assertIn("&id=not.in.(aaa,bbb)", rel[0])
+
+    def test_restart_without_executor_tables_still_releases_orphans(self):
+        def missing(p): raise http_err(404, "relation does not exist")
+        b = self._recover_with(missing)
+        rel = [p[0] for p in b.patches if "llm_calls" in p[0]]
+        self.assertEqual(len(rel), 1); self.assertNotIn("not.in", rel[0]); self.assertTrue(E._started)
+
+    def test_restart_fails_closed_and_retries_when_runs_unreadable(self):
+        def broken(p): raise http_err(500, "boom")
+        b = self._recover_with(broken)
+        self.assertFalse(any("llm_calls" in p[0] for p in b.patches)); self.assertFalse(E._started)
+        b = self._recover_with(lambda p: [])   # next tick, readable again
+        self.assertTrue(any("llm_calls" in p[0] for p in b.patches)); self.assertTrue(E._started)
+
     def test_unblock_matches_title_with_colons(self):
         b = Board(tasks=[{"id": "t1", "title": "Finish: call rules"}, {"id": "t2", "title": "Other"}])
         with mock.patch.object(hq, "_request", b):

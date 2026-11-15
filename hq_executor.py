@@ -6,10 +6,17 @@ HQ stays the only authority for money, permissions and the kill switch. An execu
   3. executor_complete -> HQ settles the real cost; a crash is settled as failed, never left reserved
 The work callable is injected, so the executor is replaceable and this module can be tested without one.
 """
+import asyncio
 import hashlib
 import json
+import logging
+import urllib.error
 
 import hq
+
+logger = logging.getLogger(__name__)
+EXPIRE_EVERY_SECONDS = 600   # how often the bot settles stale executor runs
+_warned_missing = False
 
 
 class ExecutorRefused(Exception):
@@ -55,3 +62,33 @@ def run(executor: str, agent: str, task_id: str, est_cents: int, purpose: str, w
 
 def expire_stale(minutes: int = 60) -> int:
     return int(_rpc("executor_expire_stale", {"p_minutes": int(minutes)}))
+
+
+def expire_stale_sync(minutes: int = 60):
+    """Settle executor runs stuck in 'running' (charges the full reservation, so a hung worker cannot hide spend).
+    Never raises. Returns the number settled, or None if it could not run (HQ off, migration not applied, network)."""
+    global _warned_missing
+    if not hq.hq_enabled():
+        return None
+    try:
+        n = expire_stale(minutes)
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 404):   # executor_expire_stale not installed yet (migration 20261117_executor_gate_v1 not applied): a quiet no-op
+            if not _warned_missing:
+                logger.info("executor_expire_stale is not installed yet; skipping (HTTP %s)", e.code)
+                _warned_missing = True
+        else:
+            logger.warning("executor_expire_stale failed: HTTP %s", e.code)
+        return None
+    except Exception:
+        logger.exception("executor_expire_stale failed")
+        return None
+    if n:
+        logger.warning("settled %s stale executor run(s) at their full reservation", n)
+    return n
+
+
+async def expire_stale_job(context) -> None:
+    """Repeating job (python-telegram-bot job_queue). Deliberately NOT part of hq_engine.tick: that returns early when the kill switch
+    or a credits pause is on, and settling stale reservations must keep working then."""
+    await asyncio.to_thread(expire_stale_sync)

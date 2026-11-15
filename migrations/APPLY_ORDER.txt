@@ -32,4 +32,5 @@
 20261116_evidence_sources_v1.sql
 20261117_executor_gate_v1.sql
 20261117_client_workspaces_v1.sql
+20261118_executor_sweep_v1.sql
 20261112_lockdown_v1.sql
