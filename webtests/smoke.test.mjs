@@ -264,10 +264,10 @@ test('service worker serves from cache when offline, ignores writes and other or
   listeners.install({ waitUntil: (x) => { p = x; } }); await p;
   const respond = async (req) => { let r; listeners.fetch({ request: req, respondWith: (x) => { r = x; } }); return r === undefined ? undefined : await r; };
   // online path is not exercised here; offline (fetch rejects) must fall back to the cache:
-  store.caches.get('hq-v4').set('https://fendezy-hq-app.onrender.com/app.js', 'APPJS');
+  store.caches.get('hq-v5').set('https://fendezy-hq-app.onrender.com/app.js', 'APPJS');
   assert.equal(await respond({ method: 'GET', url: 'https://fendezy-hq-app.onrender.com/app.js' }), 'APPJS');
   assert.equal(await respond({ method: 'POST', url: 'https://fendezy-hq-app.onrender.com/app.js' }), undefined);
   assert.equal(await respond({ method: 'GET', url: 'https://ihxzvpwbqydqtblvazbq.supabase.co/rest/v1/rpc/app_snapshot' }), undefined);
   store.caches.set('hq-v1-old', new Map()); let a; listeners.activate({ waitUntil: (x) => { a = x; } }); await a;
-  assert.deepEqual([...store.caches.keys()], ['hq-v4']);
+  assert.deepEqual([...store.caches.keys()], ['hq-v5']);
 });
