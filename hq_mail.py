@@ -7,6 +7,7 @@ import json, os, re, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 
 import hq
+import hq_gatemark
 import hq_policy
 
 API = "https://api.resend.com/emails"
@@ -83,8 +84,24 @@ def profile_refusal(row: dict, prof: dict | None, slug: str | None) -> str | Non
     return None
 
 
+# Person-directed outbound is allowed ONLY on channels with a durable suppression identifier (an address or a number). Mirror of public.outreach_channel_problem.
+# hq_mail itself sends email only; text and call are listed so the approval path agrees with the database. Everything else is refused here AND at the database.
+ALLOWED_CHANNELS = ("email", "text", "call")
+PROHIBITED_CHANNELS = ("telegram", "post", "mail", "whatsapp", "signal", "other")
+
+
+def channel_problem(channel) -> str | None:
+    """None for a channel that has a durable suppression identifier; otherwise a reason code. Fails closed: a missing or odd channel is a no."""
+    if channel in ALLOWED_CHANNELS:
+        return None
+    return "channel_prohibited" if channel in PROHIBITED_CHANNELS else "unknown_channel"
+
+
 def refusal(row: dict, lead: dict | None = None) -> str | None:
     """Why this draft must NOT be sent right now, or None if it may."""
+    ch = row.get("channel", "email")
+    if ch != "email":
+        return f"channel {ch!r} is not sent by this module ({channel_problem(ch) or 'email only'}): no person-directed outreach without a durable suppression identifier"
     to = (row.get("to_ref") or "").strip()
     body = row.get("body") or ""
     if not EMAIL.match(to) or normalize_addr(to) is None:
@@ -223,8 +240,11 @@ def deliver_approved(limit: int = 5) -> dict:
             out["reason"] = "not configured"; return out
         if not live():
             out["reason"] = "not live"; return out
+        a = hq_gatemark.attest()   # the sender's OUTSIDE high-water mark against the database: a restored (rolled-back) database closes its own gate here, and an unanchored sender sends nothing
+        if not a.get("ok"):
+            out["reason"] = "gate: " + str(a.get("reason")); return out
         rows = _get(f"outbox?status=eq.approved&channel=eq.email&sent_at=is.null&order=created_at.asc&limit={int(limit)}"
-                    "&select=id,to_ref,body,subject,lead_id,agent,venture_id")
+                    "&select=id,to_ref,body,subject,lead_id,agent,venture_id,channel")
         for row in rows:
             lead = None
             if row.get("lead_id"):

@@ -18,7 +18,7 @@ end $$;
 -- fixture: open the outreach gate (closed by default) and give the tests an owner-attested capture helper. Evidence verification itself is tested in consent_integrity_check.sql.
 set local session_replication_role = replica;
 insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
-update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture' where id = 1;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
 set local session_replication_role = origin;
 create function pg_temp.express(p_ws uuid, p_lead uuid, p_ch text, p_ref text, p_by text default 'bot') returns uuid language plpgsql as $$
 declare prev text := current_setting('app.uid', true); r uuid;

@@ -203,6 +203,8 @@ def consent_checks(enc, key, rep, renv, work, out_sha):
     owner(False)
     check("C16 restoring the missing entry and verifying again re-opens the gate", j["verified"] is True and sql("select public.ffm_outreach_gate_open()"), str(j))
     DST_.commit()
+    v3_restore_closed_checks(DST_, cur, sql, owner, work)
+    DST_.commit()
     # negative control for the restore tool's own pass criterion: if the restored database would ALLOW outreach, the tool must say so
     import restore_backup as R
     cur.execute("create or replace function public.ffm_outreach_gate_open() returns boolean language sql as 'select true'")
@@ -257,6 +259,97 @@ def consent_checks(enc, key, rep, renv, work, out_sha):
         m["suppression/hashes.json"] = b"{}"; mm = json.loads(m["manifest.json"]); mm["suppression"] = {"included": False, "reason": "x"}; m["manifest.json"] = json.dumps(mm, separators=(",", ":"), sort_keys=True).encode()
     code, r7 = tamper("undeclared", undeclared)
     check("T7 a suppression file the manifest does not declare is refused", code != 0 and "not declared" in r7.get("error", ""), r7.get("error", "")[:120])
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+# v3: the RESTORE-CLOSED gate against a real second database, with the real hq_gatemark sender code talking to it. "Provider restore" = pg_dump of the live scratch database restored into a
+# NEW database with no help from any of our tools (what a PITR / backup restore does to the data). Everything runs on this machine; nothing is production.
+def _admin_url(dsn, name):
+    base = dsn.rsplit("/", 1)[0]
+    return f"{base}/{name}"
+
+
+def v3_restore_closed_checks(DST_, cur, sql, owner, work):
+    import hq, hq_gatemark as G
+    from pg_adapter import PgAdapter
+    sfx = DST_NAME.replace("drill_restore_", "") or str(os.getpid())
+    cur.execute("select count(*) from public.ffm_restore_markers where source = 'restore_backup.py'"); n_marker = cur.fetchone()[0]
+    cur.execute("select (select epoch from public.ffm_epoch where id = 1), (select verified_at > (select max(restored_at) from public.ffm_restore_markers) from public.ffm_outreach_gate where id = 1)"); ep0, after = cur.fetchone()
+    check("V1 the restore tool wrote a restore marker (same transaction as the restore) and the owner's verification is NEWER than it", n_marker == 1 and after is True, f"markers={n_marker} epoch={ep0}")
+    DST_.commit()
+    hwm = os.path.join(work, "sender_hwm.jsonl")
+    fp = sql("select public.ffm_instance_fp()")
+    prov_names = []
+    def mkdb(name, admin_dsn=None):
+        admin = admin_dsn or _admin_url(DST, "postgres")
+        c = psycopg2.connect(admin); c.autocommit = True
+        c.cursor().execute(f'drop database if exists "{name}"'); c.cursor().execute(f'create database "{name}"'); c.close()
+        prov_names.append((name, admin))
+    def dump_to(dest_dsn, dump):
+        r = subprocess.run(["pg_restore", "--no-owner", "-d", dest_dsn, dump], capture_output=True, text=True, timeout=300)
+        bad = [l for l in r.stderr.splitlines() if l.startswith("pg_restore: error") and "already exists" not in l and "errors ignored" not in l]
+        return not bad and "FATAL" not in r.stderr, "; ".join(bad)[-200:]
+    with mock.patch.dict(os.environ, {"GATE_HWM_FILE": hwm}, clear=False):
+        ad_live = PgAdapter(DST + ("&" if "?" in DST else "?") + "options=-c%20timezone%3DUTC")
+        with mock.patch.object(hq, "_request", side_effect=ad_live):
+            G._CACHE.update(at=0.0, rec=None)
+            a0 = G.attest()
+            check("V2 an UNANCHORED sender (no mark anywhere) refuses, and does not anchor itself to the database", a0.get("reason") == "sender_unanchored" and not os.path.exists(hwm), str(a0))
+            r_anchor = G.anchor("drill")
+            a1 = G.attest()
+            check("V3 the owner anchors the sender once the gate is verified after the restore marker; the sender then attests ok and the gate stays open", r_anchor.get("ok") is True and a1.get("ok") is True and sql("select public.ffm_outreach_gate_open()") is True, f"{r_anchor} {a1}")
+        DST_.commit()
+        dump = os.path.join(work, "provider_snapshot.dump")
+        subprocess.run(["pg_dump", "-Fc", "--no-owner", "-n", "public", "-n", "auth", "-d", DST, "-f", dump], check=True, timeout=300)       # t0: the "provider backup" (gate OPEN, checkpoint staged)
+        # t1: a person opts out AFTER the snapshot; the sender sees it
+        cur.execute("insert into public.contact_suppressions (address, reason, recorded_by) values ('latecomer-optout@example.com', 'drill: opted out after the provider snapshot', 'drill')"); DST_.commit()
+        with mock.patch.object(hq, "_request", side_effect=ad_live):
+            a2 = G.attest(); mark = G.read_mark()
+        check("V4 after a new opt-out the sender's OUTSIDE mark advances with the database epoch", a2.get("ok") is True and mark["epoch"] > ep0, f"{a2} mark={mark}")
+        # t2: PROVIDER-LEVEL RESTORE of the t0 snapshot into a NEW database (no tool of ours involved)
+        prov = f"drill_prov_{sfx}"; mkdb(prov)
+        ok, err = dump_to(_admin_url(DST, prov), dump)
+        PROV = _admin_url(DST, prov)
+        pc = psycopg2.connect(PROV); pcur = pc.cursor()
+        pcur.execute("select public.ffm_outreach_gate_open(), public.is_suppressed('latecomer-optout@example.com'), public.outreach_recipient_problem('email', 'latecomer-optout@example.com', null)"); exposed = pcur.fetchone(); pc.rollback()
+        check("V5 EXPOSURE, stated honestly: a provider-restored copy taken inside the attestation window shows the OLD gate OPEN and the LOST opt-out as not suppressed - the database alone cannot tell", ok and exposed == (True, False, None), f"restore_ok={ok} {exposed} {err[-80:]}")
+        ad_prov = PgAdapter(PROV + ("&" if "?" in PROV else "?") + "options=-c%20timezone%3DUTC")
+        with mock.patch.object(hq, "_request", side_effect=ad_prov):
+            G._CACHE.update(at=0.0, rec=None)
+            a3 = G.attest()
+        pcur.execute("select public.ffm_outreach_gate_open(), (select state from public.ffm_outreach_gate where id = 1), public.outreach_recipient_problem('email', 'latecomer-optout@example.com', null), public.outreach_recipient_problem('email', 'anyone@example.com', null), (select count(*) from public.ffm_restore_markers where source = 'detected_by_sender')"); closed = pcur.fetchone(); pc.rollback()
+        check("V6 the sender's FIRST attestation against the restored copy detects the rollback (its mark is ahead), the database closes ITSELF for everyone, and a marker is written", a3.get("ok") is False and a3.get("reason") == "rollback_detected" and closed == (False, "unverified", "suppression_unverified", "suppression_unverified", 1), f"{a3} {closed}")
+        check("V7 the sender's mark did not move down", G.read_mark()["epoch"] == mark["epoch"], str(G.read_mark()))
+        # the same restore with the sender DOWN: staleness closes it by itself once the window passes
+        pcur.execute("select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()"); pc.rollback(); pc.close()
+        prov2 = f"drill_prov2_{sfx}"; mkdb(prov2); ok2, err2 = dump_to(_admin_url(DST, prov2), dump); PROV2 = _admin_url(DST, prov2)
+        p2 = psycopg2.connect(PROV2); p2c = p2.cursor(); p2c.execute("select public.ffm_outreach_gate_open()"); open0 = p2c.fetchone()[0]
+        p2c.execute("set session_replication_role = replica"); p2c.execute("update public.ffm_outreach_gate set attested_at = attested_at - interval '16 minutes'"); p2c.execute("set session_replication_role = origin")
+        p2c.execute("select public.ffm_outreach_gate_open(), public.outreach_recipient_problem('email', 'anyone@example.com', null)"); late = p2c.fetchone(); p2.rollback(); p2.close()
+        check("V8 restored OPEN gate with NO sender running: open inside the window, closed by itself 16 minutes after the last attestation", ok2 and open0 is True and late == (False, "suppression_unverified"), f"{open0} {late}")
+        # OTHER CLUSTER: a dump restored into a different server has a different system identifier -> the stored fingerprint no longer matches, with no sender at all
+        other = os.environ.get("DRILL_OTHER_CLUSTER_URL")
+        if other:
+            prov3 = f"drill_prov3_{sfx}"
+            try:
+                oc = psycopg2.connect(_admin_url(other, "postgres")); oc.autocommit = True; occ = oc.cursor()
+                for r in ("anon", "authenticated", "service_role"):
+                    occ.execute(f"do $$ begin create role {r} nologin; exception when duplicate_object then null; end $$")
+                occ.execute(f'drop database if exists "{prov3}"'); occ.execute(f'create database "{prov3}"'); oc.close()
+                prov_names.append((prov3, _admin_url(other, "postgres")))
+                ok3, err3 = dump_to(_admin_url(other, prov3), dump)
+                p3 = psycopg2.connect(_admin_url(other, prov3)); p3c = p3.cursor()
+                p3c.execute("select public.ffm_outreach_gate_open(), (select instance_fp from public.ffm_outreach_gate where id = 1), public.ffm_instance_fp(), (public.ffm_outreach_gate_status() ->> 'instance_matches')::boolean"); o3 = p3c.fetchone(); p3.rollback(); p3.close()
+                check("V9 a dump restored into ANOTHER CLUSTER (real second server, different system identifier) closes the gate by itself, no sender needed", ok3 and o3[0] is False and o3[1] != o3[2] and o3[3] is False, f"{o3} {err3[-80:]}")
+            except Exception as e:
+                check("V9 other-cluster restore", False, f"{type(e).__name__}: {str(e)[:160]}")
+        else:
+            print("SKIP  V9 other-cluster restore (set DRILL_OTHER_CLUSTER_URL to a SECOND local Postgres server to run it; CI has only one server)")
+    for name, admin in prov_names:
+        try:
+            c = psycopg2.connect(admin); c.autocommit = True; c.cursor().execute(f'drop database if exists "{name}" with (force)'); c.close()
+        except Exception:
+            pass
 
 
 WHERE = {"audit_log": " where action <> 'backup_ok'"}     # the backup writes its own audit row AFTER it has dumped the table

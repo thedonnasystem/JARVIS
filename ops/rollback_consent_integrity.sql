@@ -12,6 +12,12 @@ begin;
 alter table public.ffm_consent_log drop constraint if exists ffm_consent_log_express_needs_capture;
 alter table public.ffm_consent_log drop column if exists capture_id;
 alter table public.ffm_consent_log drop column if exists verification;
+drop trigger if exists ffm_epoch_bump on public.contact_suppressions;
+drop trigger if exists ffm_epoch_bump on public.leads;
+drop trigger if exists ffm_epoch_bump on public.ffm_consent_log;
+drop table if exists public.ffm_restore_markers;
+drop table if exists public.ffm_epoch;
+drop table if exists public.ffm_gate_config;
 drop table if exists public.ffm_suppression_expected;
 drop table if exists public.ffm_suppression_hashes;
 drop table if exists public.ffm_outreach_gate;
@@ -47,8 +53,17 @@ drop function if exists public.ffm_suppression_digest();
 drop function if exists public.backup_suppression_export();
 drop function if exists public.ffm_stage_suppression_checkpoint(jsonb);
 drop function if exists public.ffm_import_suppression_hashes();
-drop function if exists public.ffm_verify_suppression(text);commit;
--- previous definitions of the replaced functions (every migration is re-runnable; the replica gate applies each one twice)
+drop function if exists public.ffm_verify_suppression(text);
+drop function if exists public.ffm_epoch_guard();
+drop function if exists public.ffm_epoch_bump_now();
+drop function if exists public.ffm_epoch_bump();
+drop function if exists public.ffm_instance_fp();
+drop function if exists public.ffm_record_restore(text, text, text);
+drop function if exists public.ffm_gate_state();
+drop function if exists public.ffm_sender_attest(bigint, text);
+drop function if exists public.ffm_set_gate_config(integer, integer, text);
+drop function if exists public.outreach_channel_problem(text);commit;
+-- previous definitions of the replaced functions (including ffm_route_preview, which 20261119 defines) (every migration is re-runnable; the replica gate applies each one twice)
 \i migrations/20261115_venture_deals_replies_v1.sql
 \i migrations/20261116_audit_hardening_v1.sql
 \i migrations/20261119_ffm_consent_v1.sql

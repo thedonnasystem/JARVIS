@@ -46,7 +46,7 @@ begin
   delete from public.ffm_secrets; delete from public.ffm_suppression_hashes; delete from public.ffm_suppression_expected;
   insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', p_supp_key, 'fixture');
   if p_capture_key is not null then insert into public.ffm_secrets (name, value, set_by) values ('capture_signing_key', p_capture_key, 'fixture'); end if;
-  update public.ffm_outreach_gate set state = 'verified', reason = 'test fixture', verified_raw_count = 0, verified_at = now() where id = 1;
+  update public.ffm_outreach_gate set state = 'verified', reason = 'test fixture', verified_raw_count = 0, verified_at = clock_timestamp(), verified_epoch = 1, instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
   set local session_replication_role = origin;
 end $$;
 create or replace function pg_temp.close_gate() returns void language plpgsql as $$
@@ -352,17 +352,18 @@ begin
   perform pg_temp.open_gate(KP);
   foreach ch in array array['sms', 'Email', 'EMAIL', 'whatsapp', '', ' email', 'email ', 'phone'] loop
     r := public.outreach_recipient_problem(ch, 'clean@example.com', null);
-    if r is distinct from 'unknown_channel' then raise exception 'F7a channel % returned % with the gate open', quote_literal(ch), coalesce(r, 'NULL (allowed)'); end if;
+    if r is distinct from (case when ch = 'whatsapp' then 'channel_prohibited' else 'unknown_channel' end) then raise exception 'F7a channel % returned % with the gate open', quote_literal(ch), coalesce(r, 'NULL (allowed)'); end if;
   end loop;
   if public.outreach_recipient_problem(null, 'clean@example.com', null) is distinct from 'unknown_channel' then raise exception 'F7b NULL channel allowed'; end if;
   -- the five real channels (outbox_channel_check) are still allowed when the gate is open and the recipient is clean
   if public.outreach_recipient_problem('email', 'clean@example.com', null) is not null then raise exception 'F7c email refused'; end if;
   if public.outreach_recipient_problem('text', '+44 20 7946 0958', null) is not null then raise exception 'F7c text refused'; end if;
   if public.outreach_recipient_problem('call', '+44 20 7946 0958', null) is not null then raise exception 'F7c call refused'; end if;
-  if public.outreach_recipient_problem('post', '1 Example Street', null) is not null then raise exception 'F7c post refused'; end if;
-  if public.outreach_recipient_problem('telegram', '@handle', null) is not null then raise exception 'F7c telegram refused'; end if;
+  -- v3: post and telegram have no durable suppression identifier: refused even with the gate open, and refused (same reason) with it closed
+  if public.outreach_recipient_problem('post', '1 Example Street', null) is distinct from 'channel_prohibited' then raise exception 'F7c post allowed'; end if;
+  if public.outreach_recipient_problem('telegram', '@handle', null) is distinct from 'channel_prohibited' then raise exception 'F7c telegram allowed'; end if;
   perform pg_temp.close_gate();
-  if public.outreach_recipient_problem('post', '1 Example Street', null) is distinct from 'suppression_unverified' then raise exception 'F7d post allowed with the gate closed'; end if;
+  if public.outreach_recipient_problem('post', '1 Example Street', null) is distinct from 'channel_prohibited' then raise exception 'F7d post not refused for its channel with the gate closed'; end if;
 end $$;
 rollback;
 select 'consent_review_fixes_check: done';

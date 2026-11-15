@@ -26,8 +26,9 @@ class T(unittest.TestCase):
         with mock.patch.dict(os.environ, ENV), mock.patch.object(M, "live", return_value=False), mock.patch.object(M, "_post") as p:
             self.assertEqual(M.deliver_approved()["reason"], "not live"); p.assert_not_called()
 
-    def _run(self, decision="allow", posted=True, refused=False, slug="donna", prof=PROF, venture_id="v1", suppressed=(), allowed=(True, True)):
+    def _run(self, decision="allow", posted=True, refused=False, slug="donna", prof=PROF, venture_id="v1", suppressed=(), allowed=(True, True), attest={"ok": True}, channel="email"):
         row = {**ROW, "body": "no footer"} if refused else {**ROW, "venture_id": venture_id}
+        row["channel"] = channel
         def get(path):
             if path.startswith("outbox"): return [row]
             if path.startswith("ventures"): return [{"slug": slug}] if slug else []
@@ -41,6 +42,7 @@ class T(unittest.TestCase):
         with mock.patch.dict(os.environ, ENV), mock.patch.object(M, "live", return_value=True), \
              mock.patch.object(M, "_get", side_effect=get), mock.patch.object(M.hq, "_request", side_effect=rpc), \
              mock.patch("hq_policy.authorize", return_value=Decision("send_email", decision, "r")), \
+             mock.patch.object(M.hq_gatemark, "attest", return_value=attest), \
              mock.patch.object(M, "_claim", return_value=True), mock.patch.object(M, "_release"), \
              mock.patch.object(M, "_post", return_value=posted) as post, mock.patch.object(M, "_mark_sent") as mark:
             return M.deliver_approved(), post, mark
@@ -120,6 +122,21 @@ class T(unittest.TestCase):
         out, post, mark = self._run(allowed=(False,))
         post.assert_not_called(); mark.assert_not_called()
 
+    # ---- v3: channel prohibition and the sender's outside high-water mark ----
+    def test_prohibited_channels_are_never_sent_or_approved(self):
+        for ch in ("telegram", "post", "mail", "whatsapp", "signal", "other", "sms", "Email", "", None, "fax"):
+            self.assertIn("channel", M.refusal({**ROW, "channel": ch}) or "", repr(ch))
+            out, post, mark = self._run(channel=ch)
+            self.assertEqual((out["sent"], out["skipped"]), (0, 1), repr(ch)); post.assert_not_called(); mark.assert_not_called()
+        self.assertIsNone(M.refusal({**ROW, "channel": "email"})); self.assertIsNone(M.refusal(ROW))      # no channel key = the email default of the query
+        self.assertEqual(M.channel_problem("telegram"), "channel_prohibited"); self.assertEqual(M.channel_problem("post"), "channel_prohibited")
+        self.assertEqual(M.channel_problem("fax"), "unknown_channel"); self.assertIsNone(M.channel_problem("email")); self.assertIsNone(M.channel_problem("text")); self.assertIsNone(M.channel_problem("call"))
+
+    def test_unattested_sender_sends_nothing(self):
+        for a in ({"ok": False, "reason": "sender_unanchored"}, {"ok": False, "reason": "rollback_detected"}, {"ok": False, "reason": "hwm_unavailable"}, {}):
+            out, post, mark = self._run(attest=a)
+            self.assertEqual(out["sent"], 0); self.assertTrue(str(out["reason"]).startswith("gate: ")); post.assert_not_called(); mark.assert_not_called()
+
     def test_send_allowed_is_strictly_a_yes(self):
         for reply in ({"allowed": False}, {"allowed": "true"}, {"allowed": 1}, {}, None, "ok", [], [{"allowed": False}], [{"allowed": True}, {"allowed": True}]):
             with mock.patch.object(M.hq, "_request", return_value=reply):
@@ -157,8 +174,11 @@ class T(unittest.TestCase):
             status = 200
             def __enter__(s): return s
             def __exit__(s, *a): return False
-        def run(gate):
-            provider, claims = [], []
+        import tempfile, json as _j
+        hwm = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False); hwm.write(_j.dumps({"gen": 1, "epoch": 5, "fp": None}) + "\n"); hwm.close()
+        self.addCleanup(os.unlink, hwm.name)
+        def run(gate, attest=None):
+            provider, claims, seen = [], [], []
             answers = list(gate)
             def urlopen(req, timeout=None):
                 url, method = req.full_url, req.get_method()
@@ -170,6 +190,7 @@ class T(unittest.TestCase):
                 if path.startswith("/rest/v1/outbox?status=eq.approved&channel=eq.email"): return Resp(json.dumps([ROW]).encode())
                 if path.startswith("/rest/v1/outbox?id=eq.a1&status=eq.approved&sent_at=is.null"): claims.append(path); return Resp(json.dumps([{"id": "a1"}]).encode())
                 if path.startswith("/rest/v1/outbox?id=eq.a1&status=eq.approved"): return Resp(b"")   # release / mark sent
+                if path.endswith("/rpc/ffm_sender_attest"): seen.append(body); return Resp(json.dumps(attest or {"ok": True, "epoch": 5, "open": True}).encode())
                 if path.endswith("/rpc/is_suppressed"): return Resp(b"false")
                 if path.endswith("/rpc/outreach_send_allowed"): return Resp(json.dumps({"allowed": answers.pop(0) if answers else False}).encode())
                 if path.startswith("/rest/v1/leads?id=eq.L1"): return Resp(json.dumps([{"do_not_contact": False}]).encode()) if method == "GET" else Resp(b"")
@@ -177,16 +198,20 @@ class T(unittest.TestCase):
                 if path.startswith("/rest/v1/company_profile"): return Resp(json.dumps([PROF]).encode())
                 if path.startswith("/rest/v1/audit_log"): return Resp(b"")
                 raise AssertionError(f"unexpected {method} {path}")
-            with mock.patch.dict(os.environ, ENV), mock.patch.object(M.hq, "HQ_SUPABASE_URL", "https://supabase.test"), mock.patch.object(urllib.request, "urlopen", urlopen), \
+            with mock.patch.dict(os.environ, {**ENV, "GATE_HWM_FILE": hwm.name}), mock.patch.object(M.hq, "HQ_SUPABASE_URL", "https://supabase.test"), mock.patch.object(urllib.request, "urlopen", urlopen), \
                  mock.patch("hq_policy.authorize", return_value=Decision("send_email", "allow", "r")):
                 out = M.deliver_approved()
-            return out, provider, claims
-        out, provider, claims = run([False])
+            return out, provider, claims, seen
+        out, provider, claims, seen = run([False])
         self.assertEqual((provider, claims, out["sent"]), ([], [], 0))        # gate closed after approval: no claim, NO provider call
-        out, provider, claims = run([True, False])
+        out, provider, claims, seen = run([True, False])
         self.assertEqual((len(provider), out["sent"]), (0, 0))                # closed mid-flow: claimed, then released, still no provider call
-        out, provider, claims = run([True, True])
+        out, provider, claims, seen = run([True, True])
         self.assertEqual((len(provider), len(claims)), (1, 1))                # open: exactly one provider call
+        self.assertEqual(seen, [{"p_hwm_epoch": 5, "p_hwm_instance": None}])  # the sender told the database its OUTSIDE high-water mark first
+        # rollback detected by the database (its epoch is behind our mark): nothing is claimed, nothing is posted, whatever else would allow it
+        out, provider, claims, seen = run([True, True], attest={"ok": False, "reason": "rollback_detected", "detail": "epoch 3 < 5"})
+        self.assertEqual((provider, claims, out["sent"], out["reason"]), ([], [], 0, "gate: rollback_detected"))
 
     def test_never_raises(self):
         with mock.patch.dict(os.environ, ENV), mock.patch.object(M, "live", side_effect=RuntimeError("db down")):

@@ -84,7 +84,7 @@ class Delivery(unittest.TestCase):
         outs = []
         with mock.patch.dict(os.environ, ENV), mock.patch.object(M, "live", return_value=True), \
              mock.patch.object(M, "_get", side_effect=db.get), mock.patch("hq._request", side_effect=db.request), \
-             mock.patch("hq_policy.authorize", return_value=Decision("send_email", "allow", "r")), \
+             mock.patch("hq_policy.authorize", return_value=Decision("send_email", "allow", "r")), mock.patch.object(M.hq_gatemark, "attest", return_value={"ok": True}), \
              mock.patch.object(M, "_post", side_effect=posts) as post:
             for _ in range(n):
                 outs.append(M.deliver_approved())

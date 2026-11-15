@@ -25,6 +25,7 @@ What it checks, in order (any failure => non-zero exit, and the report says whic
     A restore REQUIRES --expect-sha256 (the file hash from the owner's OWN records, NOT audit_log: service_role can write it): only then is the file's checkpoint staged. With --i-accept-unverified-suppression instead, the
     checkpoint in the file is IGNORED and the gate stays closed. A schema with no outreach gate at all FAILS the restore. A provider restore (PITR / pg_dump) does NOT go through this tool:
     the owner must run ffm_close_outreach_gate immediately after it (BACKUP_RECOVERY.md).
+    A RESTORE MARKER is written and the epoch row recreated in the SAME transaction as the restore (one commit at the end), so a restore is never visible without them.
     Nothing is verified automatically: the owner re-supplies the suppression key, imports/restores the list and runs the owner-only verification (printed at the end).
 Limits are printed in the report ("not_restored"): cron jobs, default privileges for FUTURE objects, extensions the scratch server lacks, anything outside public."""
 import argparse, base64, collections, datetime as dt, hashlib, io, json, os, re, sys, tarfile, urllib.error, urllib.parse, urllib.request
@@ -268,11 +269,12 @@ GATE_STEPS = [
     "2. Owner only (from the SQL editor, with the owner session, see ops/OWNER_CONSENT_INTEGRITY.sql): set the SAME suppression key you stored offline: ffm_set_key('suppression_hmac_key', ...). It was never in this backup.",
     "3. Re-establish the suppression list, best source first: (a) the database PROVIDER backup (restore contact_suppressions / ffm_phone_suppressions rows into this database), or (b) this file's keyed hashes: select ffm_import_suppression_hashes() (hash-only entries are honoured by is_suppressed / ffm_can_contact).",
     "4. Owner only: select ffm_verify_suppression('owner'). It opens the gate ONLY if every entry of the staged checkpoint is present in the live list. 'incomplete', 'key differs' or 'altered after staging' mean: keep the gate closed and use the provider backup.",
+    "4b. Then, in the bot chat, owner only: /gate anchor. This database is in a NEW generation: its epoch is lower than the high-water mark the sender keeps outside the database, so the sender (and the database itself) refuse outreach until you anchor, and anchoring is only accepted after step 4 succeeded.",
     "5. If the backup has NO checkpoint, or verification keeps failing: outreach stays blocked. Rebuild the list from the provider backup or from the unsubscribe/reply history, stage a checkpoint you trust (ffm_stage_suppression_checkpoint), then verify.",
 ]
 
 
-def apply_gate(cur, rep: dict, sup: dict | None, checkpoint_trusted: bool = True) -> bool:
+def apply_gate(cur, rep: dict, sup: dict | None, checkpoint_trusted: bool = True, file_sha: str | None = None) -> bool:
     """Put the RESTORED database into 'suppression unverified': default-deny until the owner verifies. Runs as the restoring superuser (this is the one place that may write the
     gate directly: it only ever CLOSES it). Returns False when the restored database would still allow outreach (the restore then FAILS)."""
     g = {"state": None, "open": None, "checkpoint_staged": False}
@@ -282,6 +284,18 @@ def apply_gate(cur, rep: dict, sup: dict | None, checkpoint_trusted: bool = True
         rep["outreach_gate"] = g
         rep["next_steps"] = ["APPLY migrations 20261121_consent_evidence_v1 and 20261121_suppression_integrity_v1 to this database, then follow the steps below."] + GATE_STEPS
         return False      # review finding 5: a restore that leaves outreach UNGATED must never report PASS
+    # RESTORE MARKER + epoch (v3), in the SAME transaction as the restore (main() commits once, after this). The marker makes every verification made before it worthless; the epoch row is
+    # recreated at 1 (the off-site file carries no ffm_* data), which is LOWER than the high-water mark the sender keeps outside the database, so the sender detects the restore too
+    # and refuses until the owner re-verifies the list and runs /gate anchor.
+    cur.execute("select to_regclass('public.ffm_restore_markers') is not null and to_regclass('public.ffm_epoch') is not null")
+    if not cur.fetchone()[0]:
+        g.update(state="NO RESTORE MARKER TABLE", note="this backup's schema has no restore marker / epoch tables (it predates the restore-closed gate in migration 20261121_suppression_integrity_v1). The restore FAILS: apply that migration BEFORE any outreach.")
+        rep["outreach_gate"] = g
+        rep["next_steps"] = ["APPLY migration 20261121_suppression_integrity_v1 (restore-closed gate) to this database, then follow the steps below."] + GATE_STEPS
+        return False
+    cur.execute("insert into public.ffm_restore_markers (source, detail, recorded_by) values ('restore_backup.py', %s, 'restore_backup.py')", ("restored from off-site backup" + (f" sha256 {file_sha[:16]}" if file_sha else ""),))
+    cur.execute("insert into public.ffm_epoch (id, epoch) values (1, 1) on conflict (id) do nothing")
+    g["restore_marker_recorded"] = True
     cur.execute("delete from public.ffm_suppression_expected")
     reason = "restored from backup: suppression list NOT verified (default-deny until the owner verifies)"
     if sup and not checkpoint_trusted:
@@ -295,14 +309,14 @@ def apply_gate(cur, rep: dict, sup: dict | None, checkpoint_trusted: bool = True
         cur.execute("""insert into public.ffm_outreach_gate (id, state, reason, expected_count, expected_hash, expected_key_check, expected_staged_at)
                        values (1, 'unverified', %s, %s, %s, %s, clock_timestamp())
                        on conflict (id) do update set state = 'unverified', reason = excluded.reason, expected_count = excluded.expected_count, expected_hash = excluded.expected_hash,
-                         expected_key_check = excluded.expected_key_check, expected_staged_at = excluded.expected_staged_at, verified_raw_count = null, verified_at = null, verified_by = null, updated_at = clock_timestamp()""",
+                         expected_key_check = excluded.expected_key_check, expected_staged_at = excluded.expected_staged_at, verified_raw_count = null, verified_at = null, verified_by = null, verified_epoch = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp()""",
                     (reason + "; checkpoint from the backup staged", sup["count"], sup["hash"], sup["key_check"]))
         g["checkpoint_staged"] = True
         g["checkpoint"] = {"count": sup["count"], "email_count": sup.get("email_count"), "phone_count": sup.get("phone_count"), "hash": sup["hash"]}
     else:
         cur.execute("""insert into public.ffm_outreach_gate (id, state, reason) values (1, 'unverified', %s)
                        on conflict (id) do update set state = 'unverified', reason = excluded.reason, expected_count = null, expected_hash = null, expected_key_check = null,
-                         expected_staged_at = null, verified_raw_count = null, verified_at = null, verified_by = null, updated_at = clock_timestamp()""",
+                         expected_staged_at = null, verified_raw_count = null, verified_at = null, verified_by = null, verified_epoch = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp()""",
                     (reason + "; no trusted suppression checkpoint was staged from this backup",))
         g["note"] = g.get("checkpoint_ignored") or "no checkpoint in this backup (the owner had not set the suppression key, or the backup predates the export): verification is impossible from this file"
     cur.execute("select public.ffm_outreach_gate_open()")
@@ -744,8 +758,9 @@ def main():
             rebuild_constraints(cur, schema, rep); rebuild_rest(cur, schema, rep); replay_schema_acl_and_comments(cur, schema, rep)
             rep["steps"]["constraints_indexes_triggers_views_policies_grants"] = "PASS" if not rep["views_failed"] else "FAIL"
             rep.setdefault("not_restored", {}).update(dict(skipped))
-            conn.commit()
-            gate_ok = apply_gate(cur, rep, sup, checkpoint_trusted=bool(args.expect_sha256)); conn.commit()        # the gate is part of the restored state: it PERSISTS (closed), unlike the smoke tests
+            # NO commit before the gate: schema, rows, restore marker and the closed gate become visible TOGETHER or not at all, so there is no committed moment in which the restored
+            # data exists with a verified/open gate and no marker (the old code committed here first).
+            gate_ok = apply_gate(cur, rep, sup, checkpoint_trusted=bool(args.expect_sha256), file_sha=(rep.get("file") or {}).get("sha256")); conn.commit()        # the gate is part of the restored state: it PERSISTS (closed), unlike the smoke tests
             checks = [("every_row_identical", verify_rows(cur, data, rep)), ("schema_identical", verify_schema(cur, schema, rep)), ("smoke_tests", smoke(cur, rep)),
                       ("outreach_gate_closed_default_deny", gate_ok)]
             conn.rollback()      # smoke tests changed nothing that persists

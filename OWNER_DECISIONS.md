@@ -18,6 +18,16 @@ Exact heads, checksums, order: `PRODUCTION_APPROVAL_PACKAGE.md`.
 | B5 | Protected spend/send hardening (`ops/pending_signoff/audit_spend_send_hardening.sql`, F2/F3/F7-F9/F12) | Rejects negative/re-settled LLM amounts, bounds settle_spend, blocks `sent_by=owner` bypass of kill switch/dry-run, blocks sent->draft, blocks API role adding policy rows | Edits protected spend/permission functions; F2 also needs a small `hq_commands.mark_sent` change | Approve before any live email or real spend; all findings are latent today | No | Yes, but before going live |
 | B4 | Unsuppression policy | Today opt-outs are permanent | Re-mailing an opt-out breaks CASL | Keep permanent; any exception = written owner-signed re-consent record | No | Yes |
 
+## B2. Consent integrity v3: channels and restore-closed gate (Nov 15 2026, `build/consent-integrity-v3`)
+| # | Decision | Default taken in code | Risk | Blocks? |
+|---|---|---|---|---|
+| G1 | Person-directed Telegram, post/mail, WhatsApp, Signal, other: prohibited until a durable suppression identifier and check exist | Prohibited at the database and in Python; email, text, call allowed behind the gate | None to outreach (it can only say no). To enable a channel later: a reviewed migration | No |
+| G2 | Does an EMAIL-only unsubscribe also suppress the phone number (and vice versa)? | No: channel-specific withdrawals suppress their own identifier; `all` and any no-identifier channel suppress both | Under-suppression if counsel says an unsubscribe covers all electronic messages from the sender | Before any live outreach |
+| G3 | Gate timers: attestation window (default 15 min, 2-120) and maximum age of the owner's verification (default 30 days, 1-90) | Defaults; set with `ffm_set_gate_config` (owner only) | Shorter = smaller exposure window after a provider restore and more re-verification | No |
+| G4 | Where the sender keeps its outside mark: the existing Backblaze bucket (needs the backup key to have listFiles + writeFiles, already recommended) and optionally `GATE_HWM_FILE` on a Railway volume | B2 if backups are configured; with no store the sender refuses | Without B2 or a volume every redeploy needs `/gate anchor` again | Before live outreach |
+| G5 | After setup and after any restore: verify the list, then `/gate anchor` once in the bot chat | Gate and sender stay closed until you do | None (fails closed) | Before live outreach |
+| G6 | Approve applying the v3 additions (inside the unreleased `20261121_suppression_integrity_v1`) with the rest of Gate B | Not applied anywhere | Production migration: separate release authorization | Yes, for any outreach |
+
 ## C. Evidence verification D1-D8
 Built and merged into PR #4 in **shadow mode** (audits, downgrades nothing; env `HQ_EVIDENCE_V2=off|shadow|enforce`). Migration `20261116_evidence_sources_v1` is part of the release. Flipping to enforce = D2.
 D1 snapshot capture on (yes); D2 shadow 2 weeks then enforce material claims (yes); D3 judge off at first (off); D4 retention 90/180 days (yes); D5 corroboration 2 domains for money/legal/medical (yes); D6 judge ceiling min(10% budget, 30c), 6 calls (yes); D7 staleness 24 months (yes); D8 legacy evidence ok for non-material claims, flagged (yes). Risk: only that stricter checks downgrade more missions. Blocks release: **No.** Can wait: yes (build is on a dev branch).

@@ -75,6 +75,11 @@ def record_reply(ref: str, kind: str, note: str = "", by: str = OWNER) -> str:
     r = r if isinstance(r, dict) else {}
     name = lead.get("name") or "lead"
     if kind == "unsubscribe":
+        try:  # the opt-out just moved the database's suppression epoch: advance the sender's OUTSIDE high-water mark now, so a restore to a point just before it is detectable (best effort, never blocks)
+            import hq_gatemark
+            hq_gatemark.observe()
+        except Exception:
+            pass
         return (f"#{ref.lstrip('#')} {name} is now do-not-contact. {r.get('leads_marked', 1)} lead(s) sharing the address marked across all ventures; "
                 f"{r.get('drafts_rejected', 0)} open draft(s) rejected. Nothing more will be drafted or sent to them.")
     if r.get("unchanged"):
@@ -220,6 +225,9 @@ def dnc_problem(outbox_id: str) -> str | None:
         lead = (_get(f"leads?id=eq.{_q(ob['lead_id'])}&select=do_not_contact&limit=1") or [{}])[0]
         if lead.get("do_not_contact"):
             return "Cannot approve: this lead is do-not-contact (opted out). The draft stays unsent."
+    why_ch = hq_mail.channel_problem(ob.get("channel", "email"))
+    if why_ch:
+        return f"Cannot approve: person-directed outreach on {str(ob.get('channel'))[:20]} is prohibited ({why_ch}): there is no durable suppression identifier for it. The draft stays unsent."
     raw = (ob.get("to_ref") or "").strip()
     to = hq_mail.normalize_addr(raw)
     if raw and ob.get("channel", "email") == "email" and to is None:

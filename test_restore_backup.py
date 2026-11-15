@@ -92,6 +92,33 @@ class SuppressionPayload(unittest.TestCase):
         self.assertGreaterEqual(len(rep["next_steps"]), 4)
         self.assertFalse(any("'verified'" in q and "set state = 'verified'" in q for q in cur.sql))      # the tool only ever closes the gate
 
+    def test_restore_marker_and_epoch_are_written_by_the_tool_and_the_gate_only_closes(self):
+        """v3: the restore writes a restore MARKER and recreates the epoch row (lower than the sender's outside mark), before it touches the gate row."""
+        for sup in (self.payload(), None):
+            rep, cur = {}, self.Cur()
+            self.assertTrue(R.apply_gate(cur, rep, sup, file_sha="ab" * 32))
+            m = [i for i, q in enumerate(cur.sql) if "insert into public.ffm_restore_markers" in q]
+            e = [i for i, q in enumerate(cur.sql) if "insert into public.ffm_epoch" in q]
+            g = [i for i, q in enumerate(cur.sql) if "insert into public.ffm_outreach_gate" in q]
+            self.assertEqual((len(m), len(e), len(g)), (1, 1, 1)); self.assertLess(m[0], g[0]); self.assertLess(e[0], g[0])
+            self.assertIn("sha256 " + "ab" * 8, cur.params[m[0]][0]); self.assertTrue(rep["outreach_gate"]["restore_marker_recorded"])
+            self.assertTrue(any("verified_epoch = null" in q and "attested_at = null" in q and "instance_fp = null" in q for q in cur.sql))     # every v3 verification column is cleared
+            self.assertFalse(any("delete from public.ffm_restore_markers" in q or "update public.ffm_restore_markers" in q for q in cur.sql))
+        rep = {}
+        class NoMarkers(self.Cur):
+            def fetchone(s):
+                if s.last and "ffm_restore_markers') is not null" in s.last: return (False,)
+                return super().fetchone()
+        self.assertFalse(R.apply_gate(NoMarkers(), rep, self.payload()))      # a schema without the marker table cannot be made safe: FAIL
+        self.assertIn("APPLY", rep["next_steps"][0])
+
+    def test_marker_gate_and_data_commit_together(self):
+        """The restore must not COMMIT between loading the data and writing the marker / closed gate (one transaction, one commit)."""
+        import os, re
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "restore_backup.py")) as fh: src = fh.read()
+        body = src[src.index("replay_schema_acl_and_comments(cur, schema, rep)\n"):src.index("apply_gate(cur, rep, sup")]
+        self.assertNotIn("conn.commit()", body)
+
     def test_without_checkpoint_and_with_open_gate(self):
         rep = {}
         self.assertTrue(R.apply_gate(self.Cur(), rep, None))

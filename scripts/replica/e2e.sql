@@ -115,7 +115,7 @@ select 'finance_rules_ok';
 -- fixture: the outreach gate (20261121_suppression_integrity_v1) is closed by default; the legacy outbox tests below approve and send drafts, so open it for them
 set session_replication_role = replica;
 insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
-update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture' where id = 1;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
 set session_replication_role = origin;
 -- autonomy_v1
 do $$ declare r jsonb; begin

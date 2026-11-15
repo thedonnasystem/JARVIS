@@ -193,6 +193,18 @@ class Gate(unittest.TestCase):
         with mock.patch.object(hq, "_request", w):
             self.assertIn("refuses outreach", V.dnc_problem("ob1"))
 
+    def test_prohibited_channels_cannot_be_approved_even_if_the_database_would_say_yes(self):
+        """v3: telegram / post / whatsapp / unknown channels have no durable suppression identifier. The approval path refuses them BEFORE asking the database, and says why."""
+        for ch in ("telegram", "post", "mail", "whatsapp", "other", "fax", "Email", ""):
+            w = World(outbox={**self.OB, "channel": ch})
+            with mock.patch.object(hq, "_request", w):
+                got = V.dnc_problem("ob1")
+            self.assertIn("prohibited", got or "", repr(ch))
+            self.assertFalse([c for c in w.calls if "outreach_send_allowed" in c[1]], repr(ch))      # refused before any database decision
+        for ch in ("email", "text", "call"):
+            with mock.patch.object(hq, "_request", World(outbox={**self.OB, "channel": ch, "to_ref": "+1 613 555 0101" if ch != "email" else "a@acme.co"})):
+                self.assertIsNone(V.dnc_problem("ob1"), ch)
+
     def test_outreach_check_fails_closed_on_error_or_odd_answer(self):
         for reply in (http(500), http(404), RuntimeError("boom"), {"allowed": "true"}, {"allowed": None}, {}, None, "yes", [], [{"allowed": False}]):
             with mock.patch.object(hq, "_request", World(outbox=self.OB, send_reply=reply)):

@@ -5,7 +5,7 @@ begin;
 -- fixture: the outreach gate is closed by default (20261121_suppression_integrity_v1); open it so these checks still exercise the suppression rules rather than the gate
 set local session_replication_role = replica;
 insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
-update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture' where id = 1;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
 set local session_replication_role = origin;
 do $$
 declare va uuid; vb uuid; la uuid; lb uuid; lc uuid; ld uuid; le uuid; lnew uuid; lx uuid;

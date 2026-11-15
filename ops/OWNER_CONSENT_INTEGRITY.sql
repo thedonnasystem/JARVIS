@@ -34,9 +34,9 @@ select public.ffm_register_wording('<workspace uuid>', '<wording version, e.g. f
 -- 4. Hand-attested consent (paper/recorded call) - only with a real artifact kept on file; see ffm_register_capture_owner's signature in the migration.
 
 -- 6. AFTER ANY RESTORE (provider PITR, pg_dump, Supabase backup restore, or ops/restore_backup.py): the gate row comes back as it was at the snapshot, possibly 'verified' = OPEN, with later
---    suppressions missing. FIRST, before anything else:
-select set_config('request.jwt.claim.sub', '<YOUR-AUTH-UID>', true);
-select public.ffm_close_outreach_gate('restore: suppression list not re-verified', 'owner');
+--    suppressions missing. Since v3 the gate also closes itself (other cluster/timeline, the sender's outside high-water mark, a stale attestation), but do this FIRST, it is free:
+--    (it writes a RESTORE MARKER: no verification older than it will ever count again, and closes the gate; anyone may call it, it can only close)
+select public.ffm_record_restore('provider restore', '<what you restored and to which time>', 'owner');
 --    then re-establish the list, then verify against an INDEPENDENT checkpoint (the file hash YOU recorded outside the database when you made the export: restore_backup.py --expect-sha256. NOT audit_log: service_role can write audit_log, so it proves nothing. A provider restore can also bring back a 'verified' gate with an older list: close the gate first).
 --    ffm_import_suppression_hashes() followed by ffm_verify_suppression() is circular (the import IS the checkpoint) and proves nothing by itself.
 
@@ -45,7 +45,13 @@ select public.ffm_close_outreach_gate('restore: suppression list not re-verified
 select set_config('request.jwt.claim.sub', '<YOUR-AUTH-UID>', true);
 select public.ffm_verify_suppression('owner');   -- must return verified; anything else = stay closed
 
--- Check state at any time (safe, read-only):
+-- 5b. AFTER the verification above, in the BOT CHAT (not here): /gate anchor. The sender keeps the highest suppression epoch it has seen OUTSIDE the database and refuses to send when the
+--     database is behind it or when it has none. Anchoring is accepted only while the gate is open and was verified AFTER the last restore marker. Needed once at setup and after every restore.
+-- 5c. Optional (owner only): the gate timers. Defaults: sender attestation must be at most 15 minutes old; your verification at most 30 days old. Bounds 2-120 minutes, 1-90 days.
+--    select set_config('request.jwt.claim.sub', '<YOUR-AUTH-UID>', true);
+--    select public.ffm_set_gate_config(15, 30, 'owner');
+
+-- Check state at any time (safe, read-only; /gate in the bot chat shows the same plus the sender's mark):
 select public.ffm_outreach_gate_status();
 
 -- 7. app_owners: the bot's service role can no longer write it (migration 20261121_suppression_integrity_v1, section 13). Add or remove an owner HERE, in the SQL editor:

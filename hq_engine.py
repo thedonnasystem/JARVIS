@@ -28,6 +28,7 @@ import hq_missions
 import hq_evidence
 import hq_mail
 import hq_backup
+import hq_gatemark
 import hq_bank
 import hq_waterfall
 
@@ -1298,6 +1299,10 @@ def tick_sync() -> None:
     _recover_stale()
     _refresh_capital_mode()
     _bank_watch()
+    try:  # keeps the outreach gate bound to the sender's OUTSIDE high-water mark (a restored database closes itself); never sends anything, never raises
+        hq_gatemark.attest(force=False)
+    except Exception:
+        logger.exception("HQ gate attestation failed")
     try:  # dormant until BACKUP_KEY and BACKUP_PUT_URL are set; runs once a night (02:00-05:00 Toronto)
         hq_backup.run()
     except Exception:
