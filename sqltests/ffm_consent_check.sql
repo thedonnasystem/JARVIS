@@ -19,6 +19,7 @@ end $$;
 set local session_replication_role = replica;
 insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
 update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, verified_marker_id = (select coalesce(max(id),0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
+update public.ffm_gate_config set phone_outreach_enabled = true;     -- text / call are disabled by default (v3 review F1); the checks below exercise them, so enable them in this scratch transaction
 set local session_replication_role = origin;
 create function pg_temp.express(p_ws uuid, p_lead uuid, p_ch text, p_ref text, p_by text default 'bot') returns uuid language plpgsql as $$
 declare prev text := current_setting('app.uid', true); r uuid;

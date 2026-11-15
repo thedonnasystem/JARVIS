@@ -24,7 +24,7 @@ import json, os, re, time, urllib.parse
 
 import hq
 
-NAME_RE = re.compile(r"hwm-(\d{6})-(\d{12})-(\d{9})-(\d{1,20}_\d{1,10}|unavailable)\.json")     # matched with fullmatch against <prefix>gate/<this>; nothing else under the prefix counts
+NAME_RE = re.compile(r"hwm-(\d{6})-(\d{12})-(\d{9})-(\d{1,20}(?:_\d{1,10}){1,3}|unavailable)\.json")     # matched with fullmatch against <prefix>gate/<this>; nothing else under the prefix counts
 _CACHE = {"at": 0.0, "rec": None}
 CACHE_SECONDS = 300      # the engine tick may use a cached read this old; a SEND never does
 

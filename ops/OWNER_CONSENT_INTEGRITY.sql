@@ -59,3 +59,7 @@ select public.ffm_outreach_gate_status();
 
 -- 7. app_owners: the bot's service role can no longer write it (migration 20261121_suppression_integrity_v1, section 13). Add or remove an owner HERE, in the SQL editor:
 --    insert into public.app_owners (email) values ('<owner email>');
+
+-- 7. (optional, owner decision G7) text / call outreach are DISABLED by default. Do not enable them until a sender for those channels attests against the outside high-water mark. Enabling closes the gate: verify again.
+-- select set_config('request.jwt.claim.sub', '<YOUR-AUTH-UID>', true);
+-- select public.ffm_set_phone_outreach(true, 'owner');     -- and false to switch them off again

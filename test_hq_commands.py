@@ -242,6 +242,7 @@ class DecisionFake(Fake):
 
 class D(unittest.TestCase):
     def setUp(self):
+        _p = mock.patch("hq_gatemark.attest", return_value={"ok": True}); _p.start(); self.addCleanup(_p.stop)   # the sender mark vouches for the database (its own tests are in test_hq_gatemark)
         _db_allows_outreach(self)
 
     def test_approve_closes_escalation_and_saves_decision(self):
@@ -472,6 +473,7 @@ class Resolve(unittest.TestCase):
 
 class Casl(unittest.TestCase):
     def setUp(self):
+        _p = mock.patch("hq_gatemark.attest", return_value={"ok": True}); _p.start(); self.addCleanup(_p.stop)   # the sender mark vouches for the database (its own tests are in test_hq_gatemark)
         os.environ["JARVIS_OWNER_ID"] = "42"
         _db_allows_outreach(self)
 

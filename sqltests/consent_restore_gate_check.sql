@@ -64,7 +64,7 @@ end $$;
 
 do $$
 declare
-  a uuid; l1 uuid; l2 uuid; l3 uuid; l4 uuid; l5 uuid; l6 uuid; l7 uuid; l8 uuid; ld uuid; x record; r text; j jsonb; n int; e0 bigint; e1 bigint; t text; ch text; ob uuid; why text; i int;
+  a uuid; l1 uuid; l2 uuid; l3 uuid; l4 uuid; l5 uuid; l6 uuid; l7 uuid; l8 uuid; ld uuid; x record; r text; j jsonb; n int; e0 bigint; e1 bigint; t text; ch text; ob uuid; why text; i int; x2 uuid;
   fp text := public.ffm_instance_fp();
 begin
   insert into auth.users (id, email) values ('99999999-9999-9999-9999-999999999995', 'v3-owner@example.com');
@@ -86,6 +86,24 @@ begin
   -- A2 with the gate OPEN (real verification) and a clean recipient, prohibited channels are still refused; the three real channels are allowed
   l1 := public.ws_add_lead(a, null, 'Alice', 'alice@example.com', '+1 613 555 0101', 'web');
   perform pg_temp.express(a, l1, 'email', 'form-a-001'); perform pg_temp.express(a, l1, 'sms', 'form-a-002'); perform pg_temp.express(a, l1, 'phone', 'form-a-003'); perform pg_temp.express(a, l1, 'mail', 'form-a-004');
+  -- P text / call are DISABLED by default (review F1): the DB gate alone cannot tell a same-instance restore inside the attestation window, and nothing external vouches for those channels.
+  if (select phone_outreach_enabled from public.ffm_gate_config where id = 1) is not false then raise exception 'P1 phone outreach is not disabled by default'; end if;
+  foreach ch in array array['text', 'call', 'sms', 'phone'] loop
+    if public.outreach_channel_disabled(ch) is distinct from 'channel_disabled' then raise exception 'P2 % not disabled', ch; end if;
+    if public.ffm_contact_status(l1, ch) ->> 'reason' <> 'channel_disabled' or public.ffm_can_contact(l1, ch) then raise exception 'P3 % contactable or wrong reason: %', ch, public.ffm_contact_status(l1, ch); end if;
+  end loop;
+  foreach ch in array array['text', 'call'] loop
+    if public.outreach_recipient_problem(ch, '+16135550101', null) is distinct from 'channel_disabled' then raise exception 'P4 % allowed by the outbox decision: %', ch, public.outreach_recipient_problem(ch, '+16135550101', null); end if;
+    perform pg_temp.expect_fail(format($q$insert into public.outbox (channel, to_ref, body, status) values (%L, '+16135550101', 'hi', 'draft')$q$, ch), 'Channel prohibited (channel_disabled)%');
+  end loop;
+  foreach ch in array array['sms', 'phone'] loop      -- the consent log's names are not outbox channels: refused explicitly, not by the CHECK constraint
+    perform pg_temp.expect_fail(format($q$insert into public.outbox (channel, to_ref, body, status) values (%L, '+16135550101', 'hi', 'draft')$q$, ch), 'Channel prohibited (invalid_outbox_channel)%');
+  end loop;
+  if pg_temp.svc($q$select public.ffm_set_phone_outreach(true, 'bot')$q$) not like 'ERR:owner approval required%' then raise exception 'P5 the bot enabled phone outreach'; end if;
+  if (select phone_outreach_enabled from public.ffm_gate_config where id = 1) then raise exception 'P5b the refused call changed the setting'; end if;
+  if pg_temp.svc($q$update public.ffm_gate_config set phone_outreach_enabled = true$q$) not like 'ERR:permission denied%' then raise exception 'P5c the bot wrote the config table'; end if;
+  perform pg_temp.as_owner(true); perform public.ffm_set_phone_outreach(true, 'owner'); perform pg_temp.as_owner(false);   -- the owner's decision; it closes the gate (re-verify follows)
+  if public.ffm_outreach_gate_open() then raise exception 'P6 enabling phone outreach left the gate open'; end if;
   j := pg_temp.verify_gate();
   if (j ->> 'verified')::boolean is not true then raise exception 'A2 setup: gate did not verify: %', j; end if;
   if not public.ffm_outreach_gate_open() then raise exception 'A2 setup: gate not open after real verification: %', public.ffm_outreach_gate_status(); end if;
@@ -301,6 +319,14 @@ begin
   update public.leads set do_not_contact = true where id = (select id from public.leads limit 1);
   if (select epoch from public.ffm_epoch where id = 1) <= e1 and exists (select 1 from public.leads) then raise exception 'R1d do-not-contact flag did not move the epoch'; end if;
   e1 := (select epoch from public.ffm_epoch where id = 1);
+  -- R1f a lead CREATED already flagged do-not-contact is a suppression too (a restore that lost it must leave epoch evidence); an ordinary lead insert moves nothing
+  insert into public.ventures (slug, name, kind) values ('v3-epoch', 'V3 epoch', 'revenue') returning id into x2;
+  e1 := (select epoch from public.ffm_epoch where id = 1);
+  insert into public.leads (venture_id, name, email) values (x2, 'ordinary', 'ordinary-r1f@example.com');
+  if (select epoch from public.ffm_epoch where id = 1) <> e1 then raise exception 'R1f an ordinary lead insert moved the epoch'; end if;
+  insert into public.leads (venture_id, name, email, do_not_contact) values (x2, 'flagged', 'flagged-r1f@example.com', true);
+  if (select epoch from public.ffm_epoch where id = 1) <= e1 then raise exception 'R1f a lead inserted already do-not-contact did not move the epoch'; end if;
+  e1 := (select epoch from public.ffm_epoch where id = 1);
   perform public.ffm_close_outreach_gate('epoch test', 'test'); if (select epoch from public.ffm_epoch where id = 1) <= e1 then raise exception 'R1e closing the gate did not move the epoch'; end if;
 
   -- R2 a verified gate is OPEN, and the verification records the epoch, the instance and a first attestation
@@ -361,6 +387,10 @@ begin
   perform pg_temp.svc(format($q$select public.ffm_sender_attest(1, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1) + 100, fp));
   if (select count(*) from public.ffm_restore_markers) <> n then raise exception 'R4f marker spam on a closed gate'; end if;
 
+  -- R5-0 the fingerprint is system_identifier:timeline:database oid:gate-table oid. The last two are NOT carried by a logical restore (pg_restore creates the database / tables afresh), so a same-cluster
+  -- logical restore no longer matches the verified fingerprint with no sender involved (scripts/backup_drill.py V5 restores for real). Here: shape and components.
+  if fp !~ '^[0-9]+:[0-9]+:[0-9]+:[0-9]+$' then raise exception 'R5-0 fingerprint shape: %', fp; end if;
+  if split_part(fp, ':', 3)::oid <> (select oid from pg_database where datname = current_database()) or split_part(fp, ':', 4)::oid <> 'public.ffm_outreach_gate'::regclass::oid then raise exception 'R5-0b fingerprint does not carry the database and gate table oids: %', fp; end if;
   -- R5 INSTANCE: another cluster / timeline. (a) detected by the sender, (b) detected by the database alone from the stored fingerprint
   perform pg_temp.verify_gate();
   r := pg_temp.svc($q$select public.ffm_sender_attest(1, 1, '999:7')::text$q$);
@@ -504,6 +534,9 @@ begin
   perform public.ffm_set_key('suppression_hmac_key', encode(sha256(convert_to('v3-fixture-second-key', 'UTF8')), 'hex'), 'owner');
   j := public.ffm_verify_suppression('owner'); perform pg_temp.as_owner(false);
   if (j ->> 'verified')::boolean is not false or public.ffm_outreach_gate_open() then raise exception 'R10e verification passed on an empty list: %', j; end if;
+  -- R10g hash-only entries with NO key: is_suppressed / ffm_is_phone_suppressed fail CLOSED (true), not open
+  set local session_replication_role = replica; delete from public.ffm_secrets; insert into public.ffm_suppression_hashes (kind, mac, source) values ('email', repeat('0', 64), 'restore_import'), ('phone', repeat('1', 64), 'restore_import') on conflict do nothing; set local session_replication_role = origin;
+  if public.is_suppressed('never-seen@example.com') is not true or public.ffm_is_phone_suppressed('+16135550177') is not true then raise exception 'R10g hash-only entries without the key fail OPEN (is_suppressed=%, phone=%)', public.is_suppressed('never-seen@example.com'), public.ffm_is_phone_suppressed('+16135550177'); end if;
   -- a database with NO gate row at all is closed (a wiped table)
   set local session_replication_role = replica; delete from public.ffm_outreach_gate; set local session_replication_role = origin;
   if public.ffm_outreach_gate_open() or public.outreach_recipient_problem('email', 'x@example.com', null) is distinct from 'suppression_unverified' then raise exception 'R10f missing gate row is open'; end if;

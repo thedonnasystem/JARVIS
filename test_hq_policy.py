@@ -35,6 +35,7 @@ class Rec:
 
 class T(unittest.TestCase):
     def setUp(self):
+        _p = mock.patch("hq_gatemark.attest", return_value={"ok": True}); _p.start(); self.addCleanup(_p.stop)   # the sender mark vouches for the database (its own tests are in test_hq_gatemark)
         _db_allows_outreach(self)
 
     def test_database_decision_is_used(self):

@@ -242,6 +242,12 @@ def dnc_problem(outbox_id: str) -> str | None:
         return "Cannot approve: could not check the do-not-contact list. Try again."
     # the database's own decision (PR #15 review): outreach gate, lead flag, plaintext AND hash-only suppressions, phone numbers for text/call. Fail closed on ANY error,
     # including a missing function: an approval the database would refuse anyway must not be offered, and an unanswerable question is a no.
+    # F1: the database's answer is only as good as the database. An approval must not rest on gate state that a same-instance restore can bring back, so the sender first compares the database with its
+    # OUTSIDE high-water mark (the same check deliver_approved makes before a send); if that cannot vouch for the database, nothing is approved.
+    import hq_gatemark
+    att = hq_gatemark.attest(force=True)
+    if not att.get("ok"):
+        return f"Cannot approve: the sender's outside gate mark does not vouch for the database ({str(att.get('reason'))[:40]}). Run /gate for the next step. The draft stays unsent."
     try:
         got = _rpc("outreach_send_allowed", {"p_outbox": outbox_id})
     except Exception:

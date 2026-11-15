@@ -215,6 +215,14 @@ class T(unittest.TestCase):
         self.assertEqual((s.hides, s.foreign), (1, 6)); self.assertEqual({c_[0] for c_ in calls}, {"b2_list_file_versions"})
         self.assertEqual(calls[0][1]["prefix"], P)
 
+    def test_fingerprint_with_database_and_table_oids_round_trips_through_the_file_name(self):
+        fp = "7708539452488523814:1:16384:24577"      # system_identifier:timeline:database oid:gate table oid
+        self.assertEqual(G._name_to_fp(G._fp_to_name(fp)), fp)
+        name = f"hwm-000001-000000000005-000000000-{G._fp_to_name(fp)}.json"
+        m = G.NAME_RE.fullmatch(name); self.assertTrue(m); self.assertEqual(G._name_to_fp(m.group(4)), fp)
+        for bad in ("7_1_2_3_4", "a_1", "1", "1__2"):
+            self.assertIsNone(G.NAME_RE.fullmatch(f"hwm-000001-000000000005-000000000-{bad}.json"), bad)
+
     def test_b2_store_pages_with_start_file_id_and_appends_the_documented_name(self):
         import hq_backup as B
         P = "hq/gate/"

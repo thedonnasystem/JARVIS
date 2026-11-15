@@ -13,7 +13,7 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-sys.path[:0] = [ROOT, os.path.join(HERE, "replica"), os.path.join(ROOT, "ops")]
+sys.path[:0] = [HERE, ROOT, os.path.join(HERE, "replica"), os.path.join(ROOT, "ops")]
 
 import subprocess
 import psycopg2
@@ -152,6 +152,7 @@ def consent_checks(enc, key, rep, renv, work, out_sha):
         return lid
     l_out = add("Opted Out", "OptOut1+promo@Example.com", "613 555 0911")
     l_ok = add("Fine Person", "fine.person@example.com", "613 555 0999")
+    cur.execute("insert into public.ffm_gate_config (id, phone_outreach_enabled) values (1, true) on conflict (id) do update set phone_outreach_enabled = true")      # text/call are disabled by default (review F1); the checks below exercise the sms path, so the drill enables it on this scratch copy
     def can(l, ch):
         cur.execute("select public.ffm_can_contact(%s, %s), public.ffm_contact_status(%s, %s) ->> 'reason'", (l, ch, l, ch)); return cur.fetchone()
     res = [can(l, ch) for l in (l_out, l_ok) for ch in ("email", "sms")]
@@ -269,6 +270,9 @@ def _admin_url(dsn, name):
     return f"{base}/{name}"
 
 
+from pg_restore_filter import restore_errors
+
+
 def _pg_bin(tool, dsn):
     """pg_dump / pg_restore of the SAME major version as the server when installed (a newer client writes SETs an older server rejects, e.g. transaction_timeout from client 17 into server 16)."""
     try:
@@ -300,9 +304,7 @@ def v3_restore_closed_checks(DST_, cur, sql, owner, work):
         prov_names.append((name, admin))
     def dump_to(dest_dsn, dump):
         r = subprocess.run([_pg_bin("pg_restore", dest_dsn), "--no-owner", "-d", dest_dsn, dump], capture_output=True, text=True, timeout=300)
-        # the one tolerated error: a client NEWER than the server (no matching binaries installed) sets transaction_timeout, which an older server does not know; it changes no data
-        bad = [l for l in r.stderr.splitlines() if l.startswith("pg_restore: error") and "already exists" not in l and "errors ignored" not in l and "transaction_timeout" not in l]
-        bad = [l for l in bad if not l.strip().startswith("Command was: SET transaction_timeout")]
+        bad = restore_errors(r.stderr)      # scripts/pg_restore_filter.py: only the exact newer-client transaction_timeout message is tolerated
         return not bad and "FATAL" not in r.stderr, "; ".join(bad)[-200:]
     with mock.patch.dict(os.environ, {"GATE_HWM_FILE": hwm}, clear=False):
         ad_live = PgAdapter(DST + ("&" if "?" in DST else "?") + "options=-c%20timezone%3DUTC")
@@ -327,7 +329,7 @@ def v3_restore_closed_checks(DST_, cur, sql, owner, work):
         PROV = _admin_url(DST, prov)
         pc = psycopg2.connect(PROV); pcur = pc.cursor()
         pcur.execute("select public.ffm_outreach_gate_open(), public.is_suppressed('latecomer-optout@example.com'), public.outreach_recipient_problem('email', 'latecomer-optout@example.com', null)"); exposed = pcur.fetchone(); pc.rollback()
-        check("V5 EXPOSURE, stated honestly: a provider-restored copy taken inside the attestation window shows the OLD gate OPEN and the LOST opt-out as not suppressed - the database alone cannot tell", ok and exposed == (True, False, None), f"restore_ok={ok} {exposed} {err[-80:]}")
+        check("V5 a pg_dump/pg_restore of a snapshot taken INSIDE the attestation window (new database, same cluster) is CLOSED by the database alone: the fingerprint carries the database and gate-table OIDs, which a logical restore does not keep; the lost opt-out is not on the list but nothing is allowed", ok and exposed == (False, False, "suppression_unverified"), f"restore_ok={ok} {exposed} {err[-80:]}")
         ad_prov = PgAdapter(PROV + ("&" if "?" in PROV else "?") + "options=-c%20timezone%3DUTC")
         with mock.patch.object(hq, "_request", side_effect=ad_prov):
             G._CACHE.update(at=0.0, rec=None)
@@ -338,7 +340,12 @@ def v3_restore_closed_checks(DST_, cur, sql, owner, work):
         # the same restore with the sender DOWN: staleness closes it by itself once the window passes
         pcur.execute("select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()"); pc.rollback(); pc.close()
         prov2 = f"drill_prov2_{sfx}"; mkdb(prov2); ok2, err2 = dump_to(_admin_url(DST, prov2), dump); PROV2 = _admin_url(DST, prov2)
-        p2 = psycopg2.connect(PROV2); p2c = p2.cursor(); p2c.execute("select public.ffm_outreach_gate_open()"); open0 = p2c.fetchone()[0]
+        p2 = psycopg2.connect(PROV2); p2c = p2.cursor(); p2c.execute("select public.ffm_outreach_gate_open()"); closed_by_oid = p2c.fetchone()[0]
+        # the RESIDUAL, stated honestly: a DATA-ONLY / in-place restore keeps the database and table OIDs (simulated here by writing the live fingerprint into the restored gate row), so the database alone sees
+        # a verified, freshly attested gate: OPEN, with the opt-out recorded after the snapshot missing, until the sender next attests. Email is still protected (deliver_approved and the approval check attest first).
+        p2c.execute("set session_replication_role = replica"); p2c.execute("update public.ffm_outreach_gate set instance_fp = public.ffm_instance_fp()"); p2c.execute("set session_replication_role = origin"); p2.commit()      # committed: the anchor check below talks to this copy through its own connection
+        p2c.execute("select public.ffm_outreach_gate_open(), public.is_suppressed('latecomer-optout@example.com'), public.outreach_recipient_problem('email', 'latecomer-optout@example.com', null)"); resid = p2c.fetchone(); open0 = resid[0]
+        check("V5b RESIDUAL (documented, owner decision G7): a data-only / in-place restore that keeps the OIDs shows the OLD gate OPEN and the lost opt-out as not suppressed until the sender attests; text/call stay disabled by default for this reason", ok2 and closed_by_oid is False and resid == (True, False, None), f"{closed_by_oid} {resid}")
         # V8b THE EXACT PITR SCENARIO for /gate anchor: this restored copy was NOT detected (no sender attested against it), its gate is open and 'verified', and someone runs /gate anchor.
         # The database epoch is below the sender's mark and no owner restore was recorded: the anchor must refuse and the mark must not move.
         mark_before = G.read_mark()

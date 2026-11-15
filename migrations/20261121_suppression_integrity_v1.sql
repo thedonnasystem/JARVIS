@@ -80,8 +80,10 @@ create table if not exists public.ffm_gate_config (
   id integer primary key check (id = 1),
   attest_window_minutes integer not null default 15 check (attest_window_minutes between 6 and 120),   -- the engine tick is 300 s: a window below two ticks would close the gate between ticks
   max_verified_age_days integer not null default 30 check (max_verified_age_days between 1 and 90),
+  phone_outreach_enabled boolean not null default false,   -- text / call (sms / phone) are DISABLED until the owner enables them: the DB gate alone cannot tell a same-instance restore inside the attestation window, and no sender attests for those channels
   updated_at timestamptz not null default clock_timestamp()
 );
+alter table public.ffm_gate_config add column if not exists phone_outreach_enabled boolean not null default false;
 insert into public.ffm_gate_config (id) values (1) on conflict (id) do nothing;
 -- the highest sender mark the DATABASE has accepted (monotonic): a forged lower mark cannot refresh the gate, and a NEW generation (an anchor) is accepted only with an owner-recorded restore (or first setup)
 create table if not exists public.ffm_sender_mark (
@@ -150,6 +152,8 @@ do $$ declare t text; begin
 end $$;
 drop trigger if exists ffm_epoch_bump on public.leads;
 create trigger ffm_epoch_bump after update of do_not_contact on public.leads for each statement execute function public.ffm_epoch_bump();
+drop trigger if exists ffm_epoch_bump_ins on public.leads;
+create trigger ffm_epoch_bump_ins after insert on public.leads for each row when (new.do_not_contact) execute function public.ffm_epoch_bump();     -- a lead created already flagged do-not-contact is a suppression too
 
 -- 4. the suppression lookups -----------------------------------------------------------------------------------------------------------------------------------------
 -- The keyed hash of a normalised value is HMAC-SHA256(suppression key, 'sup|v1|' || lp(kind) || lp(norm)): domain-separated and length-prefixed, so it can never equal a capture seal.
@@ -170,6 +174,7 @@ begin
   if n is null then return true; end if;     -- not one clean address: cannot be shown to be NOT suppressed, so it counts as suppressed (fail closed)
   if exists (select 1 from public.contact_suppressions where address = n) then return true; end if;
   if exists (select 1 from public.ffm_suppression_hashes where kind = 'email') then
+    if not exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key') then return true; end if;     -- hash-only entries but no key to test them with: cannot show the address is NOT suppressed (fail closed)
     return exists (select 1 from public.ffm_suppression_hashes where kind = 'email' and mac = public.ffm_hmac_sha256((select value from public.ffm_secrets where name = 'suppression_hmac_key'), public.ffm_sup_message('email', n)));
   end if;
   return false;
@@ -182,6 +187,7 @@ begin
   if n is null then return true; end if;     -- not one clean number (including an ambiguous trunk-prefix form): fail closed, never 'not suppressed'
   if exists (select 1 from public.ffm_phone_suppressions where phone = n) then return true; end if;
   if exists (select 1 from public.ffm_suppression_hashes where kind = 'phone') then
+    if not exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key') then return true; end if;     -- same: hashes but no key = fail closed
     return exists (select 1 from public.ffm_suppression_hashes where kind = 'phone' and mac = public.ffm_hmac_sha256((select value from public.ffm_secrets where name = 'suppression_hmac_key'), public.ffm_sup_message('phone', n)));
   end if;
   return false;
@@ -198,7 +204,10 @@ begin
     begin
       select system_identifier::text into sid from pg_control_system();
       select timeline_id into tl from pg_control_checkpoint();
-      return sid || ':' || tl;    -- a dump restored into another cluster changes the system identifier; a point-in-time recovery promotes a NEW timeline
+      -- sid: a dump restored into another cluster changes it. tl: a point-in-time recovery promotes a NEW timeline. dboid + the gate table's OID: NOT carried by a logical restore (pg_dump/pg_restore into a
+      -- new database, or into this one after --clean, creates the database / tables afresh with new OIDs), so a same-cluster logical restore no longer looks like the original, with no sender involved.
+      -- (A DATA-ONLY restore into the existing tables keeps both: the residual that only the sender's outside mark and the owner's record-restore step cover.)
+      return sid || ':' || tl || ':' || (select oid::text from pg_database where datname = current_database()) || ':' || 'public.ffm_outreach_gate'::regclass::oid::text;
     exception when others then
       if i < 3 then perform pg_sleep(0.05 * i); end if;
     end;
@@ -466,6 +475,20 @@ language sql immutable set search_path to 'public' as $$
     when p_channel in ('email', 'text', 'call', 'sms', 'phone') then null
     when p_channel in ('telegram', 'post', 'mail', 'whatsapp', 'signal', 'other') then 'channel_prohibited'
     else 'unknown_channel' end $$;
+-- text / call (sms / phone) are DISABLED until the owner enables them (ffm_set_phone_outreach). Reason: every consumer of the DB gate (owner approval, manual text/call, outbox insert) trusts DB state that a
+-- same-instance restore brings back, and only the email sender (hq_mail.deliver_approved) attests against the outside high-water mark. No sender exists for text/call, so nothing external can vouch for them.
+create or replace function public.outreach_channel_disabled(p_channel text) returns text
+language sql stable security definer set search_path to 'public' as $$
+  select case when p_channel in ('text', 'call', 'sms', 'phone') and not coalesce((select phone_outreach_enabled from public.ffm_gate_config where id = 1), false) then 'channel_disabled' else null end $$;
+create or replace function public.ffm_set_phone_outreach(p_enabled boolean, p_by text) returns void
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  perform public.ffm_require_owner();
+  if p_enabled is null then raise exception 'p_enabled must be true or false'; end if;
+  update public.ffm_gate_config set phone_outreach_enabled = p_enabled, updated_at = clock_timestamp() where id = 1;
+  insert into public.audit_log (actor, action, target, detail) values (coalesce(nullif(btrim(p_by), ''), 'owner'), 'ffm_phone_outreach_set', 'gate/1', jsonb_build_object('enabled', p_enabled));
+  perform public.ffm_close_outreach_gate('phone outreach setting changed: re-verify', coalesce(nullif(btrim(p_by), ''), 'owner'));    -- any change of what may be contacted re-opens only through a fresh verification
+end $$;
 
 -- 9. the decision, replaced: gate first, then withdrawal, then address/number suppression, then consent ---------------------------------------------------------------------
 create or replace function public.ffm_contact_status(p_lead uuid, p_channel text) returns jsonb
@@ -476,6 +499,7 @@ begin
   if p_channel is null or public.outreach_channel_problem(p_channel) is not null then      -- v3: only channels with a durable suppression identifier (email, sms, phone) can ever be allowed
     return jsonb_build_object('allowed', false, 'reason', case public.outreach_channel_problem(p_channel) when 'channel_prohibited' then 'channel_prohibited' else 'invalid_channel' end);
   end if;
+  if public.outreach_channel_disabled(p_channel) is not null then return jsonb_build_object('allowed', false, 'reason', 'channel_disabled'); end if;
   if not public.ffm_outreach_gate_open() then return jsonb_build_object('allowed', false, 'reason', 'suppression_unverified'); end if;
   select * into l from public.ws_leads where id = p_lead;
   if l.id is null then return jsonb_build_object('allowed', false, 'reason', 'unknown_lead'); end if;
@@ -648,6 +672,7 @@ begin
   if p_channel is null then return 'unknown_channel'; end if;
   if public.outreach_channel_problem(p_channel) is not null then return public.outreach_channel_problem(p_channel); end if;
   if p_channel not in ('email', 'text', 'call') then return 'unknown_channel'; end if;      -- the outbox vocabulary; sms / phone are the consent log's names for text / call
+  if public.outreach_channel_disabled(p_channel) is not null then return 'channel_disabled'; end if;
   if not public.ffm_outreach_gate_open() then return 'suppression_unverified'; end if;
   if p_lead is not null then select do_not_contact into dnc from public.leads where id = p_lead; end if;
   if coalesce(dnc, false) then return 'lead_do_not_contact'; end if;
@@ -693,6 +718,12 @@ begin
   bound := new.status in ('approved', 'sent') or new.sent_at is not null;
   -- v3: a person-directed telegram / post / whatsapp / unknown-channel row cannot be created, approved, claimed or sent AT ALL (not even as a draft): there is no durable suppression identifier.
   -- (A row that already exists and changes nothing that decides who is contacted returned above; moving it to rejected is not guarded.)
+  if new.channel in ('sms', 'phone') then      -- explicit: these are the consent log's names, not outbox channels (the outbox vocabulary is text / call); never rely on the CHECK constraint to keep them out
+    raise exception 'Channel prohibited (invalid_outbox_channel): % is not an outbox channel; use text or call, which are disabled until the owner enables them.', new.channel;
+  end if;
+  if public.outreach_channel_disabled(new.channel) is not null then
+    raise exception 'Channel prohibited (channel_disabled): % outreach is disabled until the owner enables it (ffm_set_phone_outreach). No draft, approval, claim or send is allowed.', new.channel;
+  end if;
   if public.outreach_channel_problem(new.channel) is not null then
     raise exception 'Channel prohibited (%): no person-directed outreach on %. There is no durable suppression identifier for it, so no draft, approval, claim or send is allowed.', public.outreach_channel_problem(new.channel), coalesce(new.channel, 'NULL') using errcode = 'P0001';
   end if;
@@ -748,6 +779,8 @@ revoke all on function public.ffm_epoch_guard() from public, anon, authenticated
 revoke all on function public.ffm_epoch_bump() from public, anon, authenticated;
 revoke all on function public.ffm_instance_fp() from public, anon, authenticated;
 revoke all on function public.ffm_gate_core_ok() from public, anon, authenticated;
+revoke all on function public.outreach_channel_disabled(text) from public, anon, authenticated;
+revoke all on function public.ffm_set_phone_outreach(boolean, text) from public, anon, authenticated;
 revoke all on function public.ffm_owner_record_restore(text) from public, anon, authenticated;
 revoke all on function public.ffm_lead_identifier_guard() from public, anon, authenticated;
 revoke all on function public.ffm_gate_state() from public, anon, authenticated;
@@ -777,6 +810,8 @@ grant execute on function public.ffm_erase_lead(uuid, uuid, text) to service_rol
 grant execute on function public.outbox_dnc_guard() to service_role;
 grant execute on function public.ffm_instance_fp() to service_role;
 grant execute on function public.ffm_gate_core_ok() to service_role;
+grant execute on function public.outreach_channel_disabled(text) to service_role;
+grant execute on function public.ffm_set_phone_outreach(boolean, text) to service_role;
 grant execute on function public.ffm_owner_record_restore(text) to service_role;
 grant execute on function public.ffm_lead_identifier_guard() to service_role;
 grant execute on function public.ffm_gate_state() to service_role;

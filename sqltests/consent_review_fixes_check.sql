@@ -47,6 +47,7 @@ begin
   insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', p_supp_key, 'fixture');
   if p_capture_key is not null then insert into public.ffm_secrets (name, value, set_by) values ('capture_signing_key', p_capture_key, 'fixture'); end if;
   update public.ffm_outreach_gate set state = 'verified', reason = 'test fixture', verified_raw_count = 0, verified_at = clock_timestamp(), verified_epoch = 1, verified_marker_id = (select coalesce(max(id),0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
+  update public.ffm_gate_config set phone_outreach_enabled = true;     -- text / call are disabled by default (v3 review F1); the checks below exercise them, so enable them in this scratch transaction
   set local session_replication_role = origin;
 end $$;
 create or replace function pg_temp.close_gate() returns void language plpgsql as $$

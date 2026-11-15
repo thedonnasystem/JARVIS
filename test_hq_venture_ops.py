@@ -151,6 +151,17 @@ class Ops(unittest.TestCase):
 class Gate(unittest.TestCase):
     """Every approval path funnels through _outbox_casl_gate -> these checks."""
     OB = {"lead_id": "L1", "to_ref": "A@Acme.co", "channel": "email", "venture_id": "v-cl"}
+    def setUp(self):
+        _p = mock.patch("hq_gatemark.attest", return_value={"ok": True}); _p.start(); self.addCleanup(_p.stop)   # the sender mark vouches for the database (its own tests are in test_hq_gatemark)
+
+
+    def test_approval_requires_the_senders_outside_mark_to_vouch_for_the_database(self):
+        """F1: a same-instance restore inside the attestation window leaves the database's own gate open; an approval must not rest on that alone."""
+        w = World(leads=[{"id": "L1", "short_id": 12, "venture_id": "v-cl", "do_not_contact": False}], outbox=self.OB)
+        for att in ({"ok": False, "reason": "rollback_detected"}, {"ok": False, "reason": "sender_unanchored"}, {"ok": False, "reason": "hwm_unavailable"}):
+            with mock.patch.object(hq, "_request", w), mock.patch("hq_gatemark.attest", return_value=att) as a, mock.patch.object(V, "_rpc", side_effect=AssertionError("the database must not even be asked")):
+                why = V.dnc_problem("ob1")
+            self.assertIn("outside gate mark", why); self.assertIn(att["reason"], why); a.assert_called_once_with(force=True)
 
     def test_dnc_lead_blocks(self):
         w = World(leads=[{"id": "L1", "short_id": 12, "venture_id": "v-cl", "do_not_contact": True}], outbox=self.OB)
