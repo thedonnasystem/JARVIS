@@ -40,7 +40,7 @@ begin
   insert into public.client_workspaces (slug, name, vertical, status) values ('ic-ins', 'IC Insurance', 'insurance', 'active') returning id into ins;
   insert into public.client_workspaces (slug, name, vertical, status) values ('ic-ins2', 'IC Insurance Two', 'insurance', 'active') returning id into ins2;
   insert into public.client_workspaces (slug, name, vertical, status) values ('ic-other', 'IC Other', 'mortgage', 'active') returning id into other;
-  insert into public.ws_campaigns (workspace_id, name) values (ins, 'Ins campaign') returning id into ca;
+  insert into public.ws_campaigns (workspace_id, name) values (ins, 'Spring promo') returning id into ca;
   insert into public.ws_campaigns (workspace_id, name) values (other, 'Other campaign') returning id into cb;
 
   -- ===== G: grants, owner-only, validation, audit, immutability =====
@@ -55,7 +55,7 @@ begin
   if not has_table_privilege('service_role', 'public.ws_approved_terms', 'select') then raise exception 'G4b service_role cannot read'; end if;
   foreach f in array array['public.ws_terms_immutable()', 'public.ws_fold_text(text)', 'public.ws_leet_text(text,integer)', 'public.ws_health_extra_hit(text)', 'public.ws_personal_context_hit(text)',
                            'public.ws_identifier_hit(text)', 'public.ws_classify_text(text,uuid)', 'public.ws_add_approved_term(uuid,text,text,text,boolean)', 'public.ws_remove_approved_term(uuid)',
-                           'public.ws_guard()', 'public.ffm_guard()', 'public.ws_condition_hit(text)', 'public.ws_vocab_denied(text,boolean)', 'public.ws_residual_check(text,text)', 'public.ws_text_insurance_word(text,text,text)',
+                           'public.ws_guard()', 'public.ffm_guard()', 'public.ws_condition_hit(text)', 'public.ws_vocab_denied(text,boolean)', 'public.ws_residual_check(text,text)', 'public.ws_capitalised_name(text,boolean)', 'public.ws_text_insurance_word(text,text,text)',
                            'public.ws_insurance_context(text,uuid)', 'public.ws_classify_core(text,uuid,boolean,boolean)', 'public.ws_add_vocab_word(text,text)', 'public.ws_remove_vocab_word(uuid)', 'public.ws_place_catalog_immutable()'] loop
     foreach r in array array['anon', 'authenticated'] loop
       if has_function_privilege(r, f, 'execute') then raise exception 'G5 % can execute %', r, f; end if;
@@ -85,7 +85,7 @@ begin
   if exists (select 1 from public.ws_marketing_vocab where word = any (array['client', 'clients', 'patient', 'patients', 'he', 'she', 'his', 'her', 'him', 'mother', 'father', 'wife', 'husband', 'son', 'daughter', 'sister', 'brother', 'mr', 'mrs', 'ms', 'mme', 'dr',
        'has', 'had', 'takes', 'took', 'was', 'lost', 'broke', 'diagnosed', 'claim', 'claims', 'approved', 'denied', 'i', 'me', 'my', 'mine', 'mon', 'ma', 'mes', 'je', 'il', 'elle', 'health', 'cancer', 'diabetes', 'income', 'salary', 'off', 'underwriting', 'cannot', 'unable']))
      then raise exception 'G9i a forbidden word is in the seeded vocabulary'; end if;
-  if (select count(*) from public.ws_place_catalog) < 60 or exists (select 1 from public.ws_place_catalog where public.ws_vocab_denied(name_norm, false) and name_norm !~ ' ') then raise exception 'G9j place catalog'; end if;
+  if (select count(*) from public.ws_place_catalog) < 60 or exists (select 1 from public.ws_place_catalog where public.ws_vocab_denied(name_norm, false) and name_norm !~ ' ' and name_norm not in ('peterborough', 'charlottetown')) then raise exception 'G9j place catalog'; end if;
   perform pg_temp.expect_fail($q$update public.ws_place_catalog set display_name = 'x'$q$, 'the place catalog is fixed%');
   perform pg_temp.expect_fail($q$delete from public.ws_place_catalog$q$, 'the place catalog is fixed%');
   perform pg_temp.expect_fail($q$truncate public.ws_place_catalog$q$, 'the place catalog is fixed%');
@@ -104,8 +104,13 @@ begin
     perform pg_temp.must_block('E2', s, null, 'health');
     perform pg_temp.must_block('E3', s, other, 'health');
   end loop;
-  foreach s in array array['Life insurance quote', 'Term 20 coverage', 'Assurance vie pour les familles', 'Spring campaign', 'Call 613-555-0142 about a renewal'] loop
+  foreach s in array array['Life insurance quote', 'Assurance vie pour les familles', 'Spring campaign'] loop
     perform pg_temp.must_pass('E4', s, ins);
+  end loop;
+  -- a non-insurance workspace (mortgage) keeps the previous behaviour for these
+  foreach s in array array['Term 20 coverage', 'Call 613-555-0142 about a renewal', 'Mortgage rates - privacy policy', 'Title insurance included', 'Home insurance requirement for your mortgage',
+                           'Mortgage default insurance explained for first-time buyers'] loop
+    perform pg_temp.must_pass('E4m', s, other);
   end loop;
   perform pg_temp.must_pass('E5 null', null, ins);
   perform pg_temp.must_pass('E5 empty', '   ', ins);
@@ -148,9 +153,9 @@ begin
   -- ===== P: permitted product marketing (exact approved terms, no personal context, no identifiers) =====
   foreach s in array array['Protect your family with health insurance', 'Critical illness insurance from $25/month', 'Assurance invalidité pour les travailleurs autonomes',
                            'HEALTH INSURANCE', 'Health   insurance', 'health-insurance', 'Assurance santé pour toute la famille', 'Assurance-santé dès 25$ par mois', 'Assurance santé: protégez votre famille',
-                           'Compare health insurance and life insurance', 'Health insurance for ages 18-65, since 1995', 'Health insurance with 24/7 support for over 10,000 families', 'Health insurance. Learn more.',
+                           'Compare health insurance and life insurance', 'Health insurance for ages 18-65, trusted by over ten thousand families', 'Health insurance with 24/7 support for over ten thousand families', 'Health insurance. Learn more.',
                            'Disability insurance' || ' ' , 'Assurance d''invalidité pour les travailleurs autonomes', 'Assurance d’invalidité pour les travailleurs autonomes',
-                           'Health insurance in Medicine Hat', 'Medicine Hat office open Mon-Fri', 'Mon - Fri: Medicine Hat', 'Critical illness insurance covers you. Health insurance covers your family.',
+                           'Health insurance in Medicine Hat', 'Medicine Hat office open Monday to Friday', 'Monday - Friday: Medicine Hat', 'Critical illness insurance covers you. Health insurance covers your family.',
                            'ＨＥＡＬＴＨ ＩＮＳＵＲＡＮＣＥ', 'Health' || chr(8203) || ' insurance', 'Heal' || chr(173) || 'th insurance'] loop
     if s like 'Disability insurance%' then continue; end if;   -- not approved in this scope on purpose (see E and below)
     perform pg_temp.must_pass('P1', s, ins);
@@ -249,7 +254,7 @@ begin
   -- ... while neighbouring ordinary marketing is still fine (the classifier must not become a blanket block)
   foreach s in array array['Health insurance and life insurance for your family', 'Health insurance from $19.99/month - no medical exam needed' || '', 'Assurance santé, assurance-vie, assurance invalidité: tout au même endroit',
                            'Critical illness insurance: protect your income, your family and your future', 'Get a free quote. Book a call. Health insurance made simple.', 'Health insurance for freelancers in Ottawa and Medicine Hat',
-                           'Choose health insurance that fits your budget: $25, $40 or $60 per month', 'Health insurance - plans from 25$/mois, 100% online', 'Health insurance, 24/7, since 1998, 4.8 stars from 2,300 reviews'] loop
+                           'Choose health insurance that fits your budget: $25, $40 or $60 per month', 'Health insurance - plans from 25$/mois, 100% online', 'Health insurance, 24/7, five stars from reviews'] loop
     if s like '%no medical exam%' then
       perform pg_temp.must_block('A2 (words outside the approved list stay refused)', s, ins);   -- 'medical' is health wording: only an approved feature phrase can carry it
     else perform pg_temp.must_pass('A2', s, ins); end if;   -- 'protect your income' passes: generic second-person income with no amount
@@ -287,7 +292,7 @@ begin
   end loop;
 
   -- ===== T: the guards on the real tables =====
-  ads := public.ffm_add_ad_set(ins, ca, 'Ottawa families', 'people who may want health insurance', null);   -- Ottawa is an approved place
+  ads := public.ffm_add_ad_set(ins, ca, 'Ottawa families', 'families who want health insurance', null);   -- Ottawa is an approved place
   perform public.ffm_add_creative(ins, ca, ads, 'Protect your family with health insurance', 'Critical illness insurance from $25/month. Assurance invalidité pour les travailleurs autonomes.', 'Get a quote');
   perform public.ffm_add_campaign(ins, 'Health insurance spring campaign', 'meta');
   insert into public.ws_ledger (workspace_id, amount_cents, note) values (ins, 100, 'Health insurance ad budget');
@@ -327,7 +332,7 @@ begin
   declare
     vocab text[] := array['diabetes', 'cancer', 'diagnosed', 'prescribed', 'surgery', 'my doctor', 'heart', 'medication', 'tumour', 'hospital', 'depression', 'pregnant', 'disability', 'illness', 'diabète', 'maladie', 'chirurgie', 'médecin',
                           'j''ai le diabète', 'cœur', 'santé', 'invalidité', 'enceinte', 'health insurance', 'Health Insurance', 'HEALTH INSURANCE', 'assurance invalidité', 'Assurance Invalidité', 'critical illness insurance', 'life insurance',
-                          'disability insurance', 'Medicine Hat', 'Protect your family with', 'Get a quote for', 'from $25/month', 'for self-employed workers', 'Call us today', 'ages 18-65', 'since 1995', 'over 10,000 families',
+                          'disability insurance', 'Medicine Hat', 'Protect your family with', 'Get a quote for', 'from $25/month', 'for self-employed workers', 'Call us today', 'ages 18-65', 'since 1995', 'over ten thousand families',
                           'my', 'I', 'j''ai', 'ma mère', 'me', 'her claim for surgery', 'he passed away', 'policy number', 'born 1985-03-12', 'diagnosed', 'suffers from', 'atteinte',
                           '613-555-0100', '123-456-789', '123456789', '4111 1111 1111 1111', '1234567', 'T2T 1A1', 'john@example.com', '12/03/1985', '123 Main Street', '$500,000', '55512',
                           'bank statement', 'credit score', 'SIN', 'passport', 'void cheque', 'salary', 'mortgage application', 'Equifax', 'date of birth', 'T4',
@@ -461,10 +466,12 @@ begin
   end loop;
   -- the strict (no workspace) screen is the old behaviour: no insurance vocabulary test on person tables or for callers without a workspace
   perform pg_temp.must_pass('F2b strict/no-workspace behaviour is the old behaviour (no insurance vocabulary test)', 'Life insurance application for Jean Tremblay is pending underwriting', null);
-  perform pg_temp.must_block('F2c same text in a workspace', 'Life insurance application for Jean Tremblay is pending underwriting', other, 'unknown_word');
+  perform pg_temp.must_block('F2c same text in an insurance workspace', 'Life insurance application for Jean Tremblay is pending underwriting', ins, 'unknown_word');
+  perform pg_temp.must_pass('F2c2 in a MORTGAGE workspace an insurance word does not start the vocabulary test (no regression)', 'Life insurance application for Jean Tremblay is pending underwriting', other);
   -- non-insurance text: unchanged (identifiers and unknown words are not refused without insurance context)
-  perform pg_temp.must_pass('F2d non-insurance identifiers unchanged', 'Call 613-555-0142 about a renewal in March', ins);
-  perform pg_temp.must_pass('F2e non-insurance text with unknown words unchanged', 'Spring campaign: Barrhaven snow removal flyers', ins);
+  perform pg_temp.must_pass('F2d non-insurance identifiers unchanged', 'Call 613-555-0142 about a renewal in March', other);
+  perform pg_temp.must_pass('F2e non-insurance text with unknown words unchanged (other vertical)', 'Spring campaign: Barrhaven snow removal flyers', other);
+  perform pg_temp.must_block('F2e2 the same words in an INSURANCE workspace are unknown words', 'Spring campaign: Barrhaven snow removal flyers', ins, 'unknown_word');
 
   -- ===== F3: term and vocabulary management: what an owner cannot approve =====
   foreach s in array array['cancer insurance', 'diabetes coverage', 'insurance for people with cancer', 'life insurance for people with diabetes', 'hiv coverage', 'insurance for her mother', 'insurance for john smith',
@@ -542,7 +549,7 @@ begin
   for s in select l from regexp_split_to_table($corpus$Canada's #1 health insurance broker
 Health insurance in 1 minute
 1 in 3 Canadians need disability insurance
-Health insurance Option 1
+Health insurance Option #1
 Health Insurance | Life Insurance
 Health insurance @ $25/mo
 Disability insurance can cover up to 70% of your income
@@ -567,8 +574,8 @@ Group benefits for your business and your employees
 Extended health coverage for your family
 Choose health insurance that fits your budget: $25, $40 or $60 per month
 Health insurance with 24/7 support
-Health insurance since 1995, trusted by over 10,000 families
-Health insurance, 4.8 stars from 2,300 reviews
+Health insurance, trusted by over ten thousand families
+Health insurance, five stars from reviews
 Get a quote in 2 minutes. No obligation.
 No medical exam life insurance
 Life insurance from $15 a month for ages 18-65
@@ -581,7 +588,7 @@ Disability insurance for business owners and professionals
 Long term care insurance for seniors
 Dental insurance for you and your family
 Health insurance plans for individuals and groups
-Critical illness cover: one lump sum, tax free
+Critical illness cover: a lump sum, tax free
 Life insurance that grows with your family
 Disability insurance. Simple. Fast. Affordable.
 Health insurance for students and young professionals
@@ -591,14 +598,14 @@ Life insurance riders: add more protection to your plan
 Mortgage life insurance for your home
 Disability insurance helps pay your bills
 Join thousands of Canadians with life insurance
-Our licensed advisors compare plans from top insurers
-Health insurance made simple: just one call
+Licensed advisors compare plans from top insurers
+Health insurance made simple: just a call
 Free quote, no obligation: health insurance for your business
 Same day quotes for life insurance
 Health insurance coverage that follows you across Canada
-Life insurance, disability insurance and critical illness insurance in one place
+Life insurance, disability insurance and critical illness insurance in the same place
 Why wait? Get life insurance today
-Visit our Ottawa office: Monday to Friday, 9 to 5
+Visit the Ottawa office: Monday to Friday
 Health insurance. Because your family comes first.
 Assurance santé pour toute la famille
 Assurances santé
@@ -611,7 +618,7 @@ Assurance vie temporaire à partir de 15 $ par mois
 Obtenez une soumission gratuite aujourd'hui
 Comparez les assurances santé en quelques minutes
 Protégez votre famille avec l'assurance vie
-Assurance santé : 1 appel suffit
+Assurance santé : un appel suffit
 Assurance collective pour votre entreprise et vos employés
 Assurance voyage pour votre prochain voyage
 Assurance santé dès 25 $ par mois
@@ -629,7 +636,7 @@ Assurance santé à partir de 25 $/mois
 Un appel suffit pour comparer les assurances
 Protégez ce qui compte le plus avec l'assurance invalidité
 Assurance vie pour les non-fumeurs
-Découvrez nos assurances santé et vie
+Découvrez les assurances santé et vie
 Assurance santé : aucune obligation
 Assurance collective pour les petites entreprises
 Votre famille mérite une protection : assurance vie dès aujourd'hui
@@ -637,7 +644,7 @@ Assurance invalidité, assurance maladie grave et assurance vie
 Demandez une soumission d'assurance santé
 Assurance santé pour tous les budgets
 Une assurance vie qui grandit avec votre famille
-Assurance vie : protégez vos proches
+Assurance vie : protégez votre famille
 Life insurance for non-smokers
 Critical illness insurance pays a lump sum
 Health insurance for your whole family, from $99 a month
@@ -645,7 +652,7 @@ Life insurance in Toronto, Ottawa and Calgary
 Disability insurance in Calgary
 Group benefits for small businesses in Ottawa
 Get covered today with health insurance
-Talk to us about long term care insurance
+Talk to an advisor about long term care insurance
 Compare term life insurance and whole life insurance
 Health insurance plans with no obligation
 Assurance voyage pour toute la famille
@@ -665,7 +672,7 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
   for s in select l from regexp_split_to_table($corpus$Canada's #1 health insurance broker
 Health insurance in 1 minute
 1 in 3 Canadians need disability insurance
-Health insurance Option 1
+Health insurance Option #1
 Health Insurance | Life Insurance
 Health insurance @ $25/mo
 Disability insurance can cover up to 70% of your income
@@ -690,8 +697,8 @@ Group benefits for your business and your employees
 Extended health coverage for your family
 Choose health insurance that fits your budget: $25, $40 or $60 per month
 Health insurance with 24/7 support
-Health insurance since 1995, trusted by over 10,000 families
-Health insurance, 4.8 stars from 2,300 reviews
+Health insurance, trusted by over ten thousand families
+Health insurance, five stars from reviews
 Get a quote in 2 minutes. No obligation.
 No medical exam life insurance
 Life insurance from $15 a month for ages 18-65
@@ -704,7 +711,7 @@ Disability insurance for business owners and professionals
 Long term care insurance for seniors
 Dental insurance for you and your family
 Health insurance plans for individuals and groups
-Critical illness cover: one lump sum, tax free
+Critical illness cover: a lump sum, tax free
 Life insurance that grows with your family
 Disability insurance. Simple. Fast. Affordable.
 Health insurance for students and young professionals
@@ -714,14 +721,14 @@ Life insurance riders: add more protection to your plan
 Mortgage life insurance for your home
 Disability insurance helps pay your bills
 Join thousands of Canadians with life insurance
-Our licensed advisors compare plans from top insurers
-Health insurance made simple: just one call
+Licensed advisors compare plans from top insurers
+Health insurance made simple: just a call
 Free quote, no obligation: health insurance for your business
 Same day quotes for life insurance
 Health insurance coverage that follows you across Canada
-Life insurance, disability insurance and critical illness insurance in one place
+Life insurance, disability insurance and critical illness insurance in the same place
 Why wait? Get life insurance today
-Visit our Ottawa office: Monday to Friday, 9 to 5
+Visit the Ottawa office: Monday to Friday
 Health insurance. Because your family comes first.
 Assurance santé pour toute la famille
 Assurances santé
@@ -734,7 +741,7 @@ Assurance vie temporaire à partir de 15 $ par mois
 Obtenez une soumission gratuite aujourd'hui
 Comparez les assurances santé en quelques minutes
 Protégez votre famille avec l'assurance vie
-Assurance santé : 1 appel suffit
+Assurance santé : un appel suffit
 Assurance collective pour votre entreprise et vos employés
 Assurance voyage pour votre prochain voyage
 Assurance santé dès 25 $ par mois
@@ -752,7 +759,7 @@ Assurance santé à partir de 25 $/mois
 Un appel suffit pour comparer les assurances
 Protégez ce qui compte le plus avec l'assurance invalidité
 Assurance vie pour les non-fumeurs
-Découvrez nos assurances santé et vie
+Découvrez les assurances santé et vie
 Assurance santé : aucune obligation
 Assurance collective pour les petites entreprises
 Votre famille mérite une protection : assurance vie dès aujourd'hui
@@ -760,7 +767,7 @@ Assurance invalidité, assurance maladie grave et assurance vie
 Demandez une soumission d'assurance santé
 Assurance santé pour tous les budgets
 Une assurance vie qui grandit avec votre famille
-Assurance vie : protégez vos proches
+Assurance vie : protégez votre famille
 Life insurance for non-smokers
 Critical illness insurance pays a lump sum
 Health insurance for your whole family, from $99 a month
@@ -768,7 +775,7 @@ Life insurance in Toronto, Ottawa and Calgary
 Disability insurance in Calgary
 Group benefits for small businesses in Ottawa
 Get covered today with health insurance
-Talk to us about long term care insurance
+Talk to an advisor about long term care insurance
 Compare term life insurance and whole life insurance
 Health insurance plans with no obligation
 Assurance voyage pour toute la famille
@@ -777,7 +784,7 @@ Assurance vie : obtenez une soumission en 2 minutes
 Assurance collective : avantages pour vos employés
 Health insurance deals for freelancers
 Life insurance quotes in 2 minutes, no obligation
-Disability insurance for professionals and business owners in Gatineau$corpus$, E'\n') l where btrim(l) ~* 'health|disab|illness|sant|invalid|maladie|medical|smok|fumeur|heart' loop
+Disability insurance for professionals and business owners in Gatineau$corpus$, E'\n') l where btrim(l) ~* 'health|disab|illness|sant|invalid|maladie|medical|heart' loop
     if pg_temp.ok(s, other) then n := n + 1; end if;
   end loop;
   if n > 0 then raise exception 'F4b % health-product sentences pass without any approval', n; end if;
@@ -793,7 +800,7 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
     perform pg_temp.must_block('O2', s, ins);
   end loop;
   -- digits and symbols standing alone are NOT leetspeak any more (review false positives), but inside a word they still are
-  foreach s in array array['Canada''s #1 health insurance broker', 'Health insurance in 1 minute', '1 in 3 Canadians need disability insurance', 'Health insurance Option 1', 'Health Insurance | Life Insurance', 'Assurance santé: 1 appel suffit', 'Health insurance @ $25/mo'] loop
+  foreach s in array array['Canada''s #1 health insurance broker', 'Health insurance in 1 minute', '1 in 3 Canadians need disability insurance', 'Health insurance Option #1', 'Health Insurance | Life Insurance', 'Assurance santé: 1 in 3 canadiens', 'Health insurance @ $25/mo'] loop
     perform pg_temp.must_pass('O3 stand-alone numeral or separator', s, ins4);
   end loop;
   if public.ws_leet_text('option 1 | a @ b #1 $25', 1) <> 'option 1 | a @ b #1 $25' or public.ws_leet_text('d1abetes', 1) <> 'diabetes' or public.ws_leet_text('di@betes', 2) <> 'diabetes' then raise exception 'O4 leet fold'; end if;
@@ -809,7 +816,8 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
     perform pg_temp.must_block('I2', s, ins4);
   end loop;
   -- 'income' without insurance context is still the mortgage category, with or without a workspace
-  perform pg_temp.must_block('I3', 'Spring campaign for your income', ins4, 'application_or_income');
+  perform pg_temp.must_block('I3', 'Spring campaign for your income', other, 'application_or_income');
+  perform pg_temp.must_pass('I3c in an insurance workspace the generic phrase is waived', 'Spring campaign for your income', ins4);
   perform pg_temp.must_block('I3b', 'income protection', null, 'application_or_income');
 
   -- ===== splice / cut-and-splice: the pieces around a cut term are tested one by one, never re-joined =====
@@ -826,15 +834,96 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
   end loop;
   foreach s in array array['Health insurance - no medical exam', 'Healthy families, health insurance', 'Disability insurance - if you cannot work', 'Disability insurance if you are unable to work', 'File a claim online with health insurance',
                            'Health insurance: Mon-Fri 9 to 5', 'Health insurance rated 4.8', 'Health insurance - 50%off', 'Health insurance ' || chr(10003) || ' trusted', 'Health insurance & dental', 'Health insurance - Q&A',
-                           'Assurance santé - mon-ven', 'Life insurance - pre-existing conditions covered', 'Disability insurance helps you recover', 'Health insurance wellness plans'] loop
+                           'Assurance santé - mon-ven', 'Life insurance - pre-existing conditions covered', 'Disability insurance helps you recover', 'Health insurance wellness plans',
+                           'Contact us for a quote', 'Our team of advisors', 'Call us today', 'Life insurance: top 5 reasons to compare', 'Life insurance since 1985', 'Affordable Life Insurance For Young Families', 'Life insurance: one call away',
+                           'Life insurance - Q4 retargeting', 'Assurance vie : nos conseillers', 'Life insurance: ages 54 to 55'] loop
     perform pg_temp.must_block('L2 KNOWN OVER-BLOCK (an unlisted or deliberately excluded word fails closed: the owner approves a feature phrase or a vocabulary word, or rephrases)', s, ins);
   end loop;
   -- RESIDUAL RISK, asserted so a change is noticed: vocabulary-only text can still carry personal meaning when a vocabulary word is also a name, or numbers are spelled out.
-  foreach s in array array['Life insurance for Will', 'Life insurance: one, two and three', 'Life insurance one hundred thousand', 'Critical illness insurance covers heart attack, stroke and cancer, no medical exam'] loop
+  foreach s in array array['life insurance for will', 'Summer can not work', 'Life insurance: two, three and four', 'Critical illness insurance covers heart attack, stroke and cancer, no medical exam'] loop
     perform pg_temp.must_pass('L3 KNOWN RESIDUAL (single vocabulary word used as a name; spelled-out numbers; feature phrases are generic by owner approval)', s, ins4);
   end loop;
+
+  -- ===== R2: second independent review of PR #17 =====
+  -- R2.1 insurance workspace: EVERY free-text column of a non-person row is insurance context, whatever the words are (real guarded inserts)
+  foreach s in array array['Client takes Lipitor', 'Client has lupus', 'Maria Gonzalez cannot walk', 'Client is blind', 'Client lost a leg', 'She broke her leg', 'Jean Tremblay lapsed', 'Mr. Tremblay is off work',
+                           'Client had a hysterectomy', 'Client has an STD', 'Client has hepatitis', 'Le client est séropositif', 'Maria has chest pain', 'Maria Gonzalez is on ODSP', 'Our client has lupus'] loop
+    perform pg_temp.must_block('R2.1 classifier', s, ins2, 'unknown_word');
+    perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name) values (%L, %L)$q$, ins2, s), 'Sensitive data refused%unknown_word%');
+    perform pg_temp.expect_fail(format($q$select public.ffm_add_creative(%L, %L, %L, 'Get covered', %L)$q$, ins, ca, ads, s), 'Sensitive data refused%unknown_word%');
+  end loop;
+  insert into public.ws_campaigns (workspace_id, name) values (ins2, 'Spring promo');
+  perform public.ffm_add_creative(ins, ca, ads, 'Get covered', 'Protect your income');
+  -- R2.1b other languages inside an insurance workspace (non-Latin or mixed script, German/Turkish/Spanish/Italian/Portuguese words are simply not vocabulary)
+  foreach s in array array['Krankenversicherung: Kunde hat Krebs', 'Sigorta: müşteri kanser', chr(20445) || chr(38505) || ': ' || chr(23458) || chr(25143) || chr(24739) || chr(26377) || chr(30284) || chr(30151), 'Gesundheitsversicherung: Krebs',
+                           chr(1578) || chr(1571) || chr(1605) || chr(1610) || chr(1606) || ': ' || chr(1575) || chr(1604) || chr(1593) || chr(1605) || chr(1610) || chr(1604) || ' ' || chr(1605) || chr(1585) || chr(1610) || chr(1590),
+                           chr(2348) || chr(2368) || chr(2350) || chr(2366) || ': ' || chr(2325) || chr(2376) || chr(2306) || chr(2360) || chr(2352), 'Assicurazione sanitaria: il cliente ha un tumore', 'Seguro de salud: el cliente tiene cancer',
+                           'Seguro de saude: o cliente tem cancro'] loop
+    perform pg_temp.must_block('R2.1b', s, ins2);
+    perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name) values (%L, %L)$q$, ins2, s), 'Sensitive data refused%');
+  end loop;
+  -- R2.2 first-person plural and generic person words are not vocabulary
+  foreach s in array array['Health insurance: heart attack, stroke and cancer in our family', 'Life insurance: we need care', 'Disability insurance: parents can not work', 'Life insurance: someone needs help', 'Life insurance for everyone in the family',
+                           'Assurance vie: nous avons besoin', 'Assurance vie: notre famille', 'Assurance vie: nos enfants', 'Life insurance: our kids', 'Life insurance: people', 'Life insurance: ones who can not work'] loop
+    perform pg_temp.must_block('R2.2', s, ins4, 'unknown_word');
+  end loop;
+  foreach s in array array['cancer in our family', 'cancer in the family of our client', 'protection for parents who can not work', 'insurance for people', 'insurance for everyone', 'assurance pour nos enfants', 'insurance for someone'] loop
+    perform pg_temp.expect_fail(format($q$select public.ws_add_approved_term(%L, null, 'feature', %L)$q$, ins, s), 'term refused%');
+  end loop;
+  foreach s in array array['we', 'us', 'our', 'ours', 'ourselves', 'one', 'ones', 'someone', 'anyone', 'everyone', 'parents', 'children', 'kids', 'people', 'nous', 'notre', 'nos', 'enfants', 'gens'] loop
+    perform pg_temp.expect_fail(format($q$select public.ws_add_vocab_word('en', %L)$q$, s), 'word refused%');
+    if exists (select 1 from public.ws_marketing_vocab where word = s and removed_at is null) then raise exception 'R2.2 % is still in the seeded vocabulary', s; end if;
+  end loop;
+  perform pg_temp.expect_fail($q$select public.ws_add_vocab_word('fr', 'on')$q$, 'word refused%');
+  -- R2.3 capitalised names: a vocabulary word that is also a name fails closed when capitalised, passes in lower case
+  foreach s in array array['Health insurance for Will Page', 'Health insurance: Will can not work', 'Life insurance: Brandon', 'Life insurance for Sam', 'Life insurance: Summer', 'Life insurance for Young and Long', 'Life insurance: Don can not work',
+                           'LIFE INSURANCE FOR WILL', 'Life insurance: Spring can not work', 'Life insurance: Page'] loop
+    perform pg_temp.must_block('R2.3', s, ins4, 'unknown_word');
+  end loop;
+  foreach s in array array['Life insurance for will', 'life insurance: long term care for young families', 'Spring promo', 'Best life insurance for the summer', 'Don''t wait: life insurance quotes'] loop
+    perform pg_temp.must_pass('R2.3 lower-case or sentence-initial use passes', s, ins4);
+  end loop;
+  foreach s in array array['Will insurance', 'insurance for Will', 'Page coverage plan', 'Long term care insurance', 'Sam protection plan', 'insurance for may'] loop
+    perform pg_temp.expect_fail(format($q$select public.ws_add_approved_term(%L, null, 'product', %L)$q$, ins, s), 'term refused%');
+  end loop;
+  foreach s in array array['Victoria', 'Regina', 'Sydney', 'Brandon', 'Barrie', 'Vernon', 'Courtenay'] loop
+    perform pg_temp.expect_fail(format($q$select public.ws_add_approved_term(%L, null, 'place', %L)$q$, ins, s), 'term refused%');
+    if exists (select 1 from public.ws_place_catalog where name_norm = lower(s)) then raise exception 'R2.3 % is in the place catalog', s; end if;
+  end loop;
+  -- R2.3b numbers: only price / percent / marketing-duration forms; ages, years, dates and spelled-out digit runs fail; yes/no answers after a feature phrase fail
+  foreach s in array array['Life insurance: age 54', 'Life insurance: 54 years', 'Life insurance: 1985', 'Life insurance: one two three four five six seven eight nine', 'Life insurance: two three four five', 'Life insurance: 54', 'Life insurance: born 1985',
+                           'Life insurance: 2 3 4 5', 'Life insurance, exam 2025', 'Life insurance: 54 year old', 'Life insurance aged 54', 'Life insurance: ages 54 to 55',
+                           'Critical illness insurance covers heart attack, stroke and cancer: no', 'Critical illness insurance covers heart attack, stroke and cancer - yes', 'Critical illness insurance covers heart attack, stroke and cancer, not',
+                           'Critical illness insurance covers heart attack, stroke and cancer: oui', 'Assurance vie: 54 ans', 'Life insurance in 2025'] loop
+    perform pg_temp.must_block('R2.3b', s, ins4);
+  end loop;
+  foreach s in array array['Life insurance from $25/month', 'Life insurance: 100% online', 'Life insurance in 10 minutes', 'Life insurance: 1 in 3 Canadians', 'Canada''s #1 life insurance broker', 'Life insurance 24/7', 'Life insurance: ages 18 to 65',
+                           'Life insurance, 30 year term', 'Life insurance with 20 years of experience', 'Life insurance: 30 days money back', 'Life insurance: quotes in 5 minutes', 'Assurance vie dès 25 $ par mois'] loop
+    perform pg_temp.must_pass('R2.3b allowed number forms', s, ins4);
+  end loop;
+  -- R2.4 REGRESSION: a non-insurance workspace is not subject to the vocabulary test just because the text says insurance or policy
+  foreach s in array array['Mortgage rates - privacy policy', 'Title insurance included', 'Mortgage default insurance explained for first-time buyers', 'Home insurance requirement for your mortgage', 'Our privacy policy', 'Insurance policy review for homeowners'] loop
+    perform pg_temp.must_pass('R2.4', s, other);
+    insert into public.ws_campaigns (workspace_id, name) values (other, s);
+    perform public.ffm_add_creative(other, cb, public.ffm_add_ad_set(other, cb, 'Mortgage ad set', 'First-time buyers in Ottawa', null), s, 'Ask for a quote today');
+  end loop;
+  -- ...but identifiers are still refused next to an insurance word, in any vertical, and "policy" alone does not trigger anything
+  perform pg_temp.must_block('R2.4b', 'Home insurance policy number 12345678', other, 'insurance_identifier');
+  perform pg_temp.must_pass('R2.4c bare policy', 'Privacy policy updated 2026', other);
+  -- R2.5 the owner hard-deny list cannot be bypassed by inflections, truncation, accents or a missing list entry
+  foreach s in array array['lupuses', 'lupusé', 'lupu', 'hivs', 'sidas', 'insomnia', 'meningitis', 'psychosis', 'anxious', 'schizo', 'sclerosis', 'methadone', 'warfarin', 'prednisone', 'cocaine', 'heroin', 'rehab', 'vasectomy',
+                           'menopause', 'incontinence', 'catheter', 'colostomy', 'oxygen', 'ventilator', 'amnesia', 'coma', 'stutter', 'cataract', 'glaucoma', 'mommy', 'daddy', 'papa', 'mamie', 'maria', 'gonzalez', 'tremblay', 'jean', 'marie',
+                           'john', 'smith', 'Lupuses', 'LUPUS', 'diabètes', 'cancers', 'cancéreux', 'oxygène'] loop
+    perform pg_temp.expect_fail(format($q$select public.ws_add_vocab_word('en', %L)$q$, s), 'word refused%');
+    if not public.ws_vocab_denied(s, true) then raise exception 'R2.5 % is not denied', s; end if;
+  end loop;
+  -- ...and the vocabulary additions the review asked for are present
+  foreach s in array array['worth', 'reasons', 'guide', 'webinar', 'planning', 'explained', 'freelancers', 'contractors', 'convert', 'loan', 'download', 'paycheque', 'become', 'waiver', 'respecte', 'raisons', 'acheter', 'nouveaux', 'aines',
+                           'entiere', 'habitation', 'sejour', 'telechargez', '30s', 'promo'] loop
+    if not exists (select 1 from public.ws_marketing_vocab where word = s and removed_at is null) then raise exception 'R2.5 vocabulary lacks %', s; end if;
+  end loop;
   -- no literal invisible characters in the new function bodies, only \u escapes
-  if exists (select 1 from pg_proc where proname in ('ws_fold_text', 'ws_classify_text', 'ws_classify_core', 'ws_identifier_hit', 'ws_personal_context_hit', 'ws_health_extra_hit', 'ws_residual_check', 'ws_vocab_denied', 'ws_condition_hit', 'ws_leet_text', 'ws_add_approved_term', 'ws_add_vocab_word')
+  if exists (select 1 from pg_proc where proname in ('ws_fold_text', 'ws_classify_text', 'ws_classify_core', 'ws_capitalised_name', 'ws_identifier_hit', 'ws_personal_context_hit', 'ws_health_extra_hit', 'ws_residual_check', 'ws_vocab_denied', 'ws_condition_hit', 'ws_leet_text', 'ws_add_approved_term', 'ws_add_vocab_word')
              and (position(chr(8203) in prosrc) > 0 or position(chr(65279) in prosrc) > 0 or position(chr(173) in prosrc) > 0 or position(chr(8205) in prosrc) > 0)) then raise exception 'L5 literal invisible character in a classifier function'; end if;
   -- ws_sensitive_hits itself was not touched by this migration: still the 20261119 definition (same long-stem and short-word lists)
   if pg_get_functiondef('public.ws_sensitive_hits(text)'::regprocedure) !~ 'heartfailure' or pg_get_functiondef('public.ws_sensitive_hits(text)'::regprocedure) !~ 'foreach w in array' then raise exception 'L6 ws_sensitive_hits changed'; end if;

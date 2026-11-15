@@ -65,6 +65,7 @@ drop function if exists public.ws_classify_core(text, uuid, boolean, boolean);
 drop function if exists public.ws_insurance_context(text, uuid);
 drop function if exists public.ws_text_insurance_word(text, text, text);
 drop function if exists public.ws_residual_check(text, text);
+drop function if exists public.ws_capitalised_name(text, boolean);
 drop function if exists public.ws_vocab_denied(text, boolean);
 drop function if exists public.ws_condition_hit(text);
 drop function if exists public.ws_identifier_hit(text);

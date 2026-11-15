@@ -51,7 +51,7 @@ revoke insert, update, delete, truncate, trigger, references on public.ws_approv
 create table if not exists public.ws_marketing_vocab (
   id uuid primary key default gen_random_uuid(),
   lang text not null check (lang in ('en', 'fr')),
-  word text not null check (word ~ '^[a-z]{1,30}$'),
+  word text not null check (word ~ '^[a-z0-9]{1,30}$'),
   created_by text not null default 'owner',
   created_at timestamptz not null default clock_timestamp(),
   removed_at timestamptz,
@@ -222,21 +222,91 @@ begin
     'result', 'results', 'positive', 'negative', 'stage', 'chronic', 'terminal', 'terminally', 'recovering', 'recovered', 'recovery', 'condition', 'conditions', 'answered', 'answer', 'answers',
     'ai', 'ont', 'avait', 'avais', 'etait', 'etais', 'fut', 'ete', 'mort', 'morte', 'decede', 'decedee', 'malade', 'souffre', 'souffrant', 'souffrants', 'atteint', 'atteinte', 'atteints',
     'atteintes', 'enceinte', 'prend', 'pris', 'perdu', 'casse', 'diagnostique', 'refuse', 'refusee', 'accepte', 'approuve', 'approuvee', 'rejete', 'rejetee', 'reclamation', 'reclamations',
-    'sinistre', 'sinistres', 'accidente', 'blesse', 'blessee', 'hospitalise', 'income', 'incomes', 'revenu', 'revenus', 'salary', 'wage', 'wages']) then return true; end if;
+    'sinistre', 'sinistres', 'accidente', 'blesse', 'blessee', 'hospitalise', 'income', 'incomes', 'revenu', 'revenus', 'salary', 'wage', 'wages',
+    'we', 'us', 'our', 'ours', 'ourselves', 'nous', 'notre', 'nos', 'one', 'ones', 'someone', 'anyone', 'everyone', 'somebody', 'anybody', 'everybody', 'nobody', 'none', 'parents', 'parent', 'children', 'kids',
+    'people', 'couples', 'gens', 'enfants', 'proches', 'family members', 'relatives', 'relative', 'friend', 'friends', 'neighbour', 'neighbours', 'neighbor', 'neighbors', 'colleague', 'colleagues']) then return true; end if;
+  -- relations, nicknames and common given names / surnames (en, fr): always denied, whatever p_health says. Matched after trimming a plural / past / -ing / final-e suffix;
+  -- a stem of 5+ letters also matches as a PREFIX of the word, a stem of 7+ letters anywhere inside it.
+  if exists (select 1 from unnest(array[
+       'mommy', 'mommies', 'daddy', 'papa', 'mama', 'mamma', 'mummy', 'mamie', 'mamy', 'papi', 'papy', 'granny', 'grannie', 'nana', 'nonna', 'tante', 'oncle', 'cousin', 'cousine', 'neveu', 'niece', 'nephew',
+       'parrain', 'marraine', 'fiance', 'fiancee', 'boyfriend', 'girlfriend', 'grandpere', 'grandmere', 'belle-mere', 'beau-pere', 'stepmother', 'stepfather', 'stepson', 'stepdaughter',
+       'maria', 'marie', 'jean', 'john', 'smith', 'gonzalez', 'tremblay', 'james', 'mary', 'robert', 'patricia', 'michael', 'jennifer', 'william', 'david', 'linda', 'richard', 'susan', 'joseph', 'jessica', 'thomas',
+       'sarah', 'charles', 'karen', 'christopher', 'nancy', 'daniel', 'lisa', 'matthew', 'betty', 'anthony', 'sandra', 'ashley', 'steven', 'emily', 'paul', 'donna', 'andrew', 'michelle', 'joshua', 'carol',
+       'kenneth', 'amanda', 'kevin', 'melissa', 'brian', 'deborah', 'george', 'stephanie', 'edward', 'rebecca', 'ronald', 'laura', 'timothy', 'helen', 'jason', 'sharon', 'jeffrey', 'cynthia', 'ryan',
+       'kathleen', 'jacob', 'amy', 'gary', 'angela', 'nicholas', 'anna', 'eric', 'brenda', 'jonathan', 'pamela', 'stephen', 'nicole', 'larry', 'samantha', 'justin', 'katherine', 'scott', 'christine',
+       'brandon', 'debra', 'benjamin', 'rachel', 'samuel', 'carolyn', 'gregory', 'janet', 'alexander', 'patrick', 'heather', 'jack', 'diane', 'dennis', 'olivia', 'jerry', 'julie', 'tyler', 'joyce',
+       'aaron', 'victoria', 'jose', 'kelly', 'adam', 'christina', 'nathan', 'lauren', 'henry', 'joan', 'zachary', 'evelyn', 'douglas', 'judith', 'peter', 'megan', 'kyle', 'cheryl', 'noah', 'andrea',
+       'ethan', 'hannah', 'jeremy', 'walter', 'martha', 'christian', 'gloria', 'keith', 'teresa', 'roger', 'sara', 'terry', 'madison', 'gerald', 'frances', 'harold', 'kathryn', 'sean', 'janice', 'austin',
+       'carl', 'abigail', 'arthur', 'sophia', 'lawrence', 'emma', 'dylan', 'isabella', 'jesse', 'jordan', 'charlotte', 'bryan', 'amelia', 'billy', 'harper', 'bruce', 'gabriel', 'logan', 'sofia',
+       'willie', 'alan', 'juan', 'chloe', 'wayne', 'regina', 'sydney', 'barrie', 'vernon', 'courtenay', 'ahmed', 'mohamed', 'mohammed', 'fatima', 'ali', 'wei', 'priya',
+       'pierre', 'jacques', 'michel', 'andre', 'philippe', 'francois', 'louis', 'sophie', 'nathalie', 'isabelle', 'sylvie', 'catherine', 'chantal', 'mathieu', 'antoine', 'guillaume', 'maxime', 'etienne',
+       'johnson', 'williams', 'brown', 'jones', 'garcia', 'miller', 'davis', 'rodriguez', 'martinez', 'hernandez', 'lopez', 'wilson', 'anderson', 'taylor', 'moore', 'jackson', 'martin', 'perez',
+       'thompson', 'sanchez', 'clark', 'ramirez', 'lewis', 'robinson', 'walker', 'allen', 'wright', 'torres', 'nguyen', 'flores', 'adams', 'nelson', 'baker', 'rivera', 'campbell', 'mitchell',
+       'carter', 'roberts', 'gagnon', 'cote', 'bouchard', 'gauthier', 'morin', 'lavoie', 'fortin', 'gagne', 'ouellet', 'pelletier', 'belanger', 'levesque', 'bergeron', 'leblanc', 'paquette',
+       'girard', 'simard', 'boucher', 'caron', 'beaulieu', 'cloutier', 'poirier', 'fournier', 'lapointe', 'leclerc', 'lefebvre', 'singh', 'patel', 'kumar', 'khan', 'wang', 'chen', 'zhang', 'kim', 'tran']) s
+     cross join lateral unnest(array[w, regexp_replace(w, '(ies)$', 'y'), regexp_replace(w, '(es|s|ed|d|ing|e)$', ''), regexp_replace(w, '(ies|es|s|ed|ing)$', ''), regexp_replace(w, 'e$', '')]) c
+     where c = s or (length(s) >= 5 and left(c, length(s)) = s) or (length(s) >= 7 and position(s in c) > 0)) then return true; end if;
   if w ~ '^(diagnos|suffer|claim|underwrit)' then return true; end if;
   if p_health then
     if w ~ '^(pregnan|medicat|prescri|surg|cancer|diabet|dement|alzheim|tumou?r|chemo|radiat|dialys|transplant)' then return true; end if;
+    if exists (select 1 from unnest(array[
+         'insomnia', 'meningitis', 'psychosis', 'psychotic', 'anxious', 'anxiety', 'schizo', 'sclerosis', 'methadone', 'warfarin', 'prednisone', 'cocaine', 'heroin', 'rehab', 'vasectomy', 'menopause',
+         'incontinence', 'catheter', 'colostomy', 'oxygen', 'ventilator', 'amnesia', 'coma', 'stutter', 'cataract', 'glaucoma', 'lupus', 'lupu', 'hiv', 'aids', 'sida', 'asthma', 'epilepsy', 'seizure',
+         'migraine', 'depression', 'depressed', 'bipolar', 'autism', 'autistic', 'adhd', 'arthritis', 'osteoporosis', 'hepatitis', 'leukemia', 'leukaemia', 'lymphoma', 'melanoma', 'stroke', 'cardiac',
+         'cardio', 'heart', 'kidney', 'renal', 'liver', 'lung', 'hernia', 'ulcer', 'anemia', 'anaemia', 'thyroid', 'copd', 'obese', 'obesity', 'diabetes', 'diabetic', 'insulin', 'lipitor', 'statin', 'metformin',
+         'ozempic', 'opioid', 'oxycodone', 'fentanyl', 'morphine', 'xanax', 'prozac', 'zoloft', 'ibuprofen', 'aspirin', 'tylenol', 'codeine', 'antibiotic', 'vaccine', 'biopsy', 'mammogram', 'colonoscopy',
+         'hysterectomy', 'mastectomy', 'amputation', 'amputee', 'prosthesis', 'wheelchair', 'paralysis', 'paralyzed', 'dyslexia', 'tinnitus', 'vertigo', 'eczema', 'psoriasis', 'herpes', 'std', 'sti', 'syphilis',
+         'chlamydia', 'gonorrhea', 'seropositif', 'seropositive', 'pneumonia', 'bronchitis', 'tuberculosis', 'malaria', 'covid', 'influenza', 'shingles', 'gout', 'crohn', 'colitis', 'celiac', 'fibromyalgia',
+         'tumor', 'tumour', 'cancer', 'chemo', 'radiation', 'dialysis', 'transplant', 'stent', 'pacemaker', 'aneurysm', 'thrombosis', 'embolism', 'hypertension', 'cholesterol', 'arrhythmia', 'dementia',
+         'alzheimer', 'parkinson', 'concussion', 'fracture', 'sprain', 'whiplash', 'sciatica', 'scoliosis', 'pregnancy', 'pregnant', 'miscarriage', 'infertility', 'abortion', 'contraceptive', 'alcoholic',
+         'alcoholism', 'addict', 'addiction', 'smoker', 'tobacco', 'nicotine', 'cannabis', 'marijuana', 'overdose', 'suicide', 'suicidal', 'depressif', 'cancereux', 'diabete', 'infarctus', 'avc',
+         'leg', 'arm', 'foot', 'feet', 'hand', 'eye', 'ear', 'brain', 'spine', 'knee', 'hip', 'shoulder', 'chest', 'bladder', 'breast', 'prostate', 'uterus', 'ovary', 'testicle', 'bowel', 'colon', 'stomach',
+         'skin', 'teeth', 'tooth', 'throat', 'thyroide', 'poumon', 'rein', 'foie', 'coeur', 'cerveau', 'jambe', 'bras', 'pied', 'main', 'oeil', 'yeux', 'genou', 'epaule', 'poitrine', 'sein']) s
+       cross join lateral unnest(array[w, regexp_replace(w, '(ies)$', 'y'), regexp_replace(w, '(es|s|ed|d|ing|e)$', ''), regexp_replace(w, '(ies|es|s|ed|ing)$', ''), regexp_replace(w, 'e$', '')]) c
+       where c = s or (length(s) >= 5 and left(c, length(s)) = s) or (length(s) >= 7 and position(s in c) > 0)) then return true; end if;
     if cardinality(public.ws_sensitive_hits(w)) > 0 or public.ws_health_extra_hit(w) or public.ws_condition_hit(w)
        or cardinality(public.ws_sensitive_hits(public.ws_leet_text(w, 1))) > 0 or cardinality(public.ws_sensitive_hits(public.ws_leet_text(w, 2))) > 0 then return true; end if;
   end if;
   return false;
 end $$;
 
+-- 6b. capitalised names. A vocabulary word that is also a given name or surname ("Will", "Page", "Sam", "Summer") is vocabulary when written in lower case, but a CAPITALISED
+--     occurrence is treated as a name and fails closed. p_strict (term management): hard names in any case, soft names whenever capitalised. Text: hard names whenever
+--     capitalised; soft names when capitalised in mid-sentence (not at the start of the text or of a sentence) or when the whole text has no lower-case letter.
+create or replace function public.ws_capitalised_name(p_text text, p_strict boolean default false) returns boolean
+language plpgsql immutable set search_path to 'public' as $$
+declare hard text[] := array['will', 'may', 'page', 'sam', 'don'];
+        soft text[] := array['star', 'stars', 'summer', 'spring', 'winter', 'sun', 'sat', 'wed', 'long', 'young', 'best', 'bill', 'bills', 'mo', 'fall'];
+        m text[]; w text; t text; lower_present boolean;
+begin
+  -- the same normalisation as ws_fold_text, but case-preserving (zero-width and combining characters out, fullwidth / mathematical letters and look-alikes to Latin)
+  t := coalesce(p_text, '');
+  t := regexp_replace(t, '[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0]', '', 'g');
+  t := regexp_replace(t, '[\U000e0001\U000e0020-\U000e007f\U000e0100-\U000e01ef]', '', 'g');
+  t := normalize(t, nfkc);
+  t := normalize(t, nfd);
+  t := regexp_replace(t, '[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]', '', 'g');
+  t := translate(t, 'ΗΝΜΥΖΒΕΚΟΡΤΧΑΙАВЕКМНОРСТХУІЈЅ', 'HNMYZBEKOPTXAIABEKMHOPCTXYIJS');
+  t := translate(t, 'ıавекмнорстухіїјѕԁԛԝһӏүѡɑɡαβγεικνορτυχωϲϳςμη', 'iabekmhopctyxiijsdqwhlywagabyeikvoptuxwcjcun');
+  lower_present := t ~ '[a-z]';
+  for m in select g from regexp_matches(t, '(^|[.!?][ \t\n]+|[^A-Za-z])([A-Za-z]+)(?![A-Za-z])(?![''’]t(?![A-Za-z]))', 'g') as r(g) loop
+    w := lower(m[2]);
+    if p_strict and w = any (hard) then return true; end if;
+    if m[2] !~ '^[A-Z]' then continue; end if;
+    if w = any (hard) then return true; end if;
+    if w = any (soft) and (p_strict or not lower_present or not (m[1] = '' or m[1] ~ '^[.!?]')) then return true; end if;
+  end loop;
+  return false;
+end $$;
+
 -- 7. the default-deny vocabulary test. Input: the folded residual (approved terms already cut out and replaced by p_marker, never re-joined). Returns the reason codes
---    (empty array = every token is vocabulary, a number, or simple punctuation). Never echoes the text.
+--    (empty array = every token is vocabulary, an allowed number FORM, or simple punctuation). Never echoes the text.
+--    Numbers: a bare number is NOT vocabulary. Only these forms are allowed: an amount of money, a percentage, #N, "in N minutes", N in M, 24/7, N days/hours (a fixed
+--    list of marketing numbers), "30 year term", "20 years of experience", an age RANGE ("ages 18 to 65", at least 10 years wide).
+--    Spelled-out numbers: a run of 4+ number words fails. A yes/no/none answer straight after an approved term ("cancer: no") fails.
 create or replace function public.ws_residual_check(p_r text, p_marker text) returns text[]
 language plpgsql stable set search_path to 'public' as $$
-declare v text := coalesce(p_r, ''); codes text[] := '{}'; n integer; tmp text;
+declare v text := coalesce(p_r, ''); codes text[] := '{}'; n integer; tmp text; m text[]; nw text := 'zero|one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|forty|fifty|hundred|thousand|million|deux|trois|quatre|cinq|sept|huit|neuf|dix|vingt|trente|cent|mille';
 begin
   v := translate(translate(v, '«»“”„•·‣', '"""""   '), '€£', chr(36) || chr(36));
   v := regexp_replace(v, '(^|[^a-z0-9])(l|d|c|n|s|qu|jusqu|lorsqu|puisqu)''(?=[a-z0-9])', '\1\2 ', 'g');   -- French elision: l'assurance -> l assurance
@@ -246,14 +316,35 @@ begin
     codes := codes || array['unknown_word', 'non_latin_script'];
     if v ~ '[a-z]' then codes := codes || array['mixed_script']; end if;
   end if;
+  if v like '%zznum%' then codes := codes || array['unknown_word']; end if;
   tmp := regexp_replace(v, '(^|[^0-9])24 ?/ ?7([^0-9]|$)', '\1 \2', 'g');
   if v ~ '[a-z0-9]@|@[a-z0-9]' or v ~ '[a-z0-9&]&|&[a-z0-9#]' or v ~ '(^|[^0-9 ])%' or v ~ '(^|[^0-9]) +%' or v ~ '%[0-9a-f]{2}' or v ~ '(^|[^0-9])\+'
      or tmp ~ '(^|[^0-9a-z.,])[0-9]+ ?/ ?[0-9]+([^0-9a-z]|$)' then
     codes := codes || array['unknown_word', 'encoded_text'];
   end if;
+  -- allowed number forms become the placeholder token zznum; anything numeric that is left is an unknown word
+  if v ~ '[0-9]' then
+    v := regexp_replace(v, '(^|[^0-9])24 ?/ ?7([^0-9]|$)', '\1 zznum \2', 'g');
+    v := regexp_replace(v, '\$ ?[0-9][0-9,.]*k?', ' zznum ', 'g');
+    v := regexp_replace(v, '[0-9][0-9,.]*k? ?\$', ' zznum ', 'g');
+    v := regexp_replace(v, '[0-9][0-9,.]* ?%', ' zznum ', 'g');
+    v := regexp_replace(v, '#[0-9]+', ' zznum ', 'g');
+    v := regexp_replace(v, '(^|[^a-z0-9])(in|within|under|than|en|dans|sous|de) +[0-9]+ ?(minutes?|mins?|hours?|hrs?|heures?|days?|jours?|seconds?|secondes?)([^a-z]|$)', '\1\2 zznum \4', 'g');
+    v := regexp_replace(v, '(^|[^a-z0-9])(24|48|72|7|14|15|21|30|60|90|365) ?-? ?(days?|jours?|hours?|heures?|hrs?)([^a-z]|$)', '\1 zznum \4', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]+ in [0-9]+([^0-9a-z]|$)', '\1 zznum \2', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]+ ?-? ?(years?|yrs?|ans?|annees?) ?(term|terme|plan|coverage|couverture|renewable|renouvelable|guarantee|garantie|level)([^a-z]|$)', '\1 zznum \3\4', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]+ ?\+? ?(years?|ans) (of experience|d experience|in business|of service|de service|serving)', '\1 zznum \3', 'g');
+    for m in select g from regexp_matches(v, '((?:ages?|aged) +([0-9]{1,2}) ?(?:-|to|and|a|et) ?([0-9]{1,2}))', 'g') as r(g) loop
+      if abs(m[3]::integer - m[2]::integer) >= 10 and m[2]::integer >= 18 then v := replace(v, m[1], ' zznum '); end if;
+    end loop;
+  end if;
+  -- a run of 4 or more spelled-out number words
+  if v ~ ('(^|[^a-z])(' || nw || ')( +(' || nw || ')){3}([^a-z]|$)') then codes := codes || array['unknown_word']; end if;
+  -- yes / no / none straight after an approved term or feature phrase
+  if v ~ (p_marker || '[ :;,=-]*(no|not|yes|oui|non|pas|none|never|negative|positive)([^a-z]|$)') then codes := codes || array['unknown_word']; end if;
   select count(*) into n from regexp_matches(v, '[a-z0-9]+(?:[.,][0-9]+)*|[^a-z0-9 ]', 'g') as m(g)
    where not (m.g[1] = p_marker
-              or m.g[1] ~ '^[0-9]+([.,][0-9]+)*$'
+              or m.g[1] = 'zznum'
               or m.g[1] ~ '^[.,;:!?"()/%$|#+&@-]$'
               or exists (select 1 from public.ws_marketing_vocab w where w.word = m.g[1] and w.removed_at is null));
   if n > 0 then codes := codes || array['unknown_word']; end if;
@@ -268,23 +359,21 @@ declare x text; kc text;
 begin
   foreach x in array array[coalesce(p_fold, ''), coalesce(p_l1, ''), coalesce(p_l2, '')] loop
     kc := regexp_replace(x, '[^a-z0-9]', '', 'g');
-    if kc ~ '(insur|assuranc|underwrit|policy|policies|beneficiar|annuit|indemnit)' then return true; end if;
+    if kc ~ '(insur|assuranc|underwrit|beneficiar|annuit|indemnit|versicher|seguro|assicura|sigorta)' then return true; end if;
   end loop;
   return false;
 end $$;
 
 create or replace function public.ws_insurance_context(p_text text, p_ws uuid) returns boolean
 language plpgsql stable security definer set search_path to 'public' as $$
-declare f text; vert text; tr record;
+declare vert text;
 begin
-  if p_ws is null or p_text is null or btrim(p_text) = '' then return false; end if;
-  f := public.ws_fold_text(p_text);
-  if public.ws_text_insurance_word(f, public.ws_leet_text(f, 1), public.ws_leet_text(f, 2)) then return true; end if;
+  -- WORKSPACE level (p_text is not consulted): every free-text column of a non-person row in an insurance workspace, or in a workspace that holds an approved
+  -- product term, is insurance context, whatever the words are. A bare word such as "policy" or "insurance" in another vertical (mortgage) does NOT make it so.
+  if p_ws is null then return false; end if;
   select vertical into vert from public.client_workspaces where id = p_ws;
-  for tr in select term_norm from public.ws_approved_terms where removed_at is null and kind = 'product' and (workspace_id = p_ws or (vert is not null and vertical = vert)) loop
-    if f ~ ('(^|[^a-z0-9])' || replace(tr.term_norm, ' ', '[ ,\-]+') || '([^a-z0-9]|$)') then return true; end if;
-  end loop;
-  return false;
+  if lower(btrim(coalesce(vert, ''))) in ('insurance', 'assurance') then return true; end if;
+  return exists (select 1 from public.ws_approved_terms where removed_at is null and kind = 'product' and (workspace_id = p_ws or (vert is not null and vertical = vert)));
 end $$;
 
 -- 9. THE classifier core. Never echoes the text. Reasons are fixed codes: the old category names, plus
@@ -297,7 +386,7 @@ language plpgsql stable security definer set search_path to 'public' as $$
 declare
   f text; l1 text; l2 text; r text; r1 text; r2 text; prev text; rx text; tr record; vert text; marker text; before_r text; fx text;
   cats_s text[] := '{}'; allc text[]; hh text[]; health boolean := false; health0 boolean; inc boolean := false; x text; res text[];
-  n_prod integer := 0; n_place integer := 0; n_feat integer := 0; ctx boolean := false; cut boolean := false; pass integer; word_ctx boolean; views text[]; ex text[];
+  n_prod integer := 0; n_place integer := 0; n_feat integer := 0; ctx boolean := false; cut boolean := false; pass integer; word_ctx boolean; idword boolean; views text[]; ex text[]; nm boolean;
 begin
   if p_text is null or btrim(p_text) = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb); end if;
   f := public.ws_fold_text(p_text);
@@ -339,7 +428,9 @@ begin
   end if;
 
   -- workspace given (non-person tables). Context: an insurance word anywhere (or the row says so), or an approved product term below.
-  word_ctx := p_row_ctx or public.ws_text_insurance_word(f, l1, l2);
+  -- context (waivers and the vocabulary test) is a property of the WORKSPACE: insurance vertical, or any approved product term. An insurance WORD in the text only adds the identifier checks.
+  word_ctx := p_row_ctx or public.ws_insurance_context(p_text, p_ws);
+  idword := public.ws_text_insurance_word(f, l1, l2);
   ctx := word_ctx;
   marker := 'zzqx';
   while position(marker in f) > 0 loop marker := marker || 'x'; end loop;
@@ -406,12 +497,16 @@ begin
   if (ctx or (health0 and n_place > 0)) and p_text ~ '[\u0370-\u03ff\u0400-\u052f]' and p_text ~ '[A-Za-z]' then
     return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['mixed_script', 'unknown_word']));
   end if;
+  if not ctx and idword and public.ws_identifier_hit(r) then
+    return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['identifier']));
+  end if;
   if ctx then
     if public.ws_identifier_hit(r) then
       return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['identifier']));
     end if;
     if not p_joined then
       res := public.ws_residual_check(r, marker);
+      if cardinality(res) = 0 and public.ws_capitalised_name(p_text, false) then res := array['unknown_word']; end if;
       if cardinality(res) > 0 then
         return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || res));
       end if;
@@ -464,6 +559,7 @@ begin
   if p_kind = 'feature' and (v_words < 2 or v_words > 12) then raise exception 'term refused: a feature phrase is 2 to 12 words'; end if;
   if p_kind = 'place' and v_words > 5 then raise exception 'term refused: a place name is at most 5 words'; end if;
   if public.ws_personal_context_hit(v_norm) then raise exception 'term refused: personal wording (first person or narrative) is not a product name'; end if;
+  if public.ws_capitalised_name(v_term, true) then raise exception 'term refused: it contains a word that is also a given name or surname (write ordinary words in lower case)'; end if;
   hits := public.ws_sensitive_hits(v_norm) || public.ws_sensitive_hits(v_term);
   -- the only non-health category an owner may approve is the word 'income' inside a product or feature phrase (income protection, disability income)
   if exists (select 1 from unnest(hits) h where h not in ('health', 'application_or_income')) then raise exception 'term refused: it contains wording this system never allows (identity, banking, credit)'; end if;
@@ -535,6 +631,8 @@ begin
   v_norm := public.ws_fold_text(btrim(p_word));
   if v_norm !~ '^[a-z]{2,30}$' then raise exception 'word refused: could not be normalised to plain letters'; end if;
   if public.ws_vocab_denied(v_norm, true) then raise exception 'word refused: it is on the hard deny list (people, events, wording about a case, or anything medical) and can never be vocabulary'; end if;
+  if p_lang = 'fr' and v_norm = 'on' then raise exception 'word refused: it is on the hard deny list (people, events, wording about a case, or anything medical) and can never be vocabulary'; end if;
+  if public.ws_capitalised_name(initcap(v_norm), true) then raise exception 'word refused: it is also a common given name or surname; it stays out of the vocabulary unless the owner decides otherwise in a migration'; end if;
   if exists (select 1 from public.ws_marketing_vocab where lang = p_lang and word = v_norm and removed_at is null) then raise exception 'word already in the vocabulary'; end if;
   insert into public.ws_marketing_vocab (lang, word) values (p_lang, v_norm) returning id into v_id;
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'ws_vocab_word_added', 'vocab/' || p_lang, jsonb_build_object('word_id', v_id, 'lang', p_lang));
@@ -560,7 +658,7 @@ a an the and or but nor so yet if then than as at by for from in into of on onto
 behind below beside between beyond during except inside near since through throughout toward towards until while whether because both either neither each every all any some no not only just
 also even more most much many less least other another such same own very too now today tomorrow here there where when what which who how why can could will would should may might must shall
 do does don doesn isn aren be is are
-you your yours yourself we us our ours ourselves it its this that these those one ones everyone anyone someone
+you your yours yourself it its this that these those
 protect protects protected cover covers covered pay pays paying paid save saves saving savings get gets learn compare comparing apply quote start choose find ask talk speak contact book schedule
 visit see read discover build grow plan prepare secure safeguard insure insures enjoy feel stay keep give help helps support guide review check explore join click tap send request receive access
 manage customize customise tailor simplify switch renew upgrade enroll sign buy shop reduce lower increase replace replaces replacing include includes including offer offers provide provides
@@ -570,24 +668,26 @@ coverage coverages protection protections plans quotes free benefit benefits pol
 expert experts team service services online phone call text chat email rate rates premium premiums deductible lump sum payout payouts payment payments cost costs budget value option options
 choice choices solution solutions program programs product products package packages deal deals discount discounts peace mind security future life lives home homes house car auto travel trip
 trips vacation work worker workers employee employees employer employers owner owners self employed freelancer freelancers professional professionals entrepreneur entrepreneurs student
-students senior seniors retirement retirees children kids couples people parents canada canadian canadians ontario quebec alberta british columbia manitoba saskatchewan newfoundland labrador
+students senior seniors retirement retirees canada canadian canadians ontario quebec alberta british columbia manitoba saskatchewan newfoundland labrador
 scotia brunswick territories north south east west province provinces nationwide national local coast mortgage mortgages
 affordable simple easy fast quick flexible personal personalized best top trusted licensed independent leading reliable safe strong smart clear transparent complete comprehensive extra
 additional new real true better good great perfect right ready available guaranteed limited full whole term permanent universal group individual extended long short high low fair
 competitive tax
-one two three four five six seven eight nine ten twenty thirty forty fifty hundred thousand million zero first
+two three four five six seven eight nine ten twenty thirty forty fifty hundred thousand million zero first
 tue wed thu fri sat sun monday tuesday wednesday thursday friday saturday sunday spring summer fall winter holiday holidays open office offices location locations appointment consultation
 meeting obligation commitment fee fees hidden instantly instant anytime cancel cancellation renewal renewable renews application applications beneficiary beneficiaries exam care level levels tier
 tiers amount amounts lifetime forever rider riders non lowest highest reviews stars star
 small large big medium mo yr yrs part parts starting starts next fits fit ages age deserves deserve works grows grow groups individuals add bills young thousands insurers made follows follow place wait comes come lifestyle
 meta google facebook instagram tiktok linkedin youtube sms seo ads ad campaign campaigns creative creatives landing page pages form forms lead leads audience audiences headline copy draft
+worth reasons reason guide guides webinar webinars planning explained freelancers contractors contractor convert loan loans download downloads paycheque paycheck become becomes waiver promo promotion promotions
+spend retargeting remarketing tips checklist education experience serving money back 20s 30s 40s 50s 60s 70s 80s 90s
 $v$, '[[:space:]]+')) w) s where w <> '' and not exists (select 1 from public.ws_marketing_vocab v where v.lang = 'en' and v.word = s.w);
 insert into public.ws_marketing_vocab (lang, word, created_by)
 select 'fr', w, 'seed' from (select distinct unnest(regexp_split_to_array($v$
 le la les l un une des du de d au aux et ou mais donc or ni car que qu quel quelle quels quelles qui quoi dont ce cet cette ces ca celui
 dans en sur sous avec sans pour par chez vers entre contre depuis pendant jusque jusqu plus moins tres trop assez aussi encore deja toujours jamais ne n pas non oui si tout tous toute toutes
 chaque autre autres meme tel
-vous votre vos nous notre nos on se s c y
+vous votre vos se s c y
 protegez protegeons proteger obtenez obtenir appelez appeler comparez comparer economisez economiser profitez profiter decouvrez decouvrir demandez soumettez contactez choisissez trouvez
 apprenez planifiez assurez assurer couvrir couvre couvrent payer paye payez beneficier beneficiez commencez reservez visitez simplifiez preparez securisez rassurez peut peuvent pouvez
 pouvons est sont soit etre avez avons avoir faire faites aller veut voulez cherchez
@@ -595,32 +695,33 @@ famille familles entreprise entreprises prix mois an ans annee annees semaine se
 soumissions devis gratuit gratuite gratuits avantage avantages courtier courtiers agent agents conseiller conseillers conseillere equipe service services soutien aide ligne telephone taux prime
 primes somme montant montants paiement paiements cout couts budget valeur option options choix solution solutions programme programmes produit produits forfait forfaits offre offres rabais
 economie economies paix esprit securite avenir vie vies maison maisons auto voiture voyage voyages vacances travail travailleurs travailleur autonome autonomes employes employeur employeurs
-proprietaire proprietaires etudiants etudiant retraite retraites parents enfants couples gens canada canadien canadiens canadiennes ontario quebec alberta manitoba saskatchewan
+proprietaire proprietaires etudiants etudiant retraite retraites canada canadien canadiens canadiennes ontario quebec alberta manitoba saskatchewan
 assurance assurances assure assures assureur
 abordable simple facile rapide flexible personnalise meilleur meilleure meilleurs fiable securitaire complet complete complets exclusif nouveau nouvelle grand grande vrai bon bonne parfait
 pret prete disponible garanti terme temporaire permanente collective collectif individuelle individuel appel suffit suffisent ici maintenant aujourd hui demain
 un deux trois quatre cinq six sept huit neuf dix vingt trente cent mille million
 lundi mardi mercredi jeudi vendredi samedi dimanche lun mar mer jeu ven sam dim printemps automne hiver ouvert ouverts bureau bureaux rendez consultation sans obligation gratuitement
-quelques partir prochain endroit compte aucune aucun petite petites petit petits merite budgets grandit grandir proches forfaitaire examen examens tarif tarifs mieux
+quelques partir prochain endroit compte aucune aucun petite petites petit petits merite budgets grandit grandir forfaitaire examen examens tarif tarifs mieux
 beneficiaire beneficiaires niveau niveaux montant duree toujours vie
+respecte raisons acheter nouveaux aines entiere habitation sejour telechargez agrees
 $v$, '[[:space:]]+')) w) s where w <> '' and not exists (select 1 from public.ws_marketing_vocab v where v.lang = 'fr' and v.word = s.w);
 do $$ declare bad text; begin
   select string_agg(word, ', ') into bad from public.ws_marketing_vocab where created_by = 'seed' and removed_at is null and public.ws_vocab_denied(word, true);
   if bad is not null then raise exception 'seed vocabulary contains denied words: %', bad; end if;
 end $$;
 
--- PLACE CATALOG: municipalities an owner may approve (fixed; no free text). Only unambiguous names (no common nouns, no first names). Never edited after this migration.
+-- PLACE CATALOG: municipalities an owner may approve (fixed; no free text). Only unambiguous names (no common nouns, no first names: Victoria, Regina, Sydney, Brandon, Barrie, Vernon and Courtenay are deliberately NOT here). Never edited after this migration.
 insert into public.ws_place_catalog (name_norm, display_name, province)
 select public.ws_fold_text(split_part(e, '|', 1)), split_part(e, '|', 1), split_part(e, '|', 2)
 from unnest(array[
  'Toronto|ON', 'Ottawa|ON', 'Mississauga|ON', 'Brampton|ON', 'Hamilton|ON', 'London|ON', 'Markham|ON', 'Vaughan|ON', 'Kitchener|ON', 'Windsor|ON', 'Richmond Hill|ON', 'Oakville|ON', 'Burlington|ON',
- 'Oshawa|ON', 'Barrie|ON', 'St Catharines|ON', 'Guelph|ON', 'Cambridge|ON', 'Whitby|ON', 'Kingston|ON', 'Ajax|ON', 'Waterloo|ON', 'Pickering|ON', 'Niagara Falls|ON', 'Peterborough|ON',
+ 'Oshawa|ON', 'St Catharines|ON', 'Guelph|ON', 'Cambridge|ON', 'Whitby|ON', 'Kingston|ON', 'Ajax|ON', 'Waterloo|ON', 'Pickering|ON', 'Niagara Falls|ON', 'Peterborough|ON',
  'Sudbury|ON', 'Thunder Bay|ON', 'Cornwall|ON', 'Belleville|ON', 'Sarnia|ON', 'North Bay|ON', 'Brantford|ON', 'Kanata|ON', 'Barrhaven|ON', 'Nepean|ON', 'Orleans|ON', 'Stittsville|ON',
  'Montreal|QC', 'Quebec City|QC', 'Laval|QC', 'Gatineau|QC', 'Longueuil|QC', 'Sherbrooke|QC', 'Saguenay|QC', 'Levis|QC', 'Trois Rivieres|QC', 'Terrebonne|QC', 'Drummondville|QC', 'Granby|QC', 'Brossard|QC',
- 'Vancouver|BC', 'Victoria|BC', 'Burnaby|BC', 'Kelowna|BC', 'Abbotsford|BC', 'Kamloops|BC', 'Nanaimo|BC', 'Chilliwack|BC', 'Prince George|BC', 'Vernon|BC', 'Penticton|BC', 'Courtenay|BC',
+ 'Vancouver|BC', 'Burnaby|BC', 'Kelowna|BC', 'Abbotsford|BC', 'Kamloops|BC', 'Nanaimo|BC', 'Chilliwack|BC', 'Prince George|BC', 'Penticton|BC',
  'Calgary|AB', 'Edmonton|AB', 'Red Deer|AB', 'Lethbridge|AB', 'Medicine Hat|AB', 'Airdrie|AB', 'Grande Prairie|AB', 'St Albert|AB', 'Fort McMurray|AB', 'Cochrane|AB', 'Lloydminster|AB',
- 'Winnipeg|MB', 'Brandon|MB', 'Saskatoon|SK', 'Regina|SK', 'Moose Jaw|SK', 'Prince Albert|SK', 'Swift Current|SK',
- 'Halifax|NS', 'Truro|NS', 'Sydney|NS', 'Moncton|NB', 'Fredericton|NB', 'Saint John|NB', 'Charlottetown|PE', 'St Johns|NL', 'Corner Brook|NL', 'Gander|NL', 'Mount Pearl|NL',
+ 'Winnipeg|MB', 'Saskatoon|SK', 'Moose Jaw|SK', 'Prince Albert|SK', 'Swift Current|SK',
+ 'Halifax|NS', 'Truro|NS', 'Moncton|NB', 'Fredericton|NB', 'Saint John|NB', 'Charlottetown|PE', 'St Johns|NL', 'Corner Brook|NL', 'Gander|NL', 'Mount Pearl|NL',
  'Whitehorse|YT', 'Yellowknife|NT', 'Iqaluit|NU']) e
 on conflict (name_norm) do nothing;
 
@@ -628,22 +729,28 @@ on conflict (name_norm) do nothing;
 --     "Structural" columns (enums, template keys, actor tags) are exempt from the vocabulary test only: every category and the health screen still apply to them.
 create or replace function public.ws_guard() returns trigger
 language plpgsql set search_path to 'public' as $$
-declare k text; v text; res jsonb; allv text := ''; j jsonb := to_jsonb(new); v_ws uuid; row_ctx boolean := false;
+declare k text; v text; t text; e record; res jsonb; allv text := ''; j jsonb := to_jsonb(new); v_ws uuid; row_ctx boolean := false; n_vals integer := 0;
 begin
   v_ws := case when tg_table_name = any (array['ws_campaigns', 'ws_ledger']) then nullif(j ->> 'workspace_id', '')::uuid else null end;
-  -- a value split across columns (name / phone / note) is caught by also scanning every scanned column joined together
-  for k, v in select key, value from jsonb_each_text(j - array['id', 'workspace_id', 'campaign_id', 'created_at', 'status', 'stage', 'amount_cents', 'monthly_budget_cents']) loop
-    allv := allv || ' ' || coalesce(v, '');
+  -- a value split across columns (name / phone / note) is caught by also scanning every scanned column joined together (only when there is more than one value to join)
+  for e in select key, value from jsonb_each(j - array['id', 'workspace_id', 'campaign_id', 'created_at', 'status', 'stage', 'amount_cents', 'monthly_budget_cents']) loop
+    v := e.value #>> '{}';
+    if v is not null and btrim(v) <> '' and jsonb_typeof(e.value) <> 'boolean' then allv := allv || ' ' || v; n_vals := n_vals + 1; end if;
   end loop;
   if v_ws is not null then row_ctx := public.ws_insurance_context(allv, v_ws); end if;
-  res := public.ws_classify_core(allv, v_ws, row_ctx, true);
-  if not (res ->> 'allowed')::boolean then
-    raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
-  end if;
-  for k, v in select key, value from jsonb_each_text(j - array['id', 'workspace_id', 'campaign_id', 'created_at', 'status', 'stage', 'amount_cents', 'monthly_budget_cents']) loop
-    res := public.ws_classify_core(v, v_ws, row_ctx, false);
+  if n_vals > 1 then
+    res := public.ws_classify_core(allv, v_ws, row_ctx, true);
     if not (res ->> 'allowed')::boolean then
-      raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ')
+      raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
+  end if;
+  for e in select key, value from jsonb_each(j - array['id', 'workspace_id', 'campaign_id', 'created_at', 'status', 'stage', 'amount_cents', 'monthly_budget_cents']) loop
+    v := e.value #>> '{}'; t := jsonb_typeof(e.value);
+    continue when v is null or btrim(v) = '' or t = 'boolean';
+    -- numbers and other non-text values: every category still applies, the vocabulary test does not (a number column is not wording)
+    res := public.ws_classify_core(v, v_ws, row_ctx, t <> 'string');
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, e.key, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ')
         using errcode = 'P0001';
     end if;
   end loop;
@@ -652,31 +759,29 @@ end $$;
 
 create or replace function public.ffm_guard() returns trigger
 language plpgsql set search_path to 'public' as $$
-declare k text; v text; res jsonb; allv text := ''; j jsonb := to_jsonb(new); v_ws uuid; row_ctx boolean := false; structural boolean; allfree text := '';
+declare k text; v text; res jsonb; allv text := ''; j jsonb := to_jsonb(new); v_ws uuid; row_ctx boolean := false; structural boolean; n_vals integer := 0;
 begin
   v_ws := case when tg_table_name = any (array['ffm_ad_sets', 'ffm_creatives', 'ffm_approvals', 'ffm_onboarding_items']) then nullif(j ->> 'workspace_id', '')::uuid else null end;
+  if v_ws is not null then row_ctx := public.ws_insurance_context(null, v_ws); end if;
   for k, v in select e.key, e.value #>> '{}' from jsonb_each(j) e
               where jsonb_typeof(e.value) = 'string'
                 and not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = e.key and a.attnum > 0 and not a.attisdropped
                                   and a.atttypid in ('uuid'::regtype, 'timestamptz'::regtype)) loop
-    structural := k = any (array['status', 'stage', 'kind', 'provider', 'template_key', 'approved_by', 'destination_kind']) or (k = 'provided_by' and lower(btrim(v)) in ('owner', 'client', 'ai', 'bot', 'system'));
-    if not structural then allfree := allfree || ' ' || v; end if;
-  end loop;
-  if v_ws is not null then row_ctx := public.ws_insurance_context(allfree, v_ws); end if;
-  for k, v in select e.key, e.value #>> '{}' from jsonb_each(j) e
-              where jsonb_typeof(e.value) = 'string'
-                and not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = e.key and a.attnum > 0 and not a.attisdropped
-                                  and a.atttypid in ('uuid'::regtype, 'timestamptz'::regtype)) loop
-    structural := k = any (array['status', 'stage', 'kind', 'provider', 'template_key', 'approved_by', 'destination_kind']) or (k = 'provided_by' and lower(btrim(v)) in ('owner', 'client', 'ai', 'bot', 'system'));
-    res := public.ws_classify_core(v, v_ws, row_ctx and not structural, false);
+    structural := k = any (array['status', 'stage', 'kind', 'provider', 'template_key', 'approved_by', 'destination_kind']) or (k = 'provided_by' and lower(btrim(v)) in ('owner', 'client', 'ai', 'bot', 'system'))
+                  or (tg_table_name = 'ffm_onboarding_items' and k in ('title', 'blocked_until'));   -- title: copied from the fixed template table; blocked_until: a date
+    continue when btrim(v) = '';
+    -- a structural column (enum, template key, actor tag) skips only the vocabulary test: every category and the health screen still apply to it
+    res := public.ws_classify_core(v, v_ws, row_ctx, structural);
     if not (res ->> 'allowed')::boolean then
       raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
     end if;
-    allv := allv || ' ' || v;
+    allv := allv || ' ' || v; n_vals := n_vals + 1;
   end loop;
-  res := public.ws_classify_core(allv, v_ws, row_ctx, true);   -- a value split across columns
-  if not (res ->> 'allowed')::boolean then
-    raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+  if n_vals > 1 then
+    res := public.ws_classify_core(allv, v_ws, row_ctx, true);   -- a value split across columns
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
   end if;
   return new;
 end $$;
@@ -692,6 +797,7 @@ revoke all on function public.ws_personal_context_hit(text) from public, anon, a
 revoke all on function public.ws_identifier_hit(text) from public, anon, authenticated;
 revoke all on function public.ws_vocab_denied(text, boolean) from public, anon, authenticated;
 revoke all on function public.ws_residual_check(text, text) from public, anon, authenticated;
+revoke all on function public.ws_capitalised_name(text, boolean) from public, anon, authenticated;
 revoke all on function public.ws_text_insurance_word(text, text, text) from public, anon, authenticated;
 revoke all on function public.ws_insurance_context(text, uuid) from public, anon, authenticated;
 revoke all on function public.ws_classify_core(text, uuid, boolean, boolean) from public, anon, authenticated;
@@ -712,6 +818,7 @@ grant execute on function public.ws_personal_context_hit(text) to service_role;
 grant execute on function public.ws_identifier_hit(text) to service_role;
 grant execute on function public.ws_vocab_denied(text, boolean) to service_role;
 grant execute on function public.ws_residual_check(text, text) to service_role;
+grant execute on function public.ws_capitalised_name(text, boolean) to service_role;
 grant execute on function public.ws_text_insurance_word(text, text, text) to service_role;
 grant execute on function public.ws_insurance_context(text, uuid) to service_role;
 grant execute on function public.ws_classify_core(text, uuid, boolean, boolean) to service_role;

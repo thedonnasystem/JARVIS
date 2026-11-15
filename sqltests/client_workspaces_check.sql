@@ -25,7 +25,7 @@ begin
   insert into public.client_workspaces (slug, name, vertical, status) values ('t-mortgage', 'Test Mortgage Broker', 'mortgage', 'active') returning id into a;
   insert into public.client_workspaces (slug, name, vertical, status) values ('t-insurance', 'Test Life Insurance', 'insurance', 'active') returning id into b;
   insert into public.ws_campaigns (workspace_id, name) values (a, 'A campaign') returning id into ca;
-  insert into public.ws_campaigns (workspace_id, name) values (b, 'B campaign') returning id into cb;
+  insert into public.ws_campaigns (workspace_id, name) values (b, 'Spring promo') returning id into cb;
 
   -- isolation: a lead cannot reference the other client's campaign, on any path
   l := public.ws_add_lead(a, ca, 'Pat Example', 'pat@example.com', '613-555-0142', 'web form', 'wants a callback about renewal');

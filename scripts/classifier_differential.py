@@ -15,8 +15,10 @@ leetspeak, numbers, identifiers, product phrases, personal context). OLD = ws_se
       vocabulary word, a number or simple punctuation when the text is insurance-related.
   D4  mutations never unblock: zero-width / combining-mark / fullwidth / homoglyph / spacing mutations of a BLOCKED text are blocked.
   D5  classifier never raises, never returns the text, reasons are fixed codes.
-  D6  (REF_URL) NON-insurance text: the new classifier is never LESS strict than the previous one, and equal except for the review fix to stand-alone
-      digits / symbols (a lone "1", "|", "@", "!" or "$25" is no longer folded to a letter). Insurance text may only get STRICTER or allowed through the new vocabulary rules.
+  D6  (REF_URL) the no-workspace (strict) screen: never LESS strict than the previous (d82e29a) classifier, and equal except for the review fix to stand-alone
+      '1', '|', '@'. (The workspace behaviour intentionally changed: an insurance workspace is default-deny for every free-text column.)
+  D8  NON-insurance workspace (vertical mortgage, no terms): if the OLD detector found nothing, the new classifier allows the text unless it carries an identifier next to an
+      insurance word (or a date of birth / policy number): text with 'insurance', 'policy' ... in a mortgage workspace is NOT subject to the vocabulary test.
   D7  (--perf N) N real inserts on a guarded table finish in under 30 s.
 Exit 0 only when every invariant holds for every sample.
 """
@@ -40,11 +42,15 @@ HEALTH = ["diabetes", "cancer", "diagnosed", "prescribed", "surgery", "my doctor
 PRODUCT = APPROVED + ["Health Insurance", "ASSURANCE SANTÉ", "Disability   Insurance", "assurance-santé", "critical illness cover", "health plan", "income protection", "medical coverage", "term life insurance"]
 CONTEXT = ["my", "I", "I'm", "j'ai", "ma mère", "mon mari", "me", "my sister was diagnosed", "her claim for surgery", "he passed away", "policy number", "born 1985-03-12", "ma demande d'invalidité",
            "claim for my surgery", "suffers from", "atteinte", "diagnosed", "prescribed", "his disability claim"]
-MARKETING = ["#1 broker", "1 in 3 Canadians", "Option 1", "A | B", "@ $25/mo", "protect your income", "Protect your family with", "Get a quote for", "Affordable", "from $25/month", "for self-employed workers", "Call us today", "Top rated", "pour les travailleurs autonomes", "Canada's best",
+MARKETING = ["Mortgage rates - privacy policy", "Title insurance included", "Home insurance requirement for your mortgage", "Client has lupus", "Client takes Lipitor", "Maria Gonzalez cannot walk", "Our client has lupus",
+             "in our family", "parents can not work", "we need care", "Will", "Will Page", "Sam", "Summer", "Spring", "Brandon", "age 54", "54 years", "1985", "one two three four five six seven eight nine", "cancer: no",
+             "Krebs", "保险", "Spring promo", "Protect your income", "in 10 minutes", "30 year term", "100% online", "#1 broker", "1 in 3 Canadians", "Option 1", "A | B", "@ $25/mo", "protect your income", "Protect your family with", "Get a quote for", "Affordable", "from $25/month", "for self-employed workers", "Call us today", "Top rated", "pour les travailleurs autonomes", "Canada's best",
              "ages 18-65", "since 1995", "24/7 support", "over 10,000 families", "Learn more", "in minutes", "No medical exam", "Protégez votre famille avec", "Book a call", "we", "our team", "your family"]
 NUMBERS = ["613-555-0100", "123-456-789", "123456789", "4111 1111 1111 1111", "1234567", "98765", "T2T 1A1", "john@example.com", "12/03/1985", "123 Main Street", "$500,000", "55512", "2026"]
 BANK = ["bank statement", "credit score", "SIN", "passport", "void cheque", "salary", "income protection", "mortgage application", "Equifax", "date of birth", "account number", "T4"]
 NEUTRAL = ["quote", "family", "renewal", "tomorrow", "Spring campaign", "landing page", "Barrhaven", "hospitality", "heartfelt thanks", "the chronicle", "Hearthstone", "doctorate", "callback", "Ottawa"]
+PERF_NAMES = ["Health insurance spring campaign for families", "Spring promo", "Protect your income with disability insurance", "Life insurance quotes in 5 minutes", "Compare plans from top insurers",
+              "Get covered today", "Summer savings for families", "Assurance santé pour les travailleurs autonomes", "Retargeting for quote request", "Webinar on planning for freelancers"]
 SEPS = [" ", " ", " ", ", ", " - ", ". ", ": "]
 
 HOMO = {"a": "а", "e": "е", "o": "о", "c": "с", "p": "р", "i": "і", "x": "х", "y": "у"}
@@ -112,7 +118,7 @@ def main() -> int:
     cur.execute("select set_config('app.uid', '99999999-9999-9999-9999-999999999992', false)")
     cur.execute("insert into public.client_workspaces (slug, name, vertical, status) values ('diff-pop', 'Diff populated', 'insurance', 'active') on conflict (slug) do update set name = excluded.name returning id")
     pop = cur.fetchone()[0]
-    cur.execute("insert into public.client_workspaces (slug, name, vertical, status) values ('diff-empty', 'Diff empty', 'noterms', 'active') on conflict (slug) do update set name = excluded.name returning id")
+    cur.execute("insert into public.client_workspaces (slug, name, vertical, status) values ('diff-mtg', 'Diff mortgage', 'mortgage', 'active') on conflict (slug) do update set name = excluded.name returning id")
     empty = cur.fetchone()[0]
     for t in APPROVED:
         cur.execute("select 1 from public.ws_approved_terms where workspace_id = %s and removed_at is null and term = %s", (pop, t))
@@ -129,10 +135,10 @@ def main() -> int:
     pron = re.compile(r"(^|[^a-z0-9])(i|im|ive|me|my|mine|myself|je|moi|mon|ma|mes|suis)([^a-z0-9]|$)|(^|[^a-z0-9])(j|m)'")
     cur.execute("select word from public.ws_marketing_vocab where removed_at is null")
     vocab = {r[0] for r in cur.fetchall()}
-    ins_word = re.compile(r"insur|assuranc|underwrit|policyholder|beneficiar|annuit|indemnit|(^|[^a-z])polic(y|ies)([^a-z]|$)")
+    ins_word = re.compile(r"insur|assuranc|underwrit|beneficiar|annuit|indemnit|versicher|seguro|assicura|sigorta")
     income_re = re.compile(r"(^|[^a-z0-9])((your|votre|vos) +)(income|revenus?)(?![a-z0-9])")
     stats = {"n": 0, "old_hit": 0, "old_health_only": 0, "new_allowed_with_old_health": 0, "blocked": 0, "mut_checked": 0, "ref_compared": 0, "ref_stricter": 0, "ref_leet_fix": 0,
-             "d1": 0, "d2": 0, "d3": 0, "d4": 0, "d5": 0, "d6": 0}
+             "d1": 0, "d2": 0, "d3": 0, "d4": 0, "d5": 0, "d6": 0, "d8": 0}
     fails = []
     ref = None
     if os.environ.get("REF_URL"):
@@ -164,18 +170,59 @@ def main() -> int:
             stats["d5"] += 1
         return j
 
-    def oracle_vocab_ok(resid: str) -> bool:
+    NW = r"zero|one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|forty|fifty|hundred|thousand|million|deux|trois|quatre|cinq|sept|huit|neuf|dix|vingt|trente|cent|mille"
+    HARD = {"will", "may", "page", "sam", "don"}
+    SOFT = {"star", "stars", "summer", "spring", "winter", "sun", "sat", "wed", "long", "young", "best", "bill", "bills", "mo", "fall"}
+
+    def cap_name(orig: str) -> bool:
+        t = re.sub("[­​-‏‪-‮⁠-⁯︀-️﻿]", "", orig)
+        t = unicodedata.normalize("NFD", unicodedata.normalize("NFKC", t))
+        t = "".join(ch for ch in t if not unicodedata.combining(ch))
+        lower_present = re.search(r"[a-z]", t) is not None
+        for m in re.finditer(r"(^|[.!?][ \t\n]+|[^A-Za-z])([A-Za-z]+)(?![A-Za-z])(?![\'\u2019]t(?![A-Za-z]))", t):
+            w = m.group(2).lower()
+            if not m.group(2)[0].isupper():
+                continue
+            if w in HARD:
+                return True
+            if w in SOFT and (not lower_present or not (m.group(1) == "" or re.match(r"[.!?]", m.group(1)))):
+                return True
+        return False
+
+    def oracle_vocab_ok(resid: str, orig: str = "") -> bool:
         """independent re-implementation of the default-deny residual test (python tokenizer, same vocabulary)"""
-        v = resid
+        v = resid.translate(str.maketrans({"«": '"', "»": '"', "“": '"', "”": '"', "„": '"', "•": " ", "·": " ", "‣": " ", "€": "$", "£": "$"}))
         v = re.sub(r"(^|[^a-z0-9])(l|d|c|n|s|qu|jusqu|lorsqu|puisqu)'(?=[a-z0-9])", r"\1\2 ", v)
         v = re.sub(r"([a-z])'(s|t|ll|re|ve|d)(?![a-z0-9])", r"\1 ", v).replace("'", " ")
-        if re.search(r"[^ -~]", v) or re.search(r"[a-z0-9]@|@[a-z0-9]|[a-z0-9&]&|&[a-z0-9#]|%[0-9a-f]{2}|(^|[^0-9 ])%|(^|[^0-9])\+", v):
+        if re.search(r"[^ -~]", v) or "zznum" in v:
+            return False
+        tmp = re.sub(r"(^|[^0-9])24 ?/ ?7([^0-9]|$)", r"\1 \2", v)
+        if (re.search(r"[a-z0-9]@|@[a-z0-9]|[a-z0-9&]&|&[a-z0-9#]|%[0-9a-f]{2}|(^|[^0-9 ])%|(^|[^0-9]) +%|(^|[^0-9])\+", v)
+                or re.search(r"(^|[^0-9a-z.,])[0-9]+ ?/ ?[0-9]+([^0-9a-z]|$)", tmp)):
+            return False
+        if re.search(r"[0-9]", v):
+            v = re.sub(r"(^|[^0-9])24 ?/ ?7([^0-9]|$)", r"\1 zznum \2", v)
+            v = re.sub(r"\$ ?[0-9][0-9,.]*k?", " zznum ", v)
+            v = re.sub(r"[0-9][0-9,.]*k? ?\$", " zznum ", v)
+            v = re.sub(r"[0-9][0-9,.]* ?%", " zznum ", v)
+            v = re.sub(r"#[0-9]+", " zznum ", v)
+            v = re.sub(r"(^|[^a-z0-9])(in|within|under|than|en|dans|sous|de) +[0-9]+ ?(minutes?|mins?|hours?|hrs?|heures?|days?|jours?|seconds?|secondes?)([^a-z]|$)", r"\1\2 zznum \4", v)
+            v = re.sub(r"(^|[^a-z0-9])(24|48|72|7|14|15|21|30|60|90|365) ?-? ?(days?|jours?|hours?|heures?|hrs?)([^a-z]|$)", r"\1 zznum \4", v)
+            v = re.sub(r"(^|[^0-9a-z])[0-9]+ in [0-9]+([^0-9a-z]|$)", r"\1 zznum \2", v)
+            v = re.sub(r"(^|[^0-9a-z])[0-9]+ ?-? ?(years?|yrs?|ans?|annees?) ?(term|terme|plan|coverage|couverture|renewable|renouvelable|guarantee|garantie|level)([^a-z]|$)", r"\1 zznum \3\4", v)
+            v = re.sub(r"(^|[^0-9a-z])[0-9]+ ?\+? ?(years?|ans) (of experience|d experience|in business|of service|de service|serving)", r"\1 zznum \3", v)
+            for m in re.findall(r"((?:ages?|aged) +([0-9]{1,2}) ?(?:-|to|and|a|et) ?([0-9]{1,2}))", v):
+                if abs(int(m[2]) - int(m[1])) >= 10 and int(m[1]) >= 18:
+                    v = v.replace(m[0], " zznum ")
+        if re.search(r"(^|[^a-z])(" + NW + r")( +(" + NW + r")){3}([^a-z]|$)", v):
+            return False
+        if re.search(r"zzqx[ :;,=-]*(no|not|yes|oui|non|pas|none|never|negative|positive)([^a-z]|$)", v):
             return False
         for tok in re.findall(r"[a-z0-9]+(?:[.,][0-9]+)*|[^a-z0-9 ]", v):
-            if tok == "zzqx" or re.fullmatch(r"[0-9]+([.,][0-9]+)*", tok) or re.fullmatch(r"[.,;:!?\"()/%$|#+&@-]", tok) or tok in vocab:
+            if tok in ("zzqx", "zznum") or re.fullmatch(r"[.,;:!?\"()/%$|#+&@-]", tok) or tok in vocab:
                 continue
             return False
-        return True
+        return not (orig and cap_name(orig))
 
     def cmp_ref(t, h):
         """D6 on one text. h = list of NEW allowed flags per workspace mode; here: strict (None) and populated."""
@@ -184,17 +231,14 @@ def main() -> int:
         stats["ref_compared"] += 1
         if new_n and not ro_n:
             stats["ref_leet_fix"] += 1
-            if not re.search(r"(^|[^a-z0-9])[1|@!]([^a-z0-9]|$)|\$[0-9]", fold_py(t)):
+            # attribution: the previous classifier folded digits/symbols into letters inside letterless tokens ("18-65", "1", "|"); replace those tokens by a plain word and the previous classifier must agree
+            t2 = re.sub(r"(^|\s)[^\sA-Za-z]+(?=\s|$)", r"\1x", t)
+            rc.execute("select public.ws_classify_text(%s, null)", (t2,))
+            if not re.search(r"(^|[^a-z0-9])[1|@!]([^a-z0-9]|$)|\$[0-9]", fold_py(t)) and not rc.fetchone()[0]["allowed"]:
                 fails.append(("D6", t, "strict screen allowed what the previous one refused")); stats["d6"] += 1
         if (not new_n) and ro_n:
             stats["ref_stricter"] += 1
             fails.append(("D6", t, "strict screen refused what the previous one allowed")); stats["d6"] += 1
-        # populated workspace: NON-insurance text must behave as before (new may be looser only through the leet fix, never stricter)
-        if not ins_word.search(re.sub(r"[^a-z]", "", fold_py(t))) and not ins_word.search(fold_py(t)):
-            rc.execute("select public.ws_classify_text(%s, %s)", (t, ref_pop)); rp = rc.fetchone()[0]["allowed"]
-            np2 = new(t, pop)["allowed"]
-            if np2 != rp and not (np2 and not rp and re.search(r"(^|[^a-z0-9])[1|@!]([^a-z0-9]|$)|\$[0-9]", fold_py(t))):
-                fails.append(("D6", t, "non-insurance text differs from the previous classifier in a workspace", rp, np2)); stats["d6"] += 1
 
     for _ in range(a.n):
         t = gen(rng)
@@ -206,14 +250,20 @@ def main() -> int:
         if not np_["allowed"]:
             stats["blocked"] += 1
         f = fold_py(t)
-        ctx = ins_word.search(re.sub(r"[^a-z]", "", f)) is not None
+        ctx = True   # the populated workspace is an INSURANCE workspace: every free-text column is insurance context
         income_waived = False
         if "application_or_income" in o and ctx and income_re.search(f):
             rr = income_re.sub(r"\1\2 zzqx ", f)
             income_waived = "application_or_income" not in old(rr)
         for nm, r in (("empty", ne), ("null", nn)):
-            if r["allowed"] and o and not (nm == "empty" and income_waived):
+            if r["allowed"] and o:
                 fails.append(("D1", t, nm, o, r)); stats["d1"] += 1
+        # D8: non-insurance workspace (mortgage, no terms): old detector clean => allowed unless an identifier sits next to an insurance word (or DOB / policy number)
+        if not o and not ne["allowed"]:
+            insw = ins_word.search(re.sub(r"[^a-z]", "", f)) is not None
+            rs = {r for r in ne["reasons"] if not r.startswith("health")}   # health blocks come from the previous guard's fold / leet / extra detectors (not raw ws_sensitive_hits)
+            if not rs <= {"insurance_identifier", "identity_document", "identifier"} or ("identifier" in rs and not insw):
+                fails.append(("D8", t, ne)); stats["d8"] += 1
         non_health = [h for h in o if h != "health"]
         if np_["allowed"] and non_health and not (non_health == ["application_or_income"] and income_waived):
             fails.append(("D2", t, o, np_)); stats["d2"] += 1
@@ -227,11 +277,10 @@ def main() -> int:
                     r = tr.sub(r"\1 zzqx \2", r)
                     used = True
                     used_prod = used_prod or is_prod
-            if ctx or used_prod:
-                r = income_re.sub(r"\1\2 zzqx ", r)
+            r = income_re.sub(r"\1\2 zzqx ", r)
             ok = set(o) <= {"health", "application_or_income"} and (used or income_waived) and not old(r) and not pron.search(r)
-            if ok and (ctx or used_prod):
-                ok = oracle_vocab_ok(r)
+            if ok:
+                ok = oracle_vocab_ok(r, t)
             if not ok:
                 fails.append(("D3", t, o, np_)); stats["d3"] += 1
         if o == ["health"]:
@@ -251,13 +300,13 @@ def main() -> int:
         import time
         cur.execute("insert into public.client_workspaces (slug, name, vertical, status) values ('diff-perf', 'Diff perf', 'insurance', 'active') on conflict (slug) do update set name = excluded.name returning id")
         pw = cur.fetchone()[0]
-        for t in APPROVED[:1]:
+        for t in APPROVED:
             cur.execute("select 1 from public.ws_approved_terms where workspace_id = %s and removed_at is null and term = %s", (pw, t))
             if not cur.fetchone():
                 cur.execute("select public.ws_add_approved_term(%s, null, 'product', %s)", (pw, t))
         t0 = time.time()
         for i in range(a.perf):
-            cur.execute("insert into public.ws_campaigns (workspace_id, name, channel) values (%s, %s, 'meta')", (pw, "Health insurance spring campaign for families %d" % i if i % 2 else "Spring flyers for Barrhaven %d" % i))
+            cur.execute("insert into public.ws_campaigns (workspace_id, name, channel) values (%s, %s, 'meta')", (pw, PERF_NAMES[i % len(PERF_NAMES)]))
         dt = time.time() - t0
         stats["perf_inserts"] = a.perf
         stats["perf_seconds"] = round(dt, 1)
