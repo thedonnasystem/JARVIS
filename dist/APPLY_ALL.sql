@@ -4922,7 +4922,7 @@ create table if not exists public.ws_approved_terms (
   vertical text check (vertical is null or vertical ~ '^[a-z0-9][a-z0-9-]{1,40}$'),
   kind text not null check (kind in ('product', 'place')),
   term text not null check (length(term) between 3 and 60),
-  term_norm text not null check (length(term_norm) between 3 and 60 and term_norm ~ '^[a-z]+([ ''][a-z]+)*$'),
+  term_norm text not null check (length(term_norm) between 3 and 60) check (term_norm ~ '^[a-z]+([ ''][a-z]+)*$'),   -- two separate checks: one AND-chain with BETWEEN is re-rendered differently after a schema dump/restore (backup drill, schema identity)
   created_by text not null default 'owner',
   created_at timestamptz not null default clock_timestamp(),
   removed_at timestamptz,
