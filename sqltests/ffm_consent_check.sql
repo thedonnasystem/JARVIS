@@ -193,6 +193,28 @@ begin
   perform pg_temp.expect_fail(format($q$update public.ffm_consent_log set evidence_ref = null where id = %L$q$, cid), 'The consent log is append-only%');   -- the erasure flag does not leak out of the function
   if (select count(*) from public.audit_log where action = 'ffm_lead_erased' and (detail ->> 'lead')::uuid = la) <> 1 then raise exception 'C51 erasure not audited'; end if;
   if (select detail::text from public.audit_log where action = 'ffm_lead_erased' and (detail ->> 'lead')::uuid = la) ~* 'alpha|613' then raise exception 'C52 personal data in the audit row'; end if;
+  -- C53 (review finding): erasure also overwrites the free-text source on every consent row of the lead
+  if exists (select 1 from public.ffm_consent_log where lead_id = la and source <> '[erased]') then raise exception 'C53 consent source text survived erasure'; end if;
+  -- C54 (review finding): a withdrawal follows the ADDRESS. Re-adding the same person (also with +tag / case variants) does not restore contact.
+  declare l1 uuid; l2 uuid; l3 uuid; l4 uuid; begin
+    perform pg_temp.as_owner(true);
+    l1 := public.ws_add_lead(a, ca, 'Zed One', 'zed.one@example.com', null, 'web form', null);
+    perform public.ffm_record_consent(a, l1, 'email', 'express', 'v1', 'web form', now(), 'form-z1', 'test');
+    if not public.ffm_can_contact(l1, 'email') then raise exception 'C54a consent not effective before withdrawal'; end if;
+    perform public.ffm_withdraw_consent(a, l1, 'email', 'STOP reply', 'msg-z1', 'bot');
+    if public.ffm_can_contact(l1, 'email') then raise exception 'C54b withdrawn lead contactable'; end if;
+    l2 := public.ws_add_lead(a, ca, 'Zed One', 'zed.one@example.com', null, 'web form', null);
+    perform public.ffm_record_consent(a, l2, 'email', 'express', 'v1', 'web form', now(), 'form-z2', 'test');
+    if public.ffm_can_contact(l2, 'email') then raise exception 'C54c re-added duplicate lead contactable after withdrawal'; end if;
+    l3 := public.ws_add_lead(a, ca, 'Zed One', ' Zed.One+promo@Example.com ', null, 'web form', null);
+    perform public.ffm_record_consent(a, l3, 'email', 'express', 'v1', 'web form', now(), 'form-z3', 'test');
+    if public.ffm_can_contact(l3, 'email') then raise exception 'C54d tag/case variant contactable after withdrawal'; end if;
+    -- erasure keeps the address blocked after the lead row is redacted
+    l4 := public.ws_add_lead(a, ca, 'Yan Two', 'yan.two@example.com', null, 'web form', null);
+    perform public.ffm_record_consent(a, l4, 'email', 'express', 'v1', 'web form', now(), 'form-y1', 'test');
+    perform public.ffm_erase_lead(a, l4, 'erasure_request');
+    if not public.is_suppressed('yan.two@example.com') then raise exception 'C54e erased address not suppressed'; end if;
+  end;
   perform pg_temp.expect_fail('select set_config(''app.ffm_erasure'', ''on'', true); update public.ffm_consent_log set basis = ''express''', 'The consent log is append-only%');   -- the flag alone does not unlock other columns
 
   -- ===== H: the health category =====

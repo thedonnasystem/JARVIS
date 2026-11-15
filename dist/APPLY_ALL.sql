@@ -4602,8 +4602,8 @@ end $$;
 create or replace function public.ffm_consent_immutable() returns trigger
 language plpgsql set search_path to 'public' as $$
 begin
-  if tg_op = 'UPDATE' and current_setting('app.ffm_erasure', true) = 'on' and new.evidence_ref is null
-     and (to_jsonb(new) - 'evidence_ref' - 'evidence_erased_at') = (to_jsonb(old) - 'evidence_ref' - 'evidence_erased_at') then
+  if tg_op = 'UPDATE' and current_setting('app.ffm_erasure', true) = 'on' and new.evidence_ref is null and new.source = '[erased]'
+     and (to_jsonb(new) - 'evidence_ref' - 'evidence_erased_at' - 'source') = (to_jsonb(old) - 'evidence_ref' - 'evidence_erased_at' - 'source') then
     return new;
   end if;
   raise exception 'The consent log is append-only: rows cannot be changed or removed. Record a withdrawal as a new row.' using errcode = 'P0001';
@@ -4659,6 +4659,11 @@ begin
   if not exists (select 1 from public.ws_leads where id = p_lead and workspace_id = p_ws) then raise exception 'lead not found in this workspace'; end if;
   insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by)
     values (p_ws, p_lead, p_channel, 'withdrawn', null, coalesce(nullif(btrim(p_source), ''), 'unspecified'), clock_timestamp(), nullif(btrim(p_evidence_ref), ''), coalesce(nullif(btrim(p_by), ''), 'unknown')) returning id into v_id;
+  if p_channel in ('email', 'all') then
+    insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+      select public.normalize_addr(email), 'ffm consent withdrawn', coalesce(nullif(btrim(p_by), ''), 'unknown'), null from public.ws_leads where id = p_lead and public.normalize_addr(email) is not null
+      on conflict do nothing;   -- a withdrawal follows the ADDRESS, not only the lead id: a re-added duplicate lead is still refused ('suppressed')
+  end if;
   insert into public.audit_log (actor, action, target, detail) values ('ffm', 'ffm_consent_withdrawn', 'workspace/' || p_ws, jsonb_build_object('lead', p_lead, 'channel', p_channel, 'consent', v_id));
   return v_id;
 end $$;
@@ -4708,9 +4713,12 @@ begin
   if not exists (select 1 from public.ws_leads where id = p_lead and workspace_id = p_ws) then raise exception 'lead not found in this workspace'; end if;
   insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, source, captured_at, recorded_by)
     values (p_ws, p_lead, 'all', 'withdrawn', 'erasure:' || p_reason, clock_timestamp(), 'owner');
+  insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+    select public.normalize_addr(email), 'ffm erasure/withdrawal', 'owner', null from public.ws_leads where id = p_lead and public.normalize_addr(email) is not null
+    on conflict do nothing;   -- the address stays blocked after the lead row is redacted, so re-adding the same person cannot restore contact
   perform set_config('app.ffm_erasure', 'on', true);
   update public.ws_leads set name = '[erased]', email = null, phone = null, source = null, note = null where id = p_lead;
-  update public.ffm_consent_log set evidence_ref = null, evidence_erased_at = clock_timestamp() where lead_id = p_lead and evidence_ref is not null;
+  update public.ffm_consent_log set evidence_ref = null, source = '[erased]', evidence_erased_at = clock_timestamp() where lead_id = p_lead and (evidence_ref is not null or source <> '[erased]');
   get diagnostics n_ev = row_count;
   perform set_config('app.ffm_erasure', 'off', true);
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_lead_erased', 'workspace/' || p_ws, jsonb_build_object('lead', p_lead, 'reason', p_reason, 'evidence_refs_blanked', n_ev));
