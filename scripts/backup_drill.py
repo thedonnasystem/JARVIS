@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """End-to-end backup + restore drill on LOCAL scratch databases only (no production, no real storage).
 
-  source DB  (drill_src_<pid>)      = the replica schema, seeded with awkward data. Stands in for production.
+  source DB  (drill_src)      = the replica schema, seeded with awkward data. Stands in for production.
   hq_backup.run()             = the real production code, talking to the source DB through the PostgREST stand-in and uploading to a fake B2 server.
-  restore_backup.py           = the real restore tool, run as a separate process, downloading with a READ-only key into drill_restore_<pid>.
+  restore_backup.py           = the real restore tool, run as a separate process, downloading with a READ-only key into drill_restore.
 Then the source and the restored database are compared directly, and negative controls prove the checks can fail.
 
 Usage: REPLICA_URL=postgresql://postgres:pw@localhost:5432/drill_src  RESTORE_URL=postgresql://postgres:pw@localhost:5432/drill_restore  python3 scripts/backup_drill.py
@@ -21,7 +21,7 @@ from cryptography.fernet import Fernet
 
 SRC = os.environ["REPLICA_URL"]
 DST = os.environ["RESTORE_URL"]
-RDB = DST.rsplit("/", 1)[1].split("?")[0]   # the restore database of THIS run (the shell script names it per process)
+DST_NAME = DST.rsplit("/", 1)[-1].split("?")[0]   # per-process name (scripts/backup_drill.sh suffixes it), never a fixed "drill_restore"
 results = []
 
 
@@ -376,11 +376,11 @@ def main():
 
         # ---- restore-guard bypass attempts (found by the independent review): none may reach a database
         base = DST.rsplit("/", 1)[0]
-        code, g1 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": f"dbname={RDB} host=localhost hostaddr=10.1.2.3 user=postgres"}, os.path.join(work, "g1.json"))
+        code, g1 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": f"dbname={DST_NAME} host=localhost hostaddr=10.1.2.3 user=postgres"}, os.path.join(work, "g1.json"))
         check("G1 hostaddr in the connection string is refused", code == 2 and "hostaddr" in g1.get("error", ""), g1.get("error", "")[:90])
-        code, g2 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": f"dbname={RDB} user=postgres", "PGHOST": "db.ihxzvpwbqydqtblvazbq.supabase.co"}, os.path.join(work, "g2.json"))
+        code, g2 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": f"dbname={DST_NAME} user=postgres", "PGHOST": "db.ihxzvpwbqydqtblvazbq.supabase.co"}, os.path.join(work, "g2.json"))
         check("G2 empty host + PGHOST environment redirect is refused", code == 2 and "explicit local host" in g2.get("error", ""), g2.get("error", "")[:90])
-        code, g3 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": f"dbname={RDB} host=localhost service=prod user=postgres"}, os.path.join(work, "g3.json"))
+        code, g3 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": f"dbname={DST_NAME} host=localhost service=prod user=postgres"}, os.path.join(work, "g3.json"))
         check("G3 service= in the connection string is refused", code == 2 and "service" in g3.get("error", ""), g3.get("error", "")[:90])
         adm = psycopg2.connect(base + "/postgres"); adm.autocommit = True
         with adm.cursor() as ac:

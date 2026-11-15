@@ -290,6 +290,9 @@ begin
   if n <> 24 then raise exception 'F4 a column named in the review is missing from the spec (% of 24)', n; end if;
   if (select mode from public.backup_redaction_spec() where table_name = 'bank_transactions' and column_name = 'description') <> 'strict' or (select mode from public.backup_redaction_spec() where table_name = 'payment_instructions' and column_name = 'payee') <> 'strict' then raise exception 'F5 bank_transactions.description and payment_instructions.payee must be strict'; end if;
   if (select mode from public.backup_redaction_spec() where table_name = 'evidence_sources' and column_name = 'text') <> 'blank' then raise exception 'F6 evidence_sources.text is blank (bulk public page bodies, rebuildable) by decision'; end if;
+  -- the blank column restores: an empty string satisfies every constraint on the table (the restore inserts exactly what the export carries)
+  if exists (select 1 from pg_constraint c where c.conrelid = 'public.evidence_sources'::regclass and c.contype = 'c' and pg_get_constraintdef(c.oid) ~* 'length\(text\)\s*(>|>=)') then raise exception 'F6b evidence_sources.text = empty string would be refused on restore'; end if;
+  if (select (public.backup_snapshot() -> 'data' -> 'evidence_sources') is null) then raise exception 'F6c evidence_sources is no longer exported'; end if;
   alter table public.ideas add column zz_new_note text;
   insert into public.ideas (name, zz_new_note) values ('zz new column idea', 'ring Jean Tremblay on 613-555-0142');
   snap := public.backup_snapshot();
