@@ -2,6 +2,11 @@
 -- One transaction, rolled back. Any failed assertion raises. Proves: grants (anon/authenticated cannot execute), the do-not-contact rule
 -- (all ventures sharing an address, drafts rejected, no re-add, no un-flag, no draft/approve/send), owner-only confirmation, revenue only on confirm.
 begin;
+-- fixture: the outreach gate is closed by default (20261121_suppression_integrity_v1); open it so these checks still exercise the suppression rules rather than the gate
+set local session_replication_role = replica;
+insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', 'fixture-key-0123456789abcdefghijklmnop', 'fixture') on conflict do nothing;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture' where id = 1;
+set local session_replication_role = origin;
 do $$
 declare va uuid; vb uuid; la uuid; lb uuid; lc uuid; ld uuid; le uuid; lnew uuid; lx uuid;
         o1 uuid; o2 uuid; o3 uuid; o4 uuid; o5 uuid; d1 uuid; d2 uuid; d3 uuid; d4 uuid; r jsonb; k jsonb; f jsonb; cnt int; led0 int; ok boolean;

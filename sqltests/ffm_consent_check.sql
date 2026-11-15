@@ -15,6 +15,20 @@ begin
   if p then perform set_config('app.uid', '99999999-9999-9999-9999-999999999992', true);
   else perform set_config('app.uid', '', true); end if;
 end $$;
+-- fixture: open the outreach gate (closed by default) and give the tests an owner-attested capture helper. Evidence verification itself is tested in consent_integrity_check.sql.
+set local session_replication_role = replica;
+insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', 'fixture-key-0123456789abcdefghijklmnop', 'fixture') on conflict do nothing;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture' where id = 1;
+set local session_replication_role = origin;
+create function pg_temp.express(p_ws uuid, p_lead uuid, p_ch text, p_ref text, p_by text default 'bot') returns uuid language plpgsql as $$
+declare prev text := current_setting('app.uid', true); r uuid;
+begin
+  perform set_config('app.uid', '99999999-9999-9999-9999-999999999992', true);
+  if not exists (select 1 from public.ffm_consent_wordings where workspace_id = p_ws and version = 'v1') then perform public.ffm_register_wording(p_ws, 'v1', repeat('b', 64), 'test'); end if;
+  perform public.ffm_register_capture_owner(p_ws, p_ref, p_ch, 'v1', repeat('a', 64), now() - interval '2 hours', p_lead, null, 'test');
+  perform set_config('app.uid', coalesce(prev, ''), true);
+  return public.ffm_record_consent(p_ws, p_lead, p_ch, 'express', 'v1', 'web form', now(), p_ref, p_by);
+end $$;
 do $$
 declare a uuid; b uuid; ca uuid; la uuid; lb uuid; lc uuid; ld uuid; le uuid; t text; r text; f text; s text; j jsonb; n int; cid uuid; before_n int;
 begin
@@ -62,7 +76,7 @@ begin
   if public.ffm_contact_status(la, 'email') ->> 'reason' <> 'no_consent' then raise exception 'C10 reason'; end if;
 
   -- C11 express consent (bot may record it, with evidence), per channel only
-  cid := public.ffm_record_consent(a, la, 'email', 'express', 'form-v3', 'web form', now() - interval '1 hour', 'form-submission-1001', 'bot');
+  cid := pg_temp.express(a, la, 'email', 'form-submission-1001', 'bot');
   if not public.ffm_can_contact(la, 'email') then raise exception 'C11 express consent not honoured'; end if;
   if public.ffm_can_contact(la, 'sms') or public.ffm_can_contact(la, 'phone') then raise exception 'C12 consent leaked across channels'; end if;
   if public.ffm_can_contact(lb, 'email') then raise exception 'C13 consent leaked across leads'; end if;
@@ -121,13 +135,13 @@ begin
   perform pg_temp.expect_fail(format($q$select public.ffm_record_consent(%L,%L,'email','express','v2','web',now(),'form-9','owner')$q$, a, la), 'consent refused: this lead withdrew%');
   perform pg_temp.as_owner(false);
   -- a withdrawal for ALL channels beats an express consent on a different channel
-  perform public.ffm_record_consent(a, ld, 'sms', 'express', 'v1', 'web form', now() - interval '1 day', 'form-3000', 'bot');
-  perform public.ffm_record_consent(a, ld, 'email', 'express', 'v1', 'web form', now() - interval '1 day', 'form-3001', 'bot');
+  perform pg_temp.express(a, ld, 'sms', 'form-3000', 'bot');
+  perform pg_temp.express(a, ld, 'email', 'form-3001', 'bot');
   if not public.ffm_can_contact(ld, 'sms') or not public.ffm_can_contact(ld, 'email') then raise exception 'C31 setup'; end if;
   perform public.ffm_withdraw_consent(a, ld, 'all', 'phone call', null, 'bot');
   if public.ffm_can_contact(ld, 'sms') or public.ffm_can_contact(ld, 'email') or public.ffm_can_contact(ld, 'phone') then raise exception 'C32 withdrawal of all channels not honoured'; end if;
   -- withdrawing one channel leaves the others alone
-  perform public.ffm_record_consent(a, lc, 'sms', 'express', 'v1', 'web form', now() - interval '1 day', 'form-3002', 'bot');
+  perform pg_temp.express(a, lc, 'sms', 'form-3002', 'bot');
   perform public.ffm_withdraw_consent(a, lc, 'email', 'reply STOP', null, 'bot');
   if not public.ffm_can_contact(lc, 'sms') then raise exception 'C33 withdrawing email removed sms'; end if;
   perform pg_temp.expect_fail(format($q$select public.ffm_withdraw_consent(%L,%L,'email','x',null,'bot')$q$, b, la), 'lead not found in this workspace%');
@@ -145,7 +159,7 @@ begin
 
   -- C35 suppression list and closed workspaces
   insert into public.contact_suppressions (address, reason, recorded_by) values ('echo@example.com', 'unsubscribe', 'test');
-  perform public.ffm_record_consent(b, le, 'email', 'express', 'v1', 'web form', now() - interval '1 day', 'form-4000', 'bot');
+  perform pg_temp.express(b, le, 'email', 'form-4000', 'bot');
   if public.ffm_can_contact(le, 'email') then raise exception 'C36 suppressed address allowed'; end if;
   if public.ffm_contact_status(le, 'email') ->> 'reason' <> 'suppressed' then raise exception 'C37 reason'; end if;
   update public.client_workspaces set status = 'closed' where id = a;
@@ -164,7 +178,7 @@ begin
   before_n := (select count(*) from public.ffm_route_log);
   if before_n <> 0 then raise exception 'C40 a refused preview was logged'; end if;
   lb := public.ws_add_lead(a, ca, 'Lead Foxtrot', 'foxtrot@example.com', null, 'web form');
-  perform public.ffm_record_consent(a, lb, 'email', 'express', 'v1', 'web form', now() - interval '1 day', 'form-5000', 'bot');
+  perform pg_temp.express(a, lb, 'email', 'form-5000', 'bot');
   j := public.ffm_route_preview(a, lb);
   if jsonb_array_length(j) <> 1 or (j -> 0 ->> 'dry_run')::boolean is not true then raise exception 'C41 consented lead not previewed as a dry run: %', j; end if;
   perform public.ffm_withdraw_consent(a, lb, 'all', 'STOP', null, 'bot');
@@ -199,19 +213,19 @@ begin
   declare l1 uuid; l2 uuid; l3 uuid; l4 uuid; begin
     perform pg_temp.as_owner(true);
     l1 := public.ws_add_lead(a, ca, 'Zed One', 'zed.one@example.com', null, 'web form', null);
-    perform public.ffm_record_consent(a, l1, 'email', 'express', 'v1', 'web form', now(), 'form-z1', 'test');
+    perform pg_temp.express(a, l1, 'email', 'form-z1', 'test');
     if not public.ffm_can_contact(l1, 'email') then raise exception 'C54a consent not effective before withdrawal'; end if;
     perform public.ffm_withdraw_consent(a, l1, 'email', 'STOP reply', 'msg-z1', 'bot');
     if public.ffm_can_contact(l1, 'email') then raise exception 'C54b withdrawn lead contactable'; end if;
     l2 := public.ws_add_lead(a, ca, 'Zed One', 'zed.one@example.com', null, 'web form', null);
-    perform public.ffm_record_consent(a, l2, 'email', 'express', 'v1', 'web form', now(), 'form-z2', 'test');
+    perform pg_temp.express(a, l2, 'email', 'form-z2', 'test');
     if public.ffm_can_contact(l2, 'email') then raise exception 'C54c re-added duplicate lead contactable after withdrawal'; end if;
     l3 := public.ws_add_lead(a, ca, 'Zed One', ' Zed.One+promo@Example.com ', null, 'web form', null);
-    perform public.ffm_record_consent(a, l3, 'email', 'express', 'v1', 'web form', now(), 'form-z3', 'test');
+    perform pg_temp.express(a, l3, 'email', 'form-z3', 'test');
     if public.ffm_can_contact(l3, 'email') then raise exception 'C54d tag/case variant contactable after withdrawal'; end if;
     -- erasure keeps the address blocked after the lead row is redacted
     l4 := public.ws_add_lead(a, ca, 'Yan Two', 'yan.two@example.com', null, 'web form', null);
-    perform public.ffm_record_consent(a, l4, 'email', 'express', 'v1', 'web form', now(), 'form-y1', 'test');
+    perform pg_temp.express(a, l4, 'email', 'form-y1', 'test');
     perform public.ffm_erase_lead(a, l4, 'erasure_request');
     if not public.is_suppressed('yan.two@example.com') then raise exception 'C54e erased address not suppressed'; end if;
   end;

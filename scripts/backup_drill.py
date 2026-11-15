@@ -18,10 +18,14 @@ sys.path[:0] = [ROOT, os.path.join(HERE, "replica"), os.path.join(ROOT, "ops")]
 import subprocess
 import psycopg2
 from cryptography.fernet import Fernet
+import hq_consent
 
 SRC = os.environ["REPLICA_URL"]
 DST = os.environ["RESTORE_URL"]
 results = []
+DRILL_SUPP_KEY = "drill-suppression-key-0123456789abcdef0123456789abcdef"   # throwaway, scratch DBs only; deliberately NOT the BACKUP_KEY
+DRILL_OPTOUTS = ['optout1@example.com', 'optout2@example.com', 'optout3@example.com']
+DRILL_OPTOUT_PHONES = ['+16135550911', '+16135550912']
 
 
 def check(name, ok, detail=""):
@@ -41,6 +45,12 @@ def seed(conn):
         cur.execute("insert into leads (venture_id, name, email, phone, source, score, status, notes, next_followup_at) values (%s,%s,%s,%s,%s,%s,'new',%s,%s)",
                     (v, f"Lead {i} Ñoño \U0001F680" if i % 3 == 0 else f"Lead {i}", f"lead{i}@example.com" if i % 5 else None, None if i % 2 else f"+1613555{i:04d}",
                      "scrape", i % 100, big[:500] if i % 7 == 0 else "", f"2026-12-{(i % 28) + 1:02d}"))
+    # consent integrity: the owner's suppression key, three opted-out addresses and two opted-out numbers (client PII: must NOT reach the off-site file; only keyed hashes may)
+    cur.execute("insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', %s, 'drill')", (DRILL_SUPP_KEY,))
+    for a in DRILL_OPTOUTS:
+        cur.execute("insert into public.contact_suppressions (address, reason, recorded_by) values (%s, 'drill opt-out', 'drill')", (a,))
+    for ph in DRILL_OPTOUT_PHONES:
+        cur.execute("insert into public.ffm_phone_suppressions (phone, reason, recorded_by) values (%s, 'drill opt-out', 'drill')", (ph,))
     cur.execute("select id from leads order by short_id nulls last, name limit 20")
     for n, (lid,) in enumerate(cur.fetchall()):
         cur.execute("insert into outbox (venture_id, agent, channel, to_ref, body, status, lead_id, sources) values (%s,%s,'email',%s,%s,'draft',%s,%s)",
@@ -74,6 +84,166 @@ def seed(conn):
         select o.table_name, o.data_class, o.note from public.__orig_backup_classification() o
         union all select * from (values ('drill_ref','internal','drill fixture'),('drill_child','internal','drill fixture'),('drill_pair_a','internal','drill fixture'),('drill_pair_b','internal','drill fixture')) v $f$""")
     conn.commit()
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Consent and suppression integrity: the keyed-hash suppression list survives backup and restore, the restored database is default-deny, and ONLY an owner
+# verification that matches the checkpoint opens it.
+def _members(enc, key):
+    import io, tarfile
+    tar = tarfile.open(fileobj=io.BytesIO(Fernet(key.encode()).decrypt(enc)), mode="r:gz")
+    return {m.name: tar.extractfile(m).read() for m in tar.getmembers() if m.isfile()}
+
+
+def _build(members, key):
+    import io, tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for n, d in members.items():
+            ti = tarfile.TarInfo(n); ti.size = len(d); ti.mtime = 0
+            tar.addfile(ti, io.BytesIO(d))
+    return Fernet(key.encode()).encrypt(buf.getvalue())
+
+
+def consent_checks(enc, key, rep, renv, work, out_sha):
+    members = _members(enc, key)
+    mf = json.loads(members["manifest.json"])
+    sup_m = mf.get("suppression") or {}
+    sup = json.loads(members.get("suppression/hashes.json", b"{}") or b"{}")
+    want = {("email", hq_consent.suppression_mac(DRILL_SUPP_KEY, "email", a)) for a in DRILL_OPTOUTS} | {("phone", hq_consent.suppression_mac(DRILL_SUPP_KEY, "phone", ph)) for ph in DRILL_OPTOUT_PHONES}
+    got = {tuple(e) for e in sup.get("macs", [])}
+    check("C1 the off-site file carries the suppression list as KEYED HASHES, equal to the independently computed HMACs (5 entries)", sup_m.get("included") and got == want and sup_m.get("count") == 5 and not hq_consent.validate_suppression_export(sup), json.dumps({k: v for k, v in sup_m.items() if k != "macs"})[:200])
+    blob = b"".join(members.values())
+    leaked = [x for x in DRILL_OPTOUTS + DRILL_OPTOUT_PHONES + [DRILL_SUPP_KEY] if x.encode() in blob]
+    check("C2 no opted-out address, no opted-out number and not the suppression key appear anywhere in the (decrypted) backup", not leaked, str(leaked))
+    check("C3 the suppression key is a different secret from BACKUP_KEY", DRILL_SUPP_KEY != key and key.encode() not in blob, "")
+    for t in ("contact_suppressions", "ffm_phone_suppressions", "ffm_secrets", "ffm_outreach_gate", "ffm_suppression_hashes", "ffm_suppression_expected"):
+        if f"data/{t}.jsonl" in members:
+            check(f"C4 {t} is not exported", False, "present in the backup")
+    check("C4 contact_suppressions, ffm_phone_suppressions, ffm_secrets, ffm_outreach_gate and both hash tables have no data file", not any(n.startswith("data/") and n[5:].split(".")[0] in ("contact_suppressions", "ffm_phone_suppressions", "ffm_secrets", "ffm_outreach_gate", "ffm_suppression_hashes", "ffm_suppression_expected") for n in members), "")
+    g = rep.get("outreach_gate") or {}
+    check("C5 restore tool put the restored database into 'suppression unverified' (gate closed) and staged the checkpoint", g.get("state") == "unverified" and g.get("open") is False and g.get("checkpoint_staged") and (g.get("checkpoint") or {}).get("count") == 5, json.dumps(g)[:200])
+    check("C6 restore tool prints the procedure and counts the closed gate as a pass criterion", len(rep.get("next_steps", [])) >= 4 and rep["steps"].get("outreach_gate_closed_default_deny") == "PASS", "")
+    DST_ = psycopg2.connect(DST); cur = DST_.cursor()
+    cur.execute("select (select count(*) from public.contact_suppressions), (select count(*) from public.ffm_phone_suppressions), (select count(*) from public.ffm_secrets), (select count(*) from public.ffm_suppression_hashes), (select count(*) from public.ffm_suppression_expected), public.ffm_outreach_gate_open()")
+    row = cur.fetchone()
+    check("C7 restored database: plaintext lists EMPTY (as designed), no key, no imported hashes, 5 staged expected entries, gate closed", row == (0, 0, 0, 0, 5, False), str(row))
+    # attempted re-contact on the restored, empty-list database: a person who opted out is re-added, with consent evidence, in other written forms of the same address and number
+    cur.execute("insert into public.client_workspaces (slug, name, vertical) values ('drill-ws', 'Drill Workspace Co', 'mortgage') returning id"); ws = cur.fetchone()[0]
+    def add(name, em, ph):
+        cur.execute("select public.ws_add_lead(%s, null, %s, %s, %s, 'import')", (ws, name, em, ph)); lid = cur.fetchone()[0]
+        for ch in ("email", "sms"):
+            ref = f"drill-{name.split()[0].lower()}-{ch}"
+            cur.execute("""insert into public.ffm_consent_captures (workspace_id, capture_ref, channel, wording_version, wording_sha256, artifact_sha256, captured_at, lead_id, registered_via, registered_by)
+                           values (%s, %s, %s, 'v1', %s, %s, now() - interval '1 day', %s, 'owner_attested', 'drill') returning id""", (ws, ref, ch, "b" * 64, "a" * 64, lid)); cap = cur.fetchone()[0]
+            cur.execute("""insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by, capture_id, verification)
+                           values (%s, %s, %s, 'express', 'v1', 'drill form', now() - interval '1 day', %s, 'drill', %s, 'ok')""", (ws, lid, ch, ref, cap))
+        return lid
+    l_out = add("Opted Out", "OptOut1+promo@Example.com", "613 555 0911")
+    l_ok = add("Fine Person", "fine.person@example.com", "613 555 0999")
+    def can(l, ch):
+        cur.execute("select public.ffm_can_contact(%s, %s), public.ffm_contact_status(%s, %s) ->> 'reason'", (l, ch, l, ch)); return cur.fetchone()
+    res = [can(l, ch) for l in (l_out, l_ok) for ch in ("email", "sms")]
+    check("C8 RESTORE INTO AN EMPTY DATABASE THEN RE-CONTACT: refused for everyone (reason suppression_unverified), including the opted-out person re-added in other formats", all(r == (False, "suppression_unverified") for r in res), str(res))
+    DST_.commit()
+
+    # --- owner verification path (the restored scratch database needs the auth stub that Supabase provides; dropped again afterwards because the restore tool refuses a Supabase-looking server)
+    cur.execute("""create schema auth; create table auth.users (id uuid primary key default gen_random_uuid(), email text, email_confirmed_at timestamptz default now());
+                   create function auth.uid() returns uuid language sql as $$ select nullif(current_setting('app.uid', true), '')::uuid $$;
+                   insert into auth.users (id, email) values ('99999999-9999-9999-9999-999999999994', 'drill-owner@example.com');
+                   insert into public.app_owners (email) values ('drill-owner@example.com') on conflict do nothing""")
+    DST_.commit()
+    def owner(on):
+        cur.execute("select set_config('app.uid', %s, false)", ("99999999-9999-9999-9999-999999999994" if on else "",))
+    def sql(q, a=None):
+        cur.execute(q, a); return cur.fetchone()[0] if cur.description else None
+    def silent(q):
+        cur.execute("set session_replication_role = replica"); cur.execute(q); cur.execute("set session_replication_role = origin")
+    owner(False)
+    try:
+        sql("select public.ffm_verify_suppression('bot')"); bot_refused = False
+    except Exception as e:
+        bot_refused = "owner approval required" in str(e); DST_.rollback()
+    owner(True)
+    j = sql("select public.ffm_verify_suppression('owner')")
+    check("C9 verification without the suppression key is refused and the bot cannot run it", bot_refused and j["verified"] is False and "key is not set" in j["reason"], f"bot_refused={bot_refused} {j}")
+    sql("select public.ffm_set_key('suppression_hmac_key', %s, 'owner')", ("wrong-key-" + "0123456789abcdef" * 3,))
+    j = sql("select public.ffm_verify_suppression('owner')")
+    check("C10 a WRONG suppression key is detected (does not match the checkpoint's key fingerprint)", j["verified"] is False and "differs" in j["reason"], str(j))
+    silent("delete from public.ffm_secrets")
+    sql("select public.ffm_set_key('suppression_hmac_key', %s, 'owner')", (DRILL_SUPP_KEY,))
+    j = sql("select public.ffm_verify_suppression('owner')")
+    owner(False)
+    check("C11 right key but EMPTY list (nothing re-established yet): verification refused as incomplete, gate stays closed, outreach refused", j["verified"] is False and j["reason"].startswith("incomplete: 5 of 5") and can(l_ok, "email")[0] is False, str(j))
+    owner(True)
+    n_imp = sql("select public.ffm_import_suppression_hashes()")
+    j = sql("select public.ffm_verify_suppression('owner')")
+    owner(False)
+    check("C12 after re-establishing the list from the keyed hashes, OWNER verification succeeds exactly (5 of 5) and the gate opens", n_imp == 5 and j["verified"] is True and j["mode"] == "exact" and sql("select public.ffm_outreach_gate_open()") is True, f"imported {n_imp} {j}")
+    res = [can(l_out, "email"), can(l_out, "sms"), can(l_ok, "email"), can(l_ok, "sms")]
+    check("C13 after verification: the opted-out person stays refused through hash-only suppression (email +tag/case form and phone form); the unrelated consented lead is allowed", res == [(False, "suppressed"), (False, "suppressed"), (True, "express"), (True, "express")], str(res))
+    silent("delete from public.ffm_suppression_hashes where ctid = (select ctid from public.ffm_suppression_hashes where kind = 'email' limit 1)")
+    check("C14 the list SHRANK after verification (a row removed under the triggers): the gate closes by itself", sql("select public.ffm_outreach_gate_open()") is False and can(l_ok, "email")[0] is False, "")
+    owner(True)
+    j = sql("select public.ffm_verify_suppression('owner')")
+    check("C15 a PARTIAL live list (one hash missing) is refused with the exact count", j["verified"] is False and j["reason"].startswith("incomplete: 1 of 5"), str(j))
+    sql("select public.ffm_import_suppression_hashes()")
+    j = sql("select public.ffm_verify_suppression('owner')")
+    owner(False)
+    check("C16 restoring the missing entry and verifying again re-opens the gate", j["verified"] is True and sql("select public.ffm_outreach_gate_open()"), str(j))
+    DST_.commit()
+    # negative control for the restore tool's own pass criterion: if the restored database would ALLOW outreach, the tool must say so
+    import restore_backup as R
+    cur.execute("create or replace function public.ffm_outreach_gate_open() returns boolean language sql as 'select true'")
+    ctl = {}
+    gate_ok = R.apply_gate(cur, ctl, None)
+    DST_.rollback()
+    check("C17 negative control: a restored database that would allow outreach makes apply_gate() report failure", gate_ok is False, str(ctl.get("outreach_gate")))
+    DST_.close()
+    # drop the auth stub: restore_backup refuses a server that has an auth schema. (DST is wiped by the next restore anyway.)
+    with psycopg2.connect(DST) as c2, c2.cursor() as c2c:
+        c2c.execute("drop schema if exists auth cascade")
+
+    # ---- tampered / partial / absent suppression sections in the FILE
+    def tamper(label, mutate, extra=None, env=None):
+        m = dict(members); mutate(m)
+        path = os.path.join(work, f"tamper_{label}.enc"); open(path, "wb").write(_build(m, key))
+        return restore_cmd(["--file", path, "--wipe"] + (extra or []), env or renv, os.path.join(work, f"tamper_{label}.json"))
+    def drop_one(m):
+        d = json.loads(m["suppression/hashes.json"]); d["macs"] = d["macs"][1:]; m["suppression/hashes.json"] = json.dumps(d, separators=(",", ":"), sort_keys=True).encode()
+    code, r1 = tamper("partial", drop_one)
+    check("T1 a suppression list with an entry removed (manifest unchanged) is refused by the restore tool", code != 0 and "suppression/hashes.json" in r1.get("error", ""), r1.get("error", "")[:120])
+    def drop_one_fix_sha(m):
+        drop_one(m); mm = json.loads(m["manifest.json"]); mm["suppression"]["sha256"] = hashlib.sha256(m["suppression/hashes.json"]).hexdigest(); m["manifest.json"] = json.dumps(mm, separators=(",", ":"), sort_keys=True).encode()
+    code, r2 = tamper("partial2", drop_one_fix_sha)
+    check("T2 an entry removed AND the file hash in the manifest fixed up is still refused (count/digest no longer match the list)", code != 0 and "inconsistent" in r2.get("error", ""), r2.get("error", "")[:140])
+    def swap_mac(m):
+        d = json.loads(m["suppression/hashes.json"]); d["macs"][0][1] = "0" * 64; m["suppression/hashes.json"] = json.dumps(d, separators=(",", ":"), sort_keys=True).encode()
+        mm = json.loads(m["manifest.json"]); mm["suppression"]["sha256"] = hashlib.sha256(m["suppression/hashes.json"]).hexdigest(); m["manifest.json"] = json.dumps(mm, separators=(",", ":"), sort_keys=True).encode()
+    code, r3 = tamper("altered", swap_mac)
+    check("T3 an entry altered (file hash fixed up) is refused", code != 0 and "inconsistent" in r3.get("error", ""), r3.get("error", "")[:140])
+    def smaller_consistent(m):
+        d = json.loads(m["suppression/hashes.json"]); d["macs"] = d["macs"][1:]; dg = hq_consent.suppression_digest(d["macs"])
+        d.update(count=dg["count"], email_count=dg["email_count"], phone_count=dg["phone_count"], hash=dg["hash"]); m["suppression/hashes.json"] = json.dumps(d, separators=(",", ":"), sort_keys=True).encode()
+        mm = json.loads(m["manifest.json"]); mm["suppression"].update(sha256=hashlib.sha256(m["suppression/hashes.json"]).hexdigest(), count=dg["count"], hash=dg["hash"], email_count=dg["email_count"], phone_count=dg["phone_count"])
+        m["manifest.json"] = json.dumps(mm, separators=(",", ":"), sort_keys=True).encode()
+    code, r4 = tamper("smaller", smaller_consistent, ["--expect-sha256", out_sha])
+    check("T4 a self-consistent but SMALLER list is caught by the expected file hash taken from the audit log (--expect-sha256): the file is not the one the bot wrote", code != 0 and "checksum mismatch" in r4.get("error", ""), r4.get("error", "")[:120])
+    code, r5 = tamper("smaller2", smaller_consistent)
+    g5 = r5.get("outreach_gate") or {}
+    check("T5 RESIDUAL RISK, stated: without --expect-sha256 a self-consistent smaller list restores, but the gate is still closed and the checkpoint is the smaller one (4)", code == 0 and g5.get("open") is False and (g5.get("checkpoint") or {}).get("count") == 4, str(g5)[:160])
+    def no_suppression(m):
+        del m["suppression/hashes.json"]; mm = json.loads(m["manifest.json"]); mm["suppression"] = {"included": False, "reason": "the owner has not set the suppression key, so no keyed hashes can be exported"}
+        m["manifest.json"] = json.dumps(mm, separators=(",", ":"), sort_keys=True).encode()
+    code, r6 = tamper("none", no_suppression)
+    g6 = r6.get("outreach_gate") or {}
+    with psycopg2.connect(DST) as c3, c3.cursor() as c3c:
+        c3c.execute("select state, expected_hash is null, public.ffm_outreach_gate_open() from public.ffm_outreach_gate where id = 1"); st = c3c.fetchone()
+    check("T6 a backup WITHOUT a suppression section (key never set) restores, but there is no checkpoint, the gate is closed and says so", code == 0 and g6.get("checkpoint_staged") is False and st == ("unverified", True, False) and "no checkpoint" in g6.get("note", ""), f"{g6} {st}")
+    def undeclared(m):
+        m["suppression/hashes.json"] = b"{}"; mm = json.loads(m["manifest.json"]); mm["suppression"] = {"included": False, "reason": "x"}; m["manifest.json"] = json.dumps(mm, separators=(",", ":"), sort_keys=True).encode()
+    code, r7 = tamper("undeclared", undeclared)
+    check("T7 a suppression file the manifest does not declare is refused", code != 0 and "not declared" in r7.get("error", ""), r7.get("error", "")[:120])
 
 
 WHERE = {"audit_log": " where action <> 'backup_ok'"}     # the backup writes its own audit row AFTER it has dumped the table
@@ -214,6 +384,10 @@ def main():
         check("2e negative control: two separate statements DO show cross-table skew under the same writer (so 2c can fail)", split_bad > 0, f"skewed reads seen: {split_bad}")
         check("2c under concurrent two-table transactions, every snapshot is internally consistent", bad == 0 and committed_2c > 50, f"{taken} snapshots while {committed_2c} paired transactions committed; inconsistent snapshots: {bad}")
         check("13 restored sequences continue after the data (next serial id does not collide) and view keeps security_invoker", nid > 25 and ("true",) in opts, f"next id {nid}, view options {opts}")
+        consent_checks(enc, key, rep, renv, work, out["sha256"])
+        # restore the plain full restore so the remaining checks see the same database as before
+        code, rep = restore_cmd(["--b2-latest", "--wipe", "--expect-sha256", out["sha256"]], renv, os.path.join(work, "report_again.json"))
+        check("C18 full restore again after the consent checks (state for the remaining checks)", code == 0, rep.get("error", ""))
         # ---- negative controls: the checks must be able to fail
         bad = bytearray(enc); bad[len(bad) // 2] ^= 1
         fake.files.append({"fileId": "4_zfake_bad", "fileName": "hq/hq-99990101T000000Z.tar.gz.enc", "bytes": bytes(bad), "sha1": hashlib.sha1(bytes(bad)).hexdigest()})

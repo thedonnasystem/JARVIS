@@ -51,6 +51,11 @@ print("RESULT:", r.get("result"), "| file:", r.get("file", {}).get("name"), "| s
 print("consistency of the backup:", (r.get("archive") or {}).get("consistency"))
 for k, v in (r.get("steps") or {}).items(): print(f"  {k}: {v}")
 if r.get("error"): print("ERROR:", r["error"])
+g = r.get("outreach_gate")
+if g is not None:
+    print("OUTREACH GATE:", g.get("state"), "| open:", g.get("open"), "| checkpoint staged:", g.get("checkpoint_staged"), "|", json.dumps(g.get("checkpoint") or g.get("note") or ""))
+    print("SUPPRESSION UNVERIFIED: no outreach of any kind until the owner verifies the suppression list. Steps:")
+    for line in r.get("next_steps", []): print("  " + line)
 for k, v in (r.get("business_data") or {}).items(): print(f"  business data {k}: {'identical' if v.get('all_identical') else 'DIFFERS'}")
 if r.get("not_restored"): print("not restored / notes:", json.dumps(r["not_restored"])[:400])
 PY
