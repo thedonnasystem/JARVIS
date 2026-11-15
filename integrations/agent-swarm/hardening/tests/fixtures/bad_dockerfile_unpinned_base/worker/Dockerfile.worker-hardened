@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.27.1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 # Derived from the stock Agent Swarm worker image. Purpose: run with `user: 1001:1001`, `cap_drop: [ALL]`,
 # `read_only: true`, `no-new-privileges`, with NO root phase at runtime. All root work happens here, at build time.
 # Build out-of-band on the Docker host (the pilot compose never builds or pulls):

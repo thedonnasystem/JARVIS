@@ -161,6 +161,27 @@ def parse_squid(path):
     return sorted(set(allowed)), (last_access == "deny all"), text
 
 
+def dockerfile_pin_problems(path):
+    """[] when `# syntax=` is digest-pinned and every ARG ...IMAGE default with a digest is a real one; problems otherwise. Missing file => []."""
+    if not os.path.isfile(path):
+        return []
+    txt = open(path).read()
+    probs = []
+    first = txt.splitlines()[0] if txt.strip() else ""
+    m = re.match(r"#\s*syntax\s*=\s*(\S+)", first)
+    if not m:
+        probs.append("no `# syntax=` directive (frontend not pinned)")
+    elif not re.search(r"@sha256:[0-9a-f]{64}$", m.group(1)) or PLACEHOLDER_DIGEST.search(m.group(1)):
+        probs.append(f"syntax frontend not pinned by a real sha256 digest: {m.group(1)}")
+    for am in re.finditer(r"(?m)^ARG\s+\w*IMAGE\w*=(\S+)", txt):
+        ref = am.group(1)
+        if "@sha256:" not in ref:
+            probs.append(f"ARG image default has no digest: {ref}")
+        elif PLACEHOLDER_DIGEST.search(ref):
+            probs.append("ARG image default digest is a PLACEHOLDER")
+    return probs
+
+
 def static_checks(compose, base_dir, model_host, strict, entry_exc, rep):
     services = compose.get("services") or {}
     nets = compose.get("networks") or {}
@@ -197,6 +218,16 @@ def static_checks(compose, base_dir, model_host, strict, entry_exc, rep):
     rep.check("C01", "images pinned by digest, never :latest", sorted(set(probs)))
     if warns and not strict:
         rep.warn("C01w", "digests are PLACEHOLDERS", "replace in " + ",".join(warns) + " before any real run (--strict fails on this)")
+
+    # C22 Dockerfile supply-chain pins: the `# syntax=` frontend and the base image default must be digest-pinned and not placeholders.
+    # Added after C01 was found to look only at the compose file: a zero-digest ARG BASE_IMAGE passed --strict. WARN normally, FAIL under --strict.
+    dprobs = dockerfile_pin_problems(os.path.join(base_dir, "worker", "Dockerfile.worker-hardened"))
+    if strict and dprobs:
+        rep.fail("C22", "Dockerfile frontend and base pinned by real digest", "; ".join(dprobs) + " (--strict)")
+    elif dprobs:
+        rep.warn("C22w", "Dockerfile pins incomplete", "; ".join(dprobs) + " (--strict fails on this)")
+    else:
+        rep.ok("C22", "Dockerfile frontend and base pinned by real digest")
 
     # C02 pull policy
     probs = [f"{n}: pull_policy={s.get('pull_policy')!r}" for n, s in services.items() if s.get("pull_policy") not in ("never", "if_not_present", "missing")]

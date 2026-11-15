@@ -1,0 +1,18 @@
+name: swarm-image-digests
+# MANUAL ONLY (workflow_dispatch): prints the current registry digests of every image the Swarm pilot and CI reference, and flags drift,
+# placeholders, unpinned refs and brand-new tags. Read-only anonymous registry queries over HTTPS; pulls no layers, runs no containers,
+# needs no secrets and no Docker daemon, starts nothing of the Swarm. Result is the job summary. Not a required check.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  digests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve digests (read-only)
+        run: python3 integrations/agent-swarm/hardening/resolve_image_digests.py --extra postgres:16 postgres:17.11

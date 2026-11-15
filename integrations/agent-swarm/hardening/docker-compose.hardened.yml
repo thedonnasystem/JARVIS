@@ -38,8 +38,10 @@ x-hardened: &hardened
 services:
   api:
     <<: *hardened
-    # Placeholder digest (all zeros). Replace with the digest you verified; verifier --strict refuses placeholders.
-    image: ghcr.io/desplega-ai/agent-swarm:2.13.2@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    # Multi-arch INDEX digest of agent-swarm:2.13.2 resolved from ghcr.io on 2026-11-15 (linux/amd64 b12fe600..., linux/arm64 436e7c28...).
+    # Built by upstream GitHub Actions run 43670107766 from commit 0b75197 (BuildKit SLSA provenance in the index). NOT cosign-signed.
+    # The tag is <1 day old (upstream ships daily); the hardening evidence was produced against this exact version. See SC_REPORT_B.md.
+    image: ghcr.io/desplega-ai/agent-swarm:2.13.2@sha256:3cd41bd226743b32a60e578456dd4abe094f4ce837aa8413e043ac1b8c20b589
     # UNVERIFIED: the stock image has no USER (runs as root). A numeric non-root uid is forced here; the SQLite
     # tmpfs below is created owned by that uid so the DB is writable. Boot must be confirmed on a Docker host.
     user: "${API_UID:-10001}:${API_GID:-10001}"
@@ -129,7 +131,7 @@ services:
   # Default-deny allow-list proxy between worker and API. Python stdlib only; source mounted from config/worker_gate.py.
   worker-gate:
     <<: *hardened
-    image: python:3.12-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000   # UNVERIFIED image choice; any image with python3 >= 3.10 works
+    image: python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89   # Python 3.12.16, index digest resolved 2026-11-15 (image created 2026-11-05); boot UNVERIFIED (no Docker daemon); any image with python3 >= 3.10 works
     user: "10002:10002"
     command: ["python3", "-I", "/gate/worker_gate.py"]
     depends_on:
@@ -160,7 +162,7 @@ services:
 
   egress-proxy:
     <<: *hardened
-    image: ubuntu/squid:6.6-24.04_edge@sha256:0000000000000000000000000000000000000000000000000000000000000000   # UNVERIFIED image choice; semantics are in config/squid.conf
+    image: ubuntu/squid:6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c   # index digest resolved 2026-11-15 (image created 2026-05-05, Ubuntu 24.04 package); boot UNVERIFIED; semantics are in config/squid.conf
     user: "13:13"
     configs:
       - source: squid_conf
@@ -179,7 +181,7 @@ services:
   # impossible from an internal-only network, so this is the single host-facing door.
   api-ingress:
     <<: *hardened
-    image: nginxinc/nginx-unprivileged:1.27-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    image: nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03   # nginx 1.30.6 (stable branch, == stable-alpine), created 2026-10-19; replaces 1.27.5 (created 2025-06-23, unmaintained branch). Boot UNVERIFIED; config/nginx-ingress.conf uses only long-stable directives
     user: "101:101"
     depends_on:
       api: {condition: service_healthy}
