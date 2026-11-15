@@ -61,7 +61,7 @@ begin
   if (select count(*) from public.llm_calls) <> n then raise exception 'E18 dry_run reserved spend'; end if;
 
   -- real mode: reserve, then settle
-  set local session_replication_role = replica; update public.system_state set mode = 'approve_first' where id = 1; set local session_replication_role = origin;
+  set local session_replication_role = replica; update public.system_state set mode = 'auto_in_caps' where id = 1; set local session_replication_role = origin;
   j := public.executor_request('swarm', 'builder', tid, 5, 'harmless task');
   if not (j->>'ok')::boolean or (j->>'dry_run')::boolean or (j->>'llm_call_id') is null then raise exception 'E19 real run not started: %', j; end if;
   rid := (j->>'run_id')::uuid;
@@ -98,12 +98,35 @@ begin
   if (j->>'ok')::boolean or (j->>'reason') not like 'budget gate refused:%' then raise exception 'E29 agent cap not enforced: %', j; end if;
   update public.agents set daily_spend_cap_cents = 100000 where slug = 'builder';
 
-  -- stale runs release their reservation
+  update public.executor_registry set max_runs_per_day = 50 where slug = 'swarm';
+  -- failed runs stay counted by the daily caps (reserve_llm_budget only sums reserved/done)
+  rid := (public.executor_request('swarm', 'builder', tid, 5, 'fail')->>'run_id')::uuid;
+  if (select status || actual_cents from public.llm_calls where id = (select llm_call_id from public.executor_runs where id = rid)) <> 'reserved' then null; end if;
+  perform public.executor_complete(rid, 2, 'failed');
+  if (select status || actual_cents from public.llm_calls where id = (select llm_call_id from public.executor_runs where id = rid)) <> 'done5' then raise exception 'E33 failed run not charged at the reservation'; end if;
+
+  -- the purpose handed to the budget gate is the real task, not caller text (focus-mode bypass)
+  j := public.executor_request('swarm', 'builder', tid, 5, 'task 00000000-0000-0000-0000-000000000000');
+  if (select purpose from public.llm_calls where id = (j->>'llm_call_id')::uuid) <> 'task ' || tid::text then raise exception 'E34 caller purpose reached the budget gate'; end if;
+  perform public.executor_complete((j->>'run_id')::uuid, 1, 'done');
+
+  -- modes that need owner approval refuse; unreadable system state fails closed
+  update public.system_state set mode = 'approve_first' where id = 1;
+  j := public.executor_request('swarm', 'builder', tid, 5, 'x');
+  if (j->>'ok')::boolean or (j->>'reason') not like 'mode approve_first requires owner approval%' then raise exception 'E35 approve_first ran: %', j; end if;
+  update public.system_state set mode = 'auto_in_caps' where id = 1;
+  delete from public.system_state where id = 1;
+  j := public.executor_request('swarm', 'builder', tid, 5, 'x');
+  if (j->>'ok')::boolean then raise exception 'E36 ran with no system_state row'; end if;
+  insert into public.system_state (id, kill_switch, daily_spend_cap_cents, mode) values (1, false, 100000, 'auto_in_caps');
+
+  -- stale runs stay charged
   j := public.executor_request('swarm', 'builder', tid, 5, 'stale');
   rid := (j->>'run_id')::uuid;
   update public.executor_runs set created_at = now() - interval '3 hours' where id = rid;
   if public.executor_expire_stale(60) <> 1 then raise exception 'E30 stale run not expired'; end if;
-  if (select status from public.llm_calls where id = (select llm_call_id from public.executor_runs where id = rid)) <> 'released' then raise exception 'E31 reservation not released'; end if;
+  if (select status from public.llm_calls where id = (select llm_call_id from public.executor_runs where id = rid)) <> 'done' then raise exception 'E31 expired reservation not kept charged'; end if;
+  if (select actual_cents from public.llm_calls where id = (select llm_call_id from public.executor_runs where id = rid)) <> 5 then raise exception 'E31b expired run not charged in full'; end if;
   if public.executor_expire_stale(60) <> 0 then raise exception 'E32 expiry not idempotent'; end if;
 end $$;
 rollback;

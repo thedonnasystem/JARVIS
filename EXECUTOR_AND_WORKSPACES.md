@@ -24,7 +24,16 @@ Workspaces: composite FKs make cross-client campaign references impossible; summ
 | Python unit tests | pass | 10 new tests pass |
 | Rollback drill | objects gone, re-apply clean | confirmed |
 
+## Independent review (fresh agent, tried to break it) — 8 defects found, all fixed and re-tested
+Executor: failed/expired runs escaped the daily caps (now settled as spent at >= reservation); caller-chosen `purpose` could dodge focus mode (now fixed to `task <id>`); `approve_first` ran live (now refused); missing/NULL system_state failed open (now closed); adapter could mask the original error or strand a reservation (now guarded, one retry).
+Workspaces: phone-shaped text excused a SIN next to it; digit separators, fullwidth/Arabic-Indic digits, digits split across columns, many keyword gaps (S.I.N, SSN, Experian, FICO, loan application, tax return, OHIP, salary...); service_role kept TRIGGER/REFERENCES. All fixed; 27 isolation/guard assertions + 36 executor assertions pass. Production grants checked read-only: anon/authenticated have no access to llm_calls, audit_log, system_state, agents, tasks, ledger (RLS on); the reviewer's scratch-DB grant finding does not apply to production.
+
 ## Known limits (honest)
+- `executor_expire_stale` is NOT scheduled yet. Until it is (every 5-10 min, owner-gated deploy), a lost `executor_complete` leaves a reservation counted as spent (safe direction).
+- "Only door" is a convention for service_role: it can still call `reserve_llm_budget` directly (pre-existing).
+- `actual_cents` from an executor is trusted; overruns are flagged, not clawed back. `executor_runs.purpose` is not screened for sensitive text.
+- Guard is regex-based: fails closed, more false positives now (any 7+ digit number, the word "income"), cannot catch base64/leetspeak/homoglyph obfuscation.
+- Isolation is write-integrity in the DB; read isolation depends on callers passing the right workspace id.
 - The sensitive-data guard is pattern-based and fail-closed. It will refuse some harmless text (e.g. an email containing 9 digits) and cannot catch data it has no pattern for. It is a backstop; the primary control is that no sensitive field exists and clients' sensitive records never leave the broker's own systems.
 - Nothing runs an executor yet. Registry is empty, so the whole feature is inert until the owner registers and enables an executor.
 - `executor_complete` records an overrun but does not claw it back; per-run cap + reservation bound it.

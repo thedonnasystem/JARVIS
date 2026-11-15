@@ -47,6 +47,25 @@ class Run(unittest.TestCase):
         n, a = f.calls[-1]
         self.assertEqual((n, a["p_actual_cents"], a["p_status"]), ("executor_complete", 5, "failed"))
 
+    def test_failed_settle_does_not_mask_original_error(self):
+        def rpc(name, args):
+            if name == "executor_request": return {"ok": True, "dry_run": False, "run_id": "r1"}
+            raise RuntimeError("network down")
+        def boom(r): raise ValueError("worker died")
+        with mock.patch.object(EX, "_rpc", rpc), self.assertRaises(ValueError):
+            EX.run("swarm", "builder", "t", 5, "p", boom)
+
+    def test_complete_is_retried_once(self):
+        n = {"c": 0}
+        def rpc(name, args):
+            if name == "executor_request": return {"ok": True, "dry_run": False, "run_id": "r1"}
+            n["c"] += 1
+            if n["c"] == 1: raise RuntimeError("blip")
+            return {"ok": True}
+        with mock.patch.object(EX, "_rpc", rpc):
+            self.assertEqual(EX.run("swarm", "builder", "t", 5, "p", lambda r: ("x", 1))["status"], "done")
+        self.assertEqual(n["c"], 2)
+
     def test_negative_actual_is_clamped(self):
         f = Fake({"ok": True, "dry_run": False, "run_id": "r1"})
         with patch(f):

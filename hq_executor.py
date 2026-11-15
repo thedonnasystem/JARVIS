@@ -38,11 +38,18 @@ def run(executor: str, agent: str, task_id: str, est_cents: int, purpose: str, w
         result, actual = work(run_id)
         actual = max(0, int(actual))
     except BaseException:
-        # settle at the full reservation: a crash must not look free, and must not stay reserved
-        _rpc("executor_complete", {"p_run": run_id, "p_actual_cents": int(est_cents), "p_status": "failed"})
+        # settle at the full reservation: a crash must not look free, and must not stay reserved.
+        # If settling itself fails, keep the ORIGINAL error visible; expire_stale() will charge the reservation later.
+        try:
+            _rpc("executor_complete", {"p_run": run_id, "p_actual_cents": int(est_cents), "p_status": "failed"})
+        except Exception:
+            pass
         raise
-    _rpc("executor_complete", {"p_run": run_id, "p_actual_cents": actual, "p_status": "done",
-                               "p_result_sha256": result_sha256(result)})
+    args = {"p_run": run_id, "p_actual_cents": actual, "p_status": "done", "p_result_sha256": result_sha256(result)}
+    try:
+        _rpc("executor_complete", args)
+    except Exception:
+        _rpc("executor_complete", args)   # one retry; if it still fails the error surfaces and expire_stale() settles the run
     return {"status": "done", "dry_run": False, "run_id": run_id, "result": result}
 
 

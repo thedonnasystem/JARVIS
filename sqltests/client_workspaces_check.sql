@@ -60,6 +60,21 @@ begin
   -- normal phone numbers and ordinary notes are NOT refused
   if public.ws_sensitive_hits('Call 613-555-0142 about a renewal in March') <> '{}' then raise exception 'W18 false positive on phone'; end if;
 
+  -- review-found bypasses
+  foreach s in array array['123 456 789 call 613 555 1234', '123.456.789', '123/456/789', '123_456_789', '1234 56789', '12 34 56 78 9', '１２３４５６７８９',
+                           '١٢٣٤٥٦٧٨٩', 'S.I.N 5', 's i n', 'social-insurance', 'SSN', 'bank account 1234567', 'chequing account', 'Experian', 'credit history',
+                           'FICO', 'pre approval letter', 'loan application', 'T4A', 'tax return', 'OHIP', 'date of birth', 'salary', E's\u200bin'] loop
+    if public.ws_sensitive_hits(s) = '{}' then raise exception 'W23 not flagged: %', s; end if;
+  end loop;
+  begin perform public.ws_add_lead(a, ca, '123', '456', '789', 'x'); raise exception 'W24 digits split across columns accepted';
+  exception when raise_exception then if sqlerrm like 'W24%' then raise; end if; end;
+  begin insert into public.client_workspaces (slug, name) values ('123456789', 'Digits'); raise exception 'W25 digit slug accepted';
+  exception when raise_exception then if sqlerrm like 'W25%' then raise; end if; end;
+  if public.ws_sensitive_hits('Call 613-555-0142 or (613) 555 0142 about a renewal in March') <> '{}' then raise exception 'W26 false positive on phones'; end if;
+  foreach f in array array['client_workspaces', 'ws_campaigns', 'ws_leads', 'ws_ledger'] loop
+    if has_table_privilege('service_role', 'public.' || f, 'trigger') or has_table_privilege('service_role', 'public.' || f, 'references') then raise exception 'W27 service_role keeps trigger/references on %', f; end if;
+  end loop;
+
   -- money is default-deny, then capped
   begin perform public.ws_record_spend(a, ca, 5, 'ad test'); raise exception 'W19 spend accepted with no budget';
   exception when raise_exception then if sqlerrm like 'W19%' then raise; end if; end;

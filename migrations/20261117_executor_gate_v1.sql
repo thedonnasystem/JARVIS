@@ -38,8 +38,8 @@ revoke all on public.executor_registry from public, anon, authenticated;
 revoke all on public.executor_runs from public, anon, authenticated;
 grant select on public.executor_registry to service_role;
 grant select on public.executor_runs to service_role;
-revoke insert, update, delete, truncate on public.executor_registry from service_role;
-revoke insert, update, delete, truncate on public.executor_runs from service_role;
+revoke insert, update, delete, truncate, trigger, references on public.executor_registry from service_role;
+revoke insert, update, delete, truncate, trigger, references on public.executor_runs from service_role;
 
 create or replace function public.executor_request(p_executor text, p_agent text, p_task uuid, p_est_cents integer, p_purpose text)
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
@@ -52,9 +52,11 @@ begin
   select * into r from public.executor_registry where slug = p_executor;
   if p_task is not null then select venture_id into v_venture from public.tasks where id = p_task; end if;
   if not exists (select 1 from public.tasks where id = p_task) then v_task := null; else v_task := p_task; end if;   -- a refusal for an unknown task must still be recordable
-  if r.slug is null then v_reason := 'executor is not registered';
+  if ss.kill_switch is true then v_reason := 'kill switch is on';
+  elsif ss.id is null or ss.kill_switch is null or ss.mode is null then v_reason := 'system state unreadable: failing closed';
+  elsif r.slug is null then v_reason := 'executor is not registered';
   elsif not r.enabled then v_reason := 'executor is disabled';
-  elsif ss.kill_switch then v_reason := 'kill switch is on';
+  elsif ss.mode not in ('dry_run', 'auto_in_caps', 'exceptions_only') then v_reason := 'mode ' || ss.mode || ' requires owner approval before any executor runs';
   elsif ss.pause_reason is not null then v_reason := 'system is paused: ' || ss.pause_reason;
   elsif p_agent is null or not (p_agent = any (r.allowed_agents)) then v_reason := 'agent is not allowed for this executor';
   elsif p_task is null or not exists (select 1 from public.tasks where id = p_task) then v_reason := 'task not found';
@@ -77,7 +79,7 @@ begin
   end if;
   if v_reason is null then
     begin
-      v_call := public.reserve_llm_budget(p_agent, p_est_cents, 'executor:' || p_executor, left(p_purpose, 200));
+      v_call := public.reserve_llm_budget(p_agent, p_est_cents, 'executor:' || p_executor, 'task ' || p_task::text);   -- purpose is fixed to the real task: mission_guard parses it, so a caller-chosen string could dodge focus mode
     exception when others then
       v_reason := 'budget gate refused: ' || left(sqlerrm, 200);
     end;
@@ -105,7 +107,8 @@ begin
   select * into r from public.executor_runs where id = p_run for update;
   if r.id is null then raise exception 'unknown run'; end if;
   if r.status <> 'running' then raise exception 'run is not running (status %)', r.status; end if;
-  perform public.settle_llm_call(r.llm_call_id, p_actual_cents, case when p_status = 'done' then 'done' else 'failed' end);
+  -- a failed run is still money spent: settle it as 'done' at no less than the reservation so the daily caps (which only count reserved/done) keep counting it
+  perform public.settle_llm_call(r.llm_call_id, case when p_status = 'failed' then greatest(p_actual_cents, r.est_cents) else p_actual_cents end, 'done');
   update public.executor_runs set status = p_status, actual_cents = p_actual_cents, result_sha256 = p_result_sha256, finished_at = now() where id = p_run;
   insert into public.audit_log (actor, action, target, detail)
     values (r.agent_slug, 'executor_' || p_status, r.executor,
@@ -117,10 +120,11 @@ create or replace function public.executor_expire_stale(p_minutes integer defaul
 language plpgsql security definer set search_path to 'public' as $$
 declare r record; n integer := 0;
 begin
-  for r in select id, llm_call_id, executor, agent_slug from public.executor_runs
+  for r in select id, llm_call_id, executor, agent_slug, est_cents from public.executor_runs
             where status = 'running' and created_at < now() - make_interval(mins => greatest(coalesce(p_minutes, 60), 5)) for update loop
-    perform public.settle_llm_call(r.llm_call_id, 0, 'released');
-    update public.executor_runs set status = 'expired', actual_cents = 0, finished_at = now() where id = r.id;
+    -- unknown real cost: charge the full reservation (conservative) so a hung worker cannot hide spend from the daily caps
+    perform public.settle_llm_call(r.llm_call_id, r.est_cents, 'done');
+    update public.executor_runs set status = 'expired', actual_cents = r.est_cents, finished_at = now() where id = r.id;
     insert into public.audit_log (actor, action, target, detail)
       values (r.agent_slug, 'executor_expired', r.executor, jsonb_build_object('run', r.id));
     n := n + 1;
