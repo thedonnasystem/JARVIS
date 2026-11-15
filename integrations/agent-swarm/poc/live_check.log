@@ -1,0 +1,7 @@
+refused -> ExecutorRefused: kill switch is on
+  tasks before/after: 3 3 rpc: ['executor_request']
+dry_run -> dry_run
+  tasks before/after: 3 3 rpc: ['executor_request']
+approved -> done {'swarm_task_id': '05d7f0b5-4177-40e1-b805-6d8b4b776951', 'status': 'completed', 'output': 'wrote hello2.txt'} rpc: ['executor_request', 'executor_complete']
+timeout -> swarm task de6d1b5d-cf64-4cbe-8714-ecafb6d06d6c timed out after 3s (cancel requested) rpc: ['executor_request', 'executor_complete']
+final statuses: [('never claimed', 'cancelled'), ('Worker task complete', 'pending'), ('Write hello to hello', 'completed'), ('Write hello to hello', 'cancelled')]

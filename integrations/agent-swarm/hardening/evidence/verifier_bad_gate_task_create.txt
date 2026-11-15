@@ -1,0 +1,2 @@
+[FAIL] C19  worker-gate policy: default deny, no task create/config/token/secrets, worker flow allowed   gate ALLOWS: POST /api/tasks
+RESULT: FAIL  failed=1 warnings=2

@@ -1,0 +1,74 @@
+
+== A. DIRECT to the API (no gate): the finding
+  [PASS] direct: resolved?includeSecrets=true leaks secrets                 got=True want=True 
+  [PASS] direct: worker creates a task                                      got=201 want=201 
+  [PASS] direct: worker sets budget                                         got=200 want=200 
+  [PASS] direct: worker creates schedule                                    got=201 want=201 
+  [PASS] direct: worker db-query                                            got=200 want=200 
+
+== B. VIA GATE: required worker flow still works
+  [PASS] register itself                                                    got=200 want=200 
+  [PASS] /ping                                                              got=204 want=204 
+  [PASS] /me                                                                got=200 want=200 
+  [PASS] poll                                                               got=200 want=200 {'trigger': {'type': 'task_assigned', 'taskId': 'c9462eee-12
+  [PASS] get own task                                                       got=200 want=200 
+  [PASS] progress                                                           got=200 want=200 
+  [PASS] finish                                                             got=200 want=200 
+  [PASS] task completed in DB                                               got=completed want=completed 
+  [PASS] /api/config/resolved works (200)                                   got=200 want=200 
+  [PASS] resolved via gate: global secret NOT in body                       got=False want=False 
+  [PASS] resolved via gate: own-agent secret NOT in body                    got=False want=False 
+  [PASS] resolved via gate: secrets present but masked                      got=True want=True 
+  [PASS] duplicate includeSecrets refused                                   got=400 want=400 
+
+== C. VIA GATE: previously-open dangerous paths are 403
+  [PASS] gate 4xx: GET /api/config?scope=global&includeSecrets=true         got=403 want={400, 403} 
+  [PASS] gate 4xx: PUT /api/config                                          got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /api/config/reload                                  got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /internal/reload-config                             got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /api/tasks (create task)                            got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /api/tasks/{id}/supersede                           got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /api/agents/x/token (mint)                          got=403 want={400, 403} 
+  [PASS] gate 4xx: DELETE /api/agents/x/token (revoke)                      got=403 want={400, 403} 
+  [PASS] gate 4xx: PUT /api/budgets/global/_                                got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /api/schedules                                      got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /api/scripts/upsert                                 got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /api/scripts/run                                    got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /api/skills                                         got=403 want={400, 403} 
+  [PASS] gate 4xx: POST /api/db-query                                       got=403 want={400, 403} 
+  [PASS] gate 4xx: GET /api/agents (list)                                   got=403 want={400, 403} 
+  [PASS] gate 4xx: GET /api/users                                           got=403 want={400, 403} 
+  [PASS] gate 4xx: GET /api/tasks (list)                                    got=403 want={400, 403} 
+  [PASS] gate 4xx: GET /api/stats                                           got=403 want={400, 403} 
+  [PASS] gate 4xx: PUT /api/kv/hq                                           got=403 want={400, 403} 
+  [PASS] gate 4xx: path trick /api//tasks                                   got=400 want={400, 403} 
+  [PASS] gate 4xx: path trick /api/tasks/../tasks                           got=400 want={400, 403} 
+  [PASS] gate 4xx: path trick %2e%2e                                        got=400 want={400, 403} 
+  [PASS] gate 4xx: path trick encoded slash                                 got=400 want={400, 403} 
+  [PASS] gate 4xx: other agent's resolved config                            got=403 want={400, 403} 
+  [PASS] gate 4xx: other agent's profile                                    got=403 want={400, 403} 
+  [PASS] gate 4xx: register as lead                                         got=403 want={400, 403} 
+  [PASS] operator key through gate refused                                  got=403 want=403 
+  [PASS] no token through gate refused                                      got=403 want=403 
+  [PASS] wrong X-Agent-ID refused                                           got=403 want=403 
+  [PASS] method override header has no effect (GET stays GET)               got=403 want=403 
+
+== D. VIA GATE: MCP
+  [PASS] mcp initialize                                                     got=200 want=200 
+  [PASS] mcp tools/list                                                     got=200 want=200 
+  [PASS] mcp my-agent-info allowed                                          got=False want=False event: message data: {"result":{"content":[{"type":"text","t
+  [PASS] mcp send-task denied                                               got=True want=True 
+  [PASS] mcp task-action create denied                                      got=True want=True 
+  [PASS] mcp task-action claim passes the gate                              got=False want=False 
+  [PASS] mcp db-query denied                                                got=True want=True 
+  [PASS] mcp get-config denied                                              got=True want=True 
+  [PASS] mcp set-config denied                                              got=True want=True 
+  [PASS] mcp JSON-RPC batch refused                                         got=True want=True 
+  [PASS] no task created through the gate (REST or MCP)                     got=0 want=0 []
+  note: budgets after direct section (A) set by the direct worker call: [99999]
+
+== gate log (counts): {'ALLOW': 16, 'DENY': 37}
+  [PASS] gate log contains no token or secret                               got=False want=False 
+[cleanup] server stopped, tempdir removed=True
+
+RESULT: ALL PASS

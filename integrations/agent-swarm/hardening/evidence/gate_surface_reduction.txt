@@ -1,0 +1,121 @@
+documented operations: 509
+reachable by the worker token directly (not 401/403/404): 313
+allowed through the gate: 54  (10% of the surface)
+
+allowed operations:
+  POST   /api/active-sessions
+  DELETE /api/active-sessions/by-task/{taskId}
+  POST   /api/active-sessions/cleanup
+  PUT    /api/active-sessions/heartbeat/{taskId}
+  PUT    /api/active-sessions/provider-session/{taskId}
+  POST   /api/active-sessions/recover-orphaned-tasks
+  POST   /api/agents
+  GET    /api/agents/{id}
+  PUT    /api/agents/{id}/activity
+  PUT    /api/agents/{id}/credential-status
+  GET    /api/agents/{id}/credential-status
+  GET    /api/agents/{id}/mcp-servers
+  PUT    /api/agents/{id}/profile
+  GET    /api/agents/{id}/runtime
+  GET    /api/agents/{id}/skills
+  GET    /api/concurrent-context
+  GET    /api/config/resolved
+  POST   /api/events
+  GET    /api/events
+  POST   /api/events/batch
+  POST   /api/keys/clear-rate-limit
+  POST   /api/keys/report-auth-failure
+  POST   /api/keys/report-rate-limit
+  POST   /api/keys/report-rate-limit-windows
+  POST   /api/keys/report-seat-mismatch
+  POST   /api/keys/report-usage
+  POST   /api/keys/report-validation
+  POST   /api/memory/index
+  POST   /api/memory/search
+  GET    /api/models-catalog
+  GET    /api/paused-tasks
+  GET    /api/poll
+  POST   /api/prompt-templates/render
+  GET    /api/repos
+  POST   /api/session-costs
+  POST   /api/session-logs
+  GET    /api/steering-messages
+  POST   /api/steering-messages/{id}/delivered
+  POST   /api/steering-messages/{id}/undeliverable
+  GET    /api/tasks/{id}
+  POST   /api/tasks/{id}/context
+  POST   /api/tasks/{id}/finish
+  POST   /api/tasks/{id}/pause
+  POST   /api/tasks/{id}/progress
+  POST   /api/tasks/{id}/request-composition
+  POST   /api/tasks/{id}/resume
+  PUT    /api/tasks/{id}/session
+  GET    /api/tasks/{id}/steering-messages
+  PATCH  /api/tasks/{id}/vcs
+  GET    /api/tasks/{taskId}/session-logs
+  POST   /api/tool-hooks
+  GET    /api/tool-hooks/status
+  POST   /close
+  POST   /ping
+
+reachable-directly but denied by the gate (sample of high-risk ones):
+  POST   /api/apps  (direct status 400)
+  POST   /api/apps/{id}/actions/{name}  (direct status 400)
+  POST   /api/apps/{id}/models/{model}/rows  (direct status 400)
+  POST   /api/apps/{id}/models/{model}/rows/bulk  (direct status 400)
+  PATCH  /api/apps/{id}/models/{model}/rows/{rowId}  (direct status 400)
+  DELETE /api/apps/{id}/models/{model}/rows/{rowId}  (direct status 400)
+  POST   /api/apps/{id}/rollback  (direct status 400)
+  PUT    /api/apps/{id}/user-config  (direct status 400)
+  PUT    /api/budgets/{scope}/{scopeId}  (direct status 400)
+  DELETE /api/budgets/{scope}/{scopeId}  (direct status 400)
+  PUT    /api/config  (direct status 400)
+  POST   /api/config/pool-keys  (direct status 400)
+  DELETE /api/config/pool-keys  (direct status 400)
+  POST   /api/config/reload  (direct status 200)
+  POST   /api/db-query  (direct status 400)
+  POST   /api/internal/raw-llm  (direct status 400)
+  POST   /api/internal/script-runs/{runId}/agent-task  (direct status 400)
+  POST   /api/internal/script-runs/{runId}/status  (direct status 400)
+  POST   /api/internal/script-runs/{runId}/steps  (direct status 400)
+  PUT    /api/kv/_/{namespace}/{key}  (direct status 400)
+  POST   /api/kv/_/{namespace}/{key}/incr  (direct status 200)
+  PUT    /api/kv/{key}  (direct status 400)
+  POST   /api/kv/{key}/incr  (direct status 200)
+  POST   /api/mcp-servers  (direct status 400)
+  POST   /api/mcp-servers/{id}/install  (direct status 400)
+  DELETE /api/mcp-servers/{id}/install/{agentId}  (direct status 200)
+  POST   /api/oauth-apps  (direct status 400)
+  POST   /api/oauth-apps/discover  (direct status 400)
+  POST   /api/oauth/keep-warm/codex  (direct status 200)
+  POST   /api/oauth/refresh-locks/{key}  (direct status 400)
+  DELETE /api/oauth/refresh-locks/{key}  (direct status 400)
+  POST   /api/pages  (direct status 400)
+  POST   /api/pages/{id}/feedback  (direct status 400)
+  POST   /api/schedules  (direct status 400)
+  POST   /api/scripts/run  (direct status 400)
+  POST   /api/scripts/search  (direct status 200)
+  POST   /api/scripts/upsert  (direct status 400)
+  DELETE /api/scripts/{name}  (direct status 200)
+  POST   /api/skills  (direct status 400)
+  POST   /api/skills/install-remote  (direct status 400)
+  POST   /api/skills/sync-filesystem  (direct status 200)
+  POST   /api/skills/sync-remote  (direct status 200)
+  POST   /api/skills/{id}/files  (direct status 400)
+  PUT    /api/skills/{id}/files/{path}  (direct status 400)
+  POST   /api/skills/{id}/install  (direct status 400)
+  DELETE /api/skills/{id}/install/{agentId}  (direct status 200)
+  POST   /api/tasks  (direct status 400)
+  POST   /api/tasks/{id}/steer  (direct status 400)
+  POST   /api/tasks/{id}/supersede  (direct status 400)
+  PATCH  /api/tasks/{id}/tags  (direct status 400)
+  PATCH  /api/tasks/{id}/title  (direct status 400)
+  POST   /api/users  (direct status 400)
+  POST   /api/users/unmapped/dismiss  (direct status 400)
+  POST   /api/users/unmapped/restore  (direct status 400)
+  POST   /api/users/unmapped/{kind}/{externalId}/resolve  (direct status 400)
+  PATCH  /api/users/{id}  (direct status 400)
+  POST   /api/users/{id}/identities  (direct status 400)
+  POST   /api/users/{id}/merge  (direct status 400)
+  PUT    /api/users/{id}/roles  (direct status 400)
+  POST   /api/workflows  (direct status 400)
