@@ -122,7 +122,7 @@ begin
   perform pg_temp.expect_fail(format($q$select public.ffm_activate(%L)$q$, a), 'activation refused: workspace is not in draft%');
 
   -- blocked items and their reasons
-  perform public.ffm_block_input(b, 'licensing_status', 'client has not replied');
+  perform public.ffm_block_input(b, 'licensing_status', 'awaiting_client');
   if (select status from public.ffm_onboarding_items where workspace_id = b and template_key = 'licensing_status') <> 'blocked' then raise exception 'F20 not blocked'; end if;
 
   -- campaign architecture: drafts are plain text, guarded, isolated, dry-run only
