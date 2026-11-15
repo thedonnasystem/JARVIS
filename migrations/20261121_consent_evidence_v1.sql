@@ -34,11 +34,12 @@ end $$;
 -- Output '+<digits>' or NULL ("not one clean phone number": every caller treats NULL as "do not contact by phone").
 --   handled: spaces, dots, dashes, parentheses, +1 / 1 / 001 prefixes, fullwidth digits and plus (NFKC), Arabic-Indic and Persian digits, zero-width and bidi marks,
 --            unicode dashes, a trailing extension (x123, ext 4, #5) which is dropped (the main line is what is suppressed).
+--   TRUNK PREFIX: a 0 right after the country code is dropped for 44 20 33 49 61 90 971 966 212 962 961 (so '+44 (0)20 ...' = '+44 20 ...'); Italy keeps it; '(0)' where it cannot be interpreted gives NULL.
 --   a number with no + sign: 10 digits = North American (+1), 11 digits starting with 1 = North American, 00<cc>... = international. Anything else without a + is NULL (ambiguous).
 --   North American numbers must have an area code and exchange that start 2-9. Letters (vanity numbers), several numbers in one field, or 7-digit local numbers give NULL.
 create or replace function public.normalize_phone(p text) returns text
 language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
-declare t text; d text;
+declare t text; d text; cc text; rest text; paren0 boolean;
 begin
   if p is null then return null; end if;
   t := translate(normalize(regexp_replace(p, '[​-‏⁠﻿‪-‮]', '', 'g'), NFKC),
@@ -46,6 +47,7 @@ begin
   t := btrim(t);
   t := regexp_replace(t, '\s*(ext\.?|extension|x|#)\s*[0-9]{1,6}$', '', 'i');
   if t = '' or t ~ '[^0-9+()\-.\s]' or position('+' in t) > 1 or length(t) - length(replace(t, '+', '')) > 1 then return null; end if;
+  paren0 := t ~ '\(\s*0\s*\)';
   d := regexp_replace(t, '[^0-9]', '', 'g');
   if left(t, 1) = '+' then
     null;
@@ -59,8 +61,63 @@ begin
     return null;
   end if;
   if d ~ '^0' or length(d) < 8 or length(d) > 15 then return null; end if;
+  -- TRUNK PREFIX (review finding 4): '+44 (0)20 7946 0958', '+44 020 ...' and '+44 20 ...' are ONE number. Strip one 0 right after the country code where 0 is a trunk prefix.
+  -- Italy (39) keeps its 0 (part of the number), Spain/Portugal have none. Where the "(0)" marker or a stray 0 cannot be interpreted safely the result is NULL, which every caller treats as "refuse".
+  if d !~ '^1' then
+    cc := case when d ~ '^(971|966|212|962|961)' then substr(d, 1, 3) when d ~ '^(44|20|33|49|61|90)' then substr(d, 1, 2) when d ~ '^351' then '351' when d ~ '^(39|34)' then substr(d, 1, 2) else null end;
+    rest := case when cc is null then null else substr(d, length(cc) + 1) end;
+    if cc in ('44', '20', '33', '49', '61', '90', '971', '966', '212', '962', '961') then
+      if rest ~ '^00' then return null; end if;
+      if rest ~ '^0' then d := cc || substr(rest, 2); elsif paren0 then return null; end if;
+    elsif cc = '39' then
+      if paren0 then return null; end if;            -- "(0)" says the 0 is optional; in Italy it is not: ambiguous
+    elsif cc in ('34', '351') then
+      if paren0 or rest ~ '^0' then return null; end if;
+    elsif paren0 then
+      return null;                                   -- a "(0)" after a country code we do not know: ambiguous
+    end if;
+    if length(d) < 8 or length(d) > 15 then return null; end if;
+  elsif paren0 then
+    return null;
+  end if;
   if d ~ '^1' and d !~ '^1[2-9][0-9]{2}[2-9][0-9]{6}$' then return null; end if;
   return '+' || d;
+end $$;
+
+-- Length-prefixed fields: ffm_lp('ab') = '2:ab'. Every HMAC message below is  '<domain>|v1|' || ffm_lp(field1) || ffm_lp(field2) ...  so (a) two different uses of a key (capture seal, contact binding,
+-- suppression hash, key check) can never produce the same message, and (b) a message can never be re-split at a ':' or '|' inside a field (review finding 1).
+create or replace function public.ffm_lp(p text) returns text
+language sql immutable strict set search_path to 'pg_catalog' as $$ select octet_length(p)::text || ':' || p $$;
+
+-- Key quality policy (review finding 1). NULL = acceptable; otherwise a reason code (never the key). hq_consent.key_problem mirrors it (shared table sqltests/data/key_cases.tsv).
+--   length        fewer than 32 or more than 200 characters
+--   low_entropy   fewer than 12 distinct characters, Shannon entropy under 3.0 bits per character, or one character making up more than a quarter of the key
+--   repeated_pattern   an 8-character piece occurring twice, 6+ identical characters in a row, or 8+ characters in a sequence (abcdefgh, 87654321)
+--   related_key   p_other (the other key) is equal to, contained in, contains, or shares a 12-character piece with this key
+-- A statistical check cannot prove a key is random: the owner must still generate it from a CSPRNG (python3 -c "import secrets;print(secrets.token_hex(32))").
+create or replace function public.ffm_key_problem(p_value text, p_other text default null) returns text
+language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
+declare n int; d int; mx int; h float8; lv text; lo text; i int;
+begin
+  if p_value is null then return 'missing'; end if;
+  n := char_length(p_value);
+  if n < 32 or n > 200 then return 'length'; end if;
+  select count(*), max(c), -sum((c::float8 / n) * ln(c::float8 / n)) / ln(2.0) into d, mx, h from (select count(*) as c from regexp_split_to_table(p_value, '') ch group by ch) q;
+  if d < 12 or h < 3.0 or mx * 4 > n then return 'low_entropy'; end if;
+  if exists (select 1 from generate_series(1, n - 7) g group by substr(p_value, g, 8) having count(*) > 1) then return 'repeated_pattern'; end if;
+  if p_value ~ '(.)\1{5}' then return 'repeated_pattern'; end if;
+  if exists (select 1 from generate_series(1, n - 7) g where (select bool_and(ascii(substr(p_value, g + k, 1)) = ascii(substr(p_value, g, 1)) + k) from generate_series(0, 7) k)
+                                                          or (select bool_and(ascii(substr(p_value, g + k, 1)) = ascii(substr(p_value, g, 1)) - k) from generate_series(0, 7) k)) then
+    return 'repeated_pattern';
+  end if;
+  if p_other is not null then
+    lv := lower(p_value); lo := lower(p_other);
+    if lv = lo or position(lo in lv) > 0 or position(lv in lo) > 0 then return 'related_key'; end if;
+    for i in 1..(n - 11) loop
+      if position(substr(lv, i, 12) in lo) > 0 then return 'related_key'; end if;
+    end loop;
+  end if;
+  return null;
 end $$;
 
 -- 2. secrets (keys). NO privileges for any API role: only the SECURITY DEFINER functions below read them. Set once, owner-only, never updated or deleted.
@@ -86,7 +143,7 @@ create table if not exists public.ffm_consent_wordings (
 create table if not exists public.ffm_consent_captures (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references public.client_workspaces(id) on delete restrict,
-  capture_ref text not null check (capture_ref ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{2,99}$'),   -- opaque id of the form submission: never a name, an address or free text (the pattern forbids it)
+  capture_ref text not null check (capture_ref ~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$'),   -- opaque id of the form submission: never a name, an address or free text. No ':' and no '|' (review finding 1: the old canonical string could be re-split inside the ref)
   channel text not null check (channel in ('email', 'sms', 'phone', 'mail')),
   wording_version text not null check (wording_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,59}$'),
   wording_sha256 text not null check (wording_sha256 ~ '^[0-9a-f]{64}$'),
@@ -148,7 +205,7 @@ create index if not exists ffm_consent_capture_idx on public.ffm_consent_log (ca
 -- keyed contact binding: same for the form side (see hq_consent.contact_mac) and the database side
 create or replace function public.ffm_contact_mac(p_key text, p_kind text, p_norm text) returns text
 language sql immutable strict set search_path to 'public' as $$
-  select public.ffm_hmac_sha256(p_key, 'contact|' || p_kind || ':' || p_norm)
+  select public.ffm_hmac_sha256(p_key, 'con|v1|' || public.ffm_lp(p_kind) || public.ffm_lp(p_norm))
 $$;
 
 -- 5. owner-only setup: keys and approved wordings ---------------------------------------------------------------------------------------------------------------------
@@ -156,21 +213,23 @@ $$;
 -- endpoint only, and runs this call from the SQL editor with the owner session (see ops/OWNER_CONSENT_INTEGRITY.sql). A key cannot be changed afterwards (rotation = new design + owner decision).
 create or replace function public.ffm_set_key(p_name text, p_value text, p_by text) returns text
 language plpgsql security definer set search_path to 'public' as $$
+declare why text;
 begin
   perform public.ffm_require_owner();
   if p_name is null or p_name not in ('capture_signing_key', 'suppression_hmac_key') then raise exception 'unknown key name'; end if;
-  if p_value is null or length(p_value) < 32 or length(p_value) > 200 or (select count(distinct c) from regexp_split_to_table(p_value, '') c) < 12 then
-    raise exception 'key refused: at least 32 characters and not a repeated pattern (use 64 random hex characters)';
-  end if;
   if exists (select 1 from public.ffm_secrets where name = p_name) then raise exception 'key refused: % is already set and cannot be replaced', p_name; end if;
+  why := public.ffm_key_problem(p_value, (select value from public.ffm_secrets where name <> p_name limit 1));
+  if why is not null then
+    raise exception 'key refused (%): use 64 random hex characters from a CSPRNG, and the capture key and the suppression key must be two UNRELATED values', why;   -- never echo the value
+  end if;
   insert into public.ffm_secrets (name, value, set_by) values (p_name, p_value, coalesce(nullif(btrim(p_by), ''), 'owner'));
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_key_set', 'key/' || p_name, jsonb_build_object('name', p_name));   -- never the value
-  return public.ffm_hmac_sha256(p_value, 'fendezy-key-check-v1:' || p_name);
+  return public.ffm_hmac_sha256(p_value, 'key|v1|' || public.ffm_lp(p_name));
 end $$;
 -- a fingerprint is HMAC(key, constant): it lets the owner and the form endpoint confirm they hold the same key without revealing it
 create or replace function public.ffm_key_fingerprint(p_name text) returns text
 language sql stable security definer set search_path to 'public' as $$
-  select public.ffm_hmac_sha256(value, 'fendezy-key-check-v1:' || name) from public.ffm_secrets where name = p_name
+  select public.ffm_hmac_sha256(value, 'key|v1|' || public.ffm_lp(name)) from public.ffm_secrets where name = p_name
 $$;
 create or replace function public.ffm_register_wording(p_ws uuid, p_version text, p_sha256 text, p_by text) returns void
 language plpgsql security definer set search_path to 'public' as $$
@@ -185,7 +244,8 @@ end $$;
 -- canonical text that the form endpoint signs (hq_consent.capture_seal builds the same string)
 create or replace function public.ffm_capture_canonical(p_ws uuid, p_ref text, p_channel text, p_wv text, p_wsha text, p_at timestamptz, p_contact text, p_asha text) returns text
 language sql immutable set search_path to 'public' as $$
-  select 'ffm-capture-v1|' || p_ws::text || '|' || p_ref || '|' || p_channel || '|' || p_wv || '|' || p_wsha || '|' || (extract(epoch from p_at))::bigint::text || '|' || p_contact || '|' || p_asha
+  select 'cap|v1|' || public.ffm_lp(p_ws::text) || public.ffm_lp(p_ref) || public.ffm_lp(p_channel) || public.ffm_lp(p_wv) || public.ffm_lp(p_wsha) || public.ffm_lp((extract(epoch from p_at))::bigint::text)
+         || public.ffm_lp(p_contact) || public.ffm_lp(p_asha)
 $$;
 
 create or replace function public.ffm_ingest_capture(p_ws uuid, p_capture_ref text, p_channel text, p_wording_version text, p_wording_sha256 text, p_captured_at timestamptz,
@@ -197,7 +257,8 @@ begin
   if k is null then raise exception 'capture refused: the capture signing key has not been set by the owner'; end if;
   if p_channel is null or p_channel not in ('email', 'sms', 'phone') then raise exception 'capture refused: form ingest handles email, sms and phone only (use the owner path for mail)'; end if;
   if p_capture_ref is null or p_wording_version is null or p_wording_sha256 is null or p_captured_at is null or p_contact is null or p_artifact_sha256 is null or p_seal is null
-     or position('|' in p_capture_ref || p_wording_version || p_contact) > 0 then raise exception 'capture refused: missing field or a field contains the separator'; end if;
+     then raise exception 'capture refused: missing field'; end if;
+  if p_capture_ref !~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' then raise exception 'capture refused: capture_ref must be letters, digits, dot, underscore or hyphen (no colon, no bar)'; end if;
   if p_captured_at > clock_timestamp() + interval '5 minutes' then raise exception 'capture refused: captured_at is in the future'; end if;
   if public.ffm_hmac_sha256(k, public.ffm_capture_canonical(p_ws, p_capture_ref, p_channel, p_wording_version, lower(p_wording_sha256), p_captured_at, p_contact, lower(p_artifact_sha256))) is distinct from lower(p_seal) then
     raise exception 'capture refused: the seal does not match (wrong signing key or altered fields)';
@@ -292,6 +353,8 @@ end $$;
 
 -- 8. grants -----------------------------------------------------------------------------------------------------------------------------------------------------------
 revoke all on function public.ffm_hmac_sha256(text, text) from public, anon, authenticated;
+revoke all on function public.ffm_lp(text) from public, anon, authenticated;
+revoke all on function public.ffm_key_problem(text, text) from public, anon, authenticated;
 revoke all on function public.normalize_phone(text) from public, anon, authenticated;
 revoke all on function public.ffm_append_only() from public, anon, authenticated;
 revoke all on function public.ffm_capture_immutable() from public, anon, authenticated;
@@ -304,6 +367,8 @@ revoke all on function public.ffm_ingest_capture(uuid, text, text, text, text, t
 revoke all on function public.ffm_register_capture_owner(uuid, text, text, text, text, timestamptz, uuid, text, text) from public, anon, authenticated;
 revoke all on function public.ffm_record_consent(uuid, uuid, text, text, text, text, timestamptz, text, text) from public, anon, authenticated;
 grant execute on function public.ffm_hmac_sha256(text, text) to service_role;
+grant execute on function public.ffm_lp(text) to service_role;
+grant execute on function public.ffm_key_problem(text, text) to service_role;
 grant execute on function public.ffm_contact_mac(text, text, text) to service_role;
 grant execute on function public.normalize_phone(text) to service_role;
 grant execute on function public.ffm_append_only() to service_role;

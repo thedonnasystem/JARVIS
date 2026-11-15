@@ -115,9 +115,9 @@ begin
   perform pg_temp.expect('B9b retarget to a list', 'update public.outbox set to_ref = ''bystander@example.com,victim@example.com'' where id = ''00000000-0000-0000-0000-00000000b004''');
   perform pg_temp.expect('B9c retarget to junk', 'update public.outbox set to_ref = ''x'' where id = ''00000000-0000-0000-0000-00000000b004''', '%not one clean%');
   -- the channel flip trick: leave email, retarget, come back
-  perform pg_temp.ok('B10a channel -> text', 'update public.outbox set channel = ''text'' where id = ''00000000-0000-0000-0000-00000000b005''');
-  perform pg_temp.ok('B10b retarget on text', 'update public.outbox set to_ref = ''victim@example.com'' where id = ''00000000-0000-0000-0000-00000000b005''');
-  perform pg_temp.expect('B10c channel back to email', 'update public.outbox set channel = ''email'' where id = ''00000000-0000-0000-0000-00000000b005''', '%do-not-contact%');
+  -- (PR #15 review: an APPROVED row is delivery-bound, so flipping it to the text channel with an email address as its number is refused outright - stricter than before, the trick is closed at step one)
+  perform pg_temp.expect('B10a channel -> text on an approved row (not a phone number)', 'update public.outbox set channel = ''text'' where id = ''00000000-0000-0000-0000-00000000b005''', '%unusable recipient%');
+  perform pg_temp.expect('B10b the row is still an email row', 'update public.outbox set to_ref = ''victim@example.com'' where id = ''00000000-0000-0000-0000-00000000b005''', '%do-not-contact%');
   -- a lead flagged do-not-contact blocks every draft that points at it, whatever the address says
   perform pg_temp.expect('B11 draft for a do-not-contact lead', format('insert into public.outbox (agent, channel, to_ref, body, lead_id) values (''donna-ops'', ''email'', ''fresh@example.com'', ''x unsubscribe'', %L)', la), '%do-not-contact%');
   -- the raw flag cascades and cannot be cleared

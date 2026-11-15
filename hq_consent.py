@@ -12,10 +12,12 @@ valid capture. See DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 4. CLI for t
 
   CONSENT_CAPTURE_KEY=... python3 hq_consent.py seal < capture.json      # prints the seal; capture.json holds the ffm_ingest_capture arguments
 """
+import collections
 import datetime as dt
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import sys
@@ -25,6 +27,7 @@ _INVISIBLE = re.compile("[​-‏⁠﻿‪-‮]")
 _TRANS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹‐‑‒–—―−", "01234567890123456789" + "-" * 7)
 _WS = "[ \t\n\r\f\v]"
 _EXT = re.compile(_WS + r"*(ext\.?|extension|x|#)" + _WS + r"*[0-9]{1,6}\Z", re.I)
+_TRUNK = ("44", "20", "33", "49", "61", "90", "971", "966", "212", "962", "961")
 _BAD = re.compile(r"[^0-9+()\-." + " \t\n\r\f\v" + "]")
 
 
@@ -36,6 +39,7 @@ def normalize_phone(p):
     t = _EXT.sub("", t)
     if t == "" or _BAD.search(t) or t.find("+") > 0 or t.count("+") > 1:
         return None
+    paren0 = re.search(r"\(" + _WS + r"*0" + _WS + r"*\)", t) is not None
     d = re.sub(r"[^0-9]", "", t)
     if t.startswith("+"):
         pass
@@ -49,6 +53,30 @@ def normalize_phone(p):
         return None
     if d.startswith("0") or len(d) < 8 or len(d) > 15:
         return None
+    # trunk prefix (review finding 4): see the SQL comment. Strip one 0 after the country code where it is a trunk prefix; ambiguous forms are None.
+    if not d.startswith("1"):
+        m = re.match(r"(971|966|212|962|961)", d) or re.match(r"(44|20|33|49|61|90)", d) or re.match(r"(351)", d) or re.match(r"(39|34)", d)
+        cc = m.group(1) if m else None
+        rest = d[len(cc):] if cc else None
+        if cc in _TRUNK:
+            if rest.startswith("00"):
+                return None
+            if rest.startswith("0"):
+                d = cc + rest[1:]
+            elif paren0:
+                return None
+        elif cc == "39":
+            if paren0:
+                return None
+        elif cc in ("34", "351"):
+            if paren0 or rest.startswith("0"):
+                return None
+        elif paren0:
+            return None
+        if len(d) < 8 or len(d) > 15:
+            return None
+    elif paren0:
+        return None
     if d.startswith("1") and not re.fullmatch(r"1[2-9][0-9]{2}[2-9][0-9]{6}", d):
         return None
     return "+" + d
@@ -58,17 +86,53 @@ def hmac_hex(key: str, msg: str) -> str:
     return hmac.new(key.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def lp(field) -> str:
+    """Length-prefixed field: '<byte length>:<field>'. Mirror of public.ffm_lp. With it a message can never be re-split at a ':' or '|' inside a field."""
+    f = str(field)
+    return f"{len(f.encode('utf-8'))}:{f}"
+
+
 def key_fingerprint(key: str, name: str) -> str:
-    return hmac_hex(key, "fendezy-key-check-v1:" + name)
+    return hmac_hex(key, "key|v1|" + lp(name))
 
 
 def contact_mac(capture_key: str, kind: str, normalized: str) -> str:
-    """Keyed hash that binds a capture to a contact. kind is 'email' or 'phone'."""
-    return hmac_hex(capture_key, f"contact|{kind}:{normalized}")
+    """Keyed hash that binds a capture to a contact. kind is 'email' or 'phone'. Domain 'con|v1|'."""
+    return hmac_hex(capture_key, "con|v1|" + lp(kind) + lp(normalized))
+
+
+def sup_message(kind: str, normalized: str) -> str:
+    return "sup|v1|" + lp(kind) + lp(normalized)
 
 
 def suppression_mac(suppression_key: str, kind: str, normalized: str) -> str:
-    return hmac_hex(suppression_key, f"{kind}:{normalized}")
+    """Domain 'sup|v1|': distinct from the capture domain 'cap|v1|' so a suppression hash can never be a capture seal."""
+    return hmac_hex(suppression_key, sup_message(kind, normalized))
+
+
+def key_problem(value, other=None):
+    """None when the key is acceptable, else a reason code. Mirror of public.ffm_key_problem (shared table sqltests/data/key_cases.tsv). Never put the key in a message."""
+    if value is None:
+        return "missing"
+    n = len(value)
+    if n < 32 or n > 200:
+        return "length"
+    cnt = collections.Counter(value)
+    h = -sum((c / n) * math.log2(c / n) for c in cnt.values())
+    if len(cnt) < 12 or h < 3.0 or max(cnt.values()) * 4 > n:
+        return "low_entropy"
+    pieces = collections.Counter(value[i:i + 8] for i in range(n - 7))
+    if any(v > 1 for v in pieces.values()) or re.search(r"(.)\1{5}", value, re.S):
+        return "repeated_pattern"
+    for i in range(n - 7):
+        o = ord(value[i])
+        if all(ord(value[i + k]) == o + k for k in range(8)) or all(ord(value[i + k]) == o - k for k in range(8)):
+            return "repeated_pattern"
+    if other is not None:
+        lv, lo = value.lower(), other.lower()
+        if lv == lo or lo in lv or lv in lo or any(lv[i:i + 12] in lo for i in range(n - 11)):
+            return "related_key"
+    return None
 
 
 def _epoch(at) -> int:
@@ -81,12 +145,14 @@ def _epoch(at) -> int:
     return int(at.timestamp())
 
 
+_REF_OK = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,99}\Z")
+
+
 def capture_canonical(workspace_id, capture_ref, channel, wording_version, wording_sha256, captured_at, contact, artifact_sha256) -> str:
-    """The exact text that is signed. Mirrors public.ffm_capture_canonical."""
-    for f in (capture_ref, wording_version, contact):
-        if "|" in str(f):
-            raise ValueError("a capture field may not contain '|'")
-    return "|".join(["ffm-capture-v1", str(workspace_id), capture_ref, channel, wording_version, wording_sha256.lower(), str(_epoch(captured_at)), contact, artifact_sha256.lower()])
+    """The exact text that is signed. Mirrors public.ffm_capture_canonical: 'cap|v1|' + length-prefixed fields (no field can be re-split)."""
+    if not _REF_OK.match(str(capture_ref)):
+        raise ValueError("capture_ref must be letters, digits, dot, underscore or hyphen (3-100 characters; no colon, no bar)")
+    return "cap|v1|" + "".join(lp(f) for f in (str(workspace_id), capture_ref, channel, wording_version, wording_sha256.lower(), str(_epoch(captured_at)), contact, artifact_sha256.lower()))
 
 
 def capture_seal(capture_key: str, **fields) -> str:
@@ -133,11 +199,20 @@ def validate_suppression_export(exp) -> list:
     return probs
 
 
+def _check_key_cli(argv):
+    """python3 hq_consent.py check-key [<other-key-env-name>]: reads the key from the environment variable CONSENT_KEY_CANDIDATE (and the other key from CONSENT_KEY_OTHER) and prints only a verdict."""
+    why = key_problem(os.environ.get("CONSENT_KEY_CANDIDATE"), os.environ.get("CONSENT_KEY_OTHER") or None)
+    print("key OK" if why is None else f"key REFUSED ({why})")
+    return 0 if why is None else 1
+
+
 if __name__ == "__main__":
-    if len(sys.argv) == 2 and sys.argv[1] == "seal":
+    if len(sys.argv) == 2 and sys.argv[1] == "check-key":
+        sys.exit(_check_key_cli(sys.argv))
+    elif len(sys.argv) == 2 and sys.argv[1] == "seal":
         key = os.environ.get("CONSENT_CAPTURE_KEY", "")
         if len(key) < 32:
             sys.exit("set CONSENT_CAPTURE_KEY (the capture signing key) in the environment")
         print(capture_seal(key, **json.load(sys.stdin)))
     else:
-        sys.exit("usage: CONSENT_CAPTURE_KEY=... python3 hq_consent.py seal < capture.json")
+        sys.exit("usage: CONSENT_CAPTURE_KEY=... python3 hq_consent.py seal < capture.json   |   CONSENT_KEY_CANDIDATE=... [CONSENT_KEY_OTHER=...] python3 hq_consent.py check-key")

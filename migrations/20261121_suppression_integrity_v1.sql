@@ -79,21 +79,25 @@ drop trigger if exists ffm_gate_no_truncate on public.ffm_outreach_gate;
 create trigger ffm_gate_no_truncate before truncate on public.ffm_outreach_gate for each statement execute function public.ffm_gate_no_delete();
 
 -- 4. the suppression lookups -----------------------------------------------------------------------------------------------------------------------------------------
--- keyed hash of a normalised value, or NULL when the owner has not set the suppression key
-create or replace function public.ffm_suppression_mac(p_kind text, p_norm text) returns text
-language sql stable security definer set search_path to 'public' as $$
-  select public.ffm_hmac_sha256(value, p_kind || ':' || p_norm) from public.ffm_secrets where name = 'suppression_hmac_key' and p_norm is not null
-$$;
+-- The keyed hash of a normalised value is HMAC-SHA256(suppression key, 'sup|v1|' || lp(kind) || lp(norm)): domain-separated and length-prefixed, so it can never equal a capture seal.
+-- Review finding 1: the previous public.ffm_suppression_mac(kind, norm), executable by service_role, was an HMAC ORACLE on the suppression key (kind was free text). It no longer exists:
+-- the hash is computed INLINE inside the SECURITY DEFINER functions that need it (is_suppressed, ffm_is_phone_suppressed, ffm_suppression_set), so there is nothing for a role to call.
+-- (A revoke on a public function would not hold: the lockdown migration, applied last and re-runnable, grants execute on EVERY public function to service_role. A separate schema would not
+-- survive a restore, which rebuilds schema public only.) The message builder below is a pure function with no key and may stay callable.
+drop function if exists public.ffm_suppression_mac(text, text);
+create or replace function public.ffm_sup_message(p_kind text, p_norm text) returns text
+language sql immutable strict set search_path to 'public' as $$ select 'sup|v1|' || public.ffm_lp(p_kind) || public.ffm_lp(p_norm) $$;
 
 -- email: plaintext list first, then hash-only entries (needs the key). Same name/signature as before; callers (outbox_dnc_guard, deals, ffm_contact_status) are unchanged.
 create or replace function public.is_suppressed(p_address text) returns boolean
 language plpgsql stable security definer set search_path to 'public' as $$
 declare n text := public.normalize_addr(p_address);
 begin
-  if n is null then return false; end if;
+  if p_address is null then return false; end if;
+  if n is null then return true; end if;     -- not one clean address: cannot be shown to be NOT suppressed, so it counts as suppressed (fail closed)
   if exists (select 1 from public.contact_suppressions where address = n) then return true; end if;
   if exists (select 1 from public.ffm_suppression_hashes where kind = 'email') then
-    return exists (select 1 from public.ffm_suppression_hashes where kind = 'email' and mac = public.ffm_suppression_mac('email', n));
+    return exists (select 1 from public.ffm_suppression_hashes where kind = 'email' and mac = public.ffm_hmac_sha256((select value from public.ffm_secrets where name = 'suppression_hmac_key'), public.ffm_sup_message('email', n)));
   end if;
   return false;
 end $$;
@@ -101,10 +105,11 @@ create or replace function public.ffm_is_phone_suppressed(p_phone text) returns 
 language plpgsql stable security definer set search_path to 'public' as $$
 declare n text := public.normalize_phone(p_phone);
 begin
-  if n is null then return false; end if;
+  if p_phone is null then return false; end if;
+  if n is null then return true; end if;     -- not one clean number (including an ambiguous trunk-prefix form): fail closed, never 'not suppressed'
   if exists (select 1 from public.ffm_phone_suppressions where phone = n) then return true; end if;
   if exists (select 1 from public.ffm_suppression_hashes where kind = 'phone') then
-    return exists (select 1 from public.ffm_suppression_hashes where kind = 'phone' and mac = public.ffm_suppression_mac('phone', n));
+    return exists (select 1 from public.ffm_suppression_hashes where kind = 'phone' and mac = public.ffm_hmac_sha256((select value from public.ffm_secrets where name = 'suppression_hmac_key'), public.ffm_sup_message('phone', n)));
   end if;
   return false;
 end $$;
@@ -152,8 +157,8 @@ begin
   if k is null then raise exception 'the suppression key has not been set by the owner'; end if;
   return query
     select s.kind, s.mac from (
-      select 'email'::text as kind, public.ffm_hmac_sha256(k, 'email:' || c.address) as mac from public.contact_suppressions c
-      union select 'phone'::text, public.ffm_hmac_sha256(k, 'phone:' || p.phone) from public.ffm_phone_suppressions p
+      select 'email'::text as kind, public.ffm_hmac_sha256(k, public.ffm_sup_message('email', c.address)) as mac from public.contact_suppressions c
+      union select 'phone'::text, public.ffm_hmac_sha256(k, public.ffm_sup_message('phone', p.phone)) from public.ffm_phone_suppressions p
       union select h.kind, h.mac from public.ffm_suppression_hashes h) s;
 end $$;
 create or replace function public.ffm_suppression_digest() returns jsonb
@@ -363,19 +368,58 @@ begin
   return jsonb_build_object('lead', p_lead, 'evidence_refs_blanked', n_ev, 'captures_unlinked', n_cap, 'note', 'copies in external backups are handled by key rotation or expiry, see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md');
 end $$;
 
--- 11. the legacy send path: no approval or send while the gate is closed. Everything else in this function is exactly as in 20261116_audit_hardening_v1.
+-- 11. the legacy send path (review finding 2). ONE decision function, used by the trigger, by the RPC the Python senders call, and by the owner approval check.
+-- NULL = nothing against it; otherwise a reason code. It fails closed: the gate closed, a do-not-contact lead, an unusable or suppressed address / number, or any error is a "no".
+-- email: is_suppressed (plaintext list AND hash-only entries). text / call: the PHONE suppression list (plaintext AND hash-only). telegram / post: the gate and the lead flag only.
+create or replace function public.outreach_recipient_problem(p_channel text, p_to text, p_lead uuid) returns text
+language plpgsql stable security definer set search_path to 'public' as $$
+declare dnc boolean := false;
+begin
+  if not public.ffm_outreach_gate_open() then return 'suppression_unverified'; end if;
+  if p_lead is not null then select do_not_contact into dnc from public.leads where id = p_lead; end if;
+  if coalesce(dnc, false) then return 'lead_do_not_contact'; end if;
+  if p_channel = 'email' then
+    if p_to is null or public.normalize_addr(p_to) is null then return 'address_unusable'; end if;
+    if public.is_suppressed(p_to) then return 'suppressed'; end if;
+  elsif p_channel in ('text', 'call') then
+    if p_to is null or public.normalize_phone(p_to) is null then return 'phone_unusable'; end if;
+    if public.ffm_is_phone_suppressed(p_to) then return 'suppressed'; end if;
+  end if;
+  return null;
+exception when others then
+  return 'error';
+end $$;
+
+-- What the senders (hq_mail._claim / deliver_approved, hq_venture_ops.dnc_problem) ask BEFORE claiming and again IMMEDIATELY before the provider call. Only {"allowed": true} is a yes.
+create or replace function public.outreach_send_allowed(p_outbox uuid) returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+declare o public.outbox; why text;
+begin
+  select * into o from public.outbox where id = p_outbox;
+  if o.id is null then return jsonb_build_object('allowed', false, 'reason', 'unknown_outbox'); end if;
+  if o.status not in ('draft', 'qa_passed', 'approved') then return jsonb_build_object('allowed', false, 'reason', 'not_sendable_status'); end if;
+  why := public.outreach_recipient_problem(o.channel, o.to_ref, o.lead_id);
+  if why is not null then return jsonb_build_object('allowed', false, 'reason', why); end if;
+  return jsonb_build_object('allowed', true, 'reason', 'ok');
+exception when others then
+  return jsonb_build_object('allowed', false, 'reason', 'error');
+end $$;
+
+-- The trigger. A row that is, or becomes, approved / sent, or that carries a claim (sent_at set), is DELIVERY-BOUND: it needs the gate open and an allowed recipient, EVERY time it is written
+-- (the old early return let a claim, which only sets sent_at, through with the gate closed). The one write that is always allowed is releasing a claim (sent_at back to null, nothing else changed).
 create or replace function public.outbox_dnc_guard() returns trigger
 language plpgsql set search_path to 'public' as $$
-declare dnc boolean := false;
+declare dnc boolean := false; bound boolean; why text;
 begin
   if new.status not in ('draft','qa_passed','approved','sent') then return new; end if;
   if tg_op = 'UPDATE' and new.status is not distinct from old.status
-     and new.to_ref is not distinct from old.to_ref and new.channel is not distinct from old.channel
-     and new.lead_id is not distinct from old.lead_id then
-    return new;   -- nothing that decides WHO is contacted or WHETHER it advances changed
+     and new.to_ref is not distinct from old.to_ref and new.channel is not distinct from old.channel and new.lead_id is not distinct from old.lead_id then
+    if new.sent_at is not distinct from old.sent_at then return new; end if;     -- nothing that decides WHO is contacted or WHETHER it advances changed
+    if new.sent_at is null then return new; end if;                                -- releasing a claim only reduces what happens
   end if;
-  if new.status in ('approved', 'sent') and not public.ffm_outreach_gate_open() then
-    raise exception 'Outreach gate closed: the suppression list has not been verified (default-deny after a restore or on a fresh database). No approval or send is allowed.' using errcode = 'P0001';
+  bound := new.status in ('approved', 'sent') or new.sent_at is not null;
+  if bound and not public.ffm_outreach_gate_open() then
+    raise exception 'Outreach gate closed: the suppression list has not been verified (default-deny after a restore or on a fresh database). No approval, claim or send is allowed.' using errcode = 'P0001';
   end if;
   if new.lead_id is not null then
     select do_not_contact into dnc from public.leads where id = new.lead_id;
@@ -386,15 +430,26 @@ begin
   if new.channel = 'email' and new.to_ref is not null and public.normalize_addr(new.to_ref) is null then
     raise exception 'The recipient is not one clean email address (CASL check cannot be done). Fix the address first.' using errcode = 'P0001';
   end if;
+  if new.channel in ('text', 'call') and public.normalize_phone(new.to_ref) is not null and public.ffm_is_phone_suppressed(new.to_ref) then   -- (an unusable number is refused below, once the row is delivery-bound)
+    raise exception 'Do-not-contact: this phone number has opted out. No draft, approval or send is allowed.' using errcode = 'P0001';
+  end if;
   if coalesce(dnc, false) or (new.channel = 'email' and public.is_suppressed(new.to_ref)) then
     raise exception 'Do-not-contact: this lead or address has opted out (CASL). No draft, approval or send is allowed.' using errcode = 'P0001';
+  end if;
+  if bound then   -- the single shared decision (also what outreach_send_allowed answers): unusable phone numbers, hash-only entries, any error
+    why := public.outreach_recipient_problem(new.channel, new.to_ref, new.lead_id);
+    if why is not null then
+      raise exception 'Do-not-contact or unusable recipient (%): no approval, claim or send is allowed.', why using errcode = 'P0001';
+    end if;
   end if;
   return new;
 end $$;
 
 -- 12. grants ----------------------------------------------------------------------------------------------------------------------------------------------------------
 revoke all on function public.ffm_gate_no_delete() from public, anon, authenticated;
-revoke all on function public.ffm_suppression_mac(text, text) from public, anon, authenticated;   -- an HMAC oracle on the suppression key (never the key); see the policy document
+revoke all on function public.ffm_sup_message(text, text) from public, anon, authenticated;
+revoke all on function public.outreach_recipient_problem(text, text, uuid) from public, anon, authenticated;
+revoke all on function public.outreach_send_allowed(uuid) from public, anon, authenticated;
 revoke all on function public.is_suppressed(text) from public, anon, authenticated;
 revoke all on function public.ffm_is_phone_suppressed(text) from public, anon, authenticated;
 revoke all on function public.ffm_outreach_gate_open() from public, anon, authenticated;
@@ -412,7 +467,9 @@ revoke all on function public.ffm_withdraw_consent(uuid, uuid, text, text, text,
 revoke all on function public.ffm_erase_lead(uuid, uuid, text) from public, anon, authenticated;
 revoke all on function public.outbox_dnc_guard() from public, anon, authenticated;
 grant execute on function public.ffm_gate_no_delete() to service_role;
-grant execute on function public.ffm_suppression_mac(text, text) to service_role;
+grant execute on function public.ffm_sup_message(text, text) to service_role;
+grant execute on function public.outreach_recipient_problem(text, text, uuid) to service_role;
+grant execute on function public.outreach_send_allowed(uuid) to service_role;
 grant execute on function public.ffm_suppression_set() to service_role;
 grant execute on function public.is_suppressed(text) to service_role;
 grant execute on function public.ffm_is_phone_suppressed(text) to service_role;
@@ -429,3 +486,10 @@ grant execute on function public.ffm_can_contact(uuid, text) to service_role;
 grant execute on function public.ffm_withdraw_consent(uuid, uuid, text, text, text, text) to service_role;
 grant execute on function public.ffm_erase_lead(uuid, uuid, text) to service_role;
 grant execute on function public.outbox_dnc_guard() to service_role;
+
+-- 13. app_owners (review finding 3). In production service_role could INSERT into app_owners and so mint an owner (is_app_owner() trusts that table). Verified read-only on Nov 15 2026:
+-- service_role holds every privilege, anon/authenticated none, RLS on with no policy, no trigger, and NO code in this repository writes it (owners are added by hand in the SQL editor,
+-- which runs as postgres and is unaffected). The bot only reads it (hq_backup). So the writes are taken away; select stays.
+revoke insert, update, delete, truncate, references, trigger on public.app_owners from public, anon, authenticated, service_role;
+revoke all on public.app_owners from anon, authenticated;
+grant select on public.app_owners to service_role;

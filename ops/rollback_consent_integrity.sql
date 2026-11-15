@@ -32,6 +32,11 @@ drop function if exists public.ffm_ingest_capture(uuid, text, text, text, text, 
 drop function if exists public.ffm_register_capture_owner(uuid, text, text, text, text, timestamptz, uuid, text, text);
 drop function if exists public.ffm_gate_no_delete();
 drop function if exists public.ffm_suppression_mac(text, text);
+drop function if exists public.ffm_sup_message(text, text);
+drop function if exists public.ffm_lp(text);
+drop function if exists public.ffm_key_problem(text, text);
+drop function if exists public.outreach_send_allowed(uuid);
+drop function if exists public.outreach_recipient_problem(text, text, uuid);
 drop function if exists public.ffm_is_phone_suppressed(text);
 drop function if exists public.ffm_outreach_gate_open();
 drop function if exists public.ffm_outreach_gate_status();

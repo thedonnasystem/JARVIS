@@ -7,6 +7,14 @@ def http_err(code):
     return urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(b"{}"))
 
 
+def _db_allows_outreach(case):
+    """These tests are about approval flows, not about the outreach gate: the database RPC public.outreach_send_allowed (PR #15 review) answers yes. The gate has its own tests."""
+    import hq_venture_ops
+    orig = hq_venture_ops._rpc
+    p = mock.patch.object(hq_venture_ops, "_rpc", lambda name, args: {"allowed": True, "reason": "ok"} if name == "outreach_send_allowed" else orig(name, args))
+    p.start(); case.addCleanup(p.stop)
+
+
 class Rec:
     def __init__(self, reply=None, exc=None):
         self.calls = []; self.reply = reply; self.exc = exc
@@ -26,6 +34,9 @@ class Rec:
 
 
 class T(unittest.TestCase):
+    def setUp(self):
+        _db_allows_outreach(self)
+
     def test_database_decision_is_used(self):
         r = Rec(reply={"decision": "ask_owner", "reason": "Red", "tier": "red"})
         with mock.patch.object(hq, "_request", r):

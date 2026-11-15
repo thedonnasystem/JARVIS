@@ -22,6 +22,9 @@ What it checks, in order (any failure => non-zero exit, and the report says whic
   7 smoke tests that exercise restored functions (spend gateway refuses when the kill switch is on; capital_mode() runs)
   8 SUPPRESSION: the keyed-hash suppression list in the file is checked (sha256, count, digest recomputed here), staged in the restored database as the EXPECTED CHECKPOINT,
     and the outreach gate is set to 'unverified' (default-deny). The restored database must refuse all outreach (ffm_outreach_gate_open() = false) or the restore FAILS.
+    A restore REQUIRES --expect-sha256 (the file hash from your audit log / own records): only then is the file's checkpoint staged. With --i-accept-unverified-suppression instead, the
+    checkpoint in the file is IGNORED and the gate stays closed. A schema with no outreach gate at all FAILS the restore. A provider restore (PITR / pg_dump) does NOT go through this tool:
+    the owner must run ffm_close_outreach_gate immediately after it (BACKUP_RECOVERY.md).
     Nothing is verified automatically: the owner re-supplies the suppression key, imports/restores the list and runs the owner-only verification (printed at the end).
 Limits are printed in the report ("not_restored"): cron jobs, default privileges for FUTURE objects, extensions the scratch server lacks, anything outside public."""
 import argparse, base64, collections, datetime as dt, hashlib, io, json, os, re, sys, tarfile, urllib.error, urllib.parse, urllib.request
@@ -269,18 +272,23 @@ GATE_STEPS = [
 ]
 
 
-def apply_gate(cur, rep: dict, sup: dict | None) -> bool:
+def apply_gate(cur, rep: dict, sup: dict | None, checkpoint_trusted: bool = True) -> bool:
     """Put the RESTORED database into 'suppression unverified': default-deny until the owner verifies. Runs as the restoring superuser (this is the one place that may write the
     gate directly: it only ever CLOSES it). Returns False when the restored database would still allow outreach (the restore then FAILS)."""
     g = {"state": None, "open": None, "checkpoint_staged": False}
     cur.execute("select to_regclass('public.ffm_outreach_gate') is not null and to_regclass('public.ffm_suppression_expected') is not null")
     if not cur.fetchone()[0]:
-        g.update(state="NOT PRESENT", note="this backup's schema has no outreach gate (it predates migration 20261121_suppression_integrity_v1). Apply that migration BEFORE any outreach; until then nothing here is gated.")
+        g.update(state="NOT PRESENT", note="this backup's schema has no outreach gate (it predates migration 20261121_suppression_integrity_v1). Nothing in the restored database is gated, so the restore FAILS: apply that migration BEFORE any outreach.")
         rep["outreach_gate"] = g
         rep["next_steps"] = ["APPLY migrations 20261121_consent_evidence_v1 and 20261121_suppression_integrity_v1 to this database, then follow the steps below."] + GATE_STEPS
-        return True
+        return False      # review finding 5: a restore that leaves outreach UNGATED must never report PASS
     cur.execute("delete from public.ffm_suppression_expected")
     reason = "restored from backup: suppression list NOT verified (default-deny until the owner verifies)"
+    if sup and not checkpoint_trusted:
+        # the file was not matched to an independently recorded hash (--expect-sha256): its checkpoint is only as trustworthy as the file, and verifying a live list against a checkpoint
+        # that came from the same untrusted file proves nothing. So NO checkpoint is staged; the gate stays closed and the owner stages one from an independent source.
+        g["checkpoint_ignored"] = "the file's suppression checkpoint was NOT staged (no --expect-sha256 was given, so the file is unverified)"
+        sup = None
     if sup:
         for i in range(0, len(sup["macs"]), 500):
             cur.executemany("insert into public.ffm_suppression_expected (kind, mac) values (%s, %s)", [(k, m) for k, m in sup["macs"][i:i + 500]])
@@ -295,8 +303,8 @@ def apply_gate(cur, rep: dict, sup: dict | None) -> bool:
         cur.execute("""insert into public.ffm_outreach_gate (id, state, reason) values (1, 'unverified', %s)
                        on conflict (id) do update set state = 'unverified', reason = excluded.reason, expected_count = null, expected_hash = null, expected_key_check = null,
                          expected_staged_at = null, verified_raw_count = null, verified_at = null, verified_by = null, updated_at = clock_timestamp()""",
-                    (reason + "; the backup carries NO suppression checkpoint",))
-        g["note"] = "no checkpoint in this backup (the owner had not set the suppression key, or the backup predates the export): verification is impossible from this file"
+                    (reason + "; no trusted suppression checkpoint was staged from this backup",))
+        g["note"] = g.get("checkpoint_ignored") or "no checkpoint in this backup (the owner had not set the suppression key, or the backup predates the export): verification is impossible from this file"
     cur.execute("select public.ffm_outreach_gate_open()")
     g["open"] = bool(cur.fetchone()[0])
     cur.execute("select state from public.ffm_outreach_gate where id = 1")
@@ -696,9 +704,14 @@ def main():
     ap.add_argument("--file"); ap.add_argument("--sidecar"); ap.add_argument("--b2-latest", action="store_true"); ap.add_argument("--b2-name")
     ap.add_argument("--list", action="store_true"); ap.add_argument("--target"); ap.add_argument("--wipe", action="store_true")
     ap.add_argument("--verify-only", action="store_true"); ap.add_argument("--expect-sha256"); ap.add_argument("--report")
+    ap.add_argument("--i-accept-unverified-suppression", action="store_true",
+                    help="restore WITHOUT --expect-sha256: the suppression checkpoint in the file is ignored (not staged) and the outreach gate stays closed; the owner must stage a checkpoint from an independent source")
     args = ap.parse_args()
     if not (args.file or args.b2_latest or args.b2_name or args.list):
         ap.error("give --file, --b2-latest, --b2-name or --list")
+    if not (args.list or args.verify_only or args.expect_sha256 or args.i_accept_unverified_suppression):
+        ap.error("a restore needs --expect-sha256 <the file hash recorded in the audit log / your own records> (so the suppression checkpoint inside the file can be trusted), "
+                 "or --i-accept-unverified-suppression (the checkpoint is then ignored and the outreach gate stays closed)")
     rep = {"started_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "steps": {}}
     code = 0
     try:
@@ -732,7 +745,7 @@ def main():
             rep["steps"]["constraints_indexes_triggers_views_policies_grants"] = "PASS" if not rep["views_failed"] else "FAIL"
             rep.setdefault("not_restored", {}).update(dict(skipped))
             conn.commit()
-            gate_ok = apply_gate(cur, rep, sup); conn.commit()        # the gate is part of the restored state: it PERSISTS (closed), unlike the smoke tests
+            gate_ok = apply_gate(cur, rep, sup, checkpoint_trusted=bool(args.expect_sha256)); conn.commit()        # the gate is part of the restored state: it PERSISTS (closed), unlike the smoke tests
             checks = [("every_row_identical", verify_rows(cur, data, rep)), ("schema_identical", verify_schema(cur, schema, rep)), ("smoke_tests", smoke(cur, rep)),
                       ("outreach_gate_closed_default_deny", gate_ok)]
             conn.rollback()      # smoke tests changed nothing that persists

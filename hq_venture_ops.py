@@ -232,6 +232,19 @@ def dnc_problem(outbox_id: str) -> str | None:
             return "Cannot approve: could not check the do-not-contact list. Try again."
     except Exception:
         return "Cannot approve: could not check the do-not-contact list. Try again."
+    # the database's own decision (PR #15 review): outreach gate, lead flag, plaintext AND hash-only suppressions, phone numbers for text/call. Fail closed on ANY error,
+    # including a missing function: an approval the database would refuse anyway must not be offered, and an unanswerable question is a no.
+    try:
+        got = _rpc("outreach_send_allowed", {"p_outbox": outbox_id})
+    except Exception:
+        return "Cannot approve: could not check the outreach gate and suppression lists. Try again."
+    if isinstance(got, list) and len(got) == 1:
+        got = got[0]
+    if not (isinstance(got, dict) and got.get("allowed") is True):
+        why = str(got.get("reason")) if isinstance(got, dict) else "unexpected answer"
+        if why == "suppression_unverified":
+            return "Cannot approve: the suppression list has not been verified, so the outreach gate is closed (after a restore or on a fresh database). The owner must verify it first."
+        return f"Cannot approve: the database refuses outreach to this recipient ({why[:40]}). The draft stays unsent."
     return None
 
 

@@ -75,7 +75,9 @@ begin
 
   -- approval messages whose referenced row is gone or no longer pending are hidden (random ref_id, an outbox row already approved, an account already created)
   insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-GHOST-OUTBOX missing row', true, 'outbox', gen_random_uuid());
+  set local session_replication_role = replica;   -- a legacy approved draft with no address (the outbox guard now refuses to create one: an approved row is delivery-bound)
   insert into outbox (channel, body, status, created_at) values ('email', 'INBOX-OB approved already', 'approved', now() - interval '1 day') returning id into ob_done;
+  set local session_replication_role = origin;
   insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-GHOST-OUTBOX2 not pending', true, 'outbox', ob_done);
   insert into outbox (channel, body, status) values ('email', 'INBOX-OB draft', 'draft') returning id into ob_live;
   insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id, created_at) values ('jarvis', 'proposal', 'INBOX-LIVE-OUTBOX pending draft', true, 'outbox', ob_live, now() - interval '10 minutes');

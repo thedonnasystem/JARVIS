@@ -99,7 +99,27 @@ class SuppressionPayload(unittest.TestCase):
         rep = {}
         self.assertFalse(R.apply_gate(self.Cur(opened=True), rep, None))        # would allow outreach: the restore must FAIL
 
-    def test_old_schema_without_a_gate_is_loud(self):
+    def test_old_schema_without_a_gate_FAILS_the_restore(self):
+        """PR #15 review finding 5: a restored schema with no outreach gate left outreach ungated yet reported PASS. It must FAIL."""
         rep = {}
-        self.assertTrue(R.apply_gate(self.Cur(tables=False), rep, self.payload()))
-        self.assertEqual(rep["outreach_gate"]["state"], "NOT PRESENT"); self.assertIn("APPLY", rep["next_steps"][0])
+        self.assertFalse(R.apply_gate(self.Cur(tables=False), rep, self.payload()))
+        self.assertEqual(rep["outreach_gate"]["state"], "NOT PRESENT"); self.assertIn("APPLY", rep["next_steps"][0]); self.assertIn("FAILS", rep["outreach_gate"]["note"])
+        rep = {}
+        self.assertFalse(R.apply_gate(self.Cur(tables=False), rep, None))
+
+    def test_untrusted_checkpoint_is_not_staged(self):
+        """Finding 6: without an independently recorded file hash the checkpoint in the file is ignored (verifying against it would be a tautology); the gate stays closed."""
+        rep, cur = {}, self.Cur()
+        self.assertTrue(R.apply_gate(cur, rep, self.payload(), checkpoint_trusted=False))
+        g = rep["outreach_gate"]
+        self.assertFalse(g["checkpoint_staged"]); self.assertIn("NOT staged", g["checkpoint_ignored"]); self.assertEqual((g["state"], g["open"]), ("unverified", False))
+        self.assertFalse(any("insert into public.ffm_suppression_expected" in q for q in cur.sql))
+
+    def test_a_restore_requires_expect_sha256_or_the_explicit_flag(self):
+        import subprocess, sys, os
+        here = os.path.dirname(os.path.abspath(__file__))
+        for args in (["--file", "x.enc", "--wipe"], ["--b2-latest"]):
+            r = subprocess.run([sys.executable, "-I", os.path.join(here, "ops", "restore_backup.py")] + args, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2); self.assertIn("--expect-sha256", r.stderr); self.assertIn("--i-accept-unverified-suppression", r.stderr)
+        r = subprocess.run([sys.executable, "-I", os.path.join(here, "ops", "restore_backup.py"), "--file", "x.enc", "--i-accept-unverified-suppression"], capture_output=True, text=True, env={**os.environ, "BACKUP_KEY": ""})
+        self.assertNotIn("a restore needs --expect-sha256", r.stderr)      # the flag is accepted (it then fails later for its own reasons: no such file / no key)

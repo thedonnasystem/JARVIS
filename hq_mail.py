@@ -127,18 +127,31 @@ def normalize_addr(p) -> str | None:
 
 
 def suppressed(address) -> bool:
-    """True when the address is on the do-not-contact list, or when that cannot be checked (fail closed: never send on doubt)."""
+    """True when the address is on the do-not-contact list (plaintext OR hash-only entries, via the database's is_suppressed), or when that cannot be checked
+    (fail closed: ANY error, a missing function or an unexpected answer blocks the send)."""
     if not (address or "").strip():
         return False
     a = normalize_addr(address)
     if a is None:
         return True  # not one clean address (a list, or unparseable): never send on doubt
     try:
-        return bool(_get(f"contact_suppressions?address=eq.{_q(a)}&select=address&limit=1"))
-    except urllib.error.HTTPError as e:
-        return e.code != 404  # table absent = migration not applied, nothing suppressed yet; any other failure blocks
+        got = hq._request("POST", "/rest/v1/rpc/is_suppressed", {"p_address": a}, timeout=10)
     except Exception:
         return True
+    return got is not False   # only an explicit JSON false is "not suppressed"
+
+
+def send_allowed(outbox_id) -> bool:
+    """The ONE question every send path asks, before it claims a row and again immediately before the provider call: public.outreach_send_allowed(outbox_id).
+    It covers the outreach gate (default-deny), the lead flag, the plaintext AND hash-only suppression lists, and phone numbers for the text/call channels.
+    Fails closed: an error, a timeout, a missing function (migration not applied) or any answer other than {"allowed": true} is a no."""
+    try:
+        got = hq._request("POST", "/rest/v1/rpc/outreach_send_allowed", {"p_outbox": str(outbox_id)}, timeout=10)
+    except Exception:
+        return False
+    if isinstance(got, list) and len(got) == 1:
+        got = got[0]
+    return isinstance(got, dict) and got.get("allowed") is True
 
 
 def _post(row: dict) -> bool:
@@ -172,7 +185,10 @@ def _mark_sent(row: dict) -> None:
 
 def _claim(row: dict) -> bool:
     """At-most-once: stamp sent_at on the still-approved, unsent row BEFORE posting. Only the caller that gets the row back may post, so two
-    overlapping engines (a deploy overlap) or a retry after a failed bookkeeping write can never send the same email twice. Any error: no claim."""
+    overlapping engines (a deploy overlap) or a retry after a failed bookkeeping write can never send the same email twice. Any error: no claim.
+    The outreach decision is asked FIRST (send_allowed): with the gate closed or the recipient suppressed nothing is claimed (the database trigger refuses the claim too)."""
+    if not send_allowed(row.get("id")):
+        return False
     try:
         got = hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(row['id'])}&status=eq.approved&sent_at=is.null",
                           {"sent_at": datetime.now(timezone.utc).isoformat()}, prefer="return=representation")
@@ -228,12 +244,14 @@ def deliver_approved(limit: int = 5) -> dict:
                 out["skipped"] += 1; continue
             posted = False
             try:
-                posted = _post(row)
+                # the gate or a suppression may have changed since the checks above (and since the claim): ask again IMMEDIATELY before the provider call. Fails closed.
+                if send_allowed(row.get("id")):
+                    posted = _post(row)
             finally:
                 if not posted:
                     _release(row)
             if not posted:
-                out["failed"] += 1; continue
+                out["failed"] += 1; continue   # (includes "the second check said no": the claim was released above and nothing was posted)
             try:
                 _mark_sent(row); out["sent"] += 1
             except Exception as e:  # the email is out: never retry it, tell the owner's audit trail instead

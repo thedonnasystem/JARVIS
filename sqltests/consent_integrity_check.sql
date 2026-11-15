@@ -44,9 +44,9 @@ end $$;
 
 do $$
 declare
-  K1 constant text := 'capture-key-0123456789abcdef0123456789abcdef0123456789abcdef';
-  K2 constant text := 'suppr-key-fedcba9876543210fedcba9876543210fedcba9876543210';
-  K3 constant text := 'other-key-aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00';
+  K1 constant text := encode(sha256(convert_to('fixture-capture-key', 'UTF8')), 'hex');   -- derived at run time: no key-shaped literal in the repository
+  K2 constant text := encode(sha256(convert_to('fixture-suppression-key', 'UTF8')), 'hex');
+  K3 constant text := encode(sha256(convert_to('fixture-other-key', 'UTF8')), 'hex');
   a uuid; b uuid; l1 uuid; l2 uuid; l3 uuid; l4 uuid; l5 uuid; l6 uuid; l7 uuid; lb uuid; cap uuid; cid uuid; r text; j jsonb; e jsonb; e2 jsonb; n int; i int; t text; f text; x record;
   at timestamptz := '2026-11-01 12:00:00+00'; seal text; canon text; m jsonb; o uuid;
 begin
@@ -83,7 +83,7 @@ begin
   if exists (select 1 from pg_proc where pronamespace = 'public'::regnamespace and proname in ('ffm_secret', 'ffm_get_key', 'get_secret')) then raise exception 'G5 a function that hands out a key exists'; end if;
   for x in select p.oid::regprocedure::text as sig, p.oid, pg_get_functiondef(p.oid) as def from pg_proc p where p.pronamespace = 'public'::regnamespace
               and p.proname in ('ffm_hmac_sha256', 'normalize_phone', 'ffm_append_only', 'ffm_capture_immutable', 'ffm_contact_mac', 'ffm_set_key', 'ffm_key_fingerprint', 'ffm_register_wording',
-                                'ffm_capture_canonical', 'ffm_ingest_capture', 'ffm_register_capture_owner', 'ffm_record_consent', 'ffm_gate_no_delete', 'ffm_suppression_mac', 'is_suppressed',
+                                'ffm_capture_canonical', 'ffm_ingest_capture', 'ffm_register_capture_owner', 'ffm_record_consent', 'ffm_gate_no_delete', 'ffm_lp', 'ffm_key_problem', 'ffm_sup_message', 'outreach_send_allowed', 'outreach_recipient_problem', 'is_suppressed',
                                 'ffm_is_phone_suppressed', 'ffm_outreach_gate_open', 'ffm_outreach_gate_status', 'ffm_close_outreach_gate', 'ffm_suppression_set', 'ffm_suppression_digest',
                                 'backup_suppression_export', 'ffm_stage_suppression_checkpoint', 'ffm_import_suppression_hashes', 'ffm_verify_suppression', 'ffm_contact_status', 'ffm_can_contact',
                                 'ffm_withdraw_consent', 'ffm_erase_lead', 'outbox_dnc_guard') loop
@@ -147,18 +147,18 @@ begin
   perform pg_temp.expect_fail($q$select public.ffm_set_key('capture_signing_key', 'short', 'owner')$q$, 'key refused%');
   perform pg_temp.expect_fail($q$select public.ffm_set_key('capture_signing_key', repeat('a', 40), 'owner')$q$, 'key refused%');
   perform pg_temp.expect_fail($q$select public.ffm_set_key('other_key', 'capture-key-0123456789abcdef0123456789abcdef', 'owner')$q$, 'unknown key name%');
-  if public.ffm_set_key('capture_signing_key', K1, 'owner') <> '605f5ca79b545b565b02a8faf2f3c19a95d7abb59ffed4702992a4f0ffc83f93' then raise exception 'E5b key fingerprint differs from the Python value'; end if;
+  if public.ffm_set_key('capture_signing_key', K1, 'owner') <> '463f3361eb18a7c3ba64af73e7d03c4032bdd9ab4a5f58579212a34baa147b1d' then raise exception 'E5b key fingerprint differs from the Python value'; end if;
   perform pg_temp.expect_fail(format($q$select public.ffm_set_key('capture_signing_key', %L, 'owner')$q$, K3), 'key refused: capture_signing_key is already set%');
   perform pg_temp.as_owner(false);
   if exists (select 1 from public.audit_log where action = 'ffm_key_set' and detail::text like '%' || substr(K1, 1, 20) || '%') then raise exception 'E5c key value in the audit log'; end if;
   perform pg_temp.expect_fail($q$update public.ffm_secrets set value = repeat('z', 40)$q$, 'This record set is append-only%');
   perform pg_temp.expect_fail($q$delete from public.ffm_secrets where name = 'capture_signing_key'$q$, 'This record set is append-only%');
-  if public.ffm_key_fingerprint('capture_signing_key') <> '605f5ca79b545b565b02a8faf2f3c19a95d7abb59ffed4702992a4f0ffc83f93' then raise exception 'E5d fingerprint'; end if;
+  if public.ffm_key_fingerprint('capture_signing_key') <> '463f3361eb18a7c3ba64af73e7d03c4032bdd9ab4a5f58579212a34baa147b1d' then raise exception 'E5d fingerprint'; end if;
   seal := public.ffm_hmac_sha256(K1, canon);
   -- (the Python seal in this constant was computed for workspace 11111111-2222-3333-4444-555555555555; here the workspace differs, so also compare the canonical text shape)
-  if canon !~ '^ffm-capture-v1\|[0-9a-f-]{36}\|form-abc-001\|email\|v1\|b{64}\|1793534400\|Alice@Example.com\|a{64}$' then raise exception 'E6b canonical text %', canon; end if;
+  if canon !~ '^cap\|v1\|36:[0-9a-f-]{36}12:form-abc-0015:email2:v164:b{64}10:179353440017:Alice@Example.com64:a{64}$' then raise exception 'E6b canonical text %', canon; end if;
   canon := public.ffm_capture_canonical('11111111-2222-3333-4444-555555555555', 'form-abc-001', 'email', 'v1', repeat('b', 64), at, 'Alice@Example.com', repeat('a', 64));
-  if public.ffm_hmac_sha256(K1, canon) <> '74638c180cc3bd0a142e81670dd5797d114575aaaf7510a6e06c7027ed1de48c' then raise exception 'E6c SQL seal differs from the Python seal'; end if;
+  if public.ffm_hmac_sha256(K1, canon) <> 'e448ddc5532c39f7dc2ee7714767002c7ba4fc31d175e9df71aed4de32093dec' then raise exception 'E6c SQL seal differs from the Python seal'; end if;
   seal := public.ffm_hmac_sha256(K1, public.ffm_capture_canonical(a, 'form-abc-001', 'email', 'v1', repeat('b', 64), at, 'Alice@Example.com', repeat('a', 64)));
   -- forged / altered
   if pg_temp.svc(format($q$select public.ffm_ingest_capture(%L,'form-abc-001','email','v1',%L,%L,'Alice@Example.com',%L,%L)::text$q$, a, repeat('b', 64), at, repeat('a', 64), repeat('0', 64))) not like 'ERR:capture refused: the seal does not match%' then raise exception 'E7 forged seal accepted'; end if;
@@ -180,7 +180,7 @@ begin
   r := pg_temp.svc(format($q$select public.ffm_ingest_capture(%L,'form-abc-001','email','v1',%L,%L,'Alice@Example.com',%L,%L)::text$q$, a, repeat('b', 64), at, repeat('a', 64), seal));
   if r not like 'OK:%' then raise exception 'E9 genuine capture refused: %', r; end if;
   cap := substr(r, 4)::uuid;
-  if (select contact_mac from public.ffm_consent_captures where id = cap) <> 'f69d713627cf2e66dfb03ced3df76067c7a85daba98aeca2283f1cae9f1eef48' then raise exception 'E9b contact mac differs from the Python value'; end if;
+  if (select contact_mac from public.ffm_consent_captures where id = cap) <> 'cc176de0c0adc3013d93060a5d24064136f5dae6fd10be28b6c63aa773d768a0' then raise exception 'E9b contact mac differs from the Python value'; end if;
   if exists (select 1 from public.ffm_consent_captures where id = cap and (to_jsonb(ffm_consent_captures)::text ~* 'alice|example\.com')) then raise exception 'E9c the contact itself is stored in the capture'; end if;
   if pg_temp.svc(format($q$select public.ffm_ingest_capture(%L,'form-abc-001','email','v1',%L,%L,'Alice@Example.com',%L,%L)::text$q$, a, repeat('b', 64), at, repeat('a', 64), seal)) not like 'ERR:duplicate key%' then raise exception 'E9d a capture ref registered twice'; end if;
   -- E10 matching consent is recorded express and honoured (the bot cites the capture ref; it matters that the capture matches channel, wording and contact)
@@ -322,8 +322,8 @@ begin
   if (e ->> 'included')::boolean is not true or (e ->> 'count')::int < 4 then raise exception 'G20 export %', left(e::text, 200); end if;
   if e::text ~* '@|example|\+1|613|alice|dan' then raise exception 'G21 plaintext in the suppression export'; end if;
   if (e ->> 'count')::int <> jsonb_array_length(e -> 'macs') or (e ->> 'hash') <> encode(sha256(convert_to((select string_agg((mx ->> 0) || ':' || (mx ->> 1), E'\n' order by ((mx ->> 0) || ':' || (mx ->> 1)) collate "C") from jsonb_array_elements(e -> 'macs') mx), 'UTF8')), 'hex') then raise exception 'G22 export count/hash'; end if;
-  if (e -> 'macs') @> jsonb_build_array(jsonb_build_array('email', public.ffm_hmac_sha256(K2, 'email:dan@example.com'))) is not true or (e -> 'macs') @> jsonb_build_array(jsonb_build_array('phone', public.ffm_hmac_sha256(K2, 'phone:+16135550101'))) is not true then raise exception 'G23 expected keyed hashes missing'; end if;
-  if (e ->> 'key_check') <> public.ffm_hmac_sha256(K2, 'fendezy-key-check-v1:suppression_hmac_key') then raise exception 'G24 key check'; end if;
+  if (e -> 'macs') @> jsonb_build_array(jsonb_build_array('email', public.ffm_hmac_sha256(K2, public.ffm_sup_message('email', 'dan@example.com')))) is not true or (e -> 'macs') @> jsonb_build_array(jsonb_build_array('phone', public.ffm_hmac_sha256(K2, public.ffm_sup_message('phone', '+16135550101')))) is not true then raise exception 'G23 expected keyed hashes missing'; end if;
+  if (e ->> 'key_check') <> public.ffm_hmac_sha256(K2, 'key|v1|' || public.ffm_lp('suppression_hmac_key')) then raise exception 'G24 key check'; end if;
   -- G25 the bot may fetch the export (needed by the backup job) but nothing that would let it open the gate
   if pg_temp.svc($q$select (public.backup_suppression_export() ->> 'count')$q$) not like 'OK:%' then raise exception 'G25 bot cannot export'; end if;
   foreach t in array array['select public.ffm_verify_suppression(''bot'')::text', 'select public.ffm_import_suppression_hashes()::text', 'select public.ffm_stage_suppression_checkpoint(''{}''::jsonb)::text'] loop

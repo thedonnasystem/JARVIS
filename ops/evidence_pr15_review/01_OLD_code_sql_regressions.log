@@ -1,0 +1,11 @@
+psql:sqltests/consent_review_fixes_check.sql:136: ERROR:  F1b [identical] service_role obtained a seal from an HMAC oracle (8365a77f) and forged capture forged:ref1 (captures=1)
+psql:sqltests/consent_review_fixes_check.sql:204: ERROR:  F2b a claim (sent_at) succeeded while the gate was closed: OK:e521a3c1-45d4-4ed9-81a7-0f5bc6327c62
+psql:sqltests/consent_review_fixes_check.sql:221: ERROR:  F3a service_role can insert public.app_owners
+psql:sqltests/consent_review_fixes_check.sql:266: ERROR:  F4a normalize_phone(+44 (0)20 7946 0958) = +4402079460958, expected +442079460958
+psql:sqltests/consent_review_fixes_check.sql:293: ERROR:  function public.ffm_key_problem(text, text) does not exist
+LINE 1: got := coalesce(public.ffm_key_problem(v, o), 'ok')
+                        ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+QUERY:  got := coalesce(public.ffm_key_problem(v, o), 'ok')
+consent_review_fixes_check: done
+F1a (earlier run on the same old DB): ERROR: F1a ffm_set_key accepted the same value for capture_signing_key and suppression_hmac_key

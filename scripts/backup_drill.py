@@ -6,7 +6,7 @@
   restore_backup.py           = the real restore tool, run as a separate process, downloading with a READ-only key into drill_restore.
 Then the source and the restored database are compared directly, and negative controls prove the checks can fail.
 
-Usage: REPLICA_URL=postgresql://postgres:pw@localhost:5432/drill_src  RESTORE_URL=postgresql://postgres:pw@localhost:5432/drill_restore  python3 scripts/backup_drill.py
+Usage: REPLICA_URL=postgresql://postgres:pw@localhost:5432/drill_src_$$  RESTORE_URL=postgresql://postgres:pw@localhost:5432/drill_restore_$$  python3 scripts/backup_drill.py
 What this proves: our code paths and the restore procedure. What it cannot prove: Backblaze's real behaviour, PostgREST's real JSON, production data volumes."""
 import hashlib, json, os, subprocess, sys, tempfile
 from unittest import mock
@@ -22,8 +22,10 @@ import hq_consent
 
 SRC = os.environ["REPLICA_URL"]
 DST = os.environ["RESTORE_URL"]
+DST_NAME = DST.rsplit("/", 1)[-1].split("?")[0]   # per-process name (scripts/backup_drill.sh suffixes it), never a fixed "drill_restore"
 results = []
-DRILL_SUPP_KEY = "drill-suppression-key-0123456789abcdef0123456789abcdef"   # throwaway, scratch DBs only; deliberately NOT the BACKUP_KEY
+DRILL_SUPP_KEY = hashlib.sha256(b"drill-suppression-key").hexdigest()   # throwaway, scratch DBs only; deliberately NOT the BACKUP_KEY; derived so no key-shaped literal sits in the repository
+DRILL_WRONG_KEY = hashlib.sha256(b"drill-wrong-key").hexdigest()
 DRILL_OPTOUTS = ['optout1@example.com', 'optout2@example.com', 'optout3@example.com']
 DRILL_OPTOUT_PHONES = ['+16135550911', '+16135550912']
 
@@ -167,7 +169,7 @@ def consent_checks(enc, key, rep, renv, work, out_sha):
     owner(True)
     j = sql("select public.ffm_verify_suppression('owner')")
     check("C9 verification without the suppression key is refused and the bot cannot run it", bot_refused and j["verified"] is False and "key is not set" in j["reason"], f"bot_refused={bot_refused} {j}")
-    sql("select public.ffm_set_key('suppression_hmac_key', %s, 'owner')", ("wrong-key-" + "0123456789abcdef" * 3,))
+    sql("select public.ffm_set_key('suppression_hmac_key', %s, 'owner')", (DRILL_WRONG_KEY,))
     j = sql("select public.ffm_verify_suppression('owner')")
     check("C10 a WRONG suppression key is detected (does not match the checkpoint's key fingerprint)", j["verified"] is False and "differs" in j["reason"], str(j))
     silent("delete from public.ffm_secrets")
@@ -231,7 +233,9 @@ def consent_checks(enc, key, rep, renv, work, out_sha):
     check("T4 a self-consistent but SMALLER list is caught by the expected file hash taken from the audit log (--expect-sha256): the file is not the one the bot wrote", code != 0 and "checksum mismatch" in r4.get("error", ""), r4.get("error", "")[:120])
     code, r5 = tamper("smaller2", smaller_consistent)
     g5 = r5.get("outreach_gate") or {}
-    check("T5 RESIDUAL RISK, stated: without --expect-sha256 a self-consistent smaller list restores, but the gate is still closed and the checkpoint is the smaller one (4)", code == 0 and g5.get("open") is False and (g5.get("checkpoint") or {}).get("count") == 4, str(g5)[:160])
+    check("T5 without --expect-sha256 (explicit --i-accept-unverified-suppression) a self-consistent smaller list restores, but its checkpoint is NOT staged: the gate is closed with no checkpoint and says so", code == 0 and g5.get("open") is False and g5.get("checkpoint_staged") is False and "NOT staged" in str(g5.get("checkpoint_ignored", "")), str(g5)[:200])
+    code, r5b = restore_cmd(["--file", os.path.join(work, "tamper_smaller2.enc"), "--wipe", "--no-default-flags"], renv, os.path.join(work, "tamper_noflag.json"))
+    check("T5b a restore with neither --expect-sha256 nor --i-accept-unverified-suppression is refused before anything is touched", code == 2 and "--expect-sha256" in (r5b.get("error", "") or ""), (r5b.get("error", "") or "")[-140:])
     def no_suppression(m):
         del m["suppression/hashes.json"]; mm = json.loads(m["manifest.json"]); mm["suppression"] = {"included": False, "reason": "the owner has not set the suppression key, so no keyed hashes can be exported"}
         m["manifest.json"] = json.dumps(mm, separators=(",", ":"), sort_keys=True).encode()
@@ -260,6 +264,9 @@ def counts(dsn, tables):
 
 def restore_cmd(extra, env_extra, report):
     env = {**os.environ, **env_extra}
+    if "--expect-sha256" not in extra and "--verify-only" not in extra and "--i-accept-unverified-suppression" not in extra and "--no-default-flags" not in extra:
+        extra = extra + ["--i-accept-unverified-suppression"]    # a restore now REQUIRES one of the two (review finding 6); the cases that test other things take the explicit acceptance
+    extra = [x for x in extra if x != "--no-default-flags"]
     p = subprocess.run([sys.executable, os.path.join(ROOT, "ops", "restore_backup.py"), "--report", report] + extra, env=env, capture_output=True, text=True, timeout=600)
     try:
         rep = json.load(open(report))
@@ -459,11 +466,11 @@ def main():
 
         # ---- restore-guard bypass attempts (found by the independent review): none may reach a database
         base = DST.rsplit("/", 1)[0]
-        code, g1 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": "dbname=drill_restore host=localhost hostaddr=10.1.2.3 user=postgres"}, os.path.join(work, "g1.json"))
+        code, g1 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": f"dbname={DST_NAME} host=localhost hostaddr=10.1.2.3 user=postgres"}, os.path.join(work, "g1.json"))
         check("G1 hostaddr in the connection string is refused", code == 2 and "hostaddr" in g1.get("error", ""), g1.get("error", "")[:90])
-        code, g2 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": "dbname=drill_restore user=postgres", "PGHOST": "db.ihxzvpwbqydqtblvazbq.supabase.co"}, os.path.join(work, "g2.json"))
+        code, g2 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": f"dbname={DST_NAME} user=postgres", "PGHOST": "db.ihxzvpwbqydqtblvazbq.supabase.co"}, os.path.join(work, "g2.json"))
         check("G2 empty host + PGHOST environment redirect is refused", code == 2 and "explicit local host" in g2.get("error", ""), g2.get("error", "")[:90])
-        code, g3 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": "dbname=drill_restore host=localhost service=prod user=postgres"}, os.path.join(work, "g3.json"))
+        code, g3 = restore_cmd(["--b2-latest", "--wipe"], {**renv, "RESTORE_DB_URL": f"dbname={DST_NAME} host=localhost service=prod user=postgres"}, os.path.join(work, "g3.json"))
         check("G3 service= in the connection string is refused", code == 2 and "service" in g3.get("error", ""), g3.get("error", "")[:90])
         adm = psycopg2.connect(base + "/postgres"); adm.autocommit = True
         with adm.cursor() as ac:

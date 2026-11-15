@@ -10,8 +10,8 @@ import unittest
 import hq_consent as C
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-K1 = "capture-key-0123456789abcdef0123456789abcdef0123456789abcdef"
-K2 = "suppr-key-fedcba9876543210fedcba9876543210fedcba9876543210"
+K1 = hashlib.sha256(b"fixture-capture-key").hexdigest()       # derived, never a key-shaped literal in the repository (the SQL test derives the same values)
+K2 = hashlib.sha256(b"fixture-suppression-key").hexdigest()
 
 
 def phone_cases():
@@ -27,7 +27,7 @@ def phone_cases():
 class Phone(unittest.TestCase):
     def test_shared_table_with_the_sql_test(self):
         cases = phone_cases()
-        self.assertGreater(len(cases), 40)
+        self.assertGreater(len(cases), 80)
         for a, want in cases:
             self.assertEqual(C.normalize_phone(a), want, repr(a))
 
@@ -35,6 +35,19 @@ class Phone(unittest.TestCase):
         for a, _ in phone_cases():
             n = C.normalize_phone(a)
             self.assertEqual(C.normalize_phone(n), n, repr(a))
+
+    def test_trunk_prefix_variants_collapse(self):
+        """PR #15 review finding 4: '(0)' / a 0 after the country code is a trunk prefix in these countries, so the variants are ONE number."""
+        groups = [["+44 (0)20 7946 0958", "+44 20 7946 0958", "+44 020 7946 0958", "0044 (0)20 7946 0958"],
+                  ["+20 010 1234 5678", "+20 10 1234 5678", "+20 (0)10 1234 5678"],
+                  ["+33 (0)1 23 45 67 89", "+33 1 23 45 67 89", "+33 01 23 45 67 89"],
+                  ["+49 (0)30 12345678", "+49 30 12345678"], ["+61 (0)4 1234 5678", "+61 0412 345 678", "+61 412 345 678"],
+                  ["+971 (0)50 123 4567", "+971 50 123 4567"], ["+966 (0)50 123 4567", "+966 50 123 4567"], ["+212 (0)6 12 34 56 78", "+212 6 12 34 56 78"],
+                  ["+962 (0)7 9012 3456", "+962 7 9012 3456"], ["+961 (0)3 123 456", "+961 3 123 456"], ["+90 (0)212 345 67 89", "+90 212 345 67 89"]]
+        for g in groups:
+            got = {C.normalize_phone(x) for x in g}
+            self.assertEqual(len(got), 1, g); self.assertIsNotNone(next(iter(got)), g)
+        self.assertEqual(C.normalize_phone("+39 06 1234 5678"), "+390612345678")     # Italy keeps its 0
 
     def test_invisible_and_none(self):
         self.assertIsNone(C.normalize_phone(None))
@@ -45,7 +58,8 @@ class Phone(unittest.TestCase):
         self.assertEqual({C.normalize_phone(f) for f in forms}, {"+16135550101"})
 
     def test_ambiguous_or_unusable_is_none(self):
-        for bad in ["555-0101", "1-800-FLOWERS", "44 20 7946 0958", "613-555-0101, 613-555-0102", "+1 (013) 555-0101", "call me 613-555-0101", ""]:
+        for bad in ["555-0101", "1-800-FLOWERS", "44 20 7946 0958", "613-555-0101, 613-555-0102", "+1 (013) 555-0101", "call me 613-555-0101", "",
+                    "+39 (0)6 1234 5678", "+34 0612 345 678", "+91 (0)98 1234 5678", "+44 00 20 7946 0958"]:
             self.assertIsNone(C.normalize_phone(bad), bad)
 
 
@@ -60,27 +74,81 @@ class Primitives(unittest.TestCase):
         ws = "11111111-2222-3333-4444-555555555555"
         seal = C.capture_seal(K1, workspace_id=ws, capture_ref="form-abc-001", channel="email", wording_version="v1", wording_sha256="b" * 64,
                               captured_at=at, contact="Alice@Example.com", artifact_sha256="a" * 64)
-        self.assertEqual(seal, "74638c180cc3bd0a142e81670dd5797d114575aaaf7510a6e06c7027ed1de48c")
-        self.assertEqual(C.key_fingerprint(K1, "capture_signing_key"), "605f5ca79b545b565b02a8faf2f3c19a95d7abb59ffed4702992a4f0ffc83f93")
-        self.assertEqual(C.contact_mac(K1, "email", "alice@example.com"), "f69d713627cf2e66dfb03ced3df76067c7a85daba98aeca2283f1cae9f1eef48")
-        self.assertEqual(C.suppression_mac(K2, "email", "alice@example.com"), "c492facef016d7976c5c38aa3f229d20af79f35f107acdf8b9648986e516c448")
+        self.assertEqual(seal, "e448ddc5532c39f7dc2ee7714767002c7ba4fc31d175e9df71aed4de32093dec")
+        self.assertEqual(C.key_fingerprint(K1, "capture_signing_key"), "463f3361eb18a7c3ba64af73e7d03c4032bdd9ab4a5f58579212a34baa147b1d")
+        self.assertEqual(C.contact_mac(K1, "email", "alice@example.com"), "cc176de0c0adc3013d93060a5d24064136f5dae6fd10be28b6c63aa773d768a0")
+        self.assertEqual(C.suppression_mac(K2, "email", "alice@example.com"), "985f80f68e85610bf42950081d00a583be5d9280d69f126dac356d04334a7f18")
 
-    def test_canonical_text_and_separator_guard(self):
+    def test_canonical_text_is_domain_separated_and_length_prefixed(self):
         at = dt.datetime(2026, 11, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
         t = C.capture_canonical("w", "ref-1", "sms", "v1", "B" * 64, at, "+1 613", "A" * 64)
-        self.assertEqual(t, f"ffm-capture-v1|w|ref-1|sms|v1|{'b' * 64}|1793534400|+1 613|{'a' * 64}")   # hashes lower-cased, epoch seconds
-        for bad in ({"capture_ref": "a|b"}, {"contact": "x|y"}, {"wording_version": "v|1"}):
-            args = dict(workspace_id="w", capture_ref="ref-1", channel="sms", wording_version="v1", wording_sha256="b" * 64, captured_at=at, contact="c", artifact_sha256="a" * 64)
-            args.update(bad)
-            with self.assertRaises(ValueError):
-                C.capture_canonical(**args)
+        self.assertEqual(t, f"cap|v1|1:w5:ref-13:sms2:v164:{'b' * 64}10:17935344006:+1 61364:{'a' * 64}")   # hashes lower-cased, epoch seconds, every field length-prefixed
+        # PR #15 review finding 1: a colon or a bar inside capture_ref can no longer be used to re-split the string; the reference charset forbids both
+        args = dict(workspace_id="w", capture_ref="ref-1", channel="sms", wording_version="v1", wording_sha256="b" * 64, captured_at=at, contact="c", artifact_sha256="a" * 64)
+        for bad in ("forged:ref1", "a|b-1", "ab", "-abc", "a b c", ""):
+            with self.assertRaises(ValueError, msg=bad):
+                C.capture_canonical(**{**args, "capture_ref": bad})
+        # fields that may contain anything (contact) still cannot move a boundary
+        a = C.capture_canonical(**{**args, "wording_version": "v1", "contact": "x:1"})
+        b = C.capture_canonical(**{**args, "wording_version": "v1x", "contact": ":1"})
+        self.assertNotEqual(a, b)
+        self.assertNotEqual(C.capture_canonical(**{**args, "capture_ref": "ab-1", "wording_version": "c"}), C.capture_canonical(**{**args, "capture_ref": "ab-", "wording_version": "1c"}))
         with self.assertRaises(ValueError):
             C.capture_canonical("w", "r-1-1", "sms", "v1", "b" * 64, dt.datetime(2026, 1, 1), "c", "a" * 64)   # naive time
+
+    def test_domains_never_collide(self):
+        """One key used for two purposes (the reviewer's attack needed this) still cannot produce a message of the other domain."""
+        k = K1
+        self.assertTrue(C.sup_message("email", "x").startswith("sup|v1|"))
+        self.assertNotEqual(C.suppression_mac(k, "email", "a@b.co"), C.contact_mac(k, "email", "a@b.co"))
+        self.assertNotEqual(C.suppression_mac(k, "email", "a@b.co"), C.key_fingerprint(k, "email"))
+        # the old oracle message: kind || ':' || norm. The attacker chose kind and norm so that it equalled the canonical capture text. Not possible now:
+        at = dt.datetime(2026, 11, 1, 12, tzinfo=dt.timezone.utc)
+        canon = C.capture_canonical("w", "ref-1", "email", "v1", "b" * 64, at, "victim@example.com", "a" * 64)
+        for cut in range(len(canon)):
+            self.assertNotEqual(C.sup_message(canon[:cut], canon[cut:]), canon)
+        self.assertFalse(canon.startswith("sup|v1|"))
+
+    def test_lp(self):
+        self.assertEqual(C.lp("ab"), "2:ab"); self.assertEqual(C.lp("é"), "2:é")   # BYTE length, as octet_length in SQL
+        self.assertEqual(C.lp(""), "0:")
 
     def test_a_different_key_gives_a_different_seal(self):
         at = dt.datetime(2026, 11, 1, tzinfo=dt.timezone.utc)
         kw = dict(workspace_id="w", capture_ref="ref-1", channel="sms", wording_version="v1", wording_sha256="b" * 64, captured_at=at, contact="c", artifact_sha256="a" * 64)
         self.assertNotEqual(C.capture_seal(K1, **kw), C.capture_seal(K2, **kw))
+
+
+def key_cases():
+    out = []
+    with open(os.path.join(HERE, "sqltests", "data", "key_cases.tsv"), encoding="utf-8") as f:
+        for line in f:
+            v, o, want = line.rstrip("\n").split("\t")
+            spec = lambda x: None if x == "\\N" else (hashlib.sha256(x[7:].encode()).hexdigest() if x.startswith("sha256:") else x[4:])
+            out.append((spec(v), spec(o), want))
+    return out
+
+
+class KeyPolicy(unittest.TestCase):
+    def test_shared_table_with_the_sql_test(self):
+        cases = key_cases()
+        self.assertGreater(len(cases), 15)
+        for v, o, want in cases:
+            self.assertEqual(C.key_problem(v, o) or "ok", want, (v[:20], want))
+
+    def test_identical_and_contained_keys_are_refused(self):
+        self.assertEqual(C.key_problem(K1, K1), "related_key")
+        self.assertEqual(C.key_problem("Q" + K1, K1), "related_key")
+        self.assertIsNone(C.key_problem(K1, K2))
+        self.assertEqual(C.key_problem(None), "missing")
+
+    def test_cli_never_prints_the_key(self):
+        import subprocess, sys
+        env = {**os.environ, "CONSENT_KEY_CANDIDATE": "abcdefghijklmnopqrstuvwxyz0123456789"}
+        r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "hq_consent.py"), "check-key"], env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1); self.assertIn("REFUSED", r.stdout); self.assertNotIn("abcdefghij", r.stdout + r.stderr)
+        r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "hq_consent.py"), "check-key"], env={**env, "CONSENT_KEY_CANDIDATE": K1, "CONSENT_KEY_OTHER": K2}, capture_output=True, text=True)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "key OK")); self.assertNotIn(K1, r.stdout + r.stderr)
 
 
 class SuppressionExport(unittest.TestCase):

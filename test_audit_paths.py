@@ -53,9 +53,11 @@ class FakeOutbox:
                     "status": "approved", "sent_at": None, "channel": "email"}
         self.refuse_sent = refuse_sent; self.audit = []
 
-    def request(self, method, path, body=None, prefer=None):
+    def request(self, method, path, body=None, prefer=None, timeout=30):
         if "audit_log" in path:
             self.audit.append(body); return None
+        if path.endswith("/rpc/is_suppressed"): return False                              # the database answers (PR #15 review): not suppressed
+        if path.endswith("/rpc/outreach_send_allowed"): return {"allowed": True, "reason": "ok"}   # gate open, recipient allowed
         if "outbox?id=eq.a1" in path and method == "PATCH":
             if "sent_at=is.null" in path and self.row["sent_at"] is not None:
                 return []
