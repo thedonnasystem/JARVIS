@@ -33,8 +33,8 @@ select n, check_name, actual, expected,
   union all select 9, 'migration ledger: both new names present, lockdown_v1 is the LAST applied (live)',
     case when (select live from env) then (xpath('/row/v/text()', query_to_xml($q$select (select count(*) filter (where name in ('executor_gate_v1','client_workspaces_v1')) from supabase_migrations.schema_migrations)::text || ' / last=' || (select name from supabase_migrations.schema_migrations order by version desc limit 1) as v$q$, false, true, '')))[1]::text
          else 'n/a (scratch)' end, '2 / last=lockdown_v1'
-  union all select 10, 'public function count: 123 live before + 8 = 131 (live; valid only when Sprint 1-2 was already live)',
-    case when (select live from env) then (select count(*)::text from pg_proc where pronamespace = 'public'::regnamespace and prokind = 'f') else 'n/a (scratch)' end, '131'
+  union all select 10, 'public function count: 123 live before + 47 new distinct names = 170 after ALL SIX migrations (live). If only the first two were applied: 131. Re-count BEFORE applying and use before+47',
+    case when (select live from env) then (select count(*)::text from pg_proc where pronamespace = 'public'::regnamespace and prokind = 'f') else 'n/a (scratch)' end, '170'
   union all select 11, 'protected 19 functions: md5 unchanged (live)',
     case when (select live from env) then (select md5(string_agg(p.oid::regprocedure::text || ' ' || md5(pg_get_functiondef(p.oid)), '|' order by p.oid::regprocedure::text)) from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind = 'f' and p.proname in ('authorize_action','outbox_send_policy','enforce_outbox_rules','reserve_spend','settle_spend','release_spend','reserve_llm_budget','settle_llm_call','guard_capital_policy','capital_check','capital_mode','prepare_payment','decide_payment','confirm_payment','mission_guard','enforce_mission_transition','app_set_kill','is_app_owner','estimate_call_cents'))
          else 'n/a (scratch)' end, 'a87bfafa3ead42601588b302c0b56d18'
