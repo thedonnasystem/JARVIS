@@ -38,3 +38,12 @@ Approve creating it after A3. It spends AI budget (cap $10 hard max, default far
 1. Run `ops/preflight_live.sql`, `ops/verify_live.sql`, `ops/preflight_sprint12.sql` in the Supabase SQL editor and send me the result tables (no secrets in them), or reconnect the Supabase connector.
 2. Say "approve A1-A3" (or each separately).
 3. Optionally decide B1/B3 in the same message.
+
+## G. Insurance wording classifier (20261122, PR #17; each item is an owner action, nothing is enabled by default)
+| # | Decision | Default | Blocks release? |
+|---|---|---|---|
+| G1 | Approve, edit or reject the proposed insurance PRODUCT terms, FEATURE phrases and PLACE names (`FFM_CLIENT2_INSURANCE_ONBOARDING.md`); you add them with `ws_add_approved_term` (the bot cannot) | Approve the English and French product list for the client's workspace only | No (until you add terms, health wording is refused exactly as before) |
+| G2 | Scope: workspace-only or vertical-wide (vertical-wide needs the explicit confirm flag and is audit-logged) | Workspace-only | No |
+| G3 | Income-bearing product names (income protection, disability income insurance) | Approve for the client only if the client sells them | No |
+| G4 | Vocabulary additions as real copy meets over-blocks (brand and agency words, "spend", "push", "Monday to Friday" wording); a person, narrative, claim or health word can never be added | Add on demand | No |
+| G5 | Lead notes and workspace names stay strict (a note "interested in health insurance" is refused) | Keep strict | No |

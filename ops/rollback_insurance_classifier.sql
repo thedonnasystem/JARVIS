@@ -1,8 +1,9 @@
 -- Rollback for 20261122_insurance_classifier_v1 (run with psql from the repo root, or paste into the SQL editor). Idempotent.
--- Restores ws_guard() and ffm_guard() to their 20261117 / 20261118 definitions (the strict ws_sensitive_hits screen on every table, no approved-term waiver),
--- then drops the classifier functions and the approved-terms table. ws_sensitive_hits (health detector, 20261119) is NOT touched by the migration and not by this rollback.
--- DATA LOSS (by design, small): the ws_approved_terms rows (the owner's list and its soft-removal history) are deleted. Export them first if you want to keep them:
---   select workspace_id, vertical, kind, term, created_at, removed_at from public.ws_approved_terms order by created_at;
+-- Restores ws_guard() and ffm_guard() to their 20261117 / 20261118 definitions (the strict ws_sensitive_hits screen on every table, no approved-term waiver; scripts/replica/run.sh proves
+-- the restored function bodies are byte-identical to the ones in place before this migration), then drops the classifier functions, the approved-terms table, the vocabulary and the place catalog. ws_sensitive_hits (health detector, 20261119) is NOT touched by the migration and not by this rollback.
+-- DATA LOSS (by design, small): the ws_approved_terms rows (the owner's list and its soft-removal history) and the ws_marketing_vocab rows (the seeded words plus the owner's additions/removals) are deleted. Export them first if you want to keep them:
+--   select workspace_id, vertical, kind, term, vertical_confirmed, created_at, removed_at from public.ws_approved_terms order by created_at;
+--   select lang, word, created_by, created_at, removed_at from public.ws_marketing_vocab where created_by <> 'seed' or removed_at is not null order by created_at;
 -- Rows that were stored under an approved term stay in place (rollback never rewrites client rows); their next UPDATE will be refused again by the old strict guard.
 -- Afterwards delete the 20261122_insurance_classifier_v1.sql line from migrations/APPLY_ORDER.txt and run scripts/build_bundle.sh, or the next apply recreates everything.
 begin;
@@ -50,16 +51,28 @@ begin
   return new;
 end $$;
 
--- 2. the classifier objects (guards no longer reference them)
+-- 2. the classifier objects (guards no longer reference them). Tables first (their triggers use ws_terms_immutable / ws_place_catalog_immutable), then the functions.
+drop table if exists public.ws_approved_terms;
+drop table if exists public.ws_marketing_vocab;
+drop table if exists public.ws_place_catalog;
+drop function if exists public.ws_remove_vocab_word(uuid);
+drop function if exists public.ws_add_vocab_word(text, text);
 drop function if exists public.ws_remove_approved_term(uuid);
-drop function if exists public.ws_add_approved_term(uuid, text, text, text);
+drop function if exists public.ws_add_approved_term(uuid, text, text, text, boolean);
+drop function if exists public.ws_add_approved_term(uuid, text, text, text);   -- the pre-review 4-argument version, if a scratch database ever had it
 drop function if exists public.ws_classify_text(text, uuid);
+drop function if exists public.ws_classify_core(text, uuid, boolean, boolean);
+drop function if exists public.ws_insurance_context(text, uuid);
+drop function if exists public.ws_text_insurance_word(text, text, text);
+drop function if exists public.ws_residual_check(text, text);
+drop function if exists public.ws_vocab_denied(text, boolean);
+drop function if exists public.ws_condition_hit(text);
 drop function if exists public.ws_identifier_hit(text);
 drop function if exists public.ws_personal_context_hit(text);
 drop function if exists public.ws_health_extra_hit(text);
 drop function if exists public.ws_leet_text(text, integer);
 drop function if exists public.ws_fold_text(text);
-drop table if exists public.ws_approved_terms;
+drop function if exists public.ws_place_catalog_immutable();
 drop function if exists public.ws_terms_immutable();
 -- the replaced guards keep their grants (create or replace keeps ACLs); restate them so the file is safe on its own
 revoke all on function public.ws_guard() from public, anon, authenticated;
