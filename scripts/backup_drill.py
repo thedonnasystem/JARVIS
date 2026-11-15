@@ -107,14 +107,23 @@ def _build(members, key):
     return Fernet(key.encode()).encrypt(buf.getvalue())
 
 
+NSUP = 5      # set from the source database in consent_checks
+
+
 def consent_checks(enc, key, rep, renv, work, out_sha):
     members = _members(enc, key)
     mf = json.loads(members["manifest.json"])
     sup_m = mf.get("suppression") or {}
     sup = json.loads(members.get("suppression/hashes.json", b"{}") or b"{}")
-    want = {("email", hq_consent.suppression_mac(DRILL_SUPP_KEY, "email", a)) for a in DRILL_OPTOUTS} | {("phone", hq_consent.suppression_mac(DRILL_SUPP_KEY, "phone", ph)) for ph in DRILL_OPTOUT_PHONES}
+    # the expected list is computed from what the SOURCE database holds in plaintext (not from the drill constants), so another drill that seeds more opt-outs (the leak drill does) cannot desynchronise it
+    with psycopg2.connect(SRC) as c0, c0.cursor() as k0:
+        k0.execute("select address from public.contact_suppressions"); src_emails = [r[0] for r in k0.fetchall()]
+        k0.execute("select phone from public.ffm_phone_suppressions"); src_phones = [r[0] for r in k0.fetchall()]
+    global NSUP
+    NSUP = len(src_emails) + len(src_phones)
+    want = {("email", hq_consent.suppression_mac(DRILL_SUPP_KEY, "email", a)) for a in src_emails} | {("phone", hq_consent.suppression_mac(DRILL_SUPP_KEY, "phone", ph)) for ph in src_phones}
     got = {tuple(e) for e in sup.get("macs", [])}
-    check("C1 the off-site file carries the suppression list as KEYED HASHES, equal to the independently computed HMACs (5 entries)", sup_m.get("included") and got == want and sup_m.get("count") == 5 and not hq_consent.validate_suppression_export(sup), json.dumps({k: v for k, v in sup_m.items() if k != "macs"})[:200])
+    check("C1 the off-site file carries the suppression list as KEYED HASHES, equal to the independently computed HMACs (every opt-out in the source)", sup_m.get("included") and got == want and sup_m.get("count") == NSUP and NSUP >= 5 and not hq_consent.validate_suppression_export(sup), json.dumps({k: v for k, v in sup_m.items() if k != "macs"})[:200])
     blob = b"".join(members.values())
     leaked = [x for x in DRILL_OPTOUTS + DRILL_OPTOUT_PHONES + [DRILL_SUPP_KEY] if x.encode() in blob]
     check("C2 no opted-out address, no opted-out number and not the suppression key appear anywhere in the (decrypted) backup", not leaked, str(leaked))
@@ -124,12 +133,12 @@ def consent_checks(enc, key, rep, renv, work, out_sha):
             check(f"C4 {t} is not exported", False, "present in the backup")
     check("C4 contact_suppressions, ffm_phone_suppressions, ffm_secrets, ffm_outreach_gate and both hash tables have no data file", not any(n.startswith("data/") and n[5:].split(".")[0] in ("contact_suppressions", "ffm_phone_suppressions", "ffm_secrets", "ffm_outreach_gate", "ffm_suppression_hashes", "ffm_suppression_expected") for n in members), "")
     g = rep.get("outreach_gate") or {}
-    check("C5 restore tool put the restored database into 'suppression unverified' (gate closed) and staged the checkpoint", g.get("state") == "unverified" and g.get("open") is False and g.get("checkpoint_staged") and (g.get("checkpoint") or {}).get("count") == 5, json.dumps(g)[:200])
+    check("C5 restore tool put the restored database into 'suppression unverified' (gate closed) and staged the checkpoint", g.get("state") == "unverified" and g.get("open") is False and g.get("checkpoint_staged") and (g.get("checkpoint") or {}).get("count") == NSUP, json.dumps(g)[:200])
     check("C6 restore tool prints the procedure and counts the closed gate as a pass criterion", len(rep.get("next_steps", [])) >= 4 and rep["steps"].get("outreach_gate_closed_default_deny") == "PASS", "")
     DST_ = psycopg2.connect(DST); cur = DST_.cursor()
     cur.execute("select (select count(*) from public.contact_suppressions), (select count(*) from public.ffm_phone_suppressions), (select count(*) from public.ffm_secrets), (select count(*) from public.ffm_suppression_hashes), (select count(*) from public.ffm_suppression_expected), public.ffm_outreach_gate_open()")
     row = cur.fetchone()
-    check("C7 restored database: plaintext lists EMPTY (as designed), no key, no imported hashes, 5 staged expected entries, gate closed", row == (0, 0, 0, 0, 5, False), str(row))
+    check("C7 restored database: plaintext lists EMPTY (as designed), no key, no imported hashes, every expected entry staged, gate closed", row == (0, 0, 0, 0, NSUP, False), str(row))
     # attempted re-contact on the restored, empty-list database: a person who opted out is re-added, with consent evidence, in other written forms of the same address and number
     cur.execute("insert into public.client_workspaces (slug, name, vertical) values ('drill-ws', 'Drill Workspace Co', 'mortgage') returning id"); ws = cur.fetchone()[0]
     def add(name, em, ph):
@@ -176,19 +185,19 @@ def consent_checks(enc, key, rep, renv, work, out_sha):
     sql("select public.ffm_set_key('suppression_hmac_key', %s, 'owner')", (DRILL_SUPP_KEY,))
     j = sql("select public.ffm_verify_suppression('owner')")
     owner(False)
-    check("C11 right key but EMPTY list (nothing re-established yet): verification refused as incomplete, gate stays closed, outreach refused", j["verified"] is False and j["reason"].startswith("incomplete: 5 of 5") and can(l_ok, "email")[0] is False, str(j))
+    check("C11 right key but EMPTY list (nothing re-established yet): verification refused as incomplete, gate stays closed, outreach refused", j["verified"] is False and j["reason"].startswith(f"incomplete: {NSUP} of {NSUP}") and can(l_ok, "email")[0] is False, str(j))
     owner(True)
     n_imp = sql("select public.ffm_import_suppression_hashes()")
     j = sql("select public.ffm_verify_suppression('owner')")
     owner(False)
-    check("C12 after re-establishing the list from the keyed hashes, OWNER verification succeeds exactly (5 of 5) and the gate opens", n_imp == 5 and j["verified"] is True and j["mode"] == "exact" and sql("select public.ffm_outreach_gate_open()") is True, f"imported {n_imp} {j}")
+    check("C12 after re-establishing the list from the keyed hashes, OWNER verification succeeds exactly (all entries) and the gate opens", n_imp == NSUP and j["verified"] is True and j["mode"] == "exact" and sql("select public.ffm_outreach_gate_open()") is True, f"imported {n_imp} {j}")
     res = [can(l_out, "email"), can(l_out, "sms"), can(l_ok, "email"), can(l_ok, "sms")]
     check("C13 after verification: the opted-out person stays refused through hash-only suppression (email +tag/case form and phone form); the unrelated consented lead is allowed", res == [(False, "suppressed"), (False, "suppressed"), (True, "express"), (True, "express")], str(res))
     silent("delete from public.ffm_suppression_hashes where ctid = (select ctid from public.ffm_suppression_hashes where kind = 'email' limit 1)")
     check("C14 the list SHRANK after verification (a row removed under the triggers): the gate closes by itself", sql("select public.ffm_outreach_gate_open()") is False and can(l_ok, "email")[0] is False, "")
     owner(True)
     j = sql("select public.ffm_verify_suppression('owner')")
-    check("C15 a PARTIAL live list (one hash missing) is refused with the exact count", j["verified"] is False and j["reason"].startswith("incomplete: 1 of 5"), str(j))
+    check("C15 a PARTIAL live list (one hash missing) is refused with the exact count", j["verified"] is False and j["reason"].startswith(f"incomplete: 1 of {NSUP}"), str(j))
     sql("select public.ffm_import_suppression_hashes()")
     j = sql("select public.ffm_verify_suppression('owner')")
     owner(False)
