@@ -3815,7 +3815,7 @@ language plpgsql immutable set search_path to 'public' as $$
 declare t text; np text; c text; k text; kc text; hits text[] := '{}';
 begin
   -- normalise first: zero-width characters out, NFKC (fullwidth digits etc.), Arabic-Indic / Persian digits to ASCII
-  t := translate(normalize(regexp_replace(coalesce(p_text, ''), '[​-‍⁠﻿]', '', 'g'), NFKC),
+  t := translate(normalize(regexp_replace(coalesce(p_text, ''), '[\u200b-\u200d\u2060\ufeff]', '', 'g'), NFKC),
                  '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789');
   k := lower(t);
   -- phone-shaped numbers are removed from the text first (NOT used to excuse the rest of it), then digits are compacted
