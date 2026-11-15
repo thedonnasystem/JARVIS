@@ -306,6 +306,19 @@ class RestoreRefusesUnverified(unittest.TestCase):
                 R.ALLOW_UNVERIFIED = False
 
 
+GOOD_MANIFEST = {"consistency": {"consistent": True}}
+
+
+class UploadRefusesUnverified(unittest.TestCase):
+    def test_upload_without_a_verified_manifest_is_refused_and_never_puts(self):
+        for m in (None, {}, {"consistency": {}}, {"consistency": {"consistent": False}}, {"consistency": {"consistent": "true"}}, {"consistency": {"consistent": 1}}):
+            with mock.patch.object(B, "put_files") as put:
+                self.assertFalse(B.upload("n", b"x", m), m)
+                put.assert_not_called()
+        with mock.patch.object(B, "put_files", return_value={}) as put:
+            self.assertTrue(B.upload("n", b"x", GOOD_MANIFEST)); put.assert_called_once()
+
+
 class BackupIdentity(unittest.TestCase):
     def test_rpc_uses_the_backup_token_and_never_the_service_key(self):
         seen = []
@@ -678,7 +691,7 @@ class B2(unittest.TestCase):
     def test_bad_target_strings(self):
         for url in ("b2://", "b2://short", "b2://abc def/x", "ftp://x"):
             with FakeB2() as fake, mock.patch.dict(os.environ, {"BACKUP_KEY": KEY, "BACKUP_PUT_URL": url, "BACKUP_AUTH": "a:b"}):
-                self.assertFalse(B.upload("n", b"x"))
+                self.assertFalse(B.upload("n", b"x", GOOD_MANIFEST))
 
     def test_secrets_never_appear_in_audit_owner_message_logs_or_result(self):
         secrets = [KEY, "secretW", "keyW:secretW"]
@@ -710,16 +723,16 @@ class GenericPut(unittest.TestCase):
         def call(method, url, headers, body=None, timeout=120):
             seen.append((method, url, headers.get("Authorization"))); return 201, b""
         with mock.patch.dict(os.environ, {**ENV, "BACKUP_AUTH": "Basic abc"}), mock.patch.object(B, "_call", side_effect=call):
-            self.assertTrue(B.upload("a b.enc", b"x"))
+            self.assertTrue(B.upload("a b.enc", b"x", GOOD_MANIFEST))
         self.assertEqual(seen[0], ("PUT", "https://store.example.com/b/a%20b.enc", "Basic abc"))
 
     def test_put_target_failure_status(self):
         with mock.patch.dict(os.environ, ENV), mock.patch.object(B, "_call", return_value=(403, b"")):
-            self.assertFalse(B.upload("x", b"y"))
+            self.assertFalse(B.upload("x", b"y", GOOD_MANIFEST))
 
     def test_rejects_non_https_target(self):
         with mock.patch.dict(os.environ, {**ENV, "BACKUP_PUT_URL": "http://insecure/{name}"}):
-            self.assertFalse(B.upload("x", b"y"))
+            self.assertFalse(B.upload("x", b"y", GOOD_MANIFEST))
 
 
 class GenericPutRetry(unittest.TestCase):

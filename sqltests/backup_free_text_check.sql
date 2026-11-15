@@ -3,7 +3,8 @@
 begin;
 do $$
 declare
-  want_blank text[] := array['action_log.detail','action_log.evidence','action_log.reason','action_log.result','agent_runs.summary','approval_requests.recommendation','bank_transactions.description','bank_transactions.note',
+  want_blank text[] := array['account_requests.purpose','account_requests.signup_url','account_requests.vendor','accounts_registry.notes','accounts_registry.purpose','build_requests.risk','build_requests.rollback_plan','build_requests.spec','build_requests.test_result','build_requests.title','ideas.name','integration_status.detail','llm_calls.purpose','org_changes.alternatives','org_changes.change','org_changes.cost','org_changes.disagrees_with_owner','org_changes.gain','org_changes.risk','org_changes.target','org_changes.time_to_results','payment_instructions.purpose','payment_instructions.receipt_ref','spend_reservations.alternatives','spend_reservations.expected_benefit','spend_reservations.purpose','spend_reservations.receipt_ref','spend_reservations.vendor','system_state.pause_reason','systems.notes','tool_registry.notes','tool_registry.purpose','venture_assets.name','venture_assets.notes','venture_assets.url','venture_procedures.steps',
+    'action_log.detail','action_log.evidence','action_log.reason','action_log.result','agent_runs.summary','approval_requests.recommendation','bank_transactions.description','bank_transactions.note',
     'escalations.evidence','escalations.resolution','escalations.summary','evidence_sources.final_url','evidence_sources.text','evidence_sources.title','evidence_sources.url','executor_runs.purpose','executor_runs.refusal_reason',
     'human_handoffs.task','human_handoffs.url','human_handoffs.why_human','ideas.demand_source','ideas.description','ideas.kill_metric','ideas.result','ideas.revisit_trigger','memory.content','memory.source','missions.checkpoint',
     'missions.evidence','missions.next_action','missions.owner_decision','missions.plan','missions.result','missions.risks','missions.success_definition','missions.verdict_reason','owner_messages.answer','owner_messages.body',
@@ -49,6 +50,19 @@ begin
   if (select count(*) from jsonb_array_elements(snap -> 'data' -> 'tasks')) <> (select count(*) from public.tasks) then raise exception 'E8 task rows lost'; end if;
   if exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'tasks') r where r ->> 'status' is null or r ->> 'id' is null) then raise exception 'E8b task id/status lost'; end if;
   -- E9 a column nobody classified is strict (fails closed) and is reported
+  -- E10 (round 6) LIGHT is not a guarantee-free zone: a known / erased / deleted name glued to other characters, pluralised or letter-spaced blanks the whole LIGHT field (bounded over-blanking), a clean config text is untouched
+  insert into public.leads (venture_id, name, email, status) values (v, 'Zzbrackenfeather Quillmoor', 'zzbrackenfeather@example.test', 'new');
+  declare ctx jsonb := public.backup_redaction_context(); w text;
+  begin
+    foreach w in array array['jzzbrackenfeather', 'zzbrackenfeather2024', 'the Zzbrackenfeathers', 'Zzbrackenfeather', 'z z b r a c k e n f e a t h e r', 'quillmoorco'] loop
+      if public.backup_redact_text(w, ctx, 500, 'light') like '%feather%' or public.backup_redact_text(w, ctx, 500, 'light') like '%quillmoor%' then raise exception 'E10 LIGHT let % through: %', w, public.backup_redact_text(w, ctx, 500, 'light'); end if;
+    end loop;
+    if public.backup_redact_text('Heating and cooling service plan', ctx, 500, 'light') <> 'Heating and cooling service plan' then raise exception 'E10b clean configuration text was changed in LIGHT'; end if;
+  end;
+  update public.agents set title = 'Chief of jzzbrackenfeather' where slug = ag;
+  if position('zzbrackenfeather' in lower(((public.backup_snapshot() -> 'data' -> 'agents'))::text)) > 0 then raise exception 'E11 a glued known name reached the single-statement export of a LIGHT column (agents.title)'; end if;
+  pg := public.backup_snapshot_page('agents', 0, 50);
+  if position('zzbrackenfeather' in lower((pg -> 'rows')::text)) > 0 then raise exception 'E11b a glued known name reached the paged export of a LIGHT column'; end if;
   alter table public.ideas add column zz_new_note text;
   if not exists (select 1 from public.backup_effective_spec(public.backup_export_policy() -> 'exported') where table_name = 'ideas' and column_name = 'zz_new_note' and mode = 'strict' and not classified) then raise exception 'E9 an unclassified column is not strict'; end if;
   alter table public.ideas drop column zz_new_note;

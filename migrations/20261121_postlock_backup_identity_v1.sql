@@ -10,7 +10,7 @@
 --   owner         everything (the migration owner, psql, the SQL editor, pg_cron).
 -- Defence in depth against a later blanket `grant execute on all functions in schema public to service_role` (the lockdown does exactly that): every SECURITY DEFINER backup function that reads a key,
 -- the deny-list, the cache, the epoch or the exported data starts with `perform public.backup_assert_reader()`, which refuses any session whose role is anon / authenticated / service_role even when EXECUTE is
--- granted. The pure text helpers (fold, normalise, detectors, regexes, spec) read no data and no key; for them the revoke below is the control and scripts/acl_manifest_post_lockdown.py --check (a gate step) catches drift.
+-- granted. The pure text helpers (fold, normalise, detectors, regexes, spec) read no data and no key; for them the revoke below is the control and scripts/acl_manifest.py --check (a gate step) catches drift.
 -- Safe to re-run. Apply LAST (after the lockdown).
 
 do $$
@@ -102,4 +102,8 @@ begin
     else execute format('revoke all on table %s from public, anon, authenticated, service_role, backup_reader', r.name); end if;
   end loop;
 end $$;
+-- 3) search_path: three older definers still had `pg_catalog, public`; with CREATE on public revoked the hijack was already closed, this removes the dependency on that revoke
+alter function public.backup_schema() set search_path to 'pg_catalog';
+alter function public.backup_classification() set search_path to 'pg_catalog';
+alter function public.backup_pii_column_exceptions() set search_path to 'pg_catalog';
 -- future helpers created after this file still get the lockdown's default grant to service_role; R4 forces a revoke after each new function, and the ACL manifest check fails the gate on any drift

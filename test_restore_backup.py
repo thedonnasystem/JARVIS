@@ -59,6 +59,12 @@ class Blanks(unittest.TestCase):
         self.assertEqual(data["memory"][0]["source"], R.BLANK_MARKER)       # not NULL, not ''
         self.assertGreaterEqual(len(data["payment_instructions"][0]["payee"]), 2)
 
+    def test_not_null_json_column_with_an_array_default_restores_as_an_array(self):
+        schema = {"tables": [{"name": "missions", "columns": [{"name": "plan", "type": "jsonb", "notnull": True, "default": "'[]'::jsonb"}, {"name": "meta", "type": "jsonb", "notnull": True, "default": "'{}'::jsonb"}]}]}
+        data = {"missions": [{"plan": None, "meta": None}]}
+        R.apply_blanks(schema, data, {"redaction": {"blanked_columns": ["missions.plan", "missions.meta"]}}, {})
+        self.assertEqual((data["missions"][0]["plan"], data["missions"][0]["meta"]), ([], {}))
+
     def test_unlisted_column_is_never_touched(self):
         data = {"tasks": [{"id": 1, "result": "keep me", "title": "t", "tags": ["a"], "meta": {"a": 1}, "kind": "x"}]}
         R.apply_blanks(self.SCHEMA, data, {"redaction": {"blanked_columns": []}}, {})

@@ -5454,9 +5454,11 @@ begin
     for i in reverse cardinality(prot)..1 loop
       r := replace(r, chr(57343 + i), prot[i]);
     end loop;
+    -- a known name that survives only glued to other characters (jname, name2024), as a plural (the Names) or letter-spaced: the whole field is blanked, in LIGHT columns too (round 6: LIGHT is no
+    -- longer a guarantee-free zone; bounded over-blanking of configuration text that merely contains a known name is accepted)
+    if kc is not null and r = t1 then sq := kc; else sq := lower(regexp_replace(r, '[^a-zA-Z0-9]', '', 'g')); end if;
+    if sqre <> '' and sq ~ sqre then return u; end if;
     if is_strict then
-      if kc is not null and r = t1 then sq := kc; else sq := lower(regexp_replace(r, '[^a-zA-Z0-9]', '', 'g')); end if;
-      if sqre <> '' and sq ~ sqre then return u; end if;                                 -- a known name survives only in letter-spaced / split form
       if length(sq) >= 7 and jsonb_array_length(coalesce(ctx -> 'phones', '[]'::jsonb)) > 0 then
         dg := regexp_replace(r, '[^0-9]', '', 'g');
         for s in select jsonb_array_elements_text(ctx -> 'phones') loop
@@ -5577,15 +5579,15 @@ language sql immutable set search_path to 'pg_catalog' as $$
   select * from (values
     ('account_requests', 'account_login', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('account_requests', 'needs', 'array', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('account_requests', 'purpose', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('account_requests', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('account_requests', 'requested_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('account_requests', 'signup_url', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('account_requests', 'signup_url', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('account_requests', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('account_requests', 'vendor', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('account_requests', 'vendor', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('accounts_registry', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('accounts_registry', 'login_email', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('accounts_registry', 'notes', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('accounts_registry', 'purpose', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('accounts_registry', 'notes', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('accounts_registry', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('accounts_registry', 'service', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('accounts_registry', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('accounts_registry', 'vault_ref', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5637,12 +5639,12 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('build_requests', 'approved_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('build_requests', 'qa_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('build_requests', 'requested_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('build_requests', 'risk', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('build_requests', 'rollback_plan', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('build_requests', 'spec', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('build_requests', 'risk', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('build_requests', 'rollback_plan', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('build_requests', 'spec', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('build_requests', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('build_requests', 'test_result', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('build_requests', 'title', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('build_requests', 'test_result', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('build_requests', 'title', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('capital_policy', 'last_mode', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('capital_policy', 'updated_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('company_profile', 'brand', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
@@ -5689,12 +5691,12 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('ideas', 'demand_source', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('ideas', 'description', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('ideas', 'kill_metric', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('ideas', 'name', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('ideas', 'name', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('ideas', 'result', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('ideas', 'revisit_trigger', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('ideas', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ideas', 'verdict', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('integration_status', 'detail', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('integration_status', 'detail', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('integration_status', 'key', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ledger', 'currency', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ledger', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5703,7 +5705,7 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('ledger', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('llm_calls', 'agent_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('llm_calls', 'model', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('llm_calls', 'purpose', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('llm_calls', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('llm_calls', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('memory', 'agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('memory', 'confidence', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5728,17 +5730,17 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('model_prices', 'model', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('model_prices', 'source', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('model_prices', 'tier', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('org_changes', 'alternatives', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('org_changes', 'change', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('org_changes', 'cost', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('org_changes', 'disagrees_with_owner', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('org_changes', 'gain', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('org_changes', 'alternatives', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('org_changes', 'change', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('org_changes', 'cost', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('org_changes', 'disagrees_with_owner', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('org_changes', 'gain', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('org_changes', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('org_changes', 'proposed_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('org_changes', 'risk', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('org_changes', 'risk', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('org_changes', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('org_changes', 'target', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('org_changes', 'time_to_results', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('org_changes', 'target', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('org_changes', 'time_to_results', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('owner_messages', 'answer', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('owner_messages', 'body', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('owner_messages', 'channel', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5748,8 +5750,8 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('owner_messages', 'options', 'json', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('owner_messages', 'ref_table', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('payment_instructions', 'payee', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('payment_instructions', 'purpose', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('payment_instructions', 'receipt_ref', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('payment_instructions', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('payment_instructions', 'receipt_ref', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('payment_instructions', 'requested_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('payment_instructions', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('predictions', 'action_ref', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
@@ -5761,19 +5763,19 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('reconciliation_flags', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('spend_reservations', 'action', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('spend_reservations', 'actor', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('spend_reservations', 'alternatives', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('spend_reservations', 'expected_benefit', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('spend_reservations', 'purpose', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('spend_reservations', 'receipt_ref', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('spend_reservations', 'alternatives', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('spend_reservations', 'expected_benefit', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('spend_reservations', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('spend_reservations', 'receipt_ref', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('spend_reservations', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('spend_reservations', 'vendor', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('spend_reservations', 'vendor', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('system_state', 'mode', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('system_state', 'pause_reason', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('system_state', 'pause_reason', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('systems', 'data_store', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('systems', 'health_url', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('systems', 'host', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('systems', 'name', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('systems', 'notes', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('systems', 'notes', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('systems', 'repo', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('systems', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('systems', 'url', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
@@ -5789,17 +5791,17 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('tasks', 'title', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('tool_registry', 'currency', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('tool_registry', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('tool_registry', 'notes', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('tool_registry', 'notes', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('tool_registry', 'owner_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('tool_registry', 'purpose', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('tool_registry', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('tool_registry', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('tool_registry', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_assets', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_assets', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('venture_assets', 'name', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('venture_assets', 'notes', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('venture_assets', 'name', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
+    ('venture_assets', 'notes', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('venture_assets', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('venture_assets', 'url', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('venture_assets', 'url', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('venture_config', 'call_to_action', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('venture_config', 'offer', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('venture_config', 'updated_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5810,7 +5812,7 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('venture_procedures', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_procedures', 'owner_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_procedures', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('venture_procedures', 'steps', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('venture_procedures', 'steps', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('venture_procedures', 'title', 'text', 'keep', null, 'unique key or system reference (table/id, dedupe key, url key): altering it could collide on restore or break lookups; written by code, not typed text'),
     ('ventures', 'description', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('ventures', 'gate_criteria', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
@@ -5957,12 +5959,14 @@ do $$ begin
     perform cron.unschedule(jobid) from cron.job where jobname = 'ffm_redaction_found_purge';
     perform cron.schedule('ffm_redaction_found_purge', '*/15 * * * *', 'delete from public.ffm_redaction_found where at < now() - interval ''20 minutes''');
   end if;
-exception when others then null;
+exception when others then
+  raise warning 'pg_cron purge job for ffm_redaction_found not scheduled: %', sqlerrm;
+  begin insert into public.audit_log (actor, action, target, detail) values ('migration', 'cron_schedule_failed', 'ffm_redaction_found_purge', jsonb_build_object('error', sqlerrm, 'fallback', 'every prepare/release purges expired rows; schedule select public.backup_deny_release() hourly')); exception when others then null; end;
 end $$;
 
 -- The redaction-source epoch vector (item B). The counter is the owner-only sequence ffm_redaction_epoch_seq, bumped by statement triggers on every source table and the deny-list.
 -- Read before the export and again after the last page: any difference discards the archive. Row counts of the source tables are included so a write that bypassed the triggers
--- (session_replication_role = replica) and changed a count is seen too; the redaction code and the export policy are hashed so a migration applied mid-export is seen.
+-- (session_replication_role = replica) and changed a count is seen too; every function of the backup_* / redaction_* families (by catalog name, not a hand list) and the full export spec (table list AND every column's mode) are hashed so a migration applied mid-export is seen.
 create or replace function public.backup_epoch() returns jsonb
 language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
 declare rws jsonb := '{}'::jsonb; t record; n bigint;
@@ -5975,9 +5979,10 @@ begin
     'seq', (select case when is_called then last_value else 0 end from public.ffm_redaction_epoch_seq),
     'rows', rws,
     'denylist_rows', (select count(*) from public.ffm_redaction_denylist),
-    'policy', md5(public.backup_export_policy()::text),
-    'code', md5(coalesce((select string_agg(md5(pg_get_functiondef(p.oid)), ',' order by p.oid::regprocedure::text) from pg_proc p
-                           where p.pronamespace = 'public'::regnamespace and p.proname in ('backup_stopwords', 'backup_detector_pins', 'redaction_sources', 'ws_sensitive_hits', 'backup_fold_text', 'backup_normalise', 'backup_unescape_text')), '')));
+    'policy', md5(public.backup_export_policy()::text || '|' || coalesce((select string_agg(x::text, '|' order by x::text) from public.backup_effective_spec(public.backup_export_policy() -> 'exported') x), '')),
+    -- EVERY function the export path can execute, derived from the catalog by name (not a hand list): the backup_* and redaction_* families, the detector twin and the writer trigger. A migration applied mid-export changes this.
+    'code', md5(coalesce((select string_agg(p.oid::regprocedure::text || md5(pg_get_functiondef(p.oid)), ',' order by p.oid::regprocedure::text) from pg_proc p
+                           where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p') and (p.proname ~ '^(backup_|redaction_)' or p.proname in ('ws_sensitive_hits', 'agent_runs_scrub'))), '')));
 end $$;
 revoke all on function public.backup_epoch() from public, anon, authenticated;
 grant execute on function public.backup_epoch() to service_role;
@@ -6297,17 +6302,51 @@ begin
   return null;
 end $$;
 revoke all on function public.redaction_epoch_bump() from public, anon, authenticated, service_role;
+-- Round 6 (false invalidation): INSERT / DELETE bump only when the statement touched at least one row, UPDATE only when a REDACTION-SOURCE COLUMN of at least one row actually changed (transition tables), so no-op updates
+-- (`where false`), status / score / body updates and every write to a non-source column leave the epoch alone. TRUNCATE always bumps. The row counts in backup_epoch() stay as the backstop for writes that skip triggers.
+create or replace function public.redaction_epoch_bump_ins() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+begin
+  if exists (select 1 from new_rows) then perform nextval('public.ffm_redaction_epoch_seq'); end if;
+  return null;
+end $$;
+revoke all on function public.redaction_epoch_bump_ins() from public, anon, authenticated, service_role;
+create or replace function public.redaction_epoch_bump_del() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+begin
+  if exists (select 1 from old_rows) then perform nextval('public.ffm_redaction_epoch_seq'); end if;
+  return null;
+end $$;
+revoke all on function public.redaction_epoch_bump_del() from public, anon, authenticated, service_role;
+create or replace function public.redaction_epoch_bump_upd() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+declare cols text[] := tg_argv;
+begin
+  if exists (select (select jsonb_object_agg(e.key, e.value) from jsonb_each(to_jsonb(n)) e where e.key = any(cols)) from new_rows n
+             except all
+             select (select jsonb_object_agg(e.key, e.value) from jsonb_each(to_jsonb(o)) e where e.key = any(cols)) from old_rows o) then
+    perform nextval('public.ffm_redaction_epoch_seq');
+  end if;
+  return null;
+end $$;
+revoke all on function public.redaction_epoch_bump_upd() from public, anon, authenticated, service_role;
 do $$
 declare t record;
 begin
-  for t in select distinct s.table_name from public.redaction_sources() s where to_regclass('public.' || s.table_name) is not null loop
+  for t in select s.table_name, array_agg(distinct s.column_name order by s.column_name) cols from public.redaction_sources() s where to_regclass('public.' || s.table_name) is not null group by s.table_name loop
     execute format('drop trigger if exists redaction_epoch on public.%I', t.table_name);
-    execute format('create trigger redaction_epoch after insert or update or delete on public.%I for each statement execute function public.redaction_epoch_bump()', t.table_name);
+    execute format('drop trigger if exists redaction_epoch_ins on public.%I', t.table_name);
+    execute format('drop trigger if exists redaction_epoch_upd on public.%I', t.table_name);
+    execute format('drop trigger if exists redaction_epoch_del on public.%I', t.table_name);
+    execute format('create trigger redaction_epoch_ins after insert on public.%I referencing new table as new_rows for each statement execute function public.redaction_epoch_bump_ins()', t.table_name);
+    execute format('create trigger redaction_epoch_upd after update on public.%I referencing old table as old_rows new table as new_rows for each statement execute function public.redaction_epoch_bump_upd(%s)',
+                   t.table_name, (select string_agg(quote_literal(c), ', ') from unnest(t.cols) c));
+    execute format('create trigger redaction_epoch_del after delete on public.%I referencing old table as old_rows for each statement execute function public.redaction_epoch_bump_del()', t.table_name);
     execute format('drop trigger if exists redaction_epoch_trunc on public.%I', t.table_name);
     execute format('create trigger redaction_epoch_trunc after truncate on public.%I for each statement execute function public.redaction_epoch_bump()', t.table_name);
   end loop;
   drop trigger if exists redaction_epoch on public.ffm_redaction_denylist;
-  create trigger redaction_epoch after insert on public.ffm_redaction_denylist for each statement execute function public.redaction_epoch_bump();
+  create trigger redaction_epoch after insert on public.ffm_redaction_denylist referencing new table as new_rows for each statement execute function public.redaction_epoch_bump_ins();   -- an `on conflict do nothing` capture that adds no row does not count
 end $$;
 
 -- counts only, never a hash
@@ -6543,7 +6582,7 @@ alter default privileges in schema public grant execute on functions to service_
 --   owner         everything (the migration owner, psql, the SQL editor, pg_cron).
 -- Defence in depth against a later blanket `grant execute on all functions in schema public to service_role` (the lockdown does exactly that): every SECURITY DEFINER backup function that reads a key,
 -- the deny-list, the cache, the epoch or the exported data starts with `perform public.backup_assert_reader()`, which refuses any session whose role is anon / authenticated / service_role even when EXECUTE is
--- granted. The pure text helpers (fold, normalise, detectors, regexes, spec) read no data and no key; for them the revoke below is the control and scripts/acl_manifest_post_lockdown.py --check (a gate step) catches drift.
+-- granted. The pure text helpers (fold, normalise, detectors, regexes, spec) read no data and no key; for them the revoke below is the control and scripts/acl_manifest.py --check (a gate step) catches drift.
 -- Safe to re-run. Apply LAST (after the lockdown).
 
 do $$
@@ -6635,4 +6674,8 @@ begin
     else execute format('revoke all on table %s from public, anon, authenticated, service_role, backup_reader', r.name); end if;
   end loop;
 end $$;
+-- 3) search_path: three older definers still had `pg_catalog, public`; with CREATE on public revoked the hijack was already closed, this removes the dependency on that revoke
+alter function public.backup_schema() set search_path to 'pg_catalog';
+alter function public.backup_classification() set search_path to 'pg_catalog';
+alter function public.backup_pii_column_exceptions() set search_path to 'pg_catalog';
 -- future helpers created after this file still get the lockdown's default grant to service_role; R4 forces a revoke after each new function, and the ACL manifest check fails the gate on any drift

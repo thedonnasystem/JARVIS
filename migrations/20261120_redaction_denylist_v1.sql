@@ -199,17 +199,51 @@ begin
   return null;
 end $$;
 revoke all on function public.redaction_epoch_bump() from public, anon, authenticated, service_role;
+-- Round 6 (false invalidation): INSERT / DELETE bump only when the statement touched at least one row, UPDATE only when a REDACTION-SOURCE COLUMN of at least one row actually changed (transition tables), so no-op updates
+-- (`where false`), status / score / body updates and every write to a non-source column leave the epoch alone. TRUNCATE always bumps. The row counts in backup_epoch() stay as the backstop for writes that skip triggers.
+create or replace function public.redaction_epoch_bump_ins() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+begin
+  if exists (select 1 from new_rows) then perform nextval('public.ffm_redaction_epoch_seq'); end if;
+  return null;
+end $$;
+revoke all on function public.redaction_epoch_bump_ins() from public, anon, authenticated, service_role;
+create or replace function public.redaction_epoch_bump_del() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+begin
+  if exists (select 1 from old_rows) then perform nextval('public.ffm_redaction_epoch_seq'); end if;
+  return null;
+end $$;
+revoke all on function public.redaction_epoch_bump_del() from public, anon, authenticated, service_role;
+create or replace function public.redaction_epoch_bump_upd() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+declare cols text[] := tg_argv;
+begin
+  if exists (select (select jsonb_object_agg(e.key, e.value) from jsonb_each(to_jsonb(n)) e where e.key = any(cols)) from new_rows n
+             except all
+             select (select jsonb_object_agg(e.key, e.value) from jsonb_each(to_jsonb(o)) e where e.key = any(cols)) from old_rows o) then
+    perform nextval('public.ffm_redaction_epoch_seq');
+  end if;
+  return null;
+end $$;
+revoke all on function public.redaction_epoch_bump_upd() from public, anon, authenticated, service_role;
 do $$
 declare t record;
 begin
-  for t in select distinct s.table_name from public.redaction_sources() s where to_regclass('public.' || s.table_name) is not null loop
+  for t in select s.table_name, array_agg(distinct s.column_name order by s.column_name) cols from public.redaction_sources() s where to_regclass('public.' || s.table_name) is not null group by s.table_name loop
     execute format('drop trigger if exists redaction_epoch on public.%I', t.table_name);
-    execute format('create trigger redaction_epoch after insert or update or delete on public.%I for each statement execute function public.redaction_epoch_bump()', t.table_name);
+    execute format('drop trigger if exists redaction_epoch_ins on public.%I', t.table_name);
+    execute format('drop trigger if exists redaction_epoch_upd on public.%I', t.table_name);
+    execute format('drop trigger if exists redaction_epoch_del on public.%I', t.table_name);
+    execute format('create trigger redaction_epoch_ins after insert on public.%I referencing new table as new_rows for each statement execute function public.redaction_epoch_bump_ins()', t.table_name);
+    execute format('create trigger redaction_epoch_upd after update on public.%I referencing old table as old_rows new table as new_rows for each statement execute function public.redaction_epoch_bump_upd(%s)',
+                   t.table_name, (select string_agg(quote_literal(c), ', ') from unnest(t.cols) c));
+    execute format('create trigger redaction_epoch_del after delete on public.%I referencing old table as old_rows for each statement execute function public.redaction_epoch_bump_del()', t.table_name);
     execute format('drop trigger if exists redaction_epoch_trunc on public.%I', t.table_name);
     execute format('create trigger redaction_epoch_trunc after truncate on public.%I for each statement execute function public.redaction_epoch_bump()', t.table_name);
   end loop;
   drop trigger if exists redaction_epoch on public.ffm_redaction_denylist;
-  create trigger redaction_epoch after insert on public.ffm_redaction_denylist for each statement execute function public.redaction_epoch_bump();
+  create trigger redaction_epoch after insert on public.ffm_redaction_denylist referencing new table as new_rows for each statement execute function public.redaction_epoch_bump_ins();   -- an `on conflict do nothing` capture that adds no row does not count
 end $$;
 
 -- counts only, never a hash

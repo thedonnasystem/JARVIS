@@ -335,7 +335,7 @@ def apply_blanks(schema: dict, data: dict, manifest: dict, rep: dict) -> None:
         if ty.endswith("[]"):
             val = [] if notnull else None
         elif ty in ("json", "jsonb"):
-            val = {} if notnull else None
+            val = (([] if "'[]'" in str(col.get("default") or "") else {}) if notnull else None)      # a NOT NULL json column that defaults to an array (missions.plan, web_messages.payload) gets [] back, not {}
         elif any(re.search(r"(?<![A-Za-z0-9_])" + re.escape(c) + r"(?![A-Za-z0-9_])", d) for d in checks.get(t, [])):
             val = BLANK_MARKER
         else:

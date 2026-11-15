@@ -69,15 +69,39 @@ case("a lead is renamed between pages (every attempt)", lambda: m("update public
 r1 = case("one rename between pages: the first archive is discarded, the retry is consistent and is the one uploaded", lambda: m("update public.leads set name = %s where email = 'race-1@example.test'", "Renamed Racelynn %d" % next(K)), True, every=False)
 if r1.get("_attempts") != 2:
     print("FAIL the retry attempt count is not 2:", r1.get("_attempts")); fails.append("attempts")
-case("a lead is erased between pages", lambda: m("update public.leads set name = '[erased]', email = null, phone = null where email = 'race-1@example.test'"), False)
-case("a lead is deleted between pages", lambda: m("delete from public.leads where email = 'race-1@example.test'"), False)
+def fresh_lead():
+    e = "race-f%d@example.test" % next(K)
+    m("insert into public.leads (venture_id, name, email, phone, status) select id, 'Racelynn Fresh', %s, '613-555-0399', 'new' from public.ventures order by slug limit 1", e)    # a fresh row per attempt: the change must really change something every time
+    return e
+def erase_one():
+    e = fresh_lead(); m("update public.leads set name = '[erased]', email = null, phone = null where email = %s", e)
+def delete_one():
+    e = fresh_lead(); m("delete from public.leads where email = %s", e)
+case("a lead is erased between pages", erase_one, False)
+case("a lead is deleted between pages", delete_one, False)
 case("a deny-list entry is added between pages", lambda: m("select public.redaction_capture('n', %s)", "Zzracename Fixture%d" % next(K)), False)
 case("a suppression is added between pages", lambda: m("insert into public.contact_suppressions (address, reason, recorded_by) values (%s, 'unsubscribe', 'race') on conflict do nothing", "race-s%d@example.test" % next(K)), False)
 case("a lead is added between pages", lambda: m("insert into public.leads (venture_id, name, email, status) select id, 'Racelynn Another', %s, 'new' from public.ventures order by slug limit 1", "race-a%d@example.test" % next(K)), False)
 r2 = case("a write that bypasses the triggers (replica role) is seen through the row count: the first archive is discarded, the retry (the row is gone) is the one uploaded", lambda: (m("set session_replication_role = replica"), m("delete from public.leads where email = 'race-1@example.test'"), m("set session_replication_role = origin")), True)
 if r2.get("_attempts") != 2:
     print("FAIL replica-role write was not detected on the first attempt:", r2.get("_attempts")); fails.append("replica-role")
-reset(); m("delete from public.leads where email like 'race-%@example.test'");
+# ---- round 6: noise writes must not starve the backup; a redefined redactor / spec function must discard the archive
+case("noise: 0-row updates and non-source-column updates between pages (every attempt) do not disturb the backup", lambda: (m("update public.leads set name = 'x' where false"), m("update public.leads set score = coalesce(score, 0) + 1, status = 'contacted' where email = 'race-1@example.test'"), m("update public.leads set name = name where email = 'race-1@example.test'")), True)
+r3 = case("noise: still ONE attempt", None, True)
+with mut.cursor() as c:
+    c.execute("select pg_get_functiondef('public.backup_redact_patterns(text,jsonb)'::regprocedure)"); orig_def = c.fetchone()[0]
+    c.execute("select pg_get_functiondef('public.backup_redaction_spec()'::regprocedure)"); orig_spec = c.fetchone()[0]
+def redefine(d):
+    m(d.replace("AS $function$", "AS $function$ /* race %d */" % next(K), 1))
+try:
+    case("the redactor function (backup_redact_patterns) is replaced between pages (every attempt): discarded, not uploaded", lambda: redefine(orig_def), False)
+    case("the spec function (backup_redaction_spec) is replaced between pages (every attempt): discarded, not uploaded", lambda: redefine(orig_spec), False)
+    r4 = case("one redefinition of the redactor: the first archive is discarded, the retry is the one uploaded", (lambda st={"n": 0}: (st.__setitem__("n", st["n"] + 1), redefine(orig_def) if st["n"] == 1 else None)), True, every=False)
+    if r4.get("_attempts") != 2:
+        print("FAIL a redefined redactor was not detected on the first attempt:", r4.get("_attempts")); fails.append("redactor-redefinition")
+finally:
+    m(orig_def); m(orig_spec)
+reset(); m("delete from public.leads where email like 'race-%@example.test' or name in ('Racelynn Fresh', '[erased]')");
 mut.close()
 print("backup race check:", "FAILED " + ", ".join(fails) if fails else "all cases passed")
 sys.exit(1 if fails else 0)

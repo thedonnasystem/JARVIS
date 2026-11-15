@@ -784,9 +784,11 @@ def put_files(files: dict[str, bytes]) -> dict:
     return {"target": "put", "files": out}
 
 
-def upload(name: str, encrypted: bytes) -> bool:
-    """Single-file upload kept for callers/tests that only need success or failure."""
+def upload(name: str, encrypted: bytes, manifest: dict | None = None) -> bool:
+    """Single-file upload kept for callers/tests that only need success or failure. Defence in depth: like run(), it refuses anything whose manifest does not say consistent is exactly True
+    (no manifest = refused), so no code path can put an unverified archive off-site."""
     try:
+        _require_verified_consistency(manifest or {})
         put_files({name: encrypted})
         return True
     except (BackupError, urllib.error.URLError, OSError, ValueError, KeyError):

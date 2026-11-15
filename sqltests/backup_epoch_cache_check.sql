@@ -11,7 +11,9 @@ begin
 
   -- ============================================================ B. epoch: every source write changes the vector
   for src in select distinct table_name from public.redaction_sources() where to_regclass('public.' || table_name) is not null loop
-    if (select count(*) from pg_trigger t where t.tgrelid = ('public.' || src.table_name)::regclass and t.tgname = 'redaction_epoch' and not t.tgisinternal) <> 1
+    if (select count(*) from pg_trigger t where t.tgrelid = ('public.' || src.table_name)::regclass and t.tgname = 'redaction_epoch_ins' and not t.tgisinternal) <> 1
+       or (select count(*) from pg_trigger t where t.tgrelid = ('public.' || src.table_name)::regclass and t.tgname = 'redaction_epoch_upd' and not t.tgisinternal) <> 1
+       or (select count(*) from pg_trigger t where t.tgrelid = ('public.' || src.table_name)::regclass and t.tgname = 'redaction_epoch_del' and not t.tgisinternal) <> 1
        or (select count(*) from pg_trigger t where t.tgrelid = ('public.' || src.table_name)::regclass and t.tgname = 'redaction_epoch_trunc' and not t.tgisinternal) <> 1 then
       raise exception 'B1 source table % has no epoch triggers (insert/update/delete + truncate)', src.table_name; end if;
   end loop;
@@ -34,6 +36,54 @@ begin
   e0 := e1; set local session_replication_role = replica; insert into public.leads (venture_id, name, status) values (v, 'Epoch Bypass', 'new'); set local session_replication_role = origin;
   e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B10 a trigger-bypassing write changed no count'; end if;
   e0 := public.backup_epoch(); if public.backup_epoch() <> e0 then raise exception 'B11 the epoch changes without a write'; end if;
+
+  -- ---- round 6, B2: noise writes do not move the epoch, real source changes do
+  insert into public.leads (venture_id, name, email, phone, status, score) values (v, 'Noise Fixturename', 'noise-1@example.test', '613-555-0377', 'new', 1);
+  e0 := public.backup_epoch();
+  update public.leads set name = 'zz' where false;
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B20 a 0-row update moved the epoch'; end if;
+  update public.leads set score = score + 1, status = 'contacted' where email = 'noise-1@example.test';
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B21 an update of non-source columns moved the epoch'; end if;
+  update public.leads set name = name, email = email where email = 'noise-1@example.test';
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B22 an update that changed no source value moved the epoch'; end if;
+  delete from public.leads where false;
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B23 a 0-row delete moved the epoch'; end if;
+  update public.leads set phone = '613-555-0378' where email = 'noise-1@example.test';
+  e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B24 changing a source column did not move the epoch'; end if;
+  e0 := e1; update public.leads set email = 'noise-2@example.test' where email = 'noise-1@example.test';
+  e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B25 changing the email did not move the epoch'; end if;
+  e0 := e1; delete from public.leads where email = 'noise-2@example.test';
+  e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B26 deleting a row did not move the epoch'; end if;
+
+  -- ---- round 6, B1: redefining ANY function of the export path (every backup_* / redaction_* function, the detector twin, the writer trigger) or changing the spec moves the epoch
+  declare fr record; cnt int := 0; def text;
+  begin
+    for fr in select p.oid, p.oid::regprocedure::text sig from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p') and (p.proname ~ '^(backup_|redaction_)' or p.proname in ('ws_sensitive_hits', 'agent_runs_scrub')) order by 2 loop
+      e0 := public.backup_epoch();
+      def := pg_get_functiondef(fr.oid);
+      execute replace(def, 'AS $function$', 'AS $function$ ');
+      e1 := public.backup_epoch();
+      if e1 ->> 'code' = e0 ->> 'code' then raise exception 'B27 redefining % did not change the epoch code hash', fr.sig; end if;
+      cnt := cnt + 1;
+    end loop;
+    if cnt < 55 then raise exception 'B27b only % functions are hashed (expected the whole export path, 55+)', cnt; end if;
+  end;
+  e0 := public.backup_epoch(); alter table public.memory add column zz_probe text;
+  e1 := public.backup_epoch(); if e1 ->> 'policy' = e0 ->> 'policy' then raise exception 'B28 a new column on an exported table did not change the policy hash'; end if;
+
+  -- ---- B4 (verifier round 5): a table that is NOT exported and has a name / contact / address-like text column must be a redaction source, or be on this reviewed list (it is not a person's identifier). A new client table with a
+  -- name-like column fails here until it is added to redaction_sources() (which also feeds the context and the epoch) or reviewed onto the list on purpose.
+  declare offenders text;
+  begin
+    select string_agg(c.table_name || '.' || c.column_name, ', ' order by 1) into offenders
+      from information_schema.columns c join pg_class r on r.relname = c.table_name and r.relnamespace = 'public'::regnamespace and r.relkind = 'r'
+     where c.table_schema = 'public' and c.table_name not in (select jsonb_array_elements_text(public.backup_export_policy() -> 'exported'))
+       and c.data_type in ('text', 'character varying', 'jsonb') and c.column_name ~ '(^|_)(name|email|phone|contact|to_ref|address|client|payee|tel|mobile|cell)($|_)'
+       and not exists (select 1 from public.redaction_sources() s where s.table_name = c.table_name and s.column_name = c.column_name)
+       and (c.table_name || '.' || c.column_name) not in ('ffm_ad_sets.name', 'ffm_routing_rules.name', 'ws_campaigns.name', 'ffm_redaction_keys.name');   -- reviewed: campaign / ad set / rule / key LABELS set by the workspace operator, not a person's identifier
+    if offenders is not null then raise exception 'B30 name-like columns that are neither redaction sources nor reviewed: %', offenders; end if;
+  end;
+
 
   -- owner-only: no API role can read or write the epoch / cache tables, none is exported, the trigger function cannot be called
   if has_sequence_privilege('service_role', 'public.ffm_redaction_epoch_seq', 'usage,select,update') or has_sequence_privilege('anon', 'public.ffm_redaction_epoch_seq', 'usage,select,update') or has_sequence_privilege('authenticated', 'public.ffm_redaction_epoch_seq', 'usage,select,update') then raise exception 'B12a an API role has a privilege on the epoch sequence'; end if;
