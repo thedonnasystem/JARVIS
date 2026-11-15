@@ -1,0 +1,5 @@
+direct  GET /mcp -> HTTP/1.1 200 OK | content-type: ['content-type: text/event-stream']
+gate    GET /mcp -> HTTP/1.0 200 OK | content-type: ['content-type: text/event-stream']
+same status line: True
+gate DELETE /mcp -> 200
+[cleanup] server stopped, tempdir removed=True

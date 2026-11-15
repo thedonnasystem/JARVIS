@@ -1,0 +1,37 @@
+== happy path (uid 1001, no caps, no_new_privs, read-only root)
+    | stub agent-swarm role=worker
+    | uid=1001 gid=1001 cwd=/tmp/ws
+    | CapEff:	0000000000000000
+    | CapBnd:	0000000000000000
+    | NoNewPrivs:	1
+    | readonly /usr/bin/x
+    | readonly /etc/x
+    | readonly /usr/local/bin/x
+    | readonly /opt/worker-home-seed/x
+    | writable /tmp/home/x
+    | writable /tmp/ws/x
+    | writable /tmp/logs/x
+    | writable /tmp/x
+    | HOME-listing: .claude .claude.json 
+    | mcp.json mode: 600
+  [PASS] entrypoint reaches exec of the agent (rc=0)
+  [PASS] agent runs as uid 1001 in the workspace
+  [PASS] CapEff is empty
+  [PASS] CapBnd is empty
+  [PASS] NoNewPrivs=1
+  [PASS] rootfs read-only (/usr/bin, /etc, /usr/local/bin not writable)
+  [PASS] HOME, workspace, logs writable
+  [PASS] HOME seeded (.claude restored over the empty tmpfs)
+  [PASS] .mcp.json is mode 600
+  [PASS] no write outside HOME/workspace/logs/tmp succeeded
+== fail-closed preconditions
+  [PASS] operator-style key refused (rc 64)
+  [PASS] direct API URL refused (rc 64)
+  [PASS] userinfo trick in URL refused (rc 64)
+  [PASS] AGENT_ROLE=lead refused (rc 64)
+  [PASS] missing AGENT_ID refused (rc 64)
+  [PASS] path-like AGENT_ID refused (rc 64)
+  [PASS] uid 0 refused (rc 64)
+  [PASS] root-owned workspace volume fails with an explicit message (no ownership change attempted)
+
+RESULT: pass=18 fail=0

@@ -1,0 +1,39 @@
+port 55882
+seed FAKE_GLOBAL_SECRET 200
+seed FAKE_OWN_AGENT_SECRET 200
+seed FAKE_OTHER_AGENT_SECRET 200
+seed plain 200
+worker token prefix: aseph_ keys: ['agentCreated', 'agentId', 'expiresAt', 'plaintext', 'tokenId']
+=== as operator
+GET /api/config?scope=global&includeSecrets=true               -> 200  leaked=['THROWAWAY-GLOBAL']  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+GET /api/config?includeSecrets=true (all scopes)               -> 200  leaked=['THROWAWAY-GLOBAL', 'THROWAWAY-OWN', 'THROWAWAY-OTHER']  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+GET /api/config?scope=agent&scopeId=pilot-worker-1&includeSecrets=true -> 200  leaked=['THROWAWAY-OWN']  {"configs": [{"id": "0bd80702-c544-4168-a4c9-c9726bbd8bb5", "scope": "agent", "scopeId": "pilot-worker-1", "key": "AGENT_MAX_TASKS", "value": "1", "isSecret": false, "env
+GET /api/config?scope=agent&scopeId=other-agent&includeSecrets=true -> 200  leaked=['THROWAWAY-OTHER']  {"configs": [{"id": "e7ebd62c-8f07-44a8-88e2-fb5ba88fb240", "scope": "agent", "scopeId": "other-agent", "key": "FAKE_OTHER_AGENT_SECRET", "value": "THROWAWAY-OTHER-AGENT-
+GET /api/config/resolved?includeSecrets=true                   -> 200  leaked=['THROWAWAY-GLOBAL']  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+GET /api/config/resolved?agentId=pilot-worker-1&includeSecrets=true -> 200  leaked=['THROWAWAY-GLOBAL', 'THROWAWAY-OWN']  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+GET /api/config/resolved?agentId=other-agent&includeSecrets=true -> 200  leaked=['THROWAWAY-GLOBAL', 'THROWAWAY-OTHER']  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+=== as worker
+GET /api/config?scope=global&includeSecrets=true               -> 200  leaked=[]  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+GET /api/config?includeSecrets=true (all scopes)               -> 200  leaked=[]  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+GET /api/config?scope=agent&scopeId=pilot-worker-1&includeSecrets=true -> 200  leaked=[]  {"configs": [{"id": "0bd80702-c544-4168-a4c9-c9726bbd8bb5", "scope": "agent", "scopeId": "pilot-worker-1", "key": "AGENT_MAX_TASKS", "value": "1", "isSecret": false, "env
+GET /api/config?scope=agent&scopeId=other-agent&includeSecrets=true -> 200  leaked=[]  {"configs": [{"id": "e7ebd62c-8f07-44a8-88e2-fb5ba88fb240", "scope": "agent", "scopeId": "other-agent", "key": "FAKE_OTHER_AGENT_SECRET", "value": "********", "isSecret":
+GET /api/config/resolved?includeSecrets=true                   -> 200  leaked=['THROWAWAY-GLOBAL', 'THROWAWAY-OWN']  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+GET /api/config/resolved?agentId=pilot-worker-1&includeSecrets=true -> 200  leaked=['THROWAWAY-GLOBAL', 'THROWAWAY-OWN']  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+GET /api/config/resolved?agentId=other-agent&includeSecrets=true -> 200  leaked=[]  {"configs": [{"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envP
+GET /api/config/AGENT_LOG_RETENTION_DAYS (by id) includeSecrets -> 200  leaked=[]  {"id": "7b01fda6-a110-4bcd-a17f-74e68b5ba26f", "scope": "global", "scopeId": null, "key": "AGENT_LOG_RETENTION_DAYS", "value": "90", "isSecret": false, "envPath": null, "
+GET /api/config/AGENT_MAX_TASKS (by id) includeSecrets         -> 200  leaked=[]  {"id": "0bd80702-c544-4168-a4c9-c9726bbd8bb5", "scope": "agent", "scopeId": "pilot-worker-1", "key": "AGENT_MAX_TASKS", "value": "1", "isSecret": false, "envPath": null, 
+GET /api/config/CAPABILITIES (by id) includeSecrets            -> 200  leaked=[]  {"id": "1ae7fb57-604f-4171-b320-5bd3579ec928", "scope": "global", "scopeId": null, "key": "CAPABILITIES", "value": "core,task-pool,config,mcp,profiles,memory,metrics,kv,s
+GET /api/config/CONTEXT_VERSIONS_KEEP_LATEST (by id) includeSecrets -> 200  leaked=[]  {"id": "27b2887d-934f-4b8f-8a1c-991b5d45df78", "scope": "global", "scopeId": null, "key": "CONTEXT_VERSIONS_KEEP_LATEST", "value": "100", "isSecret": false, "envPath": nu
+GET /api/config/EVENTS_RETENTION_DAYS (by id) includeSecrets   -> 200  leaked=[]  {"id": "dde18c89-7249-43b1-a660-07a45e7bc75e", "scope": "global", "scopeId": null, "key": "EVENTS_RETENTION_DAYS", "value": "90", "isSecret": false, "envPath": null, "des
+GET /api/config/FAKE_GLOBAL_SECRET (by id) includeSecrets      -> 200  leaked=[]  {"id": "0752d768-6046-4109-b544-6026d8d9aca2", "scope": "global", "scopeId": null, "key": "FAKE_GLOBAL_SECRET", "value": "********", "isSecret": true, "envPath": null, "d
+GET /api/config/FAKE_OTHER_AGENT_SECRET (by id) includeSecrets -> 200  leaked=[]  {"id": "e7ebd62c-8f07-44a8-88e2-fb5ba88fb240", "scope": "agent", "scopeId": "other-agent", "key": "FAKE_OTHER_AGENT_SECRET", "value": "********", "isSecret": true, "envPa
+GET /api/config/FAKE_OWN_AGENT_SECRET (by id) includeSecrets   -> 200  leaked=[]  {"id": "b0bd1379-771c-4b6e-aca3-8eef219bbd6c", "scope": "agent", "scopeId": "pilot-worker-1", "key": "FAKE_OWN_AGENT_SECRET", "value": "********", "isSecret": true, "envP
+GET /api/config/PLAIN_KEY (by id) includeSecrets               -> 200  leaked=[]  {"id": "6438b66b-669e-4346-a7e5-b5b91b280147", "scope": "global", "scopeId": null, "key": "PLAIN_KEY", "value": "plain", "isSecret": false, "envPath": null, "description"
+GET /api/config/SCRIPT_RUNS_RETENTION_DAYS (by id) includeSecrets -> 200  leaked=[]  {"id": "19470ebe-b666-47b1-95e2-daad4822fe24", "scope": "global", "scopeId": null, "key": "SCRIPT_RUNS_RETENTION_DAYS", "value": "30", "isSecret": false, "envPath": null,
+GET /api/config/SESSION_LOG_RETENTION_DAYS (by id) includeSecrets -> 200  leaked=[]  {"id": "0e5f2f71-a882-45d7-a1e7-e585ff10e302", "scope": "global", "scopeId": null, "key": "SESSION_LOG_RETENTION_DAYS", "value": "30", "isSecret": false, "envPath": null,
+GET /api/config/env-presence                                   -> 400  leaked=[]  {"error": "Validation error: keys: Invalid input: expected string, received undefined"}
+PUT /api/config global                                         -> 403  leaked=[]  {"error": "Writing swarm config requires the lead agent"}
+PUT /api/config agent own scope                                -> 403  leaked=[]  {"error": "Writing swarm config requires the lead agent"}
+POST /internal/reload-config                                   -> 200  leaked=[]  {"success": true, "configsLoaded": 8, "keysUpdated": ["AGENT_LOG_RETENTION_DAYS", "CAPABILITIES", "CONTEXT_VERSIONS_KEEP_LATEST", "EVENTS_RETENTION_DAYS", "FAKE_GLOBAL_SE
+POST /api/tasks (create)                                       -> 201  leaked=[]  {"id": "06bb25dc-e8f3-4e90-9db4-42780455ee94", "key": "shared/task:06bb25dc-e8f3-4e90-9db4-42780455ee94/", "agentId": null, "creatorAgentId": "pilot-worker-1", "task": "w
+[cleanup] server stopped, tempdir removed=True

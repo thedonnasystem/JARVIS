@@ -1,0 +1,28 @@
+worker requests seen by the gate (method, path, decision, upstream/status):
+    4  GET    /api/config/resolved                             ALLOW 200
+    1  POST   /api/agents                                      ALLOW 200
+    2  POST   /api/fs/agent-credentials                        DENY  403
+    9  POST   /api/prompt-templates/render                     ALLOW 200
+    1  POST   /close                                           ALLOW 204
+    4  PUT    /api/agents/pilot-worker-1/...                   ALLOW 200
+
+DENIED requests from the real worker: 2
+   POST /api/fs/agent-credentials - POST /api/fs/agent-credentials is not on the worker allow-list
+   POST /api/fs/agent-credentials - POST /api/fs/agent-credentials is not on the worker allow-list
+
+worker log tail:
+
+[2K[1A[2K[G[env-reload] Loaded 7 config entries from API
+
+[2K[1A[2K[G[boot] waiting for CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY (attempt 4, retry in 10000ms, provider=claude) — Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or route Claude Code through a gateway (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY), Microsoft Foundry (CLAUDE_CODE_USE_FOUNDRY), Amazon Bedrock (CLAUDE_CODE_USE_BEDROCK), or Google Vertex AI (CLAUDE_CODE_USE_VERTEX).
+
+[2K[1A[2K[G
+[worker] Received SIGTERM, shutting down...
+
+[2K[1A[2K[G[worker] Marking agent as offline...
+
+[2K[1A[2K[G[worker] Agent marked as offline
+
+
+agents registered: [('pilot-worker-1', 'offline', False)]
+[cleanup] server stopped, tempdir removed=True

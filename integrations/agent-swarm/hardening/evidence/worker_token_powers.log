@@ -1,0 +1,33 @@
+other agent: 201 other-agent
+op task for other: 201 5ff6bf62-02e2-4f50-ae4f-140d10e7055f
+mint worker token (own agent)                              POST   /api/agents/pilot-worker-1/token                 -> 403 {"error": "Worker tokens require operator or user credentials"}
+mint worker token for other agent                          POST   /api/agents/other-agent/token                    -> 403 {"error": "Token cannot access another agent's scope"}
+rotate token                                               POST   /api/agents/pilot-worker-1/token/rotate          -> 403 {"error": "Worker tokens require operator or user credentials"}
+revoke other's token                                       DELETE /api/agents/other-agent/token                    -> 403 {"error": "Token cannot access another agent's scope"}
+create task                                                POST   /api/tasks                                       -> 201 {"id": "1ddbc888-367c-4afc-92b6-c5b1de391776", "key": "shared/task:1ddbc888-367c-4afc-92b6-c5b1de391776/", "ag
+create task assigned to other agent                        POST   /api/tasks                                       -> 201 {"id": "de303c61-f51e-436b-bebd-35621ab9314f", "key": "shared/task:de303c61-f51e-436b-bebd-35621ab9314f/", "ag
+cancel operator task (other agent's)                       POST   /api/tasks/5ff6bf62-02e2-4f50-ae4f-140d10e7055f/ -> 403 {"error": "Only the lead or task creator can cancel tasks."}
+finish operator task (other agent's)                       POST   /api/tasks/5ff6bf62-02e2-4f50-ae4f-140d10e7055f/ -> 403 {"error": "Task is assigned to another agent"}
+finish unassigned pool task                                POST   /api/tasks/d0881494-b89a-4284-809d-85c183434297/ -> 200 {"success": true, "alreadyFinished": true, "task": {"id": "d0881494-b89a-4284-809d-85c183434297", "key": "shar
+steer other's task                                         POST   /api/tasks/5ff6bf62-02e2-4f50-ae4f-140d10e7055f/ -> 403 {"error": "Forbidden: caller cannot steer this task"}
+read other's task                                          GET    /api/tasks/5ff6bf62-02e2-4f50-ae4f-140d10e7055f  -> 200 {"id": "5ff6bf62-02e2-4f50-ae4f-140d10e7055f", "key": "shared/task:5ff6bf62-02e2-4f50-ae4f-140d10e7055f/", "ag
+register another agent                                     POST   /api/agents                                      -> 200 {"id": "pilot-worker-1", "name": "pilot-worker", "isLead": false, "status": "idle", "runtimePoolId": null, "ru
+create budget (PUT)                                        PUT    /api/budgets/global/_                            -> 200 {"scope": "global", "scopeId": "_", "dailyBudgetUsd": 99999, "createdAt": 1794718514372, "lastUpdatedAt": 1794
+create schedule                                            POST   /api/schedules                                   -> 201 {"id": "f9895cc4-1a57-4fd3-95d2-b480fe985a49", "key": "shared/schedule:f9895cc4-1a57-4fd3-95d2-b480fe985a49/",
+upsert script                                              POST   /api/scripts/upsert                              -> 200 {"name": "evil", "version": 1, "contentDeduped": false}
+run script                                                 POST   /api/scripts/run                                 -> 200 {"truncated": {"stdout": false, "stderr": false}, "durationMs": 27, "stdout": "", "stderr": "env: 'bun': Permi
+create mcp-server (stdio)                                  POST   /api/mcp-servers                                 -> 400 {"error": "Validation error: args: Invalid input: expected string, received array"}
+create skill                                               POST   /api/skills                                      -> 201 {"skill": {"id": "afe329c7-fd0d-41d7-b3fb-8bcf8f7eeaea", "name": "evil", "description": "x", "content": "---\n
+create user                                                POST   /api/users                                       -> 401 {"error": "Unauthorized"}
+create invite                                              POST   /api/invites                                     -> 400 {"error": "Validation error: email: Invalid input: expected string, received undefined"}
+raw-llm (spend path)                                       POST   /api/internal/raw-llm                            -> 500 {"error": "LLM call failed: No workflow LLM credential found. Set OPENROUTER_API_KEY or OPENAI_API_KEY."}
+kv set                                                     PUT    /api/kv/hq                                       -> 200 {"namespace": "task:agent:pilot-worker-1", "key": "hq", "value": "x", "valueType": "json", "expiresAt": null, 
+reload config                                              POST   /api/config/reload                               -> 200 {"success": true, "configsLoaded": 6, "keysUpdated": ["AGENT_LOG_RETENTION_DAYS", "CAPABILITIES", "CONTEXT_VER
+internal reload-config                                     POST   /internal/reload-config                          -> 200 {"success": true, "configsLoaded": 6, "keysUpdated": ["AGENT_LOG_RETENTION_DAYS", "CAPABILITIES", "CONTEXT_VER
+config pool-keys write                                     POST   /api/config/pool-keys                            -> 400 {"error": "Validation error: key: Choose a credential pool variable., value: Invalid input: expected string, r
+fs agent-credentials                                       POST   /api/fs/agent-credentials                        -> 200 {"enabled": false, "created": false, "agentId": "pilot-worker-1"}
+GET /api/keys/status                                       GET    /api/keys/status                                 -> 200 {"success": true, "keys": []}
+GET /api/users                                             GET    /api/users                                       -> 200 {"users": []}
+GET /api/stats                                             GET    /api/stats                                       -> 200 {"agents": {"total": 2, "idle": 2, "busy": 0, "offline": 0}, "tasks": {"total": 4, "unassigned": 2, "offered":
+tasks now: [('x', 'pending'), ('x', 'unassigned'), ('operator pool task', 'unassigned'), ('operator task for other', 'pending')]
+[cleanup] server stopped, tempdir removed=True
