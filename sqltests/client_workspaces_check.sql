@@ -63,7 +63,7 @@ begin
   -- review-found bypasses
   foreach s in array array['123 456 789 call 613 555 1234', '123.456.789', '123/456/789', '123_456_789', '1234 56789', '12 34 56 78 9', '１２３４５６７８９',
                            '١٢٣٤٥٦٧٨٩', 'S.I.N 5', 's i n', 'social-insurance', 'SSN', 'bank account 1234567', 'chequing account', 'Experian', 'credit history',
-                           'FICO', 'pre approval letter', 'loan application', 'T4A', 'tax return', 'OHIP', 'date of birth', 'salary', E's\u200bin'] loop
+                           'FICO', 'pre approval letter', 'loan application', 'T4A', 'tax return', 'OHIP', 'date of birth', 'salary', 's' || chr(8203) || 'in'] loop
     if public.ws_sensitive_hits(s) = '{}' then raise exception 'W23 not flagged: %', s; end if;
   end loop;
   begin perform public.ws_add_lead(a, ca, '123', '456', '789', 'x'); raise exception 'W24 digits split across columns accepted';
