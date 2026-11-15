@@ -6,3 +6,4 @@ Source file: dist/umd/supabase.js inside the npm tarball https://registry.npmjs.
 supabase.js sha256: a867edbcfb029370aeec7223dd6180b560b621fbe3bc64c6584fb0369d1b7bce
 Rollback: previous file was 2.45.4, sha256 8596965fe918e656600a1b568d3a168f5c0d3d22a600886bb6f44a6555db01e7 (npm integrity sha512-E5p8/zOLaQ3a462MZnmnz03CrduA5ySH9hZyL03Y+QZLIOO4/Gs8Rdy4ZCKDHsN7x0xdanVEWWFN3pJFQr9/hg==);
   a byte-identical copy is kept at webtests/fixtures/supabase-2.45.4.umd.js.gz (gzip of that file; test fixture only, not deployed).
+Licence notices for the bundled packages: webapp/vendor/THIRD_PARTY_LICENSES.txt

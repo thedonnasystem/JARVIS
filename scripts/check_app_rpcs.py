@@ -28,7 +28,7 @@ ROOT = os.path.normpath(os.path.join(HERE, ".."))
 # closed in the lockdown, and its patch must exist. Remove the entry when the patch is applied.
 PENDING_SIGNOFF = {"app_needs_you": "ops/pending_signoff/inbox_open_app_needs_you.txt"}
 # Files under webapp/ that are intentionally not in the offline shell.
-SHELL_EXEMPT = ("sw.js", "vendor/README.txt")
+SHELL_EXEMPT = ("sw.js", "vendor/README.txt", "vendor/THIRD_PARTY_LICENSES.txt")
 SHELL_EXEMPT_PREFIX = ("apply/",)   # the public setter-signup page: not part of the owner app, must not be cached into it
 # Things in a keep-open list that the browser app does not call (the bot, the setter page, or the owner check itself).
 NOT_CALLED_BY_APP = {"is_app_owner", "setter_apply"}
