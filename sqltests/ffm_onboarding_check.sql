@@ -213,6 +213,77 @@ begin
   if public.ffm_readiness(gen_random_uuid())->>'ready' <> 'false' then raise exception 'F41 unknown workspace ready'; end if;
   -- no sensitive wording survives anywhere in the stored onboarding rows
   if exists (select 1 from public.ffm_onboarding_items where array_length(public.ws_sensitive_hits(title || ' ' || coalesce(value_text, '')), 1) > 0) then raise exception 'F42 stored item looks sensitive'; end if;
+  -- guard bypass regression (reviewer repros): a date-shaped prefix must NOT excuse digits behind it, in ANY free-text column
+  perform pg_temp.expect_fail(format($q$select public.ffm_provide_input(%L, 'service_geography', '2026-01-01 123456789', 'moe')$q$, a), 'Sensitive data refused%');
+  perform pg_temp.expect_fail(format($q$select public.ffm_provide_input(%L, 'service_geography', '2026-01-01T 4111 1111 1111 1111', 'moe')$q$, a), 'Sensitive data refused%');
+  perform pg_temp.expect_fail(format($q$select public.ffm_provide_input(%L, 'service_geography', '2026-01-01 4111-1111-1111-1111', 'moe')$q$, a), 'Sensitive data refused%');
+  perform pg_temp.expect_fail(format($q$select public.ffm_provide_input(%L, 'service_geography', 'Ottawa', '2026-01-01 123456789')$q$, a), 'Sensitive data refused%');   -- provided_by
+  perform pg_temp.expect_fail(format($q$select public.ffm_block_input(%L, 'launch_deadline', '2026-01-01 123 456 789')$q$, a), 'Sensitive data refused%');          -- blocked_until
+  perform pg_temp.expect_fail(format($q$select public.ffm_add_ad_set(%L, %L, 'Fine name', '2026-01-01 123456789')$q$, a, ca), 'Sensitive data refused%');            -- audience_note
+  perform pg_temp.expect_fail(format($q$select public.ffm_add_creative(%L, %L, %L, 'Fine headline', '2026-01-01T 4111 1111 1111 1111', 'Book')$q$, a, ca, sa), 'Sensitive data refused%');
+  perform pg_temp.expect_fail(format($q$select public.ffm_add_routing_rule(%L, 'ok rule', 'email', '2026-01-01 123456789', array['name'])$q$, a), 'Sensitive data refused%');
+  perform pg_temp.as_owner(true);
+  perform pg_temp.expect_fail(format($q$select public.ffm_owner_approve(%L, 'activation', null, '2026-01-01 123456789')$q$, a), 'Sensitive data refused%');   -- approvals.note
+  perform pg_temp.as_owner(false);
+  -- obfuscated variants go through the same detector (checked directly and through the guard)
+  foreach s in array array['１２３４５６７８９', '123 456 789', '123-456-789', '123.456.789', '1 2 3 4 5 6 7 8 9', E'1​2​3456789', '٤١١١١١١١١١١١١١١١١', '4111 1111 1111 1111', '2026-01-01 １２３４５６７８９'] loop
+    if array_length(public.ws_sensitive_hits(s), 1) is null then raise exception 'G1 detector missed %', s; end if;
+    perform pg_temp.expect_fail(format($q$select public.ffm_provide_input(%L, 'service_geography', %L, 'moe')$q$, a, s), 'Sensitive data refused%');
+  end loop;
+  -- typed uuid/timestamptz columns are still not scanned (no false refusals), and every other string column is
+  insert into public.ffm_approvals (workspace_id, kind, approved_by, created_at) values (a, 'routing', 'ok', '2026-01-01 12:34:56.789012+00');
+  delete from public.ffm_approvals where approved_by = 'ok';
+
+  -- app_ffm_* owner wrappers: owner works; anon / stranger / bot refused; nothing launches
+  foreach f in array array['app_ffm_workspaces()', 'app_ffm_inputs(uuid)', 'app_ffm_set_budget(uuid,integer)', 'app_ffm_approve_activation(uuid,text)',
+                           'app_ffm_revoke_approval(uuid)', 'app_ffm_approve_creative(uuid,uuid)', 'app_ffm_weekly_report(uuid,timestamptz,timestamptz)'] loop
+    foreach r in array array['anon', 'authenticated'] loop
+      if has_function_privilege(r, 'public.' || f, 'execute') then raise exception 'W1 % can execute %', r, f; end if;
+    end loop;
+    if not has_function_privilege('service_role', 'public.' || f, 'execute') then raise exception 'W2 service_role cannot execute %', f; end if;
+  end loop;
+  if exists (select 1 from pg_proc where pronamespace = 'public'::regnamespace and proname ~ '^app_ffm_(activate|launch|run|publish|spend|send)') then raise exception 'W3 a launch wrapper exists'; end if;
+  perform pg_temp.as_owner(false);   -- bot / service path: no auth.uid()
+  perform pg_temp.expect_fail($q$select public.app_ffm_workspaces()$q$, 'not authorized%');
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_inputs(%L)$q$, b), 'not authorized%');
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_set_budget(%L, 1)$q$, b), 'not authorized%');
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_approve_activation(%L)$q$, b), 'not authorized%');
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_revoke_approval(%L)$q$, gen_random_uuid()), 'not authorized%');
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_approve_creative(%L, %L)$q$, a, cra), 'not authorized%');
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_weekly_report(%L)$q$, a), 'not authorized%');
+  perform set_config('app.uid', '99999999-9999-9999-9999-999999999992', true);   -- signed-in stranger
+  perform pg_temp.expect_fail($q$select public.app_ffm_workspaces()$q$, 'not authorized%');
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_set_budget(%L, 1)$q$, b), 'not authorized%');
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_approve_activation(%L)$q$, b), 'not authorized%');
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_approve_creative(%L, %L)$q$, a, cra), 'not authorized%');
+  perform pg_temp.as_owner(true);
+  j := public.app_ffm_workspaces();
+  if jsonb_array_length(j) <> 2 or not exists (select 1 from jsonb_array_elements(j) e where e->>'slug' = 'f-mortgage' and e->'readiness'->>'status' = 'active')
+     or not exists (select 1 from jsonb_array_elements(j) e where e->>'slug' = 'f-insurance' and e->>'status' = 'draft') then raise exception 'W4 workspaces wrong: %', j; end if;
+  j := public.app_ffm_inputs(a);
+  if jsonb_array_length(j) < 10 or not exists (select 1 from jsonb_array_elements(j) e where e->>'key' = 'booking_link' and e->>'status' = 'provided') then raise exception 'W5 inputs wrong'; end if;
+  if jsonb_array_length(public.app_ffm_inputs(b)) < 10 or public.app_ffm_inputs(gen_random_uuid()) <> '[]'::jsonb then raise exception 'W5b inputs isolation wrong'; end if;
+  perform public.app_ffm_set_budget(a, 80000);
+  if (select monthly_budget_cents from public.client_workspaces where id = a) <> 80000 then raise exception 'W6 budget not set'; end if;
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_set_budget(%L, -1)$q$, a), 'budget must be%');
+  ap := public.app_ffm_approve_activation(a, 'via wrapper');
+  if (select kind from public.ffm_approvals where id = ap) <> 'activation' or (select budget_cents_at_approval from public.ffm_approvals where id = ap) <> 80000 then raise exception 'W7 approval wrong'; end if;
+  perform public.app_ffm_revoke_approval(ap);
+  if (select revoked_at from public.ffm_approvals where id = ap) is null then raise exception 'W8 not revoked'; end if;
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_revoke_approval(%L)$q$, ap), 'approval not found or already revoked%');
+  perform pg_temp.as_owner(false);
+  perform public.ffm_set_creative_status(a, cra, 'in_review');
+  perform pg_temp.as_owner(true);
+  perform public.app_ffm_approve_creative(a, cra);
+  if (select status from public.ffm_creatives where id = cra) <> 'approved' then raise exception 'W9 creative not approved'; end if;
+  perform pg_temp.expect_fail(format($q$select public.app_ffm_approve_creative(%L, %L)$q$, b, cra), 'creative not found in this workspace%');
+  j := public.app_ffm_weekly_report(a, now() - interval '1 day', now() + interval '1 day');
+  if j->>'workspace' <> 'f-mortgage' or (j->'funnel'->>'leads')::int <> 2 then raise exception 'W10 report wrong: %', j; end if;
+  perform pg_temp.as_owner(false);
+  if exists (select 1 from public.ws_campaigns where status = 'running') then raise exception 'W11 something is running'; end if;
+  -- the bot path stays refused for the underlying approvals too
+  perform pg_temp.expect_fail(format($q$select public.ffm_owner_approve(%L, 'activation')$q$, a), 'owner approval required%');
+
   -- closed workspaces accept nothing
   update public.client_workspaces set status = 'closed' where id = b;
   perform pg_temp.expect_fail(format($q$select public.ffm_add_campaign(%L, 'late one')$q$, b), 'workspace not found or not open%');

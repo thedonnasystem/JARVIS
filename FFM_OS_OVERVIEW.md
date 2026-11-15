@@ -25,4 +25,4 @@ FF Marketing is one reusable marketing-agency OS run per client "workspace". Bui
 - `FFM_CLIENT2_INSURANCE_ONBOARDING.md` (life-insurance professional; recruiting model NOT finalised)
 
 ## Not built (needs owner decision or credentials)
-Owner-facing PWA screens/RPC wrappers for budget and approvals (today: owner-only SQL functions; a wrapper under the `app_*` pattern needs approval); ad-platform and CRM connectors; real lead-to-client delivery; lead stage history (reports use current stage of leads created in the period); consent log table (see Client 1 doc, item to decide).
+Owner-facing PWA screens for budget and approvals (the 7 `app_ffm_*` owner wrappers exist but are CLOSED like `app_needs_you`; opening them needs owner sign-off, see ops/pending_signoff/ffm_open_app_ffm.txt); ad-platform and CRM connectors; real lead-to-client delivery; lead stage history (reports use current stage of leads created in the period); consent log table (see Client 1 doc, item to decide).
