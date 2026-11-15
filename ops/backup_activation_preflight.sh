@@ -3,6 +3,8 @@
 # Run where the three variables are in the environment WITHOUT typing them anywhere, e.g.:   railway run ops/backup_activation_preflight.sh
 # (railway run puts the service variables into this one process only; nothing is printed or written.) Add --network to also ask the
 # destination (Backblaze) whether the key is accepted and limited correctly: one authorize call, no upload, no data sent.
+# --require-pii-exclusion: the PII check (section 7) becomes a FAIL instead of a WARN (also when the DB cannot be checked). The check reads the
+# table list of the target DB through psql using PII_CHECK_DB_URL (or REPLICA_URL); it prints table NAMES only, never rows or the URL.
 # Never prints BACKUP_KEY / BACKUP_AUTH / BACKUP_PUT_URL. Exit 0 = no FAIL, 1 = at least one FAIL.
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"; root="$here/.."
@@ -10,7 +12,8 @@ fails=0; warns=0
 ok()   { echo "PASS  $1"; }
 warn() { echo "WARN  $1"; warns=$((warns+1)); }
 bad()  { echo "FAIL  $1"; fails=$((fails+1)); }
-net=0; [ "${1:-}" = "--network" ] && net=1
+net=0; reqpii=0
+for a in "$@"; do case "$a" in --network) net=1;; --require-pii-exclusion) reqpii=1;; *) echo "unknown arg $a"; exit 2;; esac; done
 
 key="${BACKUP_KEY:-}"; url="${BACKUP_PUT_URL:-}"; auth="${BACKUP_AUTH:-}"
 
@@ -65,6 +68,21 @@ except Exception as e:
 PY
 )"
     echo "$out"; echo "$out" | grep -q '^FAIL' && fails=$((fails+1)); echo "$out" | grep -q '^WARN' && warns=$((warns+1))
+  fi
+fi
+# 7 client-PII exclusion: DO NOT ACTIVATE until it ships. backup_schema()/backup_snapshot() enumerate every public table dynamically, so
+# ws_* / ffm_* / client_workspaces would be exported off-site. WARN (FAIL with --require-pii-exclusion) if any such table exists.
+pii_flag() { if [ "$reqpii" = 1 ]; then bad "$1"; else warn "$1"; fi; }
+dburl="${PII_CHECK_DB_URL:-${REPLICA_URL:-}}"
+if [ -z "$dburl" ]; then pii_flag "client-PII table check could not run: set PII_CHECK_DB_URL (read-only connection string of the target DB)"
+elif ! command -v psql >/dev/null 2>&1; then pii_flag "client-PII table check could not run: psql not installed"
+else
+  tl="$(psql "$dburl" -Atqc "select relname from pg_class where relnamespace='public'::regnamespace and relkind in ('r','p') and relname not in ('push_config','push_subscriptions') order by 1" 2>/dev/null)"; rc=$?
+  if [ $rc != 0 ]; then pii_flag "client-PII table check could not run: database not reachable"
+  else
+    hits="$(printf '%s\n' "$tl" | grep -E '^(ws_|ffm_|client_workspaces$)' | tr '\n' ' ')"
+    if [ -n "$hits" ]; then pii_flag "client-PII tables would be included in off-site backups: ${hits}- DO NOT ACTIVATE until the PII exclusion ships (see BACKUP_ACTIVATION_RUNBOOK.md)"
+    else ok "no ws_* / ffm_* / client_workspaces tables in the backup table list ($(printf '%s\n' "$tl" | grep -c .) tables checked)"; fi
   fi
 fi
 echo; echo "Result: $fails FAIL, $warns WARN."; echo "Not checked here (check by eye): bucket is Private; lifecycle rule set; BACKUP_KEY stored in 2 places; migration 20261113_backup_schema_v1.sql applied (the Telegram /backup check shows it)."

@@ -1,6 +1,12 @@
 # Backup activation runbook (minimal owner steps)
 
-Status Nov 14 2026: dormant by design. `/backup check` FAILs on the 3 variables below and is OK on the `backup_schema` database check. Validated in the sandbox (no secrets, no external hosts), NOT yet against a real destination or production data.
+> ## DO NOT ACTIVATE until client-PII exclusion ships
+> - **Owner decision:** no client lead PII may go into off-site backups until the data policy and the exclusion (branch `build/ffm-consent`, in progress by another agent) are implemented.
+> - **Why it matters:** `backup_schema()` and `backup_snapshot()` enumerate every table in schema `public` dynamically. Once PR #5 migrations are applied, the `ws_*`, `ffm_*` and `client_workspaces` tables would be exported to the destination automatically. Only `push_config` and `push_subscriptions` are excluded today.
+> - **Gate:** run `ops/backup_activation_preflight.sh --require-pii-exclusion` (with `PII_CHECK_DB_URL` pointing at the target DB). It must show no FAIL. Without the flag the same finding is only a WARN.
+> - Do not set `BACKUP_KEY`, `BACKUP_PUT_URL` or `BACKUP_AUTH` in Railway before then.
+
+Status Nov 14 2026: dormant by design (the `/backup` commands and `hq_backup.py` are already in production commit ecadb31 but do nothing without the 3 variables; this branch adds hardening, tests and this runbook). `/backup check` FAILs on the 3 variables below and is OK on the `backup_schema` database check. Validated in the sandbox (no secrets, no external hosts), NOT yet against a real destination or production data.
 Companion docs (longer, click-by-click for Backblaze): `BACKUP_SETUP_OWNER.md`, `BACKUP_PROOF_PROCEDURE.md`, `BACKUP_RECOVERY.md`. This page is the short path plus the end-to-end facts.
 
 ## 1. How the flow works (verified in code and by drill)
@@ -37,7 +43,7 @@ Secrets go ONLY into your password manager, Railway Variables, and the hidden pr
    - `BACKUP_AUTH` = `<keyId of key A>:<applicationKey of key A>` (one colon, no spaces/quotes)
    Saving redeploys the bot; wait for "deployed". Do NOT add any `RESTORE_*` variable to Railway.
 5. Optional self-check without exposing values: `railway run ops/backup_activation_preflight.sh --network` (prints only PASS/WARN/FAIL lines).
-6. Separate approvals still required before it can actually run in production: merge/deploy of the branch containing `/backup` (PR #2 plus this branch's fixes) and applying migration `20261113_backup_schema_v1.sql` (read-only functions). Until then `/backup check` does not exist in production.
+6. Separate approvals still required before it can actually run in production: merge and Railway release of this branch's fixes and applying migration `20261113_backup_schema_v1.sql` (read-only functions). The `/backup` command and `hq_backup.py` are already live in production commit ecadb31; what is NOT live until a Railway release is this branch's `hq_backup.py` fixes (alert kind, retry, clear key error). The migration is a separate approval.
 
 ## 4. Verify
 1. Telegram `/backup check`: every line OK (3 variables set, valid key, URL format, Backblaze accepts key, can write, limited to the bucket, no delete/read/admin powers, upload address issued, `backup_schema` installed). WARN on the key being too powerful or on `backup_schema`: fix, rerun. It does not test: bucket Private, lifecycle rule, key B, or your second key copy.
