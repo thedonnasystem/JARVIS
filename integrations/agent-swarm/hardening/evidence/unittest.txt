@@ -1,0 +1,80 @@
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:565: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/secrets.example/worker.env.example' mode='r' encoding='utf-8'>
+  wcode = "\n".join(l for l in open(wx).read().splitlines() if not l.startswith("#"))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:570: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/secrets.example/api.env.example' mode='r' encoding='utf-8'>
+  if os.path.isfile(ax) and "ANTHROPIC_API_KEY" in "\n".join(l for l in open(ax).read().splitlines() if not l.startswith("#")):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_wrong_model_host_fails (test_verify_swarm_controls.Good.test_wrong_model_host_fails) ... ok
+test_entrypoint_exception_only_allows_listed_caps (test_verify_swarm_controls.Options.test_entrypoint_exception_only_allows_listed_caps) ... /home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:600: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/exc_ok/worker/Dockerfile.worker-hardened' mode='r' encoding='utf-8'>
+  dtxt, etxt = open(df).read(), open(ep).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:600: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/exc_ok/worker/entrypoint-hardened.sh' mode='r' encoding='utf-8'>
+  dtxt, etxt = open(df).read(), open(ep).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:565: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/exc_ok/secrets.example/worker.env.example' mode='r' encoding='utf-8'>
+  wcode = "\n".join(l for l in open(wx).read().splitlines() if not l.startswith("#"))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:570: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/exc_ok/secrets.example/api.env.example' mode='r' encoding='utf-8'>
+  if os.path.isfile(ax) and "ANTHROPIC_API_KEY" in "\n".join(l for l in open(ax).read().splitlines() if not l.startswith("#")):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:565: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/exc_bad/secrets.example/worker.env.example' mode='r' encoding='utf-8'>
+  wcode = "\n".join(l for l in open(wx).read().splitlines() if not l.startswith("#"))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:570: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/exc_bad/secrets.example/api.env.example' mode='r' encoding='utf-8'>
+  if os.path.isfile(ax) and "ANTHROPIC_API_KEY" in "\n".join(l for l in open(ax).read().splitlines() if not l.startswith("#")):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_require_runtime_without_daemon_fails (test_verify_swarm_controls.Options.test_require_runtime_without_daemon_fails) ... ok
+test_strict_rejects_placeholder_digest (test_verify_swarm_controls.Options.test_strict_rejects_placeholder_digest) ... /home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:600: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/worker/Dockerfile.worker-hardened' mode='r' encoding='utf-8'>
+  dtxt, etxt = open(df).read(), open(ep).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:600: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/worker/entrypoint-hardened.sh' mode='r' encoding='utf-8'>
+  dtxt, etxt = open(df).read(), open(ep).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:565: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/secrets.example/worker.env.example' mode='r' encoding='utf-8'>
+  wcode = "\n".join(l for l in open(wx).read().splitlines() if not l.startswith("#"))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:570: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/secrets.example/api.env.example' mode='r' encoding='utf-8'>
+  if os.path.isfile(ax) and "ANTHROPIC_API_KEY" in "\n".join(l for l in open(ax).read().splitlines() if not l.startswith("#")):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:600: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/real_digests/worker/Dockerfile.worker-hardened' mode='r' encoding='utf-8'>
+  dtxt, etxt = open(df).read(), open(ep).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:600: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/real_digests/worker/entrypoint-hardened.sh' mode='r' encoding='utf-8'>
+  dtxt, etxt = open(df).read(), open(ep).read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:565: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/real_digests/secrets.example/worker.env.example' mode='r' encoding='utf-8'>
+  wcode = "\n".join(l for l in open(wx).read().splitlines() if not l.startswith("#"))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/sandbox/swarm_hardening/verify_swarm_controls.py:570: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/sandbox/swarm_hardening/tests/fixtures/real_digests/secrets.example/api.env.example' mode='r' encoding='utf-8'>
+  if os.path.isfile(ax) and "ANTHROPIC_API_KEY" in "\n".join(l for l in open(ax).read().splitlines() if not l.startswith("#")):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_bad_runtime_states (test_verify_swarm_controls.RuntimeInspect.test_bad_runtime_states) ... ok
+test_good (test_verify_swarm_controls.RuntimeInspect.test_good) ... ok
+test_health_is_unauthenticated (test_worker_gate.Allow.test_health_is_unauthenticated) ... ok
+test_required_worker_flow (test_worker_gate.Allow.test_required_worker_flow) ... ok
+test_body_size (test_worker_gate.Deny.test_body_size) ... ok
+test_credentials (test_worker_gate.Deny.test_credentials) ... ok
+test_duplicate_and_bad_query (test_worker_gate.Deny.test_duplicate_and_bad_query) ... ok
+test_lead_registration (test_worker_gate.Deny.test_lead_registration) ... ok
+test_methods (test_worker_gate.Deny.test_methods) ... ok
+test_must_deny_list (test_worker_gate.Deny.test_must_deny_list) ... ok
+test_other_agent_scope (test_worker_gate.Deny.test_other_agent_scope) ... ok
+test_page_headers_and_chunked (test_worker_gate.Deny.test_page_headers_and_chunked) ... ok
+test_path_hygiene (test_worker_gate.Deny.test_path_hygiene) ... ok
+test_secrets_forced_false (test_worker_gate.Deny.test_secrets_forced_false) ... ok
+test_task_creation_paths_all_closed (test_worker_gate.Deny.test_task_creation_paths_all_closed) ... ok
+test_allowed_tools (test_worker_gate.Mcp.test_allowed_tools) ... ok
+test_batch_and_malformed (test_worker_gate.Mcp.test_batch_and_malformed) ... ok
+test_denial_carries_rpc_id (test_worker_gate.Mcp.test_denial_carries_rpc_id) ... ok
+test_denied_tools (test_worker_gate.Mcp.test_denied_tools) ... ok
+test_methods_allowed (test_worker_gate.Mcp.test_methods_allowed) ... ok
+test_task_action_create_denied (test_worker_gate.Mcp.test_task_action_create_denied) ... ok
+test_rules_never_include_write_to_config (test_worker_gate.Policy.test_rules_never_include_write_to_config) ... ok
+
+----------------------------------------------------------------------
+Ran 32 tests in 10.603s
+
+OK

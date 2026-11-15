@@ -1,0 +1,3 @@
+#!/bin/sh
+# stub for `bun --no-orphans <readiness.ts> <url> <timeout>`: records the call, succeeds
+echo "bun-stub called: $*" >> "${STUB_LOG:-/dev/null}"; exit 0
