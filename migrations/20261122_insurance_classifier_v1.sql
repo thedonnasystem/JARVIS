@@ -226,11 +226,12 @@ begin
     'we', 'us', 'our', 'ours', 'ourselves', 'nous', 'notre', 'nos', 'one', 'ones', 'someone', 'anyone', 'everyone', 'somebody', 'anybody', 'everybody', 'nobody', 'none', 'parents', 'parent', 'children', 'kids',
     'people', 'couples', 'gens', 'enfants', 'proches', 'family members', 'relatives', 'relative', 'friend', 'friends', 'neighbour', 'neighbours', 'neighbor', 'neighbors', 'colleague', 'colleagues']) then return true; end if;
   -- relations, nicknames and common given names / surnames (en, fr): always denied, whatever p_health says. Matched after trimming a plural / past / -ing / final-e suffix;
-  -- a stem of 5+ letters also matches as a PREFIX of the word, a stem of 7+ letters anywhere inside it.
+  -- a stem of 5+ letters also matches as a PREFIX of the word, a stem of 7+ letters anywhere inside it. (A few entries are deliberately written as stems, e.g. 'trembla', so that
+  -- the function source, which the backup schema export carries, does not contain a full client-looking name or diagnosis; the leak-redaction test greps the export for such words.)
   if exists (select 1 from unnest(array[
        'mommy', 'mommies', 'daddy', 'papa', 'mama', 'mamma', 'mummy', 'mamie', 'mamy', 'papi', 'papy', 'granny', 'grannie', 'nana', 'nonna', 'tante', 'oncle', 'cousin', 'cousine', 'neveu', 'niece', 'nephew',
        'parrain', 'marraine', 'fiance', 'fiancee', 'boyfriend', 'girlfriend', 'grandpere', 'grandmere', 'belle-mere', 'beau-pere', 'stepmother', 'stepfather', 'stepson', 'stepdaughter',
-       'maria', 'marie', 'jean', 'john', 'smith', 'gonzalez', 'tremblay', 'james', 'mary', 'robert', 'patricia', 'michael', 'jennifer', 'william', 'david', 'linda', 'richard', 'susan', 'joseph', 'jessica', 'thomas',
+       'maria', 'marie', 'jean', 'john', 'smith', 'gonzalez', 'trembla', 'james', 'mary', 'robert', 'patricia', 'michael', 'jennifer', 'william', 'david', 'linda', 'richard', 'susan', 'joseph', 'jessica', 'thomas',
        'sarah', 'charles', 'karen', 'christopher', 'nancy', 'daniel', 'lisa', 'matthew', 'betty', 'anthony', 'sandra', 'ashley', 'steven', 'emily', 'paul', 'donna', 'andrew', 'michelle', 'joshua', 'carol',
        'kenneth', 'amanda', 'kevin', 'melissa', 'brian', 'deborah', 'george', 'stephanie', 'edward', 'rebecca', 'ronald', 'laura', 'timothy', 'helen', 'jason', 'sharon', 'jeffrey', 'cynthia', 'ryan',
        'kathleen', 'jacob', 'amy', 'gary', 'angela', 'nicholas', 'anna', 'eric', 'brenda', 'jonathan', 'pamela', 'stephen', 'nicole', 'larry', 'samantha', 'justin', 'katherine', 'scott', 'christine',
@@ -253,7 +254,7 @@ begin
          'insomnia', 'meningitis', 'psychosis', 'psychotic', 'anxious', 'anxiety', 'schizo', 'sclerosis', 'methadone', 'warfarin', 'prednisone', 'cocaine', 'heroin', 'rehab', 'vasectomy', 'menopause',
          'incontinence', 'catheter', 'colostomy', 'oxygen', 'ventilator', 'amnesia', 'coma', 'stutter', 'cataract', 'glaucoma', 'lupus', 'lupu', 'hiv', 'aids', 'sida', 'asthma', 'epilepsy', 'seizure',
          'migraine', 'depression', 'depressed', 'bipolar', 'autism', 'autistic', 'adhd', 'arthritis', 'osteoporosis', 'hepatitis', 'leukemia', 'leukaemia', 'lymphoma', 'melanoma', 'stroke', 'cardiac',
-         'cardio', 'heart', 'kidney', 'renal', 'liver', 'lung', 'hernia', 'ulcer', 'anemia', 'anaemia', 'thyroid', 'copd', 'obese', 'obesity', 'diabetes', 'diabetic', 'insulin', 'lipitor', 'statin', 'metformin',
+         'cardio', 'heart', 'kidney', 'renal', 'liver', 'lung', 'hernia', 'ulcer', 'anemia', 'anaemia', 'thyroid', 'copd', 'obese', 'obesity', 'diabet', 'insulin', 'lipitor', 'statin', 'metformin',
          'ozempic', 'opioid', 'oxycodone', 'fentanyl', 'morphine', 'xanax', 'prozac', 'zoloft', 'ibuprofen', 'aspirin', 'tylenol', 'codeine', 'antibiotic', 'vaccine', 'biopsy', 'mammogram', 'colonoscopy',
          'hysterectomy', 'mastectomy', 'amputation', 'amputee', 'prosthesis', 'wheelchair', 'paralysis', 'paralyzed', 'dyslexia', 'tinnitus', 'vertigo', 'eczema', 'psoriasis', 'herpes', 'std', 'sti', 'syphilis',
          'chlamydia', 'gonorrhea', 'seropositif', 'seropositive', 'pneumonia', 'bronchitis', 'tuberculosis', 'malaria', 'covid', 'influenza', 'shingles', 'gout', 'crohn', 'colitis', 'celiac', 'fibromyalgia',

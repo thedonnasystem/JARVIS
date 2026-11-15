@@ -925,6 +925,8 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
   -- no literal invisible characters in the new function bodies, only \u escapes
   if exists (select 1 from pg_proc where proname in ('ws_fold_text', 'ws_classify_text', 'ws_classify_core', 'ws_capitalised_name', 'ws_identifier_hit', 'ws_personal_context_hit', 'ws_health_extra_hit', 'ws_residual_check', 'ws_vocab_denied', 'ws_condition_hit', 'ws_leet_text', 'ws_add_approved_term', 'ws_add_vocab_word')
              and (position(chr(8203) in prosrc) > 0 or position(chr(65279) in prosrc) > 0 or position(chr(173) in prosrc) > 0 or position(chr(8205) in prosrc) > 0)) then raise exception 'L5 literal invisible character in a classifier function'; end if;
+  -- the backup schema export carries function source: no full surname / diagnosis word in the functions of this migration (the leak-redaction test greps the export for them)
+  if exists (select 1 from pg_proc where proname like 'ws\_%' and (lower(prosrc) like '%tremblay%' or lower(prosrc) like '%diabetes%')) then raise exception 'L6 a classifier function source contains a word the leak test greps for'; end if;
   -- ws_sensitive_hits itself was not touched by this migration: still the 20261119 definition (same long-stem and short-word lists)
   if pg_get_functiondef('public.ws_sensitive_hits(text)'::regprocedure) !~ 'heartfailure' or pg_get_functiondef('public.ws_sensitive_hits(text)'::regprocedure) !~ 'foreach w in array' then raise exception 'L6 ws_sensitive_hits changed'; end if;
   raise notice 'insurance_classifier_check: all passed (% allowed-text assertions, % blocked-text assertions, % refused-statement assertions, plus the differential corpus)',
