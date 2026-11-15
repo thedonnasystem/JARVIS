@@ -1,0 +1,21 @@
+OWNER SIGN-OFF NEEDED: open the app_ffm_* owner wrappers to the signed-in owner (FF Marketing OS owner screens in the PWA)
+
+Why this is pending
+  migrations/20261118_ffm_onboarding_v1.sql creates 7 owner-checked wrappers, CLOSED (service_role only), same as app_needs_you:
+    app_ffm_workspaces(), app_ffm_inputs(uuid), app_ffm_set_budget(uuid, int), app_ffm_approve_activation(uuid, text),
+    app_ffm_revoke_approval(uuid), app_ffm_approve_creative(uuid, uuid), app_ffm_weekly_report(uuid, timestamptz, timestamptz).
+  Every one re-checks is_app_owner() and raises 42501 for anon, a non-owner and the bot. The underlying ffm_* functions stay service_role only.
+  A function is callable by the signed-in owner only if its name is in the keep-open list of migrations/20261112_lockdown_v1.sql (an applied
+  migration); editing it and the lint allowlist is a security-allowlist change, so the engineer did NOT do it. Until then the owner-only actions
+  (budget, approval) are reachable only with the service key via SQL, and nothing in the PWA calls them (so scripts/check_app_rpcs.py is unaffected).
+
+What it does NOT change: there is no wrapper for ffm_activate, campaign/routing approval or any launch; activation stays dry-run and a service path.
+
+The change (then scripts/gate.sh --strict)
+  1. migrations/20261112_lockdown_v1.sql   add the 7 names to the `proname not in (...)` list.
+  2. ops/verify_live.sql, ops/preflight_live.sql, scripts/replica/e2e.sql   same names in every copy of the list (counts in preflight text).
+  3. migrations/20261118_ffm_onboarding_v1.sql (not applied anywhere yet): for the 7 wrappers change `from public, anon, authenticated` to
+     `from public, anon` and `to service_role` to `to authenticated`.
+  4. scripts/lint_migrations.py MODIFIED_ALLOWLIST gets {"20261112_lockdown_v1.sql": "adds app_ffm_* to the keep-open list (FF Marketing owner screens)"}.
+  5. scripts/check_app_rpcs.py: add the names to NOT_CALLED_BY_APP until the PWA screens exist (rule A6), or build the screens first.
+  Verify: python3 scripts/check_app_rpcs.py, scripts/gate.sh --strict, then after deploy ops/verify_live.sql (anon must stay false for all 7).
