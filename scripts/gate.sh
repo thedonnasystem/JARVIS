@@ -3,7 +3,7 @@
 #
 #   scripts/gate.sh                 run everything; SKIPPED steps are loud and the verdict says so
 #   scripts/gate.sh --strict        any SKIPPED step (except '(optional)' ones, e.g. no backup drill on the branch) is a failure (CI uses this; use it before a deploy)
-#   scripts/gate.sh --only lint,bundle   run only the named steps (unit scripts-tests lint bundle appcheck webjs replica manifest backup)
+#   scripts/gate.sh --only lint,bundle   run only the named steps (unit scripts-tests lint bundle reqsync appcheck webjs replica manifest backup)
 #
 # Environment
 #   REPLICA_URL   scratch Postgres, e.g. postgresql://postgres:pw@localhost:5432/infra_scratch. THE `public` SCHEMA OF THAT
@@ -33,6 +33,7 @@ run unit "python3 -m unittest discover -q (repo tests)" python3 -m unittest disc
 run scripts-tests "lint + manifest tests (scripts/test_*.py)" python3 -m unittest discover -q -s scripts -p 'test_*.py'
 run lint "migration lint (scripts/lint_migrations.py)" python3 scripts/lint_migrations.py --base "${LINT_BASE:-origin/overnight-build}"
 run bundle "dist/APPLY_ALL.sql matches migrations/ (build_bundle.sh --check)" scripts/build_bundle.sh --check
+run reqsync "requirements.txt (Railway) is exactly the hash-locked runtime.lock (scripts/check_requirements_sync.py)" python3 scripts/check_requirements_sync.py
 run appcheck "PWA vs database drift: RPC names, message kinds, offline cache (scripts/check_app_rpcs.py)" python3 scripts/check_app_rpcs.py
 # OPTIONAL: browser-less PWA smoke tests (node + jsdom, webtests/). Dev-only dependency, never part of the Python runtime. SKIPPED (not failed) without node/jsdom.
 if want webjs; then
