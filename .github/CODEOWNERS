@@ -7,4 +7,7 @@
 /requirements/          @thedonnasystem
 /requirements.txt       @thedonnasystem
 /.gitleaks.toml         @thedonnasystem
+/.gitleaksignore        @thedonnasystem
+/scripts/check_gitleaks_ignore.py @thedonnasystem
+/scripts/gitleaks_ignore_audit.json @thedonnasystem
 /Procfile               @thedonnasystem
