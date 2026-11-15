@@ -208,7 +208,7 @@ class T(unittest.TestCase):
         self.assertEqual((len(provider), out["sent"]), (0, 0))                # closed mid-flow: claimed, then released, still no provider call
         out, provider, claims, seen = run([True, True])
         self.assertEqual((len(provider), len(claims)), (1, 1))                # open: exactly one provider call
-        self.assertEqual(seen, [{"p_hwm_epoch": 5, "p_hwm_instance": None}])  # the sender told the database its OUTSIDE high-water mark first
+        self.assertEqual(seen, [{"p_hwm_gen": 1, "p_hwm_epoch": 5, "p_hwm_instance": None}])  # the sender told the database its OUTSIDE high-water mark first
         # rollback detected by the database (its epoch is behind our mark): nothing is claimed, nothing is posted, whatever else would allow it
         out, provider, claims, seen = run([True, True], attest={"ok": False, "reason": "rollback_detected", "detail": "epoch 3 < 5"})
         self.assertEqual((provider, claims, out["sent"], out["reason"]), ([], [], 0, "gate: rollback_detected"))

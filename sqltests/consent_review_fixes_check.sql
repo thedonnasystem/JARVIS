@@ -46,7 +46,7 @@ begin
   delete from public.ffm_secrets; delete from public.ffm_suppression_hashes; delete from public.ffm_suppression_expected;
   insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', p_supp_key, 'fixture');
   if p_capture_key is not null then insert into public.ffm_secrets (name, value, set_by) values ('capture_signing_key', p_capture_key, 'fixture'); end if;
-  update public.ffm_outreach_gate set state = 'verified', reason = 'test fixture', verified_raw_count = 0, verified_at = clock_timestamp(), verified_epoch = 1, instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
+  update public.ffm_outreach_gate set state = 'verified', reason = 'test fixture', verified_raw_count = 0, verified_at = clock_timestamp(), verified_epoch = 1, verified_marker_id = (select coalesce(max(id),0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
   set local session_replication_role = origin;
 end $$;
 create or replace function pg_temp.close_gate() returns void language plpgsql as $$
@@ -108,7 +108,7 @@ begin
     if exists (select 1 from pg_proc where pronamespace = 'public'::regnamespace and (proname ~* 'suppression_mac|sup_mac|sign|seal' or proname = 'ffm_suppression_mac')) then raise exception 'F1b2 [%] a mac/seal oracle function exists', scen; end if;
     if exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and has_function_privilege('service_role', p.oid, 'execute') and pg_get_functiondef(p.oid) ~* 'ffm_secrets'
                and p.proname not in ('ffm_set_key', 'ffm_key_fingerprint', 'ffm_ingest_capture', 'ffm_register_capture_owner', 'ffm_record_consent', 'ffm_erase_lead', 'is_suppressed', 'ffm_is_phone_suppressed',
-                                     'ffm_outreach_gate_open', 'ffm_outreach_gate_status', 'ffm_suppression_set', 'ffm_suppression_digest', 'backup_suppression_export', 'ffm_stage_suppression_checkpoint',
+                                     'ffm_outreach_gate_open', 'ffm_gate_core_ok', 'ffm_outreach_gate_status', 'ffm_suppression_set', 'ffm_suppression_digest', 'backup_suppression_export', 'ffm_stage_suppression_checkpoint',
                                      'ffm_import_suppression_hashes', 'ffm_verify_suppression', 'ffm_contact_status', 'ffm_can_contact', 'ffm_withdraw_consent', 'outreach_recipient_problem')) then
       raise exception 'F1b3 [%] an unexpected service_role-callable function reads the stored keys: %', scen, (select string_agg(proname, ',') from pg_proc where pronamespace = 'public'::regnamespace and pg_get_functiondef(oid) ~* 'ffm_secrets');
     end if;

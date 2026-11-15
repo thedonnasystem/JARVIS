@@ -324,6 +324,13 @@ def v3_restore_closed_checks(DST_, cur, sql, owner, work):
         pcur.execute("select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()"); pc.rollback(); pc.close()
         prov2 = f"drill_prov2_{sfx}"; mkdb(prov2); ok2, err2 = dump_to(_admin_url(DST, prov2), dump); PROV2 = _admin_url(DST, prov2)
         p2 = psycopg2.connect(PROV2); p2c = p2.cursor(); p2c.execute("select public.ffm_outreach_gate_open()"); open0 = p2c.fetchone()[0]
+        # V8b THE EXACT PITR SCENARIO for /gate anchor: this restored copy was NOT detected (no sender attested against it), its gate is open and 'verified', and someone runs /gate anchor.
+        # The database epoch is below the sender's mark and no owner restore was recorded: the anchor must refuse and the mark must not move.
+        mark_before = G.read_mark()
+        ad_prov2 = PgAdapter(PROV2 + ("&" if "?" in PROV2 else "?") + "options=-c%20timezone%3DUTC")
+        with mock.patch.object(hq, "_request", side_effect=ad_prov2):
+            r_lower = G.anchor("drill")
+        check("V8b /gate anchor on an UNDETECTED provider restore (db epoch below the mark, no owner-recorded restore) is refused and the mark does not move", r_lower.get("ok") is False and r_lower.get("reason") == "restore_not_recorded" and G.read_mark() == mark_before, f"{r_lower}")
         p2c.execute("set session_replication_role = replica"); p2c.execute("update public.ffm_outreach_gate set attested_at = attested_at - interval '16 minutes'"); p2c.execute("set session_replication_role = origin")
         p2c.execute("select public.ffm_outreach_gate_open(), public.outreach_recipient_problem('email', 'anyone@example.com', null)"); late = p2c.fetchone(); p2.rollback(); p2.close()
         check("V8 restored OPEN gate with NO sender running: open inside the window, closed by itself 16 minutes after the last attestation", ok2 and open0 is True and late == (False, "suppression_unverified"), f"{open0} {late}")
@@ -344,7 +351,10 @@ def v3_restore_closed_checks(DST_, cur, sql, owner, work):
             except Exception as e:
                 check("V9 other-cluster restore", False, f"{type(e).__name__}: {str(e)[:160]}")
         else:
-            print("SKIP  V9 other-cluster restore (set DRILL_OTHER_CLUSTER_URL to a SECOND local Postgres server to run it; CI has only one server)")
+            if os.environ.get("DRILL_REQUIRE_OTHER_CLUSTER") == "1":
+                check("V9 a dump restored into ANOTHER CLUSTER closes the gate by itself", False, "DRILL_REQUIRE_OTHER_CLUSTER=1 but DRILL_OTHER_CLUSTER_URL is not set (CI starts a second postgres service for this)")
+            else:
+                print("SKIP  V9 other-cluster restore (set DRILL_OTHER_CLUSTER_URL to a SECOND local Postgres server to run it; CI sets it and requires it; and it is documented in policy section 10)")
     for name, admin in prov_names:
         try:
             c = psycopg2.connect(admin); c.autocommit = True; c.cursor().execute(f'drop database if exists "{name}" with (force)'); c.close()

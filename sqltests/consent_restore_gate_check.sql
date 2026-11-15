@@ -7,6 +7,7 @@
 --      after re-add, cross-channel withdrawal, erasure
 --   R  restore-closed gate: epoch, instance fingerprint, restore marker, sender attestation freshness, maximum verification age, "old gate OPEN + old checkpoint restored together",
 --      restore without verified suppression state, config bounds, nobody but the owner can open it
+--   S  service-key powers: every new function called as service_role with hostile arguments (post-lockdown)
 -- Each expectation is "expected X, got Y" in the failure message.
 begin;
 grant usage on schema public to anon, authenticated, service_role;
@@ -195,6 +196,12 @@ begin
   foreach t in array array['+1 613 555 0150', '1-613-555-0150', '001 613 555 0150', '(613) 555-0150', '613.555.0150', '+1 (613) 555 0150 x12'] loop
     if public.normalize_phone(t) is distinct from '+16135550150' then raise exception 'D3 normalize_phone(%) = %', t, public.normalize_phone(t); end if;
   end loop;
+  -- D3c BARE 10-DIGIT numbers: documented default is +1 (Canada/US, the NANP), so a suppressed +16135550150 also blocks '6135550150'; any other bare length (7, 9, 11 without a leading 1) is unusable
+  if public.normalize_phone('6135550150') is distinct from '+16135550150' or public.normalize_phone('613 555 0150') is distinct from '+16135550150' then raise exception 'D3c bare 10-digit number is not read as +1'; end if;
+  if public.ffm_is_phone_suppressed('6135550150') is not true or public.outreach_recipient_problem('call', '6135550150', null) is distinct from 'suppressed' then raise exception 'D3d a bare 10-digit number is not matched against its +1 suppression'; end if;
+  foreach t in array array['5550150', '613555015', '61355501500', '0613555015'] loop
+    if public.normalize_phone(t) is not null or public.outreach_recipient_problem('call', t, null) is distinct from 'phone_unusable' then raise exception 'D3e bare number % is not refused as unusable', t; end if;
+  end loop;
   foreach t in array array['+44 (0)20 7946 0958', '020 7946 0958 ', '0044 20 7946 0958', '+44 20 7946 0958'] loop
     if public.normalize_phone(t) is distinct from (case when t = '020 7946 0958 ' then null else '+442079460958' end) then raise exception 'D3b normalize_phone(%) = %', t, public.normalize_phone(t); end if;   -- a bare national number is ambiguous without a country: NULL = refused
   end loop;
@@ -208,9 +215,34 @@ begin
   if public.ffm_contact_status(l8, 'email') ->> 'reason' <> 'withdrawn' then raise exception 'D4c reason %', public.ffm_contact_status(l8, 'email'); end if;
   perform pg_temp.expect_fail(format($q$select public.ffm_record_consent(%L,%L,'email','implied','v1','x',now(),'x','owner')$q$, a, l8), '%');             -- no new consent for a withdrawn channel (final in v1)
   if public.outreach_recipient_problem('email', 'evan@example.com', null) is distinct from 'suppressed' then raise exception 'D4d old address allowed through the outbox decision'; end if;
-  if public.outreach_recipient_problem('email', 'evan.new@example.com', null) is not null then raise exception 'D4e the new, never-withdrawn address is refused for no reason'; end if;   -- (a NEW address of a withdrawn lead is still blocked at ffm_can_contact by lead id, D4b)
+  if public.outreach_recipient_problem('email', 'evan.new@example.com', null) is distinct from 'suppressed' then raise exception 'D4e the NEW address of a withdrawn lead was not suppressed at once by the identifier trigger'; end if;
+  if public.outreach_recipient_problem('email', 'unrelated.person@example.com', null) is not null then raise exception 'D4g an unrelated clean address is refused for no reason'; end if;
   update public.ws_leads set email = 'evan@example.com' where id = l8;                           -- editing it BACK does not help either
   if public.ffm_can_contact(l8, 'email') then raise exception 'D4f editing the address back re-activated it'; end if;
+  -- D4h a withdrawal recorded with NO usable identifier stores nothing durable by itself: it is widened to 'all' (logged so), and an identifier added later is suppressed immediately
+  l7 := public.ws_add_lead(a, null, 'Phone only', null, '+1 613 555 0188', 'web');
+  j := to_jsonb((select c from public.ffm_consent_log c where c.id = public.ffm_withdraw_consent(a, l7, 'email', 'reply STOP by email', null, 'bot')));
+  if j ->> 'channel' <> 'all' or j ->> 'source' not like 'no usable identifier for email:%' then raise exception 'D4h withdrawal on a lead with no address was not widened to all and logged: %', j; end if;
+  if not public.ffm_is_phone_suppressed('+1 613 555 0188') then raise exception 'D4i the widened withdrawal did not suppress the number'; end if;
+  update public.ws_leads set email = 'late.add@example.com' where id = l7;                       -- re-add an address to the withdrawn lead
+  if not public.is_suppressed('late.add@example.com') then raise exception 'D4j an address ADDED to a withdrawn lead is not suppressed'; end if;
+  l6 := public.ws_add_lead(a, null, 'Duplicate of the late add', 'LATE.ADD@example.com', null, 'import');   -- and the duplicate lead (new id, other casing) is refused too
+  if public.ffm_can_contact(l6, 'email') or public.outreach_recipient_problem('email', 'LATE.ADD@example.com', null) is distinct from 'suppressed' then raise exception 'D4k duplicate of the late-added address is contactable'; end if;
+  l7 := public.ws_add_lead(a, null, 'Mail only', 'mailonly@example.com', null, 'web');
+  perform public.ffm_withdraw_consent(a, l7, 'sms', 'STOP', null, 'bot');                         -- no number on file: widened to all
+  if (select channel from public.ffm_consent_log where lead_id = l7 and basis = 'withdrawn') <> 'all' or not public.is_suppressed('mailonly@example.com') then raise exception 'D4l sms withdrawal without a number did not widen to all'; end if;
+  update public.ws_leads set phone = '+1 613 555 0189' where id = l7;
+  if not public.ffm_is_phone_suppressed('+16135550189') then raise exception 'D4m a number ADDED to a withdrawn lead is not suppressed'; end if;
+  l6 := public.ws_add_lead(a, null, 'Duplicate number', null, '(613) 555-0189', 'import');
+  if public.outreach_recipient_problem('call', '613-555-0189', null) is distinct from 'suppressed' then raise exception 'D4n duplicate of the late-added number is contactable'; end if;
+  -- D4o text / call map to sms / phone BEFORE the checks (an sms withdrawal blocks 'text' and 'call')
+  l7 := public.ws_add_lead(a, null, 'Text caller', 'textcaller@example.com', '+1 613 555 0190', 'web');
+  perform pg_temp.express(a, l7, 'sms', 'form-t-001');
+  if not public.ffm_can_contact(l7, 'text') or public.ffm_contact_status(l7, 'text') ->> 'reason' <> 'express' then raise exception 'D4o text is not mapped to sms: %', public.ffm_contact_status(l7, 'text'); end if;
+  perform public.ffm_withdraw_consent(a, l7, 'sms', 'STOP', null, 'bot');
+  if public.ffm_can_contact(l7, 'text') or public.ffm_can_contact(l7, 'call') or public.ffm_can_contact(l7, 'sms') then raise exception 'D4p sms withdrawal left text/call/sms contactable'; end if;
+  if public.ffm_contact_status(l7, 'text') ->> 'reason' <> 'withdrawn' then raise exception 'D4q text status is not withdrawn: %', public.ffm_contact_status(l7, 'text'); end if;
+
   -- D5 SMS withdrawal persists after the lead is re-added (new id, number in another format), and it blocks voice too; it does NOT suppress the email
   if not public.ffm_can_contact(l8, 'sms') then raise exception 'D5 setup: the sms consent of Evan should be intact (email withdrawal is channel-specific)'; end if;
   perform public.ffm_withdraw_consent(a, l8, 'sms', 'reply STOP', null, 'bot');
@@ -241,10 +273,10 @@ begin
   if pg_temp.svc($q$update public.ffm_epoch set epoch = 999999$q$) not like 'ERR:permission denied%' then raise exception 'R0d bot wrote the epoch'; end if;
   if pg_temp.svc($q$select public.ffm_set_gate_config(5, 5, 'bot')::text$q$) not like 'ERR:owner approval required%' then raise exception 'R0e bot set the gate config'; end if;
   if pg_temp.svc($q$select public.ffm_verify_suppression('bot')::text$q$) not like 'ERR:owner approval required%' then raise exception 'R0f bot verified the gate'; end if;
-  foreach t in array array['public.ffm_epoch_guard()', 'public.ffm_epoch_bump_now()', 'public.ffm_epoch_bump()'] loop
+  foreach t in array array['public.ffm_epoch_guard()', 'public.ffm_epoch_bump()', 'public.ffm_lead_identifier_guard()'] loop
     if has_function_privilege('anon', t, 'execute') or has_function_privilege('authenticated', t, 'execute') then raise exception 'R0g API roles can run %', t; end if;
   end loop;
-  foreach t in array array['public.ffm_record_restore(text,text,text)', 'public.ffm_gate_state()', 'public.ffm_sender_attest(bigint,text)', 'public.ffm_set_gate_config(integer,integer,text)', 'public.ffm_instance_fp()', 'public.outreach_channel_problem(text)'] loop
+  foreach t in array array['public.ffm_owner_record_restore(text)', 'public.ffm_gate_core_ok()', 'public.ffm_gate_state()', 'public.ffm_sender_attest(bigint,bigint,text)', 'public.ffm_set_gate_config(integer,integer,text)', 'public.ffm_instance_fp()', 'public.outreach_channel_problem(text)'] loop
     if has_function_privilege('anon', t, 'execute') or has_function_privilege('authenticated', t, 'execute') then raise exception 'R0h API roles can run %', t; end if;
   end loop;
 
@@ -254,7 +286,7 @@ begin
   perform pg_temp.expect_fail($q$update public.ffm_epoch set epoch = epoch$q$, 'The suppression epoch only increases%');
   perform pg_temp.expect_fail($q$delete from public.ffm_epoch$q$, 'The suppression epoch only increases%');
   perform pg_temp.expect_fail($q$truncate public.ffm_epoch$q$, 'The suppression epoch only increases%');
-  perform public.ffm_record_restore('test', 'append-only check', 'test');
+  perform pg_temp.as_owner(true); perform public.ffm_owner_record_restore('append-only check'); perform pg_temp.as_owner(false);
   perform pg_temp.expect_fail($q$delete from public.ffm_restore_markers$q$, 'This record set is append-only%');
   perform pg_temp.expect_fail($q$update public.ffm_restore_markers set source = 'x'$q$, 'This record set is append-only%');
   perform pg_temp.expect_fail($q$truncate public.ffm_restore_markers$q$, 'This record set is append-only%');
@@ -276,46 +308,62 @@ begin
   if (j ->> 'verified')::boolean is not true or not public.ffm_outreach_gate_open() then raise exception 'R2 verified gate not open: % / %', j, public.ffm_outreach_gate_status(); end if;
   if (select verified_epoch from public.ffm_outreach_gate where id = 1) <> (select epoch from public.ffm_epoch where id = 1) or (select instance_fp from public.ffm_outreach_gate where id = 1) is distinct from fp or (select attested_at from public.ffm_outreach_gate where id = 1) is null then raise exception 'R2b verification did not bind epoch / instance / attestation'; end if;
 
-  -- R3 the SENDER ATTESTATION must stay fresh: with none for longer than the window the gate closes BY ITSELF; a fresh attestation from a sender whose mark is not ahead re-opens nothing new but keeps it open
+  -- R3 the SENDER ATTESTATION must stay fresh: with none for longer than the window the gate closes BY ITSELF; a fresh attestation from a sender whose mark is NOT BELOW the stored mark keeps it open.
+  -- The DB keeps the highest mark it accepted (ffm_sender_mark) and refuses a lower one, so a stolen service key cannot refresh a stale gate with a forged low mark.
+  e0 := (select epoch from public.ffm_epoch where id = 1);
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(1, %s, %L)::text$q$, e0, fp));            -- first anchor (stored generation 0): allowed because the gate was just verified
+  if r not like 'OK:%"ok": true%' or (select gen from public.ffm_sender_mark where id = 1) <> 1 then raise exception 'R3 first anchor refused: %', r; end if;
   perform pg_temp.age_gate(interval '14 minutes');
-  if not public.ffm_outreach_gate_open() then raise exception 'R3 gate closed too early (14 min < 15 min window)'; end if;
+  if not public.ffm_outreach_gate_open() then raise exception 'R3a gate closed too early (14 min < 15 min window)'; end if;
   perform pg_temp.age_gate(interval '2 minutes');
   if public.ffm_outreach_gate_open() then raise exception 'R3b gate still open 16 minutes after the last attestation'; end if;
   if public.outreach_recipient_problem('email', 'clean@example.com', null) is distinct from 'suppression_unverified' then raise exception 'R3c stale-attestation gate allowed a send'; end if;
-  e0 := (select epoch from public.ffm_epoch where id = 1);
-  r := pg_temp.svc(format($q$select public.ffm_sender_attest(%s, %L)::text$q$, e0, fp));
-  if r not like 'OK:%"ok": true%' or not public.ffm_outreach_gate_open() then raise exception 'R3d a sender whose mark equals the epoch could not refresh the attestation: %', r; end if;
-  r := pg_temp.svc(format($q$select public.ffm_sender_attest(%s, NULL)::text$q$, e0 - 5));   -- an OLDER mark than the database is fine (the sender is behind, not the database)
-  if r not like 'OK:%"ok": true%' then raise exception 'R3e lower sender mark refused: %', r; end if;
-  r := pg_temp.svc($q$select public.ffm_sender_attest(NULL, NULL)::text$q$);
+  -- R3b2 THE DATABASE CLAIM GUARD requires a fresh attestation (no live sender = nothing can be approved or claimed, whatever the verification says)
+  ob := (select id from public.outbox where channel = 'email' and status = 'draft' limit 1);
+  perform pg_temp.expect_fail(format($q$update public.outbox set status = 'approved' where id = %L$q$, ob), 'Outreach gate closed%');
+  if (public.outreach_send_allowed(ob) ->> 'allowed')::boolean is not false or public.outreach_send_allowed(ob) ->> 'reason' <> 'suppression_unverified' then raise exception 'R3b3 outreach_send_allowed with a stale attestation: %', public.outreach_send_allowed(ob); end if;
+  perform pg_temp.expect_fail($q$insert into public.outbox (channel, to_ref, body, status) values ('email', 'fresh.person@example.com', 'hi', 'approved')$q$, 'Outreach gate closed%');
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(1, %s, %L)::text$q$, e0 - 5, fp));        -- a LOWER mark than the stored one (forged / stale sender) must not refresh anything
+  if r not like '%mark_regression%' or public.ffm_outreach_gate_open() then raise exception 'R3d a lower mark refreshed the attestation or was not refused: %', r; end if;
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(0, %s, %L)::text$q$, e0 + 1000, fp));     -- generation 0 / lower generation likewise
+  if r not like '%sender_unanchored%' or public.ffm_outreach_gate_open() then raise exception 'R3d2 generation 0 accepted: %', r; end if;
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(1, %s, %L)::text$q$, e0, fp));            -- the real sender (mark == stored mark) keeps it open
+  if r not like 'OK:%"ok": true%' or not public.ffm_outreach_gate_open() then raise exception 'R3e a sender whose mark equals the stored mark could not refresh the attestation: %', r; end if;
+  r := pg_temp.svc($q$select public.ffm_sender_attest(NULL, NULL, NULL)::text$q$);
   if r not like '%sender_unanchored%' then raise exception 'R3f an unanchored sender was treated as anchored: %', r; end if;
   -- the attestation can only KEEP a verified gate; it can never open one
   perform public.ffm_close_outreach_gate('test', 'test');
-  perform pg_temp.svc(format($q$select public.ffm_sender_attest(%s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
+  perform pg_temp.svc(format($q$select public.ffm_sender_attest(1, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
   if public.ffm_outreach_gate_open() then raise exception 'R3g an attestation opened a closed gate'; end if;
+  -- a higher generation (an anchor) with the gate closed, or without a new owner-recorded restore, is refused
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(2, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
+  if r not like '%anchor_refused%' or (select gen from public.ffm_sender_mark where id = 1) <> 1 then raise exception 'R3h anchor accepted on a closed gate: %', r; end if;
+  perform pg_temp.verify_gate();
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(2, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
+  if r not like '%owner-recorded restore%' or (select gen from public.ffm_sender_mark where id = 1) <> 1 then raise exception 'R3i anchor accepted with no unused owner restore marker: %', r; end if;
 
   -- R4 ROLLBACK DETECTED: the sender's mark is ahead of the database -> the database closes its own gate for good (state, marker), the call says so
   perform pg_temp.verify_gate();
   e0 := (select epoch from public.ffm_epoch where id = 1);
   n := (select count(*) from public.ffm_restore_markers);
-  r := pg_temp.svc(format($q$select public.ffm_sender_attest(%s, %L)::text$q$, e0 + 40, fp));
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(1, %s, %L)::text$q$, e0 + 40, fp));
   if r not like '%rollback_detected%' then raise exception 'R4 rollback not reported: %', r; end if;
   if public.ffm_outreach_gate_open() or (select state from public.ffm_outreach_gate where id = 1) <> 'unverified' then raise exception 'R4b gate not closed by the detection: %', public.ffm_outreach_gate_status(); end if;
   if (select count(*) from public.ffm_restore_markers) <> n + 1 or not exists (select 1 from public.ffm_restore_markers where source = 'detected_by_sender') then raise exception 'R4c no marker written'; end if;
   -- ...and it STAYS closed when the sender later presents a lower mark (a detection is not undone by a calmer second opinion); only the owner's verification, after the marker, opens it
-  perform pg_temp.svc(format($q$select public.ffm_sender_attest(%s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
+  perform pg_temp.svc(format($q$select public.ffm_sender_attest(1, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
   if public.ffm_outreach_gate_open() then raise exception 'R4d gate re-opened without verification'; end if;
   j := pg_temp.verify_gate();
   if (j ->> 'verified')::boolean is not true or not public.ffm_outreach_gate_open() then raise exception 'R4e owner re-verification after the marker did not open the gate: % / %', j, public.ffm_outreach_gate_status(); end if;
   -- R4f repeated detections do not pile markers up on an already closed gate
-  perform pg_temp.svc(format($q$select public.ffm_sender_attest(%s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1) + 100, fp));
+  perform pg_temp.svc(format($q$select public.ffm_sender_attest(1, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1) + 100, fp));
   n := (select count(*) from public.ffm_restore_markers);
-  perform pg_temp.svc(format($q$select public.ffm_sender_attest(%s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1) + 100, fp));
+  perform pg_temp.svc(format($q$select public.ffm_sender_attest(1, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1) + 100, fp));
   if (select count(*) from public.ffm_restore_markers) <> n then raise exception 'R4f marker spam on a closed gate'; end if;
 
   -- R5 INSTANCE: another cluster / timeline. (a) detected by the sender, (b) detected by the database alone from the stored fingerprint
   perform pg_temp.verify_gate();
-  r := pg_temp.svc($q$select public.ffm_sender_attest(1, '999:7')::text$q$);
+  r := pg_temp.svc($q$select public.ffm_sender_attest(1, 1, '999:7')::text$q$);
   if r not like '%rollback_detected%' or public.ffm_outreach_gate_open() then raise exception 'R5 other instance not detected by the sender check: %', r; end if;
   perform pg_temp.verify_gate();
   set local session_replication_role = replica; update public.ffm_outreach_gate set instance_fp = '999:7' where id = 1; set local session_replication_role = origin;
@@ -334,24 +382,41 @@ begin
   if not public.ffm_outreach_gate_open() then raise exception 'R6c raising the maximum age did not apply'; end if;
   perform pg_temp.as_owner(true);
   perform pg_temp.expect_fail($q$select public.ffm_set_gate_config(1, 30, 'owner')$q$, '%attest_window_minutes%');
+  perform pg_temp.expect_fail($q$select public.ffm_set_gate_config(5, 30, 'owner')$q$, '%attest_window_minutes%');      -- the engine tick is 300 s: a window of two ticks or less would flap
+  perform public.ffm_set_gate_config(6, 30, 'owner');
   perform pg_temp.expect_fail($q$select public.ffm_set_gate_config(121, 30, 'owner')$q$, '%attest_window_minutes%');
   perform pg_temp.expect_fail($q$select public.ffm_set_gate_config(15, 91, 'owner')$q$, '%max_verified_age_days%');
   perform pg_temp.expect_fail($q$select public.ffm_set_gate_config(15, 0, 'owner')$q$, '%max_verified_age_days%');
   perform public.ffm_set_gate_config(15, 30, 'owner'); perform pg_temp.as_owner(false);
 
-  -- R7 RESTORE MARKER: a restore recorded AFTER the verification closes the gate (anyone may record one); only a verification AFTER the marker counts
+  -- R7 RESTORE MARKER (deterministic, no wall-clock comparison): the verification records the newest marker id; a marker recorded AFTER it closes the gate; only a verification after it opens it again.
+  -- Only the OWNER can record a restore (the bot role cannot); the ordered flow is: owner-recorded restore -> verify -> anchor.
   perform pg_temp.verify_gate();
-  if pg_temp.svc($q$select public.ffm_record_restore('provider PITR', 'owner ran a point-in-time recovery', 'owner')::text$q$) not like 'OK:%' then raise exception 'R7 restore marker could not be recorded by the bot role'; end if;
-  if public.ffm_outreach_gate_open() then raise exception 'R7b gate open after a restore marker'; end if;
+  if pg_temp.svc($q$select public.ffm_owner_record_restore('provider PITR')::text$q$) not like 'ERR:owner approval required%' then raise exception 'R7 the bot role could record an owner restore marker'; end if;
+  if not public.ffm_outreach_gate_open() then raise exception 'R7a a refused call closed the gate'; end if;
+  perform pg_temp.as_owner(true); perform public.ffm_owner_record_restore('owner ran a point-in-time recovery'); perform pg_temp.as_owner(false);
+  if public.ffm_outreach_gate_open() or public.ffm_gate_core_ok() then raise exception 'R7b gate open after an owner restore marker'; end if;
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(2, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));      -- anchor BEFORE the verification: refused
+  if r not like '%anchor_refused%' then raise exception 'R7b2 anchor accepted before the verification: %', r; end if;
   perform pg_temp.verify_gate();
   if not public.ffm_outreach_gate_open() then raise exception 'R7c verification after the marker did not open the gate'; end if;
-  -- a marker with a LATER time than a (re)written verified state: closed even if every other column says "open"
-  set local session_replication_role = replica; insert into public.ffm_restore_markers (restored_at, source, recorded_by) values (clock_timestamp() + interval '1 second', 'fixture', 'test'); set local session_replication_role = origin;
-  if public.ffm_outreach_gate_open() then raise exception 'R7d a marker newer than the verification did not close the gate'; end if;
-  perform pg_temp.verify_gate();   -- (verified_at is clock_timestamp(): wait it out in the next statement)
-  perform pg_sleep(1.1);
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(2, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));      -- record -> verify -> anchor, in that order: accepted
+  if r not like 'OK:%"ok": true%' or (select gen from public.ffm_sender_mark where id = 1) <> 2 then raise exception 'R7d the ordered anchor was refused: %', r; end if;
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(3, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));      -- the marker is consumed: a second anchor needs a new one
+  if r not like '%anchor_refused%' then raise exception 'R7e one owner marker authorised two anchors: %', r; end if;
+  -- a marker inserted by any means closes the gate whatever its timestamp says (a restored table can carry any clock): ids, not times, decide
+  set local session_replication_role = replica; insert into public.ffm_restore_markers (restored_at, source, recorded_by) values (now() - interval '3 years', 'fixture', 'test'); set local session_replication_role = origin;
+  if public.ffm_outreach_gate_open() then raise exception 'R7f an OLD-dated marker with a newer id did not close the gate'; end if;
   perform pg_temp.verify_gate();
-  if not public.ffm_outreach_gate_open() then raise exception 'R7e could not re-verify after the future-dated marker: %', public.ffm_outreach_gate_status(); end if;
+  if not public.ffm_outreach_gate_open() then raise exception 'R7g could not re-verify immediately after a marker (no clock dependence): %', public.ffm_outreach_gate_status(); end if;
+  set local session_replication_role = replica; insert into public.ffm_restore_markers (restored_at, source, recorded_by) values (now() + interval '1 day', 'fixture', 'test'); set local session_replication_role = origin;
+  if public.ffm_outreach_gate_open() then raise exception 'R7h a future-dated marker did not close the gate'; end if;
+  perform pg_temp.verify_gate();
+  if not public.ffm_outreach_gate_open() then raise exception 'R7i could not re-verify after the future-dated marker: %', public.ffm_outreach_gate_status(); end if;
+  -- the marker table rolled BACK (fewer markers than at verification): closed as well
+  set local session_replication_role = replica; delete from public.ffm_restore_markers where id = (select max(id) from public.ffm_restore_markers); set local session_replication_role = origin;
+  if public.ffm_outreach_gate_open() then raise exception 'R7j a rolled-back marker table left the gate open'; end if;
+  perform pg_temp.verify_gate();
 
   -- R8 EPOCH ROW MISSING (a restored schema without it) or LOWER than at verification: closed, and verification itself refuses without the row
   set local session_replication_role = replica; update public.ffm_epoch set epoch = epoch - 1 where id = 1; set local session_replication_role = origin;
@@ -360,7 +425,7 @@ begin
   if public.ffm_outreach_gate_open() then raise exception 'R8b epoch row missing but the gate is open'; end if;
   j := pg_temp.verify_gate();
   if (j ->> 'verified')::boolean is not false then raise exception 'R8c verification succeeded without an epoch row: %', j; end if;
-  if pg_temp.svc($q$select public.ffm_sender_attest(1, NULL)::text$q$) not like '%rollback_detected%' then raise exception 'R8d attest with no epoch row'; end if;
+  if pg_temp.svc($q$select public.ffm_sender_attest(1, 1, NULL)::text$q$) not like '%rollback_detected%' then raise exception 'R8d attest with no epoch row'; end if;
   set local session_replication_role = replica; insert into public.ffm_epoch (id, epoch) values (1, 1000); set local session_replication_role = origin;
   perform pg_temp.verify_gate();
 
@@ -369,6 +434,7 @@ begin
   create temporary table snap_gate as select * from public.ffm_outreach_gate;
   create temporary table snap_exp as select * from public.ffm_suppression_expected;
   create temporary table snap_epoch as select * from public.ffm_epoch;
+  create temporary table snap_mark as select * from public.ffm_sender_mark;
   create temporary table snap_addr as select * from public.contact_suppressions;
   create temporary table snap_phone as select * from public.ffm_phone_suppressions;
   create temporary table snap_log as select id from public.ffm_consent_log;
@@ -385,6 +451,8 @@ begin
   delete from public.ffm_suppression_expected; insert into public.ffm_suppression_expected select * from snap_exp;
   delete from public.ffm_outreach_gate; insert into public.ffm_outreach_gate select * from snap_gate;
   delete from public.ffm_epoch; insert into public.ffm_epoch select * from snap_epoch;
+  delete from public.ffm_sender_mark; insert into public.ffm_sender_mark select * from snap_mark;      -- the stored mark is rolled back too (it is in the same database)
+  delete from public.ffm_restore_markers where id > (select verified_marker_id from snap_gate);
   delete from public.ffm_consent_log where id not in (select id from snap_log);
   set local session_replication_role = origin;
   if public.is_suppressed('late-optout@example.com') then raise exception 'R9 setup: the restore did not drop the late opt-out'; end if;
@@ -392,24 +460,36 @@ begin
   if not public.ffm_outreach_gate_open() or public.outreach_recipient_problem('email', 'late-optout@example.com', null) is not null then
     raise exception 'R9a the DB-only exposure window no longer behaves as documented (open + lost opt-out allowed) - re-read the policy section before changing this: gate_open=%', public.ffm_outreach_gate_open(); end if;
   -- R9b (b) the SENDER's first attestation closes it for good: its mark (e1) is ahead of the restored epoch
-  r := pg_temp.svc(format($q$select public.ffm_sender_attest(%s, %L)::text$q$, e1, fp));
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(2, %s, %L)::text$q$, e1, fp));
   if r not like '%rollback_detected%' then raise exception 'R9b the sender did not detect the restore: %', r; end if;
   if public.ffm_outreach_gate_open() or public.outreach_recipient_problem('email', 'late-optout@example.com', null) is distinct from 'suppression_unverified' or public.outreach_recipient_problem('email', 'anyone@example.com', null) is distinct from 'suppression_unverified' then
     raise exception 'R9c gate not closed for everyone after detection'; end if;
   -- R9c the old checkpoint is staged and the old list is a superset of it, so the OWNER'S verify would pass: that is why the sender (not the checkpoint) is the independent party, and why
   -- re-opening needs a verification made after the marker. The marker is in place, so the old verified_at no longer counts.
   if not exists (select 1 from public.ffm_restore_markers where source = 'detected_by_sender') then raise exception 'R9d no marker'; end if;
-  -- R9d the same restore with NO sender running (or one that is down): the stale attestation closes it by itself once the window has passed
+  -- R9d THE EXACT PITR SCENARIO for the anchor. The owner verifies the restored database (its OLD checkpoint passes: the old list is a superset of it) and the sender is then asked to anchor to the
+  -- LOWER epoch. Without an owner-recorded restore after that, the database refuses (the detection marker does not count). Only record -> verify -> anchor lowers the mark.
+  j := pg_temp.verify_gate();
+  if not public.ffm_outreach_gate_open() then raise exception 'R9d setup: owner verification after the detection did not open the gate: %', j; end if;
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(3, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
+  if r not like '%anchor_refused%' then raise exception 'R9d the anchor lowered the mark after an UNDETECTED/unrecorded restore: %', r; end if;
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(2, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1) + 50, fp));      -- and a sender whose OUTSIDE mark is still ahead (the verification itself moved the epoch) sees the rollback: the old sender mark still sees the rollback (the gate closes again)
+  if r not like '%rollback_detected%' or public.ffm_outreach_gate_open() then raise exception 'R9d2 the old mark no longer detects the restore: %', r; end if;
+  perform pg_temp.as_owner(true); perform public.ffm_owner_record_restore('PITR to t0, owner confirmed'); perform pg_temp.as_owner(false);
+  perform pg_temp.verify_gate();
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(3, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
+  if r not like 'OK:%"ok": true%' or (select gen from public.ffm_sender_mark where id = 1) <> 3 or not public.ffm_outreach_gate_open() then raise exception 'R9e record -> verify -> anchor did not re-open: %', r; end if;
+  -- R9f the same restore with NO sender running (or one that is down): the stale attestation closes it by itself once the window has passed
   set local session_replication_role = replica;
   delete from public.ffm_outreach_gate; insert into public.ffm_outreach_gate select * from snap_gate;
-  delete from public.ffm_restore_markers where source = 'detected_by_sender';
+  delete from public.ffm_restore_markers where id > (select verified_marker_id from snap_gate);
   set local session_replication_role = origin;
-  if not public.ffm_outreach_gate_open() then raise exception 'R9e setup: re-restored gate should be open inside the window'; end if;
+  if not public.ffm_outreach_gate_open() then raise exception 'R9f setup: re-restored gate should be open inside the window: %', public.ffm_outreach_gate_status(); end if;
   perform pg_temp.age_gate(interval '16 minutes');
-  if public.ffm_outreach_gate_open() or public.outreach_recipient_problem('email', 'late-optout@example.com', null) is distinct from 'suppression_unverified' then raise exception 'R9f a restored OPEN gate with no sender stayed open past the attestation window'; end if;
+  if public.ffm_outreach_gate_open() or public.outreach_recipient_problem('email', 'late-optout@example.com', null) is distinct from 'suppression_unverified' then raise exception 'R9g a restored OPEN gate with no sender stayed open past the attestation window'; end if;
 
   -- R10 RESTORE WITHOUT VERIFIED SUPPRESSION STATE (what ops/restore_backup.py leaves behind): gate unverified, no key, empty lists, a checkpoint staged from the file
-  perform public.ffm_record_restore('restore_backup.py', 'fixture', 'restore_backup.py');
+  perform pg_temp.as_owner(true); perform public.ffm_owner_record_restore('fixture: restore_backup.py'); perform pg_temp.as_owner(false);
   set local session_replication_role = replica;
   delete from public.ffm_secrets; delete from public.ffm_suppression_hashes; delete from public.contact_suppressions; delete from public.ffm_phone_suppressions;
   set local session_replication_role = origin;
@@ -427,6 +507,46 @@ begin
   -- a database with NO gate row at all is closed (a wiped table)
   set local session_replication_role = replica; delete from public.ffm_outreach_gate; set local session_replication_role = origin;
   if public.ffm_outreach_gate_open() or public.outreach_recipient_problem('email', 'x@example.com', null) is distinct from 'suppression_unverified' then raise exception 'R10f missing gate row is open'; end if;
+
+  -- S SERVICE KEY POWERS (post-lockdown: lockdown_v1 re-grants execute on every public function to service_role, so the safety is in the BODIES). Every new function is called as service_role with
+  -- hostile arguments; each call must be refused or harmless, and the gate / epoch / stored mark must not have been moved by anything but the documented fail-closed paths.
+  perform pg_temp.verify_gate();
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(3, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
+  if not public.ffm_outreach_gate_open() then raise exception 'S0 setup: gate not open'; end if;
+  create temporary table s_before as select (select epoch from public.ffm_sender_mark where id = 1) as me, (select gen from public.ffm_sender_mark where id = 1) as mg, (select count(*) from public.ffm_restore_markers) as mk,
+                                           (select verified_at from public.ffm_outreach_gate where id = 1) as va, (select count(*) from public.app_owners) as ow;
+  if exists (select 1 from pg_proc where proname in ('ffm_epoch_bump_now', 'ffm_record_restore') and pronamespace = 'public'::regnamespace) then raise exception 'S1b a removed bot-callable function exists again'; end if;
+  foreach t in array array['select public.ffm_epoch_guard()', 'select public.ffm_epoch_bump()', 'select public.ffm_lead_identifier_guard()'] loop
+    if pg_temp.svc(t) not like 'ERR:%trigger%' then raise exception 'S2 a trigger function is callable by service_role: % -> %', t, pg_temp.svc(t); end if;
+  end loop;
+  -- owner-only functions with hostile arguments
+  foreach t in array array[$q$select public.ffm_owner_record_restore(NULL)$q$, $q$select public.ffm_owner_record_restore(repeat('x', 100000))$q$, $q$select public.ffm_owner_record_restore('''); drop table public.ffm_epoch; --')$q$,
+                           $q$select public.ffm_set_gate_config(NULL, NULL, NULL)$q$, $q$select public.ffm_set_gate_config(120, 90, 'x')$q$, $q$select public.ffm_set_gate_config(-1, -1, NULL)$q$] loop
+    if pg_temp.svc(t) not like 'ERR:owner approval required%' then raise exception 'S3 service_role ran an owner-only function: % -> %', t, pg_temp.svc(t); end if;
+  end loop;
+  -- ffm_sender_attest with hostile mark values: never opens, never lowers the stored mark, never lets a bot raise it past the database epoch
+  foreach t in array array[$q$select public.ffm_sender_attest(-1, -1, 'x')$q$, $q$select public.ffm_sender_attest(0, 0, NULL)$q$, $q$select public.ffm_sender_attest(9223372036854775807, 1, 'x')$q$,
+                           $q$select public.ffm_sender_attest(3, -9223372036854775807, NULL)$q$, $q$select public.ffm_sender_attest(1, 1, '')$q$, $q$select public.ffm_sender_attest(1, 1, repeat('9', 100000))$q$,
+                           $q$select public.ffm_sender_attest(9223372036854775807, 9223372036854775807, NULL)$q$, $q$select public.ffm_sender_attest(4, 5, NULL)$q$] loop
+    perform pg_temp.svc(t);
+    perform pg_temp.verify_gate();
+    r := pg_temp.svc(format($q$select public.ffm_sender_attest(3, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
+    if (select gen from public.ffm_sender_mark where id = 1) <> (select mg from s_before) then raise exception 'S4 hostile attest moved the stored generation: %', t; end if;
+    if (select epoch from public.ffm_sender_mark where id = 1) > (select epoch from public.ffm_epoch where id = 1) then raise exception 'S4b hostile attest pushed the stored mark above the database epoch: %', t; end if;
+  end loop;
+  -- closing is the one thing the bot MAY do (it only reduces what is allowed); it must be audited, and it clears the verification so only the owner can re-open
+  perform pg_temp.verify_gate();
+  r := pg_temp.svc($q$select public.ffm_close_outreach_gate(NULL, NULL)$q$);
+  if r not like 'OK:%' or public.ffm_outreach_gate_open() or (select verified_at from public.ffm_outreach_gate where id = 1) is not null then raise exception 'S5 bot close did not close cleanly: %', r; end if;
+  if pg_temp.svc($q$select public.ffm_close_outreach_gate(repeat('z', 100000), '''; select 1; --')$q$) not like 'OK:%' then raise exception 'S5b hostile close text broke the call'; end if;
+  if (select count(*) from public.app_owners) <> (select ow from s_before) then raise exception 'S6 owners changed'; end if;
+  -- the bot cannot reopen it: verification is owner-only, and neither attest nor record_consent nor withdraw opens anything
+  if pg_temp.svc($q$select public.ffm_verify_suppression('bot')$q$) not like 'ERR:owner approval required%' or public.ffm_outreach_gate_open() then raise exception 'S7 bot opened the gate'; end if;
+  r := pg_temp.svc(format($q$select public.ffm_sender_attest(3, %s, %L)::text$q$, (select epoch from public.ffm_epoch where id = 1), fp));
+  if public.ffm_outreach_gate_open() then raise exception 'S7b attest opened a closed gate'; end if;
+  -- read-only helpers with hostile args are harmless
+  if pg_temp.svc($q$select public.outreach_channel_problem(NULL)$q$) not like 'OK:%' or pg_temp.svc($q$select public.outreach_channel_problem(repeat('é', 100000))$q$) is distinct from 'OK:unknown_channel' then raise exception 'S8 outreach_channel_problem hostile args'; end if;
+  perform pg_temp.verify_gate();
 
   -- N nothing here sent or authorised anything
   if exists (select 1 from public.outbox where status = 'sent') then raise exception 'N1 something was marked sent'; end if;

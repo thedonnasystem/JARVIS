@@ -128,7 +128,7 @@ begin
   -- E2 THE BOT ASSERTS AN EVIDENCE STRING: recorded as 'unverified', never as express; ffm_can_contact stays false (gate fixture open so the evidence rule is what is tested)
   set local session_replication_role = replica;
   insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', K2, 'fixture');
-  update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
+  update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, verified_marker_id = (select coalesce(max(id),0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
   set local session_replication_role = origin;
   r := pg_temp.svc(format($q$select public.ffm_record_consent(%L,%L,'email','express','v1','web form',now(),'form-abc-001','bot')::text$q$, a, l1));
   if r not like 'OK:%' then raise exception 'E2 recording an unverified claim should be accepted as a record, got %', r; end if;

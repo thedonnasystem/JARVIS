@@ -1129,7 +1129,8 @@ async def hq_backup_cmd(update, context) -> None:
 
 async def hq_gate_cmd(update, context) -> None:
     """/gate -> state of the outreach gate and of the sender's outside high-water mark; /gate anchor -> OWNER ONLY: anchor this sender to the database's current epoch.
-    Anchoring is refused unless the gate is open and was verified after the last restore. It sends nothing and opens nothing."""
+    Anchoring is refused unless the gate is freshly verified after the newest restore marker (and, when the database is behind the sender's mark, an owner-recorded restore exists: ops/OWNER_RESTORE_RUNBOOK.md).
+    /gate prints the NEXT required step. It sends nothing and opens nothing."""
     if not _owner(update):
         return
     import hq_gatemark

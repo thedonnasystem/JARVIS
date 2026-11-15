@@ -1,0 +1,32 @@
+kind	name	anon	authenticated	service_role	security	note
+function	ffm_can_contact(uuid,text)	-	-	execute	security_definer	read-only decision
+function	ffm_close_outreach_gate(text,text)	-	-	execute	security_definer	bot-callable BY DESIGN: it can only close (fail-closed); audited
+function	ffm_contact_status(uuid,text)	-	-	execute	security_definer	read-only decision
+function	ffm_epoch_bump()	-	-	execute	security_definer	trigger function (inlined update of the epoch row): cannot be called directly
+function	ffm_epoch_guard()	-	-	execute	invoker	trigger function: cannot be called directly
+function	ffm_gate_core_ok()	-	-	execute	security_definer	read-only decision
+function	ffm_gate_state()	-	-	execute	security_definer	read-only, no key and no list
+function	ffm_instance_fp()	-	-	execute	security_definer	read-only
+function	ffm_lead_identifier_guard()	-	-	execute	security_definer	trigger function: cannot be called directly
+function	ffm_outreach_gate_open()	-	-	execute	security_definer	read-only decision
+function	ffm_outreach_gate_status()	-	-	execute	security_definer	read-only, no key and no list
+function	ffm_owner_record_restore(text)	-	-	execute	security_definer	owner only (ffm_require_owner in the body)
+function	ffm_route_preview(uuid,uuid)	-	-	execute	security_definer	dry run only
+function	ffm_sender_attest(bigint,bigint,text)	-	-	execute	security_definer	bot-callable BY DESIGN: monotonic against ffm_sender_mark, cannot open a closed gate, anchor needs an unconsumed owner marker
+function	ffm_set_gate_config(integer,integer,text)	-	-	execute	security_definer	owner only (ffm_require_owner in the body)
+function	ffm_verify_suppression(text)	-	-	execute	security_definer	owner only (ffm_require_owner in the body)
+function	ffm_withdraw_consent(uuid,uuid,text,text,text,text)	-	-	execute	security_definer	bot-callable BY DESIGN: it can only ADD a withdrawal and suppressions
+function	outbox_dnc_guard()	-	-	execute	invoker	trigger function: cannot be called directly
+function	outreach_channel_problem(text)	-	-	execute	invoker	immutable policy function
+function	outreach_recipient_problem(text,text,uuid)	-	-	execute	security_definer	read-only decision
+function	outreach_send_allowed(uuid)	-	-	execute	security_definer	read-only decision
+table	ffm_consent_log	-	-	select	rls=true	
+table	ffm_epoch	-	-	select	rls=true	
+table	ffm_gate_config	-	-	select	rls=true	
+table	ffm_outreach_gate	-	-	select	rls=true	
+table	ffm_phone_suppressions	-	-	select	rls=true	
+table	ffm_restore_markers	-	-	select	rls=true	
+table	ffm_secrets	-	-	-	rls=true	
+table	ffm_sender_mark	-	-	select	rls=true	
+table	ffm_suppression_expected	-	-	-	rls=true	
+table	ffm_suppression_hashes	-	-	-	rls=true	

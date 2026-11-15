@@ -309,14 +309,14 @@ def apply_gate(cur, rep: dict, sup: dict | None, checkpoint_trusted: bool = True
         cur.execute("""insert into public.ffm_outreach_gate (id, state, reason, expected_count, expected_hash, expected_key_check, expected_staged_at)
                        values (1, 'unverified', %s, %s, %s, %s, clock_timestamp())
                        on conflict (id) do update set state = 'unverified', reason = excluded.reason, expected_count = excluded.expected_count, expected_hash = excluded.expected_hash,
-                         expected_key_check = excluded.expected_key_check, expected_staged_at = excluded.expected_staged_at, verified_raw_count = null, verified_at = null, verified_by = null, verified_epoch = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp()""",
+                         expected_key_check = excluded.expected_key_check, expected_staged_at = excluded.expected_staged_at, verified_raw_count = null, verified_at = null, verified_by = null, verified_epoch = null, verified_marker_id = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp()""",
                     (reason + "; checkpoint from the backup staged", sup["count"], sup["hash"], sup["key_check"]))
         g["checkpoint_staged"] = True
         g["checkpoint"] = {"count": sup["count"], "email_count": sup.get("email_count"), "phone_count": sup.get("phone_count"), "hash": sup["hash"]}
     else:
         cur.execute("""insert into public.ffm_outreach_gate (id, state, reason) values (1, 'unverified', %s)
                        on conflict (id) do update set state = 'unverified', reason = excluded.reason, expected_count = null, expected_hash = null, expected_key_check = null,
-                         expected_staged_at = null, verified_raw_count = null, verified_at = null, verified_by = null, verified_epoch = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp()""",
+                         expected_staged_at = null, verified_raw_count = null, verified_at = null, verified_by = null, verified_epoch = null, verified_marker_id = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp()""",
                     (reason + "; no trusted suppression checkpoint was staged from this backup",))
         g["note"] = g.get("checkpoint_ignored") or "no checkpoint in this backup (the owner had not set the suppression key, or the backup predates the export): verification is impossible from this file"
     cur.execute("select public.ffm_outreach_gate_open()")

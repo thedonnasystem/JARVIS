@@ -55,6 +55,7 @@ create table if not exists public.ffm_outreach_gate (
   verified_at timestamptz,
   verified_by text,
   verified_epoch bigint,          -- the suppression epoch at verification (v3)
+  verified_marker_id bigint,      -- the newest restore-marker id at verification (v3): the gate is open only while it is STILL the newest (deterministic, no wall-clock comparison)
   instance_fp text,               -- the instance fingerprint at verification (v3)
   attested_at timestamptz,        -- last time the SENDER (or the owner's verification) attested the gate against its external high-water mark (v3)
   updated_at timestamptz not null default clock_timestamp()
@@ -77,18 +78,27 @@ create table if not exists public.ffm_restore_markers (
 );
 create table if not exists public.ffm_gate_config (
   id integer primary key check (id = 1),
-  attest_window_minutes integer not null default 15 check (attest_window_minutes between 2 and 120),
+  attest_window_minutes integer not null default 15 check (attest_window_minutes between 6 and 120),   -- the engine tick is 300 s: a window below two ticks would close the gate between ticks
   max_verified_age_days integer not null default 30 check (max_verified_age_days between 1 and 90),
   updated_at timestamptz not null default clock_timestamp()
 );
 insert into public.ffm_gate_config (id) values (1) on conflict (id) do nothing;
+-- the highest sender mark the DATABASE has accepted (monotonic): a forged lower mark cannot refresh the gate, and a NEW generation (an anchor) is accepted only with an owner-recorded restore (or first setup)
+create table if not exists public.ffm_sender_mark (
+  id integer primary key check (id = 1),
+  gen bigint not null default 0 check (gen >= 0),
+  epoch bigint not null default 0 check (epoch >= 0),
+  owner_marker_id bigint not null default 0,
+  updated_at timestamptz not null default clock_timestamp()
+);
+insert into public.ffm_sender_mark (id) values (1) on conflict (id) do nothing;
 
 do $$ declare t text; begin
-  foreach t in array array['ffm_phone_suppressions', 'ffm_suppression_hashes', 'ffm_suppression_expected', 'ffm_outreach_gate', 'ffm_epoch', 'ffm_restore_markers', 'ffm_gate_config'] loop
+  foreach t in array array['ffm_phone_suppressions', 'ffm_suppression_hashes', 'ffm_suppression_expected', 'ffm_outreach_gate', 'ffm_epoch', 'ffm_restore_markers', 'ffm_gate_config', 'ffm_sender_mark'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from public, anon, authenticated, service_role', t);
   end loop;
-  grant select on public.ffm_phone_suppressions, public.ffm_outreach_gate, public.ffm_epoch, public.ffm_restore_markers, public.ffm_gate_config to service_role;   -- the bot may READ the list and the gate state; every write goes through a definer function
+  grant select on public.ffm_phone_suppressions, public.ffm_outreach_gate, public.ffm_epoch, public.ffm_restore_markers, public.ffm_gate_config, public.ffm_sender_mark to service_role;   -- the bot may READ the list and the gate state; every write goes through a definer function
 end $$;
 drop trigger if exists ffm_phone_supp_append_only on public.ffm_phone_suppressions;
 create trigger ffm_phone_supp_append_only before update or delete on public.ffm_phone_suppressions for each row execute function public.ffm_append_only();
@@ -126,17 +136,10 @@ drop trigger if exists ffm_markers_append_only on public.ffm_restore_markers;
 create trigger ffm_markers_append_only before update or delete on public.ffm_restore_markers for each row execute function public.ffm_append_only();
 drop trigger if exists ffm_markers_no_truncate on public.ffm_restore_markers;
 create trigger ffm_markers_no_truncate before truncate on public.ffm_restore_markers for each statement execute function public.ffm_append_only();
-create or replace function public.ffm_epoch_bump_now() returns bigint
-language plpgsql security definer set search_path to 'public' as $$
-declare e bigint;
-begin
-  update public.ffm_epoch set epoch = epoch + 1, updated_at = clock_timestamp() where id = 1 returning epoch into e;
-  return e;   -- NULL when the epoch row is missing (a restored schema): the gate then stays closed
-end $$;
 create or replace function public.ffm_epoch_bump() returns trigger
 language plpgsql security definer set search_path to 'public' as $$
 begin
-  perform public.ffm_epoch_bump_now();
+  update public.ffm_epoch set epoch = epoch + 1, updated_at = clock_timestamp() where id = 1;   -- (a trigger function: it cannot be called, so the service role cannot raise the epoch at will)
   return null;
 end $$;
 do $$ declare t text; begin
@@ -189,31 +192,48 @@ end $$;
 -- count means something removed rows underneath the triggers). Any error is "closed".
 create or replace function public.ffm_instance_fp() returns text
 language plpgsql stable security definer set search_path to 'public' as $$
-declare sid text; tl integer;
+declare sid text; tl integer; i integer;
 begin
-  select system_identifier::text into sid from pg_control_system();
-  select timeline_id into tl from pg_control_checkpoint();
-  return sid || ':' || tl;     -- a dump restored into another cluster changes the system identifier; a point-in-time recovery promotes a NEW timeline
+  for i in 1..3 loop     -- a transient read error is retried inside the call; only a PERSISTENT failure yields 'unavailable'
+    begin
+      select system_identifier::text into sid from pg_control_system();
+      select timeline_id into tl from pg_control_checkpoint();
+      return sid || ':' || tl;    -- a dump restored into another cluster changes the system identifier; a point-in-time recovery promotes a NEW timeline
+    exception when others then
+      if i < 3 then perform pg_sleep(0.05 * i); end if;
+    end;
+  end loop;
+  return 'unavailable';           -- this layer is then absent (and the gate closed: the stored fingerprint cannot be matched), never "open"
+end $$;
+-- Everything that makes the gate valid EXCEPT the freshness of the sender attestation. Used by the open decision and by the anchor rule (an owner who has just verified must be able to anchor).
+-- No wall-clock comparison decides between a restore and a verification: the verification records the NEWEST restore-marker id, and the gate is valid only while that is still the newest.
+create or replace function public.ffm_gate_core_ok() returns boolean
+language plpgsql stable security definer set search_path to 'public' as $$
+declare g public.ffm_outreach_gate; raw integer; ep bigint; cfg public.ffm_gate_config; fp text;
+begin
+  select * into g from public.ffm_outreach_gate where id = 1;
+  if g.id is null or g.state <> 'verified' or g.verified_raw_count is null or g.verified_at is null or g.verified_epoch is null or g.verified_marker_id is null then return false; end if;
+  if not exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key') then return false; end if;
+  select epoch into ep from public.ffm_epoch where id = 1;
+  if ep is null or ep < g.verified_epoch then return false; end if;                                             -- the epoch is missing or LOWER than at verification: rolled back or rebuilt
+  fp := public.ffm_instance_fp();
+  if fp = 'unavailable' or g.instance_fp is distinct from fp then return false; end if;                         -- another cluster, a recovery timeline, or an unreadable fingerprint
+  if g.verified_marker_id <> (select coalesce(max(id), 0) from public.ffm_restore_markers) then return false; end if;   -- a restore was recorded after the verification (or the marker table was rolled back)
+  select * into cfg from public.ffm_gate_config where id = 1;
+  if g.verified_at < clock_timestamp() - make_interval(days => coalesce(cfg.max_verified_age_days, 30)) then return false; end if;   -- the owner's verification is too old
+  raw := (select count(*) from public.contact_suppressions) + (select count(*) from public.ffm_phone_suppressions) + (select count(*) from public.ffm_suppression_hashes);
+  return raw >= g.verified_raw_count;
 exception when others then
-  return 'unavailable';        -- cannot be read here: this layer is then absent, never "open" (the other layers still apply, see the policy limits)
+  return false;
 end $$;
 create or replace function public.ffm_outreach_gate_open() returns boolean
 language plpgsql stable security definer set search_path to 'public' as $$
-declare g public.ffm_outreach_gate; raw integer; ep bigint; cfg public.ffm_gate_config; mark timestamptz; now_ timestamptz := clock_timestamp();
+declare g public.ffm_outreach_gate; cfg public.ffm_gate_config;
 begin
+  if not public.ffm_gate_core_ok() then return false; end if;
   select * into g from public.ffm_outreach_gate where id = 1;
-  if g.id is null or g.state <> 'verified' or g.verified_raw_count is null or g.verified_at is null or g.verified_epoch is null then return false; end if;
-  if not exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key') then return false; end if;
-  select epoch into ep from public.ffm_epoch where id = 1;
-  if ep is null or ep < g.verified_epoch then return false; end if;                              -- the epoch is missing or LOWER than at verification: rolled back or rebuilt
-  if g.instance_fp is distinct from public.ffm_instance_fp() then return false; end if;           -- another cluster, or a recovery timeline
   select * into cfg from public.ffm_gate_config where id = 1;
-  if g.attested_at is null or g.attested_at < now_ - make_interval(mins => coalesce(cfg.attest_window_minutes, 15)) then return false; end if;   -- no fresh sender attestation: closed by itself
-  if g.verified_at < now_ - make_interval(days => coalesce(cfg.max_verified_age_days, 30)) then return false; end if;                        -- the owner's verification is too old
-  select max(restored_at) into mark from public.ffm_restore_markers;
-  if mark is not null and mark >= g.verified_at then return false; end if;                       -- a restore happened after the verification: the verification no longer counts
-  raw := (select count(*) from public.contact_suppressions) + (select count(*) from public.ffm_phone_suppressions) + (select count(*) from public.ffm_suppression_hashes);
-  return raw >= g.verified_raw_count;
+  return g.attested_at is not null and g.attested_at >= clock_timestamp() - make_interval(mins => coalesce(cfg.attest_window_minutes, 15));    -- no fresh sender attestation: closed by itself
 exception when others then
   return false;
 end $$;
@@ -222,12 +242,12 @@ language plpgsql stable security definer set search_path to 'public' as $$
 declare g public.ffm_outreach_gate;
 begin
   select * into g from public.ffm_outreach_gate where id = 1;
-  return jsonb_build_object('open', public.ffm_outreach_gate_open(), 'state', coalesce(g.state, 'missing'), 'reason', coalesce(g.reason, 'gate row missing'),
+  return jsonb_build_object('open', public.ffm_outreach_gate_open(), 'core_ok', public.ffm_gate_core_ok(), 'state', coalesce(g.state, 'missing'), 'reason', coalesce(g.reason, 'gate row missing'),
     'key_set', exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key'), 'checkpoint_staged', g.expected_hash is not null,
     'expected_count', g.expected_count, 'verified_at', g.verified_at, 'verified_raw_count', g.verified_raw_count,
     'raw_count_now', (select count(*) from public.contact_suppressions) + (select count(*) from public.ffm_phone_suppressions) + (select count(*) from public.ffm_suppression_hashes),
     'epoch', (select epoch from public.ffm_epoch where id = 1), 'verified_epoch', g.verified_epoch, 'attested_at', g.attested_at,
-    'instance_matches', g.instance_fp is not distinct from public.ffm_instance_fp(), 'last_restore_marker', (select max(restored_at) from public.ffm_restore_markers));
+    'instance_matches', g.instance_fp is not distinct from public.ffm_instance_fp(), 'last_restore_marker_id', (select max(id) from public.ffm_restore_markers));
 end $$;
 -- anyone may CLOSE the gate (a restore tool, the bot on suspicion): it can only reduce what is allowed. Only ffm_verify_suppression opens it.
 create or replace function public.ffm_close_outreach_gate(p_reason text, p_by text) returns void
@@ -235,49 +255,73 @@ language plpgsql security definer set search_path to 'public' as $$
 begin
   insert into public.ffm_outreach_gate (id, state, reason) values (1, 'unverified', left(coalesce(nullif(btrim(p_reason), ''), 'closed'), 300))
     on conflict (id) do update set state = 'unverified', reason = left(coalesce(nullif(btrim(p_reason), ''), 'closed'), 300), verified_raw_count = null, verified_at = null, verified_by = null,
-      verified_epoch = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp();
-  perform public.ffm_epoch_bump_now();
+      verified_epoch = null, verified_marker_id = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp();
+  update public.ffm_epoch set epoch = epoch + 1, updated_at = clock_timestamp() where id = 1;
   insert into public.audit_log (actor, action, target, detail) values (coalesce(nullif(btrim(p_by), ''), 'unknown'), 'ffm_outreach_gate_closed', 'gate/1', jsonb_build_object('reason', left(coalesce(p_reason, ''), 300)));
 end $$;
 
 -- 5b. RESTORE-CLOSED GATE (v3) ------------------------------------------------------------------------------------------------------------------------------------------
--- ffm_record_restore: callable by anyone (a restore tool, the owner after a provider restore, the sender on detection). It writes a restore MARKER and closes the gate. The marker is why a
--- verification made BEFORE it can never open the gate again: only a verification made AFTER the marker counts.
-create or replace function public.ffm_record_restore(p_source text, p_detail text, p_by text) returns bigint
+-- ffm_owner_record_restore: OWNER ONLY (the SQL editor, or a restore tool running as the database owner). Writes an owner restore MARKER and closes the gate. The only things that can lower the
+-- sender's mark afterwards are this marker plus a fresh owner verification plus an anchor, in that order. (The previous anyone-callable ffm_record_restore is gone: with the lockdown blanket
+-- grant the bot could have called it. The sender's own detection writes its marker inline, below, with source 'detected_by_sender', which never authorises an anchor.)
+create or replace function public.ffm_owner_record_restore(p_detail text) returns bigint
 language plpgsql security definer set search_path to 'public' as $$
 declare m bigint;
 begin
-  insert into public.ffm_restore_markers (source, detail, recorded_by) values (left(coalesce(nullif(btrim(p_source), ''), 'unspecified'), 80), left(p_detail, 300), left(coalesce(nullif(btrim(p_by), ''), 'unknown'), 80)) returning id into m;
-  perform public.ffm_close_outreach_gate('restore recorded (' || left(coalesce(nullif(btrim(p_source), ''), 'unspecified'), 80) || '): the suppression list must be re-verified', p_by);
+  perform public.ffm_require_owner();
+  insert into public.ffm_restore_markers (source, detail, recorded_by) values ('owner_restore', left(p_detail, 300), 'owner') returning id into m;
+  perform public.ffm_close_outreach_gate('owner recorded a restore: the suppression list must be re-verified, then the sender anchored', 'owner');
   return m;
 end $$;
 -- the state the sender compares with its OUTSIDE high-water mark (read-only; no key, no list)
 create or replace function public.ffm_gate_state() returns jsonb
 language plpgsql stable security definer set search_path to 'public' as $$
 begin
-  return jsonb_build_object('epoch', (select epoch from public.ffm_epoch where id = 1), 'instance_fp', public.ffm_instance_fp(), 'open', public.ffm_outreach_gate_open(),
+  return jsonb_build_object('epoch', (select epoch from public.ffm_epoch where id = 1), 'instance_fp', public.ffm_instance_fp(), 'open', public.ffm_outreach_gate_open(), 'core_ok', public.ffm_gate_core_ok(),
     'state', coalesce((select state from public.ffm_outreach_gate where id = 1), 'missing'), 'verified_at', (select verified_at from public.ffm_outreach_gate where id = 1),
-    'last_restore_marker', (select max(restored_at) from public.ffm_restore_markers));
+    'last_marker_id', (select max(id) from public.ffm_restore_markers),
+    'last_owner_marker_id', (select coalesce(max(id), 0) from public.ffm_restore_markers where source in ('owner_restore', 'restore_backup.py')),
+    'mark_gen', (select gen from public.ffm_sender_mark where id = 1), 'mark_epoch', (select epoch from public.ffm_sender_mark where id = 1));
 end $$;
--- ffm_sender_attest: the sender process (which keeps a high-water mark OUTSIDE this database) says what it last saw. The database must not be BEHIND it. A restore that rolled the
--- database back shows a lower epoch (or another instance): the gate is closed for good (marker + close), not merely refused for this call. The caller cannot lower anything;
--- a successful attestation only keeps a gate that is ALREADY verified fresh. It cannot open a closed gate.
-create or replace function public.ffm_sender_attest(p_hwm_epoch bigint, p_hwm_instance text) returns jsonb
+-- ffm_sender_attest: the sender process (which keeps a high-water mark OUTSIDE this database) says what it last saw: (generation, epoch, instance).
+--   * the database must not be BEHIND the sender (epoch lower, or another instance): the gate is closed FOR GOOD (inline marker + close), not merely refused for this call;
+--   * the database remembers the highest mark it has accepted (ffm_sender_mark) and REJECTS a lower one, so a forged low mark cannot refresh a stale gate;
+--   * a HIGHER generation (an anchor) is accepted only while the gate is fully valid and freshly verified (open), and only with an owner restore marker not yet consumed (or at first setup);
+--   * a successful attestation only KEEPS a verified gate fresh; it can never open a closed one.
+create or replace function public.ffm_sender_attest(p_hwm_gen bigint, p_hwm_epoch bigint, p_hwm_instance text) returns jsonb
 language plpgsql security definer set search_path to 'public' as $$
-declare ep bigint; fp text := public.ffm_instance_fp(); st text; why text;
+declare ep bigint; fp text := public.ffm_instance_fp(); st text; why text; sm public.ffm_sender_mark; om bigint;
 begin
   select epoch into ep from public.ffm_epoch where id = 1;
   select state into st from public.ffm_outreach_gate where id = 1;
-  if p_hwm_epoch is null then return jsonb_build_object('ok', false, 'reason', 'sender_unanchored'); end if;
+  select * into sm from public.ffm_sender_mark where id = 1;
+  if p_hwm_epoch is null or p_hwm_gen is null or p_hwm_gen < 1 or p_hwm_epoch < 1 then return jsonb_build_object('ok', false, 'reason', 'sender_unanchored'); end if;
+  if fp = 'unavailable' then return jsonb_build_object('ok', false, 'reason', 'instance_unreadable'); end if;      -- a persistent read error: stay closed (the gate cannot match), write NO marker, nothing for the owner to do
   if ep is null then why := 'epoch row missing (schema rebuilt or restored)';
   elsif ep < p_hwm_epoch then why := 'rollback detected: database epoch ' || ep || ' is below the sender high-water mark ' || p_hwm_epoch;
   elsif p_hwm_instance is not null and p_hwm_instance <> fp then why := 'instance changed: the sender saw another database instance or timeline';
   end if;
   if why is not null then
-    if st = 'verified' then perform public.ffm_record_restore('detected_by_sender', why, 'sender'); end if;      -- a gate that is already closed needs nothing more
+    if st = 'verified' then
+      insert into public.ffm_restore_markers (source, detail, recorded_by) values ('detected_by_sender', left(why, 300), 'sender');
+      perform public.ffm_close_outreach_gate('rollback detected by the sender: ' || left(why, 200), 'sender');
+    end if;
     return jsonb_build_object('ok', false, 'reason', 'rollback_detected', 'detail', why, 'epoch', ep);
   end if;
-  update public.ffm_outreach_gate set attested_at = clock_timestamp() where id = 1 and state = 'verified';
+  if p_hwm_gen < sm.gen or (p_hwm_gen = sm.gen and p_hwm_epoch < sm.epoch) then
+    return jsonb_build_object('ok', false, 'reason', 'mark_regression', 'detail', 'the sender mark is lower than the highest mark this database accepted');
+  end if;
+  if p_hwm_gen > sm.gen then      -- an ANCHOR
+    select coalesce(max(id), 0) into om from public.ffm_restore_markers where source in ('owner_restore', 'restore_backup.py');
+    if p_hwm_epoch <> ep then return jsonb_build_object('ok', false, 'reason', 'anchor_refused', 'detail', 'an anchor must carry exactly the current database epoch (' || ep || '); read ffm_gate_state and retry'); end if;
+    if not public.ffm_gate_core_ok() then return jsonb_build_object('ok', false, 'reason', 'anchor_refused', 'detail', 'the gate is not freshly verified: record the restore, verify the suppression list, THEN anchor'); end if;
+    if sm.gen > 0 and om <= sm.owner_marker_id then return jsonb_build_object('ok', false, 'reason', 'anchor_refused', 'detail', 'a new generation needs an owner-recorded restore (ffm_owner_record_restore) not yet used'); end if;
+    update public.ffm_sender_mark set gen = p_hwm_gen, epoch = p_hwm_epoch, owner_marker_id = om, updated_at = clock_timestamp() where id = 1;
+    insert into public.audit_log (actor, action, target, detail) values ('sender', 'ffm_sender_anchored', 'gate/1', jsonb_build_object('gen', p_hwm_gen, 'epoch', p_hwm_epoch));
+  elsif p_hwm_epoch > sm.epoch then
+    update public.ffm_sender_mark set epoch = p_hwm_epoch, updated_at = clock_timestamp() where id = 1;
+  end if;
+  update public.ffm_outreach_gate set attested_at = clock_timestamp() where id = 1 and state = 'verified' and public.ffm_gate_core_ok();
   return jsonb_build_object('ok', true, 'epoch', ep, 'instance_fp', fp, 'open', public.ffm_outreach_gate_open());
 end $$;
 create or replace function public.ffm_set_gate_config(p_attest_window_minutes integer, p_max_verified_age_days integer, p_by text) returns void
@@ -353,8 +397,8 @@ begin
   insert into public.ffm_outreach_gate (id, state, reason, expected_count, expected_hash, expected_key_check, expected_staged_at)
     values (1, 'unverified', 'checkpoint staged: run ffm_verify_suppression', n, calc, fp, clock_timestamp())
     on conflict (id) do update set state = 'unverified', reason = 'checkpoint staged: run ffm_verify_suppression', expected_count = n, expected_hash = calc, expected_key_check = fp,
-      expected_staged_at = clock_timestamp(), verified_raw_count = null, verified_at = null, verified_by = null, verified_epoch = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp();
-  perform public.ffm_epoch_bump_now();
+      expected_staged_at = clock_timestamp(), verified_raw_count = null, verified_at = null, verified_by = null, verified_epoch = null, verified_marker_id = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp();
+  update public.ffm_epoch set epoch = epoch + 1, updated_at = clock_timestamp() where id = 1;
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_suppression_checkpoint_staged', 'gate/1', jsonb_build_object('count', n));
   return jsonb_build_object('staged', n);
 end $$;
@@ -402,9 +446,9 @@ begin
     perform public.ffm_close_outreach_gate('verification failed: the suppression epoch row is missing', p_by);
     return jsonb_build_object('verified', false, 'reason', 'the suppression epoch row is missing');
   end if;
-  perform public.ffm_epoch_bump_now();
+  update public.ffm_epoch set epoch = epoch + 1, updated_at = clock_timestamp() where id = 1;
   update public.ffm_outreach_gate set state = 'verified', reason = 'verified against checkpoint (' || mode || ')', verified_raw_count = raw, verified_at = clock_timestamp(),
-         verified_by = coalesce(nullif(btrim(p_by), ''), 'owner'), verified_epoch = (select epoch from public.ffm_epoch where id = 1), instance_fp = public.ffm_instance_fp(),
+         verified_by = coalesce(nullif(btrim(p_by), ''), 'owner'), verified_epoch = (select epoch from public.ffm_epoch where id = 1), verified_marker_id = (select coalesce(max(id), 0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(),
          attested_at = clock_timestamp(), updated_at = clock_timestamp() where id = 1;     -- the owner's own verification is a fresh attestation; afterwards the SENDER must keep it fresh
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_suppression_verified', 'gate/1', jsonb_build_object('mode', mode, 'expected', exp_n, 'current', cur));
   return jsonb_build_object('verified', true, 'mode', mode, 'expected', exp_n, 'current', cur);
@@ -428,6 +472,7 @@ create or replace function public.ffm_contact_status(p_lead uuid, p_channel text
 language plpgsql stable security definer set search_path to 'public' as $$
 declare l public.ws_leads; wstatus text; e public.ffm_consent_log; i public.ffm_consent_log; win integer;
 begin
+  p_channel := case p_channel when 'text' then 'sms' when 'call' then 'phone' else p_channel end;     -- the outbox names (text, call) map to the consent log's (sms, phone) BEFORE any check
   if p_channel is null or public.outreach_channel_problem(p_channel) is not null then      -- v3: only channels with a durable suppression identifier (email, sms, phone) can ever be allowed
     return jsonb_build_object('allowed', false, 'reason', case public.outreach_channel_problem(p_channel) when 'channel_prohibited' then 'channel_prohibited' else 'invalid_channel' end);
   end if;
@@ -507,7 +552,7 @@ end $$;
 -- but the person has objected, so it is treated as 'all' (fail closed): it is logged as channel 'all' with the original channel in the source, and suppresses the lead's address and number.
 create or replace function public.ffm_withdraw_consent(p_ws uuid, p_lead uuid, p_channel text, p_source text, p_evidence_ref text, p_by text) returns uuid
 language plpgsql security definer set search_path to 'public' as $$
-declare v_id uuid; ch text; src text := coalesce(nullif(btrim(p_source), ''), 'unspecified');
+declare v_id uuid; ch text; l public.ws_leads; src text := coalesce(nullif(btrim(p_source), ''), 'unspecified');
 begin
   if p_channel is null or p_channel not in ('email', 'sms', 'phone', 'mail', 'all', 'text', 'call', 'post', 'telegram', 'whatsapp', 'signal', 'other') then
     raise exception 'withdrawal refused: channel must be one of email, sms, phone, text, call, mail, post, telegram, whatsapp, signal, other, all';
@@ -515,7 +560,13 @@ begin
   ch := case p_channel when 'text' then 'sms' when 'call' then 'phone' when 'post' then 'all' when 'mail' then 'all' when 'telegram' then 'all' when 'whatsapp' then 'all' when 'signal' then 'all' when 'other' then 'all' else p_channel end;
   if ch = 'all' and p_channel <> 'all' then src := left('via ' || p_channel || ': ' || src, 300); end if;
   perform pg_advisory_xact_lock(hashtextextended('ffm_consent:' || p_lead::text, 0));
-  if not exists (select 1 from public.ws_leads where id = p_lead and workspace_id = p_ws) then raise exception 'lead not found in this workspace'; end if;
+  select * into l from public.ws_leads where id = p_lead and workspace_id = p_ws;
+  if l.id is null then raise exception 'lead not found in this workspace'; end if;
+  -- a withdrawal that would store NOTHING durable (no usable address for email, no usable number for sms/phone) is widened to 'all' and logged as such: the person objected, and the
+  -- identifier trigger on ws_leads (ffm_lead_identifier_guard) suppresses any identifier that is added to this lead later.
+  if (ch = 'email' and public.normalize_addr(l.email) is null) or (ch in ('sms', 'phone') and public.normalize_phone(l.phone) is null) then
+    src := left('no usable identifier for ' || ch || ': ' || src, 300); ch := 'all';
+  end if;
   insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by)
     values (p_ws, p_lead, ch, 'withdrawn', null, src, clock_timestamp(), nullif(btrim(p_evidence_ref), ''), coalesce(nullif(btrim(p_by), ''), 'unknown')) returning id into v_id;
   if ch in ('email', 'all') then
@@ -531,6 +582,25 @@ begin
   insert into public.audit_log (actor, action, target, detail) values ('ffm', 'ffm_consent_withdrawn', 'workspace/' || p_ws, jsonb_build_object('lead', p_lead, 'channel', p_channel, 'recorded_as', ch, 'consent', v_id));
   return v_id;
 end $$;
+
+-- 10b. an identifier added or changed on a lead that has WITHDRAWN is suppressed at once (v3). Without this, withdraw-then-add-email on a lead with no address stored nothing durable.
+-- A withdrawal on 'email' covers the address; on 'sms'/'phone' the number; on 'all' both. Runs as the table owner (security definer) so a plain lead edit cannot skip it.
+create or replace function public.ffm_lead_identifier_guard() returns trigger
+language plpgsql security definer set search_path to 'public' as $$
+declare a text; ph text;
+begin
+  if tg_op = 'UPDATE' and new.email is not distinct from old.email and new.phone is not distinct from old.phone then return new; end if;
+  a := public.normalize_addr(new.email); ph := public.normalize_phone(new.phone);
+  if a is not null and exists (select 1 from public.ffm_consent_log where lead_id = new.id and basis = 'withdrawn' and channel in ('email', 'all')) then
+    insert into public.contact_suppressions (address, reason, recorded_by, source_lead) values (a, 'ffm consent withdrawn (identifier added later)', 'ffm', null) on conflict do nothing;
+  end if;
+  if ph is not null and exists (select 1 from public.ffm_consent_log where lead_id = new.id and basis = 'withdrawn' and channel in ('sms', 'phone', 'all')) then
+    insert into public.ffm_phone_suppressions (phone, reason, recorded_by, source_lead) values (ph, 'ffm consent withdrawn (identifier added later)', 'ffm', null) on conflict do nothing;
+  end if;
+  return new;
+end $$;
+drop trigger if exists ws_leads_identifier_guard on public.ws_leads;
+create trigger ws_leads_identifier_guard after insert or update of email, phone on public.ws_leads for each row execute function public.ffm_lead_identifier_guard();
 
 create or replace function public.ffm_erase_lead(p_ws uuid, p_lead uuid, p_reason text) returns jsonb
 language plpgsql security definer set search_path to 'public' as $$
@@ -675,12 +745,13 @@ revoke all on function public.ffm_withdraw_consent(uuid, uuid, text, text, text,
 revoke all on function public.ffm_erase_lead(uuid, uuid, text) from public, anon, authenticated;
 revoke all on function public.outbox_dnc_guard() from public, anon, authenticated;
 revoke all on function public.ffm_epoch_guard() from public, anon, authenticated;
-revoke all on function public.ffm_epoch_bump_now() from public, anon, authenticated;
 revoke all on function public.ffm_epoch_bump() from public, anon, authenticated;
 revoke all on function public.ffm_instance_fp() from public, anon, authenticated;
-revoke all on function public.ffm_record_restore(text, text, text) from public, anon, authenticated;
+revoke all on function public.ffm_gate_core_ok() from public, anon, authenticated;
+revoke all on function public.ffm_owner_record_restore(text) from public, anon, authenticated;
+revoke all on function public.ffm_lead_identifier_guard() from public, anon, authenticated;
 revoke all on function public.ffm_gate_state() from public, anon, authenticated;
-revoke all on function public.ffm_sender_attest(bigint, text) from public, anon, authenticated;
+revoke all on function public.ffm_sender_attest(bigint, bigint, text) from public, anon, authenticated;
 revoke all on function public.ffm_set_gate_config(integer, integer, text) from public, anon, authenticated;
 revoke all on function public.outreach_channel_problem(text) from public, anon, authenticated;
 revoke all on function public.ffm_route_preview(uuid, uuid) from public, anon, authenticated;
@@ -705,9 +776,11 @@ grant execute on function public.ffm_withdraw_consent(uuid, uuid, text, text, te
 grant execute on function public.ffm_erase_lead(uuid, uuid, text) to service_role;
 grant execute on function public.outbox_dnc_guard() to service_role;
 grant execute on function public.ffm_instance_fp() to service_role;
-grant execute on function public.ffm_record_restore(text, text, text) to service_role;
+grant execute on function public.ffm_gate_core_ok() to service_role;
+grant execute on function public.ffm_owner_record_restore(text) to service_role;
+grant execute on function public.ffm_lead_identifier_guard() to service_role;
 grant execute on function public.ffm_gate_state() to service_role;
-grant execute on function public.ffm_sender_attest(bigint, text) to service_role;
+grant execute on function public.ffm_sender_attest(bigint, bigint, text) to service_role;
 grant execute on function public.ffm_set_gate_config(integer, integer, text) to service_role;
 grant execute on function public.outreach_channel_problem(text) to service_role;
 grant execute on function public.ffm_route_preview(uuid, uuid) to service_role;
