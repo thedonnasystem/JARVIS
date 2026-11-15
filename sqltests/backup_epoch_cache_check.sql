@@ -46,8 +46,8 @@ begin
   begin perform nextval('public.ffm_redaction_epoch_seq'); reset role; raise exception 'B14 service_role can move the epoch sequence'; exception when others then reset role; if sqlerrm like 'B14%' then raise; end if; end;
   set local role service_role;
   begin perform public.redaction_epoch_bump(); reset role; raise exception 'B15 the bump trigger function is callable'; exception when others then reset role; if sqlerrm like 'B15%' then raise; end if; end;
-  set local role service_role;
-  begin e1 := public.backup_epoch(); reset role; exception when others then reset role; raise exception 'B16 service_role cannot read the epoch vector (the backup needs it): %', sqlerrm; end;
+  set local role backup_reader;
+  begin e1 := public.backup_epoch(); reset role; exception when others then reset role; raise exception 'B16 backup_reader cannot read the epoch vector (the backup needs it): %', sqlerrm; end;
   if (select relpersistence from pg_class where oid = 'public.ffm_redaction_found'::regclass) <> 'u' then raise exception 'C0 the cache table is not UNLOGGED'; end if;
 
   -- ============================================================ C. run-specific cache
@@ -60,7 +60,7 @@ begin
   run1 := (public.backup_deny_prepare() ->> 'run')::uuid; run2 := (public.backup_deny_prepare() ->> 'run')::uuid;
   if run1 = run2 or (select count(*) from public.ffm_redaction_found) <> 2 then raise exception 'C1 two concurrent runs must have two rows and different ids'; end if;
   -- release deletes only the caller's own run
-  set local role service_role;
+  set local role backup_reader;      -- a different caller identity (role differs from the owner's)
   begin res := public.backup_deny_release(run1); exception when others then res := jsonb_build_object('err', sqlerrm); end;
   reset role;
   if (select count(*) from public.ffm_redaction_found) <> 2 then raise exception 'C2 another caller released a run it does not own: %', res; end if;
@@ -77,8 +77,9 @@ begin
   update public.ffm_redaction_found set found = jsonb_build_object('names', '[]'::jsonb, 'chains', '[]'::jsonb, 'emails', '[]'::jsonb, 'phones', '[]'::jsonb) where run = run2;      -- a stale / empty cached result
   paged := public.backup_snapshot_page('tasks', (select count(*)::int from public.tasks where id < (select id from public.tasks where title = 'zzc cache')), 1, run2);
   if paged -> 'rows' -> 0 ->> 'result' not like '%cachelynn%' then raise exception 'C7 control: the owner caller did not use its own cached result (the test cannot tell cache from rescan)'; end if;
-  set local role service_role;
-  paged := public.backup_snapshot_page('tasks', (select count(*)::int from public.tasks where id < (select id from public.tasks where title = 'zzc cache')), 1, run2);
+  n := (select count(*)::int from public.tasks where id < (select id from public.tasks where title = 'zzc cache'));
+  set local role backup_reader;
+  paged := public.backup_snapshot_page('tasks', n, 1, run2);
   reset role;
   if paged -> 'rows' -> 0 ->> 'result' like '%cachelynn%' then raise exception 'C8 a run id belonging to another caller was used: %', paged -> 'rows' -> 0 ->> 'result'; end if;
   paged := public.backup_snapshot_page('tasks', (select count(*)::int from public.tasks where id < (select id from public.tasks where title = 'zzc cache')), 1, gen_random_uuid());

@@ -29,7 +29,7 @@ for i in range(N):
     elif c=='memory.content': q("insert into memory (kind,content) values ('lesson',%s)", tag+' '+vs)
     elif c=='ideas.name': q("insert into ideas (name) values (%s)", tag+' '+vs)
 q("set local session_replication_role = origin")
-q("grant usage on schema public to service_role"); q("set local role service_role")
+q("grant usage on schema public to backup_reader"); q("set local role backup_reader")
 snap = q("select public.backup_snapshot()")[0][0]['data']
 RUN = q("select public.backup_deny_prepare() ->> 'run'")[0][0]
 bad=0

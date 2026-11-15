@@ -10,7 +10,8 @@ begin
     foreach r in array array['anon', 'authenticated'] loop
       if has_function_privilege(r, f, 'execute') then raise exception 'B1 % can execute %', r, f; end if;
     end loop;
-    if not has_function_privilege('service_role', f, 'execute') then raise exception 'B2 service_role cannot execute %', f; end if;
+    if has_function_privilege('service_role', f, 'execute') then raise exception 'B2 service_role can execute % (post-lockdown: the backup identity only)', f; end if;
+    if has_function_privilege('backup_reader', f, 'execute') <> (f in ('public.backup_export_policy()', 'public.backup_snapshot(text[])')) then raise exception 'B2b backup_reader ACL on % is not as catalogued', f; end if;
   end loop;
 
   pol := public.backup_export_policy();

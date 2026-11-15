@@ -99,5 +99,15 @@ else
   else pii_flag "KNOWN LEAK PATHS: redaction only partly installed (snapshot_redacts/sources_fixed/redactor_installed/agent_runs_trigger/denylist = $st) - DO NOT ACTIVATE"; fi
   [ "${BACKUP_LEAK_PATHS_ACCEPTED:-0}" = 1 ] && warn "BACKUP_LEAK_PATHS_ACCEPTED=1 is ignored: it no longer substitutes for the redaction (owner decision: close the leak paths, do not accept them)"
 fi
+# the backup identity (owner directive D): the migration 20261121_postlock_backup_identity_v1 takes the backup functions away from service_role, so the backup must carry its own token
+if [ -n "$dburl" ] && command -v psql >/dev/null 2>&1; then
+  idn="$(psql "$dburl" -Atqc "select (exists (select 1 from pg_roles where rolname = 'backup_reader'))::text || ' ' || coalesce(has_function_privilege('service_role', to_regprocedure('public.backup_epoch()'), 'execute')::text, 'none') || ' ' || coalesce(has_function_privilege('backup_reader', to_regprocedure('public.backup_epoch()'), 'execute')::text, 'none')" 2>/dev/null)"
+  case "$idn" in
+    "true false true") ok "backup identity installed: role backup_reader can run the backup functions, service_role cannot";;
+    *) pii_flag "BACKUP IDENTITY: not as expected (role exists / service_role may execute / backup_reader may execute = $idn) - apply migration 20261121_postlock_backup_identity_v1 (after the lockdown)";;
+  esac
+fi
+if [ -n "${BACKUP_READER_JWT:-}" ]; then ok "BACKUP_READER_JWT is set (the backup calls its functions as role backup_reader, never with the service key)"
+else warn "BACKUP_READER_JWT is not set: after the post-lockdown migration the backup is refused by the database (fail closed, nothing uploaded). Owner decision: see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md rule 12"; fi
 echo; echo "Result: $fails FAIL, $warns WARN."; echo "Not checked here (check by eye): bucket is Private; lifecycle rule set; BACKUP_KEY stored in 2 places; migration 20261113_backup_schema_v1.sql applied (the Telegram /backup check shows it)."
 [ "$fails" = 0 ]

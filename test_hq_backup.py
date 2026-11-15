@@ -306,6 +306,39 @@ class RestoreRefusesUnverified(unittest.TestCase):
                 R.ALLOW_UNVERIFIED = False
 
 
+class BackupIdentity(unittest.TestCase):
+    def test_rpc_uses_the_backup_token_and_never_the_service_key(self):
+        seen = []
+        def fake(method, path, body=None, timeout=30, **kw):
+            seen.append(B.hq.AUTH_OVERRIDE.get()); return {}
+        with mock.patch.dict(os.environ, {"BACKUP_READER_JWT": "reader.jwt.token"}), mock.patch("hq._request", side_effect=fake):
+            B._rpc("/rest/v1/rpc/backup_epoch", {}, timeout=5)
+        self.assertEqual(seen, ["reader.jwt.token"])
+        self.assertIsNone(B.hq.AUTH_OVERRIDE.get())                      # reset afterwards: the next (non-backup) request goes back to the service key
+
+    def test_request_sends_the_override_as_apikey_and_bearer(self):
+        sent = {}
+        class R:
+            def read(self): return b"{}"
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        def fake_open(req, timeout=0):
+            sent.update({k.lower(): v for k, v in req.header_items()}); return R()
+        tok = B.hq.AUTH_OVERRIDE.set("reader.jwt.token")
+        try:
+            with mock.patch("urllib.request.urlopen", fake_open), mock.patch.object(B.hq, "HQ_SUPABASE_URL", "https://x.example"), mock.patch.object(B.hq, "HQ_SUPABASE_SERVICE_KEY", "service-key-value"):
+                B.hq._request("POST", "/rest/v1/rpc/backup_epoch", {})
+        finally:
+            B.hq.AUTH_OVERRIDE.reset(tok)
+        self.assertEqual(sent["authorization"], "Bearer reader.jwt.token"); self.assertNotIn("service-key-value", json.dumps(sent))
+
+    def test_without_the_token_the_service_key_path_is_unchanged(self):
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch("hq._request", return_value={"ok": 1}) as m:
+            os.environ.pop("BACKUP_READER_JWT", None)
+            self.assertEqual(B._rpc("/rest/v1/rpc/backup_epoch", {}), {"ok": 1})
+        self.assertEqual(m.call_args[0][:2], ("POST", "/rest/v1/rpc/backup_epoch"))
+
+
 class Preflight(unittest.TestCase):
     def check(self, fake, env=None):
         ps = b2_patches(fake)

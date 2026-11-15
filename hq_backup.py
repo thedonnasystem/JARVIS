@@ -75,12 +75,28 @@ def _fernet():
         raise BackupError("BACKUP_KEY is not a valid encryption key (must be a 44-character Fernet key ending in =)") from None
 
 
+BACKUP_READER_ENV = "BACKUP_READER_JWT"      # a JWT with role = backup_reader (the narrow database identity that alone may run the backup functions); OWNER DECISION, see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md rule 12
+
+
+def _rpc(path: str, body: dict | None = None, **kw):
+    """Call a backup function as the backup identity. With BACKUP_READER_JWT set the call is made with that token (the service key is NOT sent); without it the service key is used, which
+    works only on a database where the post-lockdown backup-identity migration has not been applied (after it, the database refuses the call and the backup fails closed, nothing is uploaded)."""
+    tok = os.environ.get(BACKUP_READER_ENV, "").strip()
+    if not tok:
+        return hq._request("POST", path, body, **kw)
+    reset = hq.AUTH_OVERRIDE.set(tok)
+    try:
+        return hq._request("POST", path, body, **kw)
+    finally:
+        hq.AUTH_OVERRIDE.reset(reset)
+
+
 # ------------------------------------------------------------------ dump
 
 def get_schema() -> dict | None:
     """The live schema description, or None when public.backup_schema() is not installed (old database)."""
     try:
-        s = hq._request("POST", "/rest/v1/rpc/backup_schema", {}, timeout=60)
+        s = _rpc("/rest/v1/rpc/backup_schema", {}, timeout=60)
     except urllib.error.HTTPError as e:
         if e.code == 404:        # PostgREST: function not found (PGRST202) = migration not applied. Any other error must NOT silently downgrade the backup.
             return None
@@ -259,7 +275,7 @@ def _check_policy(p) -> dict:
 def get_policy() -> dict:
     """Which tables may leave the database. FAIL CLOSED: without the policy function there is no off-site export at all (never 'export everything')."""
     try:
-        p = hq._request("POST", "/rest/v1/rpc/backup_export_policy", {}, timeout=60)
+        p = _rpc("/rest/v1/rpc/backup_export_policy", {}, timeout=60)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise BackupError("backup_export_policy() is not installed (migration 20261119_backup_exclude_client_pii_v1); refusing to export client data off-site") from None
@@ -335,7 +351,7 @@ def _epoch() -> dict | None:
     """The redaction-source epoch vector (backup_epoch(): one counter bumped by owner-only triggers on every insert, update, delete and truncate of a client / lead / suppression source table and of the deny-list,
     plus the source row counts and a hash of the redaction code and the export policy). None when the database cannot tell: that is NOT consistent."""
     try:
-        e = hq._request("POST", "/rest/v1/rpc/backup_epoch", {}, timeout=60)
+        e = _rpc("/rest/v1/rpc/backup_epoch", {}, timeout=60)
     except Exception:
         return None
     return e if isinstance(e, dict) and isinstance(e.get("seq"), int) and not isinstance(e.get("seq"), bool) else None
@@ -369,7 +385,7 @@ def _encode_rows(rows: list) -> tuple[bytes, int]:
 
 def _snapshot_cost() -> dict | None:
     try:
-        c = hq._request("POST", "/rest/v1/rpc/backup_snapshot_cost", {}, timeout=60)
+        c = _rpc("/rest/v1/rpc/backup_snapshot_cost", {}, timeout=60)
         return c if isinstance(c, dict) and isinstance(c.get("est_seconds"), (int, float)) else None
     except Exception:
         return None
@@ -378,7 +394,7 @@ def _snapshot_cost() -> dict | None:
 def _deny_prepare():
     """The whole-export deny-list scan, once, for this run. Returns this run's id (random, bound to the caller) or None (then every page runs the whole scan itself: slower, never skipped)."""
     try:
-        prep = hq._request("POST", "/rest/v1/rpc/backup_deny_prepare", {}, timeout=300)
+        prep = _rpc("/rest/v1/rpc/backup_deny_prepare", {}, timeout=300)
         run = prep.get("run") if isinstance(prep, dict) else None
         return run if isinstance(run, str) and len(run) == 36 else None
     except Exception:
@@ -388,7 +404,7 @@ def _deny_prepare():
 def _deny_release(run) -> None:
     """Delete THIS run's cached scan result (and expired ones). Best effort: the database also expires and purges them."""
     try:
-        hq._request("POST", "/rest/v1/rpc/backup_deny_release", {"p_run": run} if run else {}, timeout=60)
+        _rpc("/rest/v1/rpc/backup_deny_release", {"p_run": run} if run else {}, timeout=60)
     except Exception:
         pass
 
@@ -397,19 +413,19 @@ def _read_paged(pol: dict, schema: dict) -> tuple[dict, dict, dict]:
     """Redacted export in pages for volumes one statement cannot cover. Every table's RAW digest (a hash, no data) is read before and after the pages;
     equal digests prove nothing changed while we read (the same claim as two identical full reads, with no raw text leaving the database). Retries, then flags consistent=False."""
     names = [t for t in pol["exported"] if t not in SKIP]
-    meta = hq._request("POST", "/rest/v1/rpc/backup_redaction_meta", {}, timeout=60)
+    meta = _rpc("/rest/v1/rpc/backup_redaction_meta", {}, timeout=60)
     check_redaction({"redaction": meta})
     last = None
     for attempt in range(1, CONSISTENCY_ATTEMPTS + 1):
         e0 = _epoch()
-        before = {t: hq._request("POST", "/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
+        before = {t: _rpc("/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
         run = _deny_prepare()
         try:
             data = {}
             for t in names:
                 rows, off = [], 0
                 while off < MAX_ROWS_PER_TABLE:
-                    page = hq._request("POST", "/rest/v1/rpc/backup_snapshot_page", {"p_table": t, "p_offset": off, "p_limit": PAGE_REDACT, **({"p_run": run} if run else {})}, timeout=180)
+                    page = _rpc("/rest/v1/rpc/backup_snapshot_page", {"p_table": t, "p_offset": off, "p_limit": PAGE_REDACT, **({"p_run": run} if run else {})}, timeout=180)
                     got = page.get("rows") if isinstance(page, dict) else None
                     if not isinstance(got, list):
                         raise BackupError(f"{t}: backup_snapshot_page() returned an unexpected result")
@@ -422,7 +438,7 @@ def _read_paged(pol: dict, schema: dict) -> tuple[dict, dict, dict]:
                 data[t] = rows
         finally:
             _deny_release(run)                         # on success AND on any exception: this run's cached scan result is deleted (an unreleased one also expires by itself)
-        after = {t: hq._request("POST", "/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
+        after = {t: _rpc("/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
         e1 = _epoch()
         epoch_state = "unavailable" if (e0 is None or e1 is None) else ("unchanged" if e0 == e1 else "changed")
         moved = sorted(t for t in names if before[t] != after[t])
@@ -438,7 +454,7 @@ def _try_snapshot() -> tuple[dict | None, str]:
     """One database call that returns every table AND the schema from a single SQL statement, so they are mutually consistent.
     Returns (snapshot, "") or (None, reason). Any problem falls back to the two-read method rather than failing the backup."""
     try:
-        snap = hq._request("POST", "/rest/v1/rpc/backup_snapshot", {}, timeout=180, exact=True)
+        snap = _rpc("/rest/v1/rpc/backup_snapshot", {}, timeout=180, exact=True)
     except urllib.error.HTTPError as e:
         return None, ("backup_snapshot() not installed" if e.code == 404 else f"backup_snapshot() failed (HTTP {e.code})")
     except Exception as e:

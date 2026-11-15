@@ -69,7 +69,7 @@ for core, disp in CORES.items():
             elif c=='memory.content': q("insert into memory (kind,content) values ('lesson',%s)", tag+' '+vs)
             elif c=='ideas.name': q("insert into ideas (name) values (%s)", tag+' '+vs)
 q("set local session_replication_role = origin")
-q("set local role service_role")
+q("set local role backup_reader")
 snap = q("select public.backup_snapshot()")[0][0]
 q("reset role")
 data = snap['data']

@@ -40,3 +40,4 @@
 20261120_redaction_denylist_v1.sql
 20261120_leak_source_prevention_v1.sql
 20261112_lockdown_v1.sql
+20261121_postlock_backup_identity_v1.sql

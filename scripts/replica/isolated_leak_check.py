@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Isolated-per-variant leak matrix (round 4). Every case is its OWN transaction: the person is inserted, then ERASED (the [erased] overwrite) or DELETED, ONE exported row carries ONE spelling,
-the snapshot is taken as service_role (single statement AND paged with page size 1), the transaction is rolled back. Batched tests hid cross-row contamination (a neighbouring row that spells a
+the snapshot is taken as backup_reader (single statement AND paged with page size 1), the transaction is rolled back. Batched tests hid cross-row contamination (a neighbouring row that spells a
 name whole made the squashed check catch a glued spelling elsewhere); here nothing can help. Usage: REPLICA_URL=postgresql://... python3 scripts/replica/isolated_leak_check.py [quick]"""
 import json, os, re, sys, unicodedata
 import psycopg2
@@ -68,7 +68,7 @@ def case(state, name, frag, label, spelling, col):
         cur.execute("set local session_replication_role = replica")
         cur.execute(COLS[col], (spelling,))
         cur.execute("set local session_replication_role = origin")
-        cur.execute("grant usage on schema public to service_role"); cur.execute("set local role service_role")
+        cur.execute("grant usage on schema public to backup_reader"); cur.execute("set local role backup_reader")
         cur.execute("select public.backup_snapshot() -> 'data'"); single = cur.fetchone()[0]
         paged = {}
         cur.execute("select public.backup_deny_prepare() ->> 'run'"); run = cur.fetchone()[0]             # as the Python backup does: the whole-export scan once, pages reuse it

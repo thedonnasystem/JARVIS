@@ -171,7 +171,7 @@ def main():
     work = tempfile.mkdtemp(prefix="drill_")
     with FakeB2() as fake:
         ps = [mock.patch.object(B, "B2_AUTH_URL", fake.auth_url), mock.patch.object(B, "_b2_ok_url", lambda u: u.startswith(fake.url))]
-        env = {"BACKUP_KEY": key, "BACKUP_PUT_URL": f"b2://{fake.bucket_id}/hq", "BACKUP_AUTH": "keyW:secretW"}
+        env = {"BACKUP_READER_JWT": "scratch-reader-token", "BACKUP_KEY": key, "BACKUP_PUT_URL": f"b2://{fake.bucket_id}/hq", "BACKUP_AUTH": "keyW:secretW"}   # the backup identity: the adapter runs every backup rpc as role backup_reader
         adapter = PgAdapter(SRC + ("&" if "?" in SRC else "?") + "options=-c%20timezone%3DUTC")
         with mock.patch.dict(os.environ, env), mock.patch("hq._request", side_effect=adapter), ps[0], ps[1]:
             out = B.run(force=True)
@@ -286,9 +286,9 @@ def main():
         committed_2c = wrote["n"]   # the negative control below reuses the same writer/counter; capture this phase's count now
         ddl.cursor().execute("drop table public.drill_pair_a, public.drill_pair_b"); ddl.close()
         with psycopg2.connect(SRC) as sc, sc.cursor() as scur:
-            scur.execute("select p.proname, p.provolatile, has_function_privilege('anon', p.oid, 'execute'), has_function_privilege('authenticated', p.oid, 'execute'), has_function_privilege('service_role', p.oid, 'execute') from pg_proc p where p.proname in ('backup_snapshot', 'backup_schema')")
+            scur.execute("select p.proname, p.provolatile, has_function_privilege('anon', p.oid, 'execute'), has_function_privilege('authenticated', p.oid, 'execute'), has_function_privilege('backup_reader', p.oid, 'execute') and not has_function_privilege('service_role', p.oid, 'execute') from pg_proc p where p.proname in ('backup_snapshot', 'backup_schema')")
             fr = scur.fetchall()
-        check("2d backup_snapshot/backup_schema are STABLE (single-snapshot guarantee depends on it) and only service_role may execute", len(fr) == 2 and all(r[1] == "s" and not r[2] and not r[3] and r[4] for r in fr), str(fr))
+        check("2d backup_snapshot/backup_schema are STABLE (single-snapshot guarantee depends on it) and only backup_reader may execute (not service_role)", len(fr) == 2 and all(r[1] == "s" and not r[2] and not r[3] and r[4] for r in fr), str(fr))
         # negative control: reading the two tables in two SEPARATE statements while the writer runs MUST show mismatches (proves check 2c can fail)
         stop.clear(); th = threading.Thread(target=writer); ddl2 = psycopg2.connect(SRC); ddl2.autocommit = True
         ddl2.cursor().execute("create table if not exists public.drill_pair_a (id int primary key); create table if not exists public.drill_pair_b (id int primary key); truncate public.drill_pair_a, public.drill_pair_b")

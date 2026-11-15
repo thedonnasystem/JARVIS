@@ -263,7 +263,8 @@ begin
     end loop;
   end loop;
   foreach f in array array['public.backup_redaction_context()', 'public.backup_redact_text(text,jsonb,integer,text)', 'public.backup_snapshot(text[])', 'public.backup_redaction_status()'] loop
-    if not has_function_privilege('service_role', f, 'execute') then raise exception 'E4 service_role cannot execute %', f; end if;
+    if has_function_privilege('service_role', f, 'execute') then raise exception 'E4 service_role can execute % (post-lockdown: the backup identity only)', f; end if;
+    if has_function_privilege('backup_reader', f, 'execute') <> (f in ('public.backup_snapshot(text[])', 'public.backup_redaction_status()')) then raise exception 'E4b backup_reader ACL on % is not as catalogued', f; end if;
   end loop;
   if (select provolatile from pg_proc where oid = 'public.backup_snapshot(text[])'::regprocedure) <> 's' then raise exception 'E5 backup_snapshot must stay STABLE'; end if;
   j := public.backup_redaction_status();
@@ -372,7 +373,7 @@ begin
     foreach k in array array['anon', 'authenticated'] loop
       if has_function_privilege(k, f, 'execute') then raise exception 'I5 % can execute %', k, f; end if;
     end loop;
-    if not has_function_privilege('service_role', f, 'execute') then raise exception 'I5b service_role cannot execute %', f; end if;
+    if has_function_privilege('service_role', f, 'execute') or not has_function_privilege('backup_reader', f, 'execute') then raise exception 'I5b ACL of % is not backup_reader-only', f; end if;
   end loop;
 
 
@@ -472,9 +473,9 @@ begin
   begin insert into public.ffm_redaction_denylist (h, kind) values (repeat('a', 64), 'n'); reset role; raise exception 'L3 service_role can insert into the deny-list'; exception when others then reset role; if sqlerrm like 'L3%' then raise; end if; end;
   set local role service_role;
   begin perform 1 from public.ffm_redaction_keys; reset role; raise exception 'L4 service_role can read the key table'; exception when others then reset role; if sqlerrm like 'L4%' then raise; end if; end;
-  -- the intended entry points still work for service_role
-  set local role service_role;
-  begin perform public.backup_snapshot_cost(); perform public.backup_redaction_status(); reset role; exception when others then reset role; raise exception 'L5 service_role lost an intended entry point: %', sqlerrm; end;
+  -- the intended entry points still work for the backup identity
+  set local role backup_reader;
+  begin perform public.backup_snapshot_cost(); perform public.backup_redaction_status(); reset role; exception when others then reset role; raise exception 'L5 backup_reader lost an intended entry point: %', sqlerrm; end;
 
   raise notice 'LEAK REDACTION CHECKS PASSED (% redactor vectors)', cnt;
 end $$;

@@ -57,3 +57,5 @@ drop function if exists public.backup_deny_caller();
 drop function if exists public.backup_epoch();
 drop table if exists public.ffm_redaction_found;
 commit;
+-- The post-lockdown backup identity (20261121_postlock_backup_identity_v1.sql: role backup_reader, backup_assert_reader(), backup_acl_catalogue(), the revokes) is deliberately NOT rolled back: it only restricts,
+-- and a function that still carries the guard (e.g. backup_schema) must keep finding backup_assert_reader(). To hand a function back to service_role, grant it explicitly (an owner decision).

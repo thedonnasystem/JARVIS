@@ -66,12 +66,12 @@ begin
   reset role;
   if res !~ '^err:' then raise exception 'M9 backup_deny_run wrote the deny-list as service_role'; end if;
   if (select count(*) from public.ffm_redaction_denylist) <> n0 then raise exception 'M10 poison pill count changed'; end if;
-  -- the redactor entry points service_role is meant to use still work
-  set local role service_role;
+  -- the entry points the backup identity is meant to use still work (service_role has none of them since the post-lockdown migration)
+  set local role backup_reader;
   begin
-    perform public.backup_redact_text('call Zed Quillon', public.backup_redaction_context(), 500, 'strict'); perform public.backup_snapshot_cost(); perform public.backup_redaction_status();
+    perform public.backup_snapshot_cost(); perform public.backup_redaction_status();
     reset role;
-  exception when others then reset role; raise exception 'M11 service_role lost an intended entry point: %', sqlerrm; end;
+  exception when others then reset role; raise exception 'M11 backup_reader lost an intended entry point: %', sqlerrm; end;
 
   -- round 4 / item 3: service_role gets NO deny-list answers (no bulk dictionary extractor); the owner path (backup_snapshot) still does
   insert into public.leads (venture_id, name, email, phone, status) values (v, 'Zephyrine Kowalczewski', 'zk@kowalczewski-fixture.example', '613-555-0377', 'new');

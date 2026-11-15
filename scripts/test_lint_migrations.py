@@ -115,6 +115,21 @@ class Rules(unittest.TestCase):
         r.set_order(["20261112_old_v1.sql", "20261112_lockdown_v1.sql", "20261114_infra_gate_v1.sql"])
         self.assertTrue(self.has(run(r), "R3"))
 
+    def test_r3_postlock_after_lockdown_is_allowed(self):
+        r = self.mk({"20261121_postlock_acl_v1.sql": "select 1;\n"}, [])
+        r.set_order(["20261112_old_v1.sql", "20261112_lockdown_v1.sql", "20261121_postlock_acl_v1.sql"])
+        self.assertFalse(self.has(run(r), "R3"))
+
+    def test_r3_postlock_before_lockdown_fails(self):
+        r = self.mk({"20261121_postlock_acl_v1.sql": "select 1;\n"}, ["20261121_postlock_acl_v1.sql"])
+        self.assertTrue(self.has(run(r), "R3"))
+
+    def test_r3_postlock_still_needs_revokes_and_may_not_open_functions(self):
+        r = self.mk({"20261121_postlock_acl_v1.sql": "create function public.f_x() returns int language sql as 'select 1';\ngrant execute on all functions in schema public to anon;\n"}, [])
+        r.set_order(["20261112_old_v1.sql", "20261112_lockdown_v1.sql", "20261121_postlock_acl_v1.sql"])
+        errs = run(r)
+        self.assertTrue(self.has(errs, "R4") and self.has(errs, "R5"))
+
     def test_r3_lockdown_missing_fails(self):
         r = self.mk()
         r.set_order(["20261112_old_v1.sql"])

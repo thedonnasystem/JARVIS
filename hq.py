@@ -11,6 +11,7 @@ Everything here is inert unless BOTH of these are set (see .env.example):
 Messages only ever go to JARVIS_OWNER_ID.
 """
 
+import contextvars
 import json
 import logging
 import os
@@ -40,12 +41,17 @@ def hq_enabled() -> bool:
     return bool(HQ_SUPABASE_URL and HQ_SUPABASE_SERVICE_KEY and JARVIS_OWNER_ID)
 
 
+# The backup uses its own, narrower identity (the `backup_reader` database role) for its RPC calls: hq_backup sets this for the duration of a call; every other request keeps the service key.
+AUTH_OVERRIDE: contextvars.ContextVar = contextvars.ContextVar("hq_auth_override", default=None)
+
+
 def _request(method: str, path: str, body: dict | None = None, timeout: int = 30, prefer: str | None = None, exact: bool = False):
     url = f"{HQ_SUPABASE_URL}{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("apikey", HQ_SUPABASE_SERVICE_KEY)
-    req.add_header("Authorization", f"Bearer {HQ_SUPABASE_SERVICE_KEY}")
+    token = AUTH_OVERRIDE.get() or HQ_SUPABASE_SERVICE_KEY
+    req.add_header("apikey", token)
+    req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Content-Type", "application/json")
     if prefer:
         req.add_header("Prefer", prefer)

@@ -5,7 +5,8 @@ Rules
   R1 order   every migrations/*.sql is listed in APPLY_ORDER.txt exactly once, and every listed name exists
              (files in NOT_IN_ORDER are the documented "already live" exceptions)
   R2 name    NEW files match YYYYMMDD_<stream>_<topic>_vN.sql (existing files are grandfathered, explicit list below)
-  R3 last    the lockdown migration is the last entry in APPLY_ORDER.txt
+  R3 last    the lockdown migration is the last entry in APPLY_ORDER.txt, except for `postlock` migrations (YYYYMMDD_postlock_<topic>_vN.sql): they MUST follow it (a file in that stream ordered
+             before the lockdown is an error) and only ever restrict, because the lockdown ends with a blanket `grant execute on all functions ... to service_role` that only a later file can take back (R4/R5 apply)
   R4 revoke  every `create [or replace] function` in a NEW migration (or one ordered after lockdown) is followed, in the
              same file, by `revoke ... on function <it> ... from public, anon, authenticated`
              (or one `revoke ... on all functions in schema public ...`). Functions the lockdown deliberately leaves
@@ -23,6 +24,7 @@ import sys
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 LOCKDOWN = "20261112_lockdown_v1.sql"
+POSTLOCK_RE = re.compile(r"^\d{8}_postlock_")
 NAME_RE = re.compile(r"^\d{8}_[a-z0-9]+(?:_[a-z0-9]+)+_v\d+\.sql$")
 
 # Existing files, named before this convention. Never add to this list: new files must follow the convention.
@@ -241,8 +243,15 @@ def lint(root=ROOT, base="origin/overnight-build", grandfathered=GRANDFATHERED, 
             errs.append(f"R2 {f}: new migration names must match YYYYMMDD_<stream>_<topic>_vN.sql (lowercase, e.g. 20261114_infra_gate_v1.sql)")
     if LOCKDOWN not in order:  # R3
         errs.append(f"R3 {LOCKDOWN} is missing from APPLY_ORDER.txt")
-    elif order[-1] != LOCKDOWN:
-        errs.append(f"R3 {LOCKDOWN} must be the last entry in APPLY_ORDER.txt (last is {order[-1]}); insert new migrations BEFORE it")
+    else:
+        li = order.index(LOCKDOWN)
+        tail = order[li + 1:]
+        for o in tail:
+            if not POSTLOCK_RE.match(o):
+                errs.append(f"R3 {o} follows {LOCKDOWN}: only `postlock` migrations (YYYYMMDD_postlock_<topic>_vN.sql) may; insert other new migrations BEFORE the lockdown")
+        for o in order[:li]:
+            if POSTLOCK_RE.match(o):
+                errs.append(f"R3 {o} is a postlock migration but is ordered before {LOCKDOWN}: it must come after it")
     keep_open = set()
     lp = os.path.join(mdir, LOCKDOWN)
     if os.path.exists(lp):

@@ -1,0 +1,308 @@
+kind	name	anon	authenticated	service_role	security	note	backup_reader
+function	_queue_alert(text,interval,text)	-	-	execute	security_definer	bot (service_role)	-
+function	accounts_text()	-	-	execute	security_definer	bot (service_role)	-
+function	activate_venture(text,text)	-	-	execute	invoker	bot (service_role)	-
+function	agent_can_run(text)	-	-	execute	invoker	bot (service_role)	-
+function	agent_runs_scrub()	-	-	-	security_definer	internal: owner only	-
+function	allocation_text()	-	-	execute	security_definer	bot (service_role)	-
+function	app_ffm_approve_activation(uuid,text)	-	-	execute	security_definer	bot (service_role)	-
+function	app_ffm_approve_creative(uuid,uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	app_ffm_inputs(uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	app_ffm_revoke_approval(uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	app_ffm_set_budget(uuid,integer)	-	-	execute	security_definer	bot (service_role)	-
+function	app_ffm_weekly_report(uuid,timestamp with time zone,timestamp with time zone)	-	-	execute	security_definer	bot (service_role)	-
+function	app_ffm_workspaces()	-	-	execute	security_definer	bot (service_role)	-
+function	app_messages(integer)	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_needs_you()	-	-	execute	security_definer	bot (service_role)	-
+function	app_office()	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_payments()	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_push_public_key()	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_save_push(jsonb,text)	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_send(text,text,jsonb)	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_set_agent(text,text)	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_set_kill(boolean)	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_snapshot()	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_snapshot_data()	-	-	execute	security_definer	bot (service_role)	-
+function	app_venture(text)	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	app_venture_extras(text)	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	audit_policy_change()	-	-	execute	invoker	bot (service_role)	-
+function	audit_task_bulk_delete()	-	-	execute	invoker	bot (service_role)	-
+function	audit_task_bulk_update()	-	-	execute	invoker	bot (service_role)	-
+function	authorize_action(text,text,integer,text,uuid,uuid,jsonb)	-	-	execute	invoker	bot (service_role)	-
+function	autonomy_report(numeric,integer)	-	-	execute	invoker	bot (service_role)	-
+function	backup_acl_catalogue()	-	-	-	invoker	internal: owner only	-
+function	backup_assert_reader()	-	-	-	invoker	internal: owner only	-
+function	backup_classification()	-	-	-	invoker	internal: owner only	-
+function	backup_ctx_add(jsonb,jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_ctx_blob(jsonb,jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_ctx_build(text[],text[],text[],text[],jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_ctx_hot(jsonb,jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_deny_caller()	-	-	-	invoker	internal: owner only	-
+function	backup_deny_prepare()	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_deny_query(text)	-	-	-	invoker	internal: owner only	-
+function	backup_deny_release(uuid)	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_deny_run(text,text)	-	-	-	invoker	internal: owner only	-
+function	backup_deny_scan(jsonb,jsonb,text,integer,integer)	-	-	-	invoker	internal: owner only	-
+function	backup_deny_terms(text,jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_detector_pins()	-	-	-	invoker	internal: owner only	-
+function	backup_effective_spec(jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_epoch()	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_export_policy()	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_fold_text(text)	-	-	-	invoker	internal: owner only	-
+function	backup_normalise(text)	-	-	-	invoker	internal: owner only	-
+function	backup_pii_column_exceptions()	-	-	-	invoker	internal: owner only	-
+function	backup_pk_order(text)	-	-	-	invoker	internal: owner only	-
+function	backup_probe_encoded(text,jsonb,integer)	-	-	-	invoker	internal: owner only	-
+function	backup_re_escape(text)	-	-	-	invoker	internal: owner only	-
+function	backup_redact_array(text[],jsonb,integer,text)	-	-	-	invoker	internal: owner only	-
+function	backup_redact_json(jsonb,jsonb,integer,text)	-	-	-	invoker	internal: owner only	-
+function	backup_redact_json_k(jsonb,text,jsonb,integer,text)	-	-	-	invoker	internal: owner only	-
+function	backup_redact_patterns(text,jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_redact_row(text,jsonb,jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_redact_text(text,jsonb,integer,text)	-	-	-	invoker	internal: owner only	-
+function	backup_redact_text_full(text,jsonb,integer,text)	-	-	-	invoker	internal: owner only	-
+function	backup_redaction_context()	-	-	-	security_definer	internal: owner only	-
+function	backup_redaction_meta(jsonb)	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_redaction_spec()	-	-	-	invoker	internal: owner only	-
+function	backup_redaction_status()	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_schema()	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_snapshot(text[])	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_snapshot_cost()	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_snapshot_page(text,integer,integer,uuid)	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_stopwords()	-	-	-	invoker	internal: owner only	-
+function	backup_table_digest(text)	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_table_expr(text,jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_topic_core(text,text)	-	-	-	invoker	internal: owner only	-
+function	backup_topic_fast(text,text)	-	-	-	invoker	internal: owner only	-
+function	backup_topic_hits(text)	-	-	-	invoker	internal: owner only	-
+function	backup_type_ok(oid)	-	-	-	invoker	internal: owner only	-
+function	backup_unescape_text(text)	-	-	-	invoker	internal: owner only	-
+function	backup_windows(text)	-	-	-	invoker	internal: owner only	-
+function	bank_alerts()	-	-	execute	invoker	bot (service_role)	-
+function	bank_import(uuid,jsonb)	-	-	execute	invoker	bot (service_role)	-
+function	bank_reconcile()	-	-	execute	invoker	bot (service_role)	-
+function	capital_brief_text()	-	-	execute	invoker	bot (service_role)	-
+function	capital_check()	-	-	execute	invoker	bot (service_role)	-
+function	capital_mode()	-	-	execute	invoker	bot (service_role)	-
+function	capital_snapshot()	-	-	execute	invoker	bot (service_role)	-
+function	coast_state()	-	-	execute	invoker	bot (service_role)	-
+function	complete_account(uuid,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	confirm_deal_won(uuid,integer,text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	confirm_payment(uuid,integer,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	contact_suppressions_append_only()	-	-	execute	invoker	bot (service_role)	-
+function	create_agent(text,text,text,text,text,integer,text,text,text)	-	-	execute	invoker	bot (service_role)	-
+function	create_deal(uuid,integer,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	create_department(text,text,text,text)	-	-	execute	invoker	bot (service_role)	-
+function	create_venture(text,text,text,text,integer,text,text)	-	-	execute	invoker	bot (service_role)	-
+function	daily_brief_core()	-	-	execute	invoker	bot (service_role)	-
+function	daily_brief_text()	-	-	execute	invoker	bot (service_role)	-
+function	dayjob_week_text()	-	-	execute	invoker	bot (service_role)	-
+function	decide_account(uuid,boolean,text)	-	-	execute	security_definer	bot (service_role)	-
+function	decide_payment(uuid,boolean,text)	-	-	execute	security_definer	bot (service_role)	-
+function	enforce_build_rules()	-	-	execute	invoker	bot (service_role)	-
+function	enforce_max_active_ventures()	-	-	execute	invoker	bot (service_role)	-
+function	enforce_mission_plan_limit()	-	-	execute	invoker	bot (service_role)	-
+function	enforce_mission_step_limit()	-	-	execute	invoker	bot (service_role)	-
+function	enforce_mission_transition()	-	-	execute	invoker	bot (service_role)	-
+function	enforce_outbox_rules()	-	-	execute	invoker	bot (service_role)	-
+function	enforce_owner_contact()	-	-	execute	invoker	bot (service_role)	-
+function	ensure_venture_agents(text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	estimate_call_cents(text,integer,integer)	-	-	execute	invoker	bot (service_role)	-
+function	evidence_sources_immutable()	-	-	execute	invoker	bot (service_role)	-
+function	executor_complete(uuid,integer,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	executor_expire_stale(integer)	-	-	execute	security_definer	bot (service_role)	-
+function	executor_request(text,text,uuid,integer,text)	-	-	execute	security_definer	bot (service_role)	-
+function	expire_payments()	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_activate(uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_add_ad_set(uuid,uuid,text,text,integer)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_add_campaign(uuid,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_add_creative(uuid,uuid,uuid,text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_add_routing_rule(uuid,text,text,text,text[])	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_block_input(uuid,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_can_contact(uuid,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_consent_immutable()	-	-	execute	invoker	bot (service_role)	-
+function	ffm_contact_status(uuid,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_erase_lead(uuid,uuid,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_funnel(uuid,timestamp with time zone,timestamp with time zone)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_guard()	-	-	execute	invoker	bot (service_role)	-
+function	ffm_instantiate_onboarding(uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_lead_booked_rate(uuid,timestamp with time zone,timestamp with time zone)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_open_ws(uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_owner_approve(uuid,text,uuid,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_provide_input(uuid,text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_readiness(uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_record_consent(uuid,uuid,text,text,text,text,timestamp with time zone,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_require_owner()	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_revoke_approval(uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_route_preview(uuid,uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_set_budget(uuid,integer)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_set_creative_status(uuid,uuid,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_set_implied_window(uuid,integer)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_spend_report(uuid)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_weekly_report(uuid,timestamp with time zone,timestamp with time zone)	-	-	execute	security_definer	bot (service_role)	-
+function	ffm_withdraw_consent(uuid,uuid,text,text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	flag_underperformers()	-	-	execute	invoker	bot (service_role)	-
+function	forbid_policy_delete()	-	-	execute	invoker	bot (service_role)	-
+function	forecast_bias_text()	-	-	execute	invoker	bot (service_role)	-
+function	guard_bank_balance()	-	-	execute	invoker	bot (service_role)	-
+function	guard_capital_policy()	-	-	execute	invoker	bot (service_role)	-
+function	holding_pnl(integer)	-	-	execute	invoker	bot (service_role)	-
+function	is_app_owner()	-	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	is_suppressed(text)	-	-	execute	invoker	bot (service_role)	-
+function	lead_funnel(text)	-	-	execute	invoker	bot (service_role)	-
+function	leads_dnc_cascade()	-	-	execute	security_definer	bot (service_role)	-
+function	leads_suppression_guard()	-	-	execute	invoker	bot (service_role)	-
+function	llm_calls_executor_guard()	-	-	execute	security_definer	bot (service_role)	-
+function	mark_do_not_contact(uuid,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	measure_mission_outcomes()	-	-	execute	invoker	bot (service_role)	-
+function	mission_guard(text,text,integer)	-	-	execute	invoker	bot (service_role)	-
+function	mission_spent_cents(uuid)	-	-	execute	invoker	bot (service_role)	-
+function	missions_brief_text()	-	-	execute	invoker	bot (service_role)	-
+function	needs_you(integer)	-	-	execute	security_definer	bot (service_role)	-
+function	night_shift_report(timestamp with time zone)	-	-	execute	invoker	bot (service_role)	-
+function	normalize_addr(text)	-	-	execute	invoker	bot (service_role)	-
+function	office_data()	-	-	execute	security_definer	bot (service_role)	-
+function	office_function_of(text,text)	-	-	execute	invoker	bot (service_role)	-
+function	ops_alerts()	-	-	execute	security_definer	bot (service_role)	-
+function	org_scorecard_text()	-	-	execute	invoker	bot (service_role)	-
+function	outbox_dnc_guard()	-	-	execute	invoker	bot (service_role)	-
+function	outbox_send_policy()	-	-	execute	invoker	bot (service_role)	-
+function	owner_seen()	-	-	execute	invoker	bot (service_role)	-
+function	payments_text()	-	-	execute	security_definer	bot (service_role)	-
+function	post_daily_brief()	-	-	execute	invoker	bot (service_role)	-
+function	prepare_payment(text,text,integer,text,text,date,text)	-	-	execute	security_definer	bot (service_role)	-
+function	purge_evidence_sources(integer)	-	-	execute	security_definer	bot (service_role)	-
+function	queue_all_prospect_tasks()	-	-	execute	security_definer	bot (service_role)	-
+function	queue_daily_planning()	-	-	execute	invoker	bot (service_role)	-
+function	queue_followup_digest()	-	-	execute	invoker	bot (service_role)	-
+function	queue_opportunity_scans()	-	-	execute	security_definer	bot (service_role)	-
+function	queue_outreach_drafts()	-	-	execute	security_definer	bot (service_role)	-
+function	queue_prospect_task()	-	-	execute	invoker	bot (service_role)	-
+function	queue_prospect_task(text)	-	-	execute	security_definer	bot (service_role)	-
+function	queue_valuation_task()	-	-	execute	security_definer	bot (service_role)	-
+function	queue_venture_reviews()	-	-	execute	invoker	bot (service_role)	-
+function	queue_weekly_review()	-	-	execute	security_definer	bot (service_role)	-
+function	record_action_result(bigint,text,text,boolean)	-	-	execute	invoker	bot (service_role)	-
+function	record_lead_reply(uuid,text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	redaction_capture(text,text)	-	-	-	invoker	internal: owner only	-
+function	redaction_capture_trg()	-	-	-	security_definer	internal: owner only	-
+function	redaction_denylist_immutable()	-	-	-	invoker	internal: owner only	-
+function	redaction_denylist_status()	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	redaction_epoch_bump()	-	-	-	security_definer	internal: owner only	-
+function	redaction_h(text,text,text)	-	-	-	invoker	internal: owner only	-
+function	redaction_pads()	-	-	-	invoker	internal: owner only	-
+function	redaction_sources()	-	-	-	invoker	internal: owner only	-
+function	release_spend(uuid)	-	-	execute	invoker	bot (service_role)	-
+function	request_account(text,text,text,text,text,integer,text[])	-	-	execute	security_definer	bot (service_role)	-
+function	reserve_llm_budget(text,integer,text,text)	-	-	execute	invoker	bot (service_role)	-
+function	reserve_spend(text,text,text,text,text,text,integer,boolean,integer,integer,uuid,uuid)	-	-	execute	invoker	bot (service_role)	-
+function	run_reconciliation()	-	-	execute	invoker	bot (service_role)	-
+function	set_deal_stage(uuid,text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	set_focus_mission(uuid,text)	-	-	execute	security_definer	bot (service_role)	-
+function	set_venture_budget(text,integer,text)	-	-	execute	security_definer	bot (service_role)	-
+function	set_venture_config(text,text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	set_venture_stage(text,text,text,text)	-	-	execute	invoker	bot (service_role)	-
+function	setter_add(text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	setter_apply(text,text,text,text,text)	execute	execute	execute	security_definer	app-open (lockdown keep-open list)	-
+function	setter_log(text,text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	setter_record_payout(text,text,integer,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	settle_llm_call(uuid,integer,text)	-	-	execute	invoker	bot (service_role)	-
+function	settle_spend(uuid,integer,text)	-	-	execute	invoker	bot (service_role)	-
+function	station_snapshot()	-	-	execute	invoker	bot (service_role)	-
+function	venture_config_get(text)	-	-	execute	invoker	bot (service_role)	-
+function	venture_kpis(text)	-	-	execute	invoker	bot (service_role)	-
+function	venture_over_budget(text)	-	-	execute	invoker	bot (service_role)	-
+function	venture_over_budget_id(uuid)	-	-	execute	invoker	bot (service_role)	-
+function	venture_workspace(text)	-	-	execute	invoker	bot (service_role)	-
+function	waterfall(integer)	-	-	execute	invoker	bot (service_role)	-
+function	waterfall_policy_guard()	-	-	execute	invoker	bot (service_role)	-
+function	ws_add_lead(uuid,uuid,text,text,text,text,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ws_guard()	-	-	execute	invoker	bot (service_role)	-
+function	ws_record_spend(uuid,uuid,integer,text)	-	-	execute	security_definer	bot (service_role)	-
+function	ws_sensitive_hits(text)	-	-	execute	invoker	bot (service_role)	-
+function	ws_summary(uuid)	-	-	execute	security_definer	bot (service_role)	-
+sequence	public.action_log_id_seq	-	-	-			-
+sequence	public.audit_log_id_seq	-	-	-			-
+sequence	public.ffm_redaction_epoch_seq	-	-	-		internal: owner only	-
+sequence	public.leads_short_id_seq	-	-	-			-
+table	public.account_requests	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.accounts_registry	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.action_log	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.action_policy	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.agent_runs	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.agent_scorecard	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.agents	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.alert_state	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.app_owners	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.approval_requests	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.audit_log	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.bank_accounts	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.bank_balances	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.bank_transactions	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.build_requests	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.capital_policy	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.client_workspaces	-	-	select	rls=true		-
+table	public.company_profile	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.contact_suppressions	insert,references,select,trigger	insert,references,select,trigger	insert,references,select,trigger	rls=true		-
+table	public.dayjob_days	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.dayjob_targets	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.deals	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.departments	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.escalations	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.evidence_sources	-	-	insert,references,select,trigger	rls=true		-
+table	public.executor_registry	-	-	select	rls=true		-
+table	public.executor_runs	-	-	select	rls=true		-
+table	public.ffm_ad_sets	-	-	select	rls=true		-
+table	public.ffm_approvals	-	-	select	rls=true		-
+table	public.ffm_consent_log	-	-	select	rls=true		-
+table	public.ffm_consent_settings	-	-	select	rls=true		-
+table	public.ffm_creatives	-	-	select	rls=true		-
+table	public.ffm_funnel_v	-	-	select	rls=false		-
+table	public.ffm_onboarding_items	-	-	select	rls=true		-
+table	public.ffm_onboarding_templates	-	-	select	rls=true		-
+table	public.ffm_redaction_denylist	-	-	-	rls=true	internal: owner only	-
+table	public.ffm_redaction_found	-	-	-	rls=true	internal: owner only	-
+table	public.ffm_redaction_keys	-	-	-	rls=true	internal: owner only	-
+table	public.ffm_route_log	-	-	select	rls=true		-
+table	public.ffm_routing_rules	-	-	select	rls=true		-
+table	public.ffm_spend_v	-	-	select	rls=false		-
+table	public.handbook	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.human_handoffs	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.ideas	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.integration_status	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.lead_replies	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.leads	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.ledger	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.llm_calls	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.memory	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.mission_outcomes	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.missions	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.model_prices	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.org_changes	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.outbox	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.owner_messages	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.payment_instructions	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.predictions	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.push_config	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.push_subscriptions	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.reconciliation_flags	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.setter_events	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.setter_payouts	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.setter_standing	-	-	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.setter_terms	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.setters	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.spend_reservations	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.system_state	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.systems	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.tasks	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.tool_registry	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.venture_assets	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.venture_config	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.venture_goals	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.venture_procedures	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.ventures	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	public.waterfall_policy	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.web_messages	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	public.ws_campaigns	-	-	select	rls=true		-
+table	public.ws_leads	-	-	select	rls=true		-
+table	public.ws_ledger	-	-	select	rls=true		-

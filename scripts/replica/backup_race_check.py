@@ -17,7 +17,7 @@ from pg_adapter import PgAdapter
 URL = os.environ["REPLICA_URL"]
 db = PgAdapter(URL)
 mut = psycopg2.connect(URL); mut.autocommit = True
-os.environ.update({"BACKUP_KEY": Fernet.generate_key().decode(), "BACKUP_PUT_URL": "https://store.example.com/b/{name}", "BACKUP_AUTH": "x:y"})
+os.environ.update({"BACKUP_READER_JWT": "scratch-reader-token", "BACKUP_KEY": Fernet.generate_key().decode(), "BACKUP_PUT_URL": "https://store.example.com/b/{name}", "BACKUP_AUTH": "x:y"})
 B.SNAPSHOT_BUDGET_S = -1            # force the paged mode: the many page calls are where the change lands
 fails = []
 

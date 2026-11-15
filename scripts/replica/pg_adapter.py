@@ -133,11 +133,28 @@ class PgAdapter:
         msg = (getattr(e.diag, "message_primary", None) or str(e)).strip()
         return urllib.error.HTTPError("u", code, msg, {}, io.BytesIO(json.dumps({"message": msg}).encode()))
 
+    def _rpc_as(self, role, path, body, exact):
+        """The same rpc call under `set role <role>` (what PostgREST does from the JWT's role claim), rolled back to the owner afterwards."""
+        self.conn.cursor().execute(f"set role {role}")
+        try:
+            import hq as _hq
+            t = _hq.AUTH_OVERRIDE.set(None)
+            try:
+                return self("POST", "/rest/v1/" + path, body=body, exact=exact)
+            finally:
+                _hq.AUTH_OVERRIDE.reset(t)
+                self.calls.pop()                      # the inner call already counted it once more
+        finally:
+            self.conn.cursor().execute("reset role")
+
     def __call__(self, method, path, body=None, timeout=30, prefer=None, exact=False):
         self.calls.append((method, path))
         path = path.replace("/rest/v1/", "", 1)
         try:
             if path.startswith("rpc/"):
+                import hq as _hq
+                if _hq.AUTH_OVERRIDE.get():          # hq_backup sent the backup token: PostgREST would run the call as that JWT's role
+                    return self._rpc_as("backup_reader", path, body, exact)
                 name = path[4:]
                 args = body or {}
                 names = ", ".join(f'"{k}" := %s' for k in args)

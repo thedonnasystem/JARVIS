@@ -56,7 +56,8 @@ if [ "$replica_ok" = 1 ]; then
   run replica "replica: all migrations + e2e + integration + rollback drill on a scratch DB" replica_check
   if want manifest; then
     if grep -q '^REPLICA OK' "$logs/replica.log" 2>/dev/null; then
-      run manifest "function manifest vs live baseline matches ops/EXPECTED_NEW_FUNCTIONS.txt" python3 scripts/function_manifest.py --check --manifest-out "$logs/function_manifest.txt"
+      manifest_check() { python3 scripts/function_manifest.py --check --manifest-out "$logs/function_manifest.txt" && python3 scripts/acl_manifest_post_lockdown.py --check; }
+      run manifest "function manifest vs live baseline matches ops/EXPECTED_NEW_FUNCTIONS.txt; post-lockdown ACL manifest (every function/table/sequence x anon/authenticated/service_role/backup_reader) matches ops/ACL_MANIFEST_post_lockdown.tsv" manifest_check
     else skip manifest "replica step did not pass, so there is nothing to compare"; fi
   fi
   if want backup; then
