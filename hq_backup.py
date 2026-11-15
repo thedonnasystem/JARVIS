@@ -147,13 +147,17 @@ def _blank(o):
 _NOT_TEXT = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9:.]+(?:Z|[+-][0-9:]+)?)?|-?[0-9]+(?:\.[0-9]+)?")
 
 
-def _blank_value(o):
+def _blank_value(o, inside=False):
+    """Fallback blanking. Strings become the marker unless they cannot carry text. Inside a JSON value EVERYTHING that can carry a name or a contact is replaced and the
+    structure is kept: object keys become positional markers, a number of 7+ digits becomes 0, small numbers and booleans keep their value (a key such as "jpicardeau" or a number such as a phone is as much a leak as a string)."""
     if isinstance(o, str):
         return o if _NOT_TEXT.fullmatch(o) else UNCERTAIN
     if isinstance(o, dict):
-        return {k: _blank_value(v) for k, v in o.items()}
+        return {f"[redacted:key{n}]": _blank_value(v, True) for n, (k, v) in enumerate(o.items())}
     if isinstance(o, list):
-        return [_blank_value(v) for v in o]
+        return [_blank_value(v, True) for v in o]
+    if inside and not isinstance(o, bool) and isinstance(o, (int, float)) and _number_is_contact_like("", o):
+        return 0                                  # 7+ digits (a phone number as a JSON number); counts, cents and flags keep their value
     return o
 
 
@@ -289,6 +293,7 @@ def _read_all(names, schema) -> dict:
     out = {}
     for t in names:
         rows = blank_leak_columns(t, _read_table(t, schema))
+        assert_redacted({t: rows})          # the same second lock as for the database-redacted path: a contact-like leaf in a strict column refuses the backup
         out[t] = (("\n".join(row_json(r) for r in rows)).encode(), len(rows))
     return out
 

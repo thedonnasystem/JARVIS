@@ -739,7 +739,7 @@ class LeakRedaction(unittest.TestCase):
 
     def test_blank_keeps_json_structure_numbers_and_booleans(self):
         out = B.blank_leak_columns("audit_log", [{"id": 7, "action": "do_not_contact", "detail": {"leads_marked": 2, "ok": True, "reason": "Jean 613-555-0142", "ids": ["a", 3]}}])[0]
-        self.assertEqual(out["detail"], {"leads_marked": 2, "ok": True, "reason": B.UNCERTAIN, "ids": [B.UNCERTAIN, 3]}); self.assertEqual(out["action"], "do_not_contact")
+        self.assertEqual(out["detail"], {"[redacted:key0]": 2, "[redacted:key1]": True, "[redacted:key2]": B.UNCERTAIN, "[redacted:key3]": [B.UNCERTAIN, 3]}); self.assertEqual(out["action"], "do_not_contact")
         self.assertEqual(B.blank_leak_columns("ideas", [{"id": 1, "v": "x"}]), [{"id": 1, "v": "x"}])
 
 
@@ -849,6 +849,20 @@ class FallbackMatchesSpec(unittest.TestCase):
             else:
                 self.assertNotIn("Tremblay", json.dumps(out[c]), (t, c, mode))
                 self.assertNotIn("613-555", json.dumps(out[c]), (t, c, mode))
+
+    def test_json_keys_numbers_and_bools_are_blanked_in_a_non_keep_json_column(self):
+        """Round 3 S2: only string VALUES were blanked, so a key ('jpicardeau', 'Luc Picardeau') or a number (a phone) survived in the fallback export."""
+        val = {"Luc Picardeau": 1, "a": {"jpicardeau": True, "ph": 6135550199}, "arr": [6135550198, {"x": 2.5}, "Jean Tremblay"]}
+        t, c = next((t, c) for t, c, kind, mode in self.rows if kind == "json" and mode == "strict")
+        out = B.blank_leak_columns(t, [{"id": 1, c: val}])[0][c]
+        txt = json.dumps(out)
+        for bad in ("Picardeau", "jpicardeau", "6135550199", "6135550198", "Tremblay"):
+            self.assertNotIn(bad, txt)
+        self.assertEqual(sorted(out.keys())[0].startswith("[redacted:key"), True)
+        self.assertIs(list(out.values())[1]["[redacted:key0]"], True)     # structure kept: a bool stays a bool, a small number stays
+        self.assertEqual(list(out.values())[1]["[redacted:key1]"], 0)       # the 10-digit number (a phone) is gone
+        self.assertEqual(list(out.values())[0], 1)
+        B.assert_redacted({t: [{c: out}]})                                  # the second lock passes on the fallback output
 
     def test_a_column_nobody_classified_is_blanked_and_plain_ids_survive(self):
         out = B.blank_leak_columns("ideas", [{"id": "3f2a1b4c-1111-4222-8333-444455556666", "zz_new_note": "Jean Tremblay", "created_at": "2026-11-15T10:30:00+00:00", "n": 5, "ok": True, "status": "new"}])[0]

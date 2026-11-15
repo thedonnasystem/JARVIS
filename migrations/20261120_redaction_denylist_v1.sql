@@ -109,13 +109,16 @@ begin
     return 1;
   end if;
   -- name
-  tok := array(select x from unnest(regexp_split_to_array(f, '[^a-z0-9]+')) x where x <> '');
+  tok := array(select x from unnest(regexp_split_to_array(f, '[^a-z0-9\u0080-\uffff]+')) x where x <> '');
   if cardinality(tok) = 0 then return 0; end if;
   sq := array_to_string(tok, '');
   if length(sq) >= 5 then insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'f', sq), 'f') on conflict do nothing; end if;
   foreach w in array tok loop
-    if length(w) >= 3 and not (w = any (stop)) and w !~ '^[0-9]+$' then
+    if length(w) >= (case when w ~ '[^\x01-\x7f]' then 2 else 3 end) and not (w = any (stop)) and w !~ '^[0-9]+$' then
       insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'n', w), 'n') on conflict do nothing;
+      if length(w) >= 5 then      -- the squashed token on its own (surname): found letter-spaced, glued, with a 1-2 character prefix or suffix, in a plural or a url, like a live name's squashed forms
+        insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'f', w), 'f') on conflict do nothing;
+      end if;
     end if;
   end loop;
   return 1;

@@ -77,6 +77,12 @@ class Vectors(unittest.TestCase):
                 self.assertNotEqual(out, text, f"{vid} was not touched: {text!r}")
             self.assertEqual(S.scrub(out, KNOWN), out, f"{vid} not idempotent: {out!r}")
 
+    def test_small_caps_and_latin_alpha_lookalikes_are_folded(self):
+        """Round 3 note: small capitals and the Latin alpha (U+0251) were not mapped."""
+        for txt in ("call ᴊᴇᴀɴ ᴛʀᴇᴍʙʟᴀʏ now", "call Jean Trembl\u0251y now"):
+            out = S.scrub(txt, KNOWN)
+            self.assertNotIn("tremblay", squash(out), (txt, out))
+
     def test_what_must_not_change(self):
         for text in KEEP:
             self.assertEqual(S.scrub(text, KNOWN), text)

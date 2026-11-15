@@ -4927,6 +4927,7 @@ begin
   t := regexp_replace(t, '[­͏؜ᅟᅠ឴឵᠋-᠎​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ-]', '', 'g');
   t := regexp_replace(t, '[̀-ͯ᪰-᫿᷀-᷿⃐-⃿︠-︯]', '', 'g');
   t := translate(t, 'аеорсхуіјѕһԁԛԝкмтнвѵɡӏոսАВЕКМНОРСТХУІЈЅҮѠԌԚԜᎪᏟαονρτικυχεγημωςβΑΒΕΖΗΙΚΜΝΟΡΤΥΧϹͿàÀáÁâÂãÃäÄåÅāĀăĂąĄǎǍǟǞǡǠǻǺȁȀȃȂȧȦçÇćĆĉĈċĊčČďĎđĐèÈéÉêÊëËēĒĕĔėĖęĘěĚȅȄȇȆȩȨĝĜğĞġĠģĢǧǦĥĤħĦìÌíÍîÎïÏĩĨīĪĭĬįĮıǐǏȉȈȋȊĵĴķĶĺĹļĻľĽŀĿłŁñÑńŃņŅňŇŉòÒóÓôÔõÕöÖøØōŌŏŎőŐǒǑǫǪȍȌȏȎȯȮŕŔŗŖřŘȑȐȓȒśŚŝŜşŞšŠșȘţŢťŤŧŦțȚùÙúÚûÛüÜũŨūŪŭŬůŮűŰųŲǔǓȕȔȗȖŵŴýÝÿŸŷŶźŹżŻžŽßœŒæÆðÐþÞĳ٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹०१२३४५६७८९০১২৩৪৫৬৭৮৯੦੧੨੩੪੫੬੭੮੯૦૧૨૩૪૫૬૭૮૯୦୧୨୩୪୫୬୭୮୯௦௧௨௩௪௫௬௭௮௯౦౧౨౩౪౫౬౭౮౯೦೧೨೩೪೫೬೭೮೯൦൧൨൩൪൫൬൭൮൯๐๑๒๓๔๕๖๗๘๙໐໑໒໓໔໕໖໗໘໙༠༡༢༣༤༥༦༧༨༩၀၁၂၃၄၅၆၇၈၉០១២៣៤៥៦៧៨៩᠐᠑᠒᠓᠔᠕᠖᠗᠘᠙', 'aeopcxyijshdqwkmthbvglnuABEKMHOPCTXYIJSYWGQWACaovptikuxeynuwsbABEZHIKMNOPTYXCJaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAcCcCcCcCcCdDdDeEeEeEeEeEeEeEeEeEeEeEeEgGgGgGgGgGhHhHiIiIiIiIiIiIiIiIiiIiIiIjJkKlLlLlLlLlLnNnNnNnNnoOoOoOoOoOoOoOoOoOoOoOoOoOoOrRrRrRrRrRsSsSsSsSsStTtTtTtTuUuUuUuUuUuUuUuUuUuUuUuUuUwWyYyYyYzZzZzZsoOaAdDpPi01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789');
+  t := translate(t, 'ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢɑɩ', 'abcdefghijklmnoprstuvwyzai');       -- small capitals and Latin alpha / iota look-alikes
   return t;
 end $$;
 
@@ -5105,13 +5106,15 @@ begin
       if kind = 'e' or (kind = 'c' and position('@' in f) > 0) then f := split_part(f, '@', 1); end if;     -- an email contributes its local part as a phrase, never as loose words
       tok := array(select x from unnest(regexp_split_to_array(f, '[\s.,;:/\\|()<>\[\]{}"''`~!?@#$%^&*+=_-]+')) x where x <> '');
       continue when cardinality(tok) = 0;
-      continue when cardinality(tok) = 1 and length(tok[1]) < 3;
+      continue when cardinality(tok) = 1 and length(tok[1]) < case when tok[1] ~ '[^\x01-\x7f]' then 2 else 3 end;   -- the 3-character floor is for ASCII; a 2-character CJK / Korean / Arabic name is a whole name
       ent_t := '{}'; ent_p := '{}'; ent_s := null; ent_ss := '{}';
-      phrases := phrases || array_to_string(array(select public.backup_re_escape(x) from unnest(tok) x), '[^a-z0-9]{0,3}');
+      phrases := phrases || case when cardinality(tok) = 2 and kind <> 'e'          -- a two-part name is matched in either order ('Li, Wu' for 'Wu Li'), glued or separated
+                                 then '(?:' || public.backup_re_escape(tok[1]) || '[^a-z0-9]{0,3}' || public.backup_re_escape(tok[2]) || '|' || public.backup_re_escape(tok[2]) || '[^a-z0-9]{0,3}' || public.backup_re_escape(tok[1]) || ')'
+                                 else array_to_string(array(select public.backup_re_escape(x) from unnest(tok) x), '[^a-z0-9]{0,3}') end;
       if length(array_to_string(tok, '')) >= 5 then ent_s := regexp_replace(array_to_string(tok, ''), '[^a-z0-9]', '', 'g'); squashed := squashed || ent_s; ent_ss := ent_ss || ent_s; end if;
       if kind <> 'e' then
         foreach w in array tok loop
-          if length(w) >= 3 and not (w = any (stop)) and w !~ '^[0-9]+$' then
+          if length(w) >= (case when w ~ '[^\x01-\x7f]' then 2 else 3 end) and not (w = any (stop)) and w !~ '^[0-9]+$' then
             parts := parts || public.backup_re_escape(w); ent_t := ent_t || w; ent_p := ent_p || public.backup_re_escape(w);
             if length(w) >= 5 then squashed := squashed || regexp_replace(w, '[^a-z0-9]', '', 'g'); ent_ss := ent_ss || regexp_replace(w, '[^a-z0-9]', '', 'g'); end if;
           end if;
@@ -5125,7 +5128,7 @@ begin
     if pads is not null then execute 'select exists (select 1 from public.ffm_redaction_denylist)' into deny; end if;
   end if;
   begin fast := md5(pg_get_functiondef(to_regprocedure('public.ws_sensitive_hits(text)'))) = any (public.backup_detector_pins()); exception when others then fast := false; end;
-  return public.backup_ctx_build(phrases, parts, squashed, phones, jsonb_build_object('pads', pads, 'deny', deny, 'scanned', false, 'fast_detector', fast, 'live', live));
+  return public.backup_ctx_build(phrases, parts, squashed, phones, jsonb_build_object('deny', deny, 'scanned', false, 'fast_detector', fast, 'live', live));
 end $$;
 
 -- the context a snapshot hands to every row: only the live names that OCCUR in the exported text (found by the keyed-hash scan, which also covers live names because the triggers keep the
@@ -5172,10 +5175,12 @@ create or replace function public.backup_deny_query(p_src text) returns text
 language sql immutable set search_path to 'pg_catalog', 'public' as $$
   select format($q$
     with src as materialized (%1$s),
-    toks as materialized (select distinct w from src, unnest(string_to_array(regexp_replace(src.s, '[^a-z0-9]+', ' ', 'g'), ' ')) w where length(w) >= 3 and w !~ '^[0-9]+$')
+    toks as materialized (select distinct w from src, unnest(string_to_array(regexp_replace(src.s, '[^a-z0-9\u0080-\uffff]+', ' ', 'g'), ' ')) w where length(w) >= case when w ~ '[^\x01-\x7f]' then 2 else 3 end and w !~ '^[0-9]+$')
     select cand.k, cand.c from (
       select 'n'::text k, w c from toks
       union all select 'f', w from toks where length(w) >= 5
+      union all select 'f', x.v from (select distinct substr(w, 1 + a, length(w) - a - b) v from toks, generate_series(0, 2) a, generate_series(0, 2) b where length(w) between 6 and 40 and length(w) - a - b >= 5 and (a > 0 or b > 0)) x   -- 1-2 character prefix / suffix: 'jchandrasekaran', 'chandrasekaran1', plural
+      union all select 'f', x.v from (select distinct regexp_replace(w, '^[0-9]+|[0-9]+$', '', 'g') v from toks where w ~ '^[0-9]+[a-z\u0080-\uffff]|[a-z\u0080-\uffff][0-9]+$') x where length(x.v) >= 5   -- 'brackenridge2024', '2brackenridge': digits at either end
       union all select 'f', b.w from (select distinct w from src, regexp_matches(src.s, '[a-z0-9]+(?:[^a-z0-9\s]{1,2}[a-z0-9]+)+', 'g') m, lateral public.backup_windows(m[1]) w) b
       union all select 'f', c2.w from (select distinct w from src, regexp_matches(src.s, '(?<![a-z0-9])(?:[a-z0-9][ 	._-]+){2,}[a-z0-9](?![a-z0-9])', 'g') m, lateral public.backup_windows(m[1]) w) c2
       union all select 'e', e.em from (select distinct m[1] em from src, regexp_matches(src.s, '([a-z0-9._%%+''-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+)', 'g') m) e
@@ -5186,8 +5191,10 @@ language sql immutable set search_path to 'pg_catalog', 'public' as $$
   $q$, p_src)
 $$;
 
+-- SECURITY INVOKER on purpose: it executes SQL text. As invoker it runs with the CALLER's rights, so service_role (the lockdown migration grants it execute on everything) cannot read the key or the
+-- deny-list through it, and cannot write; only the definer functions that build the text from catalog names (backup_deny_scan / backup_deny_terms) run it as the owner.
 create or replace function public.backup_deny_run(p_src text, p_pads text) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
 declare r record; n text[] := '{}'; f text[] := '{}'; e text[] := '{}'; p text[] := '{}';
 begin
   for r in execute public.backup_deny_query(p_src) using p_pads loop
@@ -5199,9 +5206,12 @@ end $$;
 -- ONE string (decoded blob, a direct call, the agent_runs trigger): the deny-list terms in it as a context addition, or null when there is nothing to check
 create or replace function public.backup_deny_terms(p_text text, p_ctx jsonb) returns jsonb
 language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+declare pads text;
 begin
-  if p_text is null or coalesce(p_ctx ->> 'pads', '') = '' or coalesce(p_ctx ->> 'deny', 'false') <> 'true' then return null; end if;
-  return public.backup_deny_run('select ' || quote_literal(lower(public.backup_normalise(p_text))) || '::text as s', p_ctx ->> 'pads');
+  if p_text is null or coalesce(p_ctx ->> 'deny', 'false') <> 'true' then return null; end if;
+  pads := public.redaction_pads();                         -- derived HERE, inside the definer function: no context, argument or result ever carries the pads
+  if pads is null then return null; end if;
+  return public.backup_deny_run('select ' || quote_literal(lower(public.backup_normalise(p_text))) || '::text as s', pads);
 end $$;
 
 -- every TEXT-LIKE column of the exported tables, with its class from backup_redaction_spec(); a column that is not in the spec is STRICT (fail closed) and marked unclassified
@@ -5287,15 +5297,16 @@ end $$;
 
 create or replace function public.backup_deny_scan(p_exported jsonb, p_ctx jsonb, p_only text default null, p_off integer default null, p_lim integer default null) returns jsonb
 language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
-declare r record; raw text; res jsonb; n text[] := '{}'; f text[] := '{}'; e text[] := '{}'; p text[] := '{}';
+declare r record; raw text; res jsonb; n text[] := '{}'; f text[] := '{}'; e text[] := '{}'; p text[] := '{}'; pads text;
 begin
-  if coalesce(p_ctx ->> 'pads', '') = '' or coalesce(p_ctx ->> 'deny', 'false') <> 'true' then return null; end if;
+  if coalesce(p_ctx ->> 'deny', 'false') <> 'true' then return null; end if;
+  pads := public.redaction_pads(); if pads is null then return null; end if;      -- derived inside this definer function, never carried by the context
   for r in select * from public.backup_effective_spec(p_exported) where mode in ('strict', 'light') and (p_only is null or table_name = p_only) loop
     raw := case r.kind when 'json' then format('regexp_replace(t.%I::text, ''\\.'', '' '', ''g'')', r.column_name)
                        when 'array' then format('array_to_string(t.%I::text[], '' '')', r.column_name)
                        else format('t.%I::text', r.column_name) end;
     res := public.backup_deny_run(format('select lower(case when (octet_length(z.e) <> length(z.e) or strpos(z.e, ''%%'') > 0 or strpos(z.e, ''&'') > 0 or strpos(z.e, ''\'') > 0) then public.backup_normalise(z.e) else z.e end) as s from (select %s as e from %s t where t.%I is not null) z',
-                                         raw, case when p_only is null then format('public.%I', r.table_name) else format('(select * from public.%I t order by %s offset %s limit %s)', r.table_name, public.backup_pk_order(r.table_name), p_off, p_lim) end, r.column_name), p_ctx ->> 'pads');
+                                         raw, case when p_only is null then format('public.%I', r.table_name) else format('(select * from public.%I t order by %s offset %s limit %s)', r.table_name, public.backup_pk_order(r.table_name), p_off, p_lim) end, r.column_name), pads);
     n := n || array(select jsonb_array_elements_text(res -> 'names')); f := f || array(select jsonb_array_elements_text(res -> 'chains'));
     e := e || array(select jsonb_array_elements_text(res -> 'emails')); p := p || array(select jsonb_array_elements_text(res -> 'phones'));
   end loop;
@@ -5521,13 +5532,20 @@ begin
       -- is redacted unless the key is on the amounts allow-list. Amounts in NUMERIC COLUMNS (ledger.amount_cents ...) are never touched: this only sees numbers inside json.
       if k ~ '(^|[^a-z])(ph|phone|phones|tel|telephone|mobile|cell|cellphone|fax|ssn|sin|nas|dob|birthdate|birthday|birth|passport|licen[sc]e|card|iban|routing|transit|acct|account|accounts)([^a-z]|$)' then return to_jsonb('[redacted:key]'::text); end if;
       digits := length(regexp_replace(split_part(replace(j #>> '{}', '-', ''), '.', 1), '[^0-9]', '', 'g'));
+      -- a number that IS a known phone (the live phone list, 7-10+ digits compared on the right-hand end) is redacted under ANY key, including the amount allow-list ('amount': 6135550199)
+      if digits >= 7 and exists (select 1 from jsonb_array_elements_text(coalesce(p_ctx -> 'phones', '[]'::jsonb)) ph
+                                 where right(ph, least(digits, 10)) = right(regexp_replace(split_part(replace(j #>> '{}', '-', ''), '.', 1), '[^0-9]', '', 'g'), least(digits, 10)) and length(ph) >= least(digits, 10))
+        then return to_jsonb('[redacted:id]'::text); end if;
       if digits >= 7 and k !~ '(^|_)(txid|xid|pid|seq|epoch|attempts|retries|amount|amt|cents|total|count|qty|quantity|sum|price|cost|fee|fees|balance|bytes|rows|chars|length|ms|secs|seconds|minutes|hours|days|limit|max|min|in|out|tokens|searches|spent|budget|cap|usd|cad|per_[a-z]+|to_cents|from_cents)($|_)'
         then return to_jsonb('[redacted:id]'::text); end if;
       return j;
     when 'object' then return coalesce((select jsonb_object_agg(
-        case when p_mode = 'strict' and coalesce(p_ctx ->> 'sq_re', '') <> '' and regexp_replace(lower(public.backup_fold_text(e.k)), '[^a-z0-9]', '', 'g') ~ (p_ctx ->> 'sq_re') then '[redacted:key]'     -- a key that holds a known name in spaced / glued form
+        case when p_mode = 'strict' and coalesce(kc.c ->> 'sq_re', '') <> '' and regexp_replace(lower(public.backup_fold_text(e.k)), '[^a-z0-9]', '', 'g') ~ (kc.c ->> 'sq_re') then '[redacted:key]'     -- a key that holds a known name in spaced / glued form
              else public.backup_redact_text(e.k, p_ctx, null, 'light') end,
-        public.backup_redact_json_k(e.v, e.k, p_ctx, p_max, p_mode)) from jsonb_each(j) e (k, v)), '{}'::jsonb);
+        public.backup_redact_json_k(e.v, e.k, p_ctx, p_max, p_mode))
+      from jsonb_each(j) e (k, v),
+           lateral (select case when p_mode = 'strict' and coalesce(p_ctx ->> 'scanned', 'false') <> 'true' and coalesce(p_ctx ->> 'deny', 'false') = 'true' and length(e.k) >= 5
+                                then public.backup_ctx_blob(p_ctx, public.backup_deny_terms(e.k, p_ctx)) else p_ctx end c) kc), '{}'::jsonb);     -- an UNSCANNED context (a direct call) asks the deny-list about the key too; the export scan already did
     when 'array' then return coalesce((select jsonb_agg(public.backup_redact_json_k(a.v, p_key, p_ctx, p_max, p_mode) order by a.ord) from jsonb_array_elements(j) with ordinality a (v, ord)), '[]'::jsonb);
     else return j;
   end case;
@@ -5923,7 +5941,7 @@ begin
     rows := rows + n;
   end loop;
   return jsonb_build_object('strict_chars', strict_chars, 'light_chars', light_chars, 'field_count', rows,
-                            'est_seconds', round((strict_chars * 0.00000115 + light_chars * 0.00000035 + rows * 0.00004)::numeric, 1));
+                            'est_seconds', round((strict_chars * 0.0000013 + light_chars * 0.00000035 + rows * 0.00004)::numeric, 1));
 end $$;
 
 revoke all on function public.backup_type_ok(oid) from public, anon, authenticated;
@@ -6094,13 +6112,16 @@ begin
     return 1;
   end if;
   -- name
-  tok := array(select x from unnest(regexp_split_to_array(f, '[^a-z0-9]+')) x where x <> '');
+  tok := array(select x from unnest(regexp_split_to_array(f, '[^a-z0-9\u0080-\uffff]+')) x where x <> '');
   if cardinality(tok) = 0 then return 0; end if;
   sq := array_to_string(tok, '');
   if length(sq) >= 5 then insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'f', sq), 'f') on conflict do nothing; end if;
   foreach w in array tok loop
-    if length(w) >= 3 and not (w = any (stop)) and w !~ '^[0-9]+$' then
+    if length(w) >= (case when w ~ '[^\x01-\x7f]' then 2 else 3 end) and not (w = any (stop)) and w !~ '^[0-9]+$' then
       insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'n', w), 'n') on conflict do nothing;
+      if length(w) >= 5 then      -- the squashed token on its own (surname): found letter-spaced, glued, with a 1-2 character prefix or suffix, in a plural or a url, like a live name's squashed forms
+        insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'f', w), 'f') on conflict do nothing;
+      end if;
     end if;
   end loop;
   return 1;
