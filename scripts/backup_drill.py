@@ -269,6 +269,19 @@ def _admin_url(dsn, name):
     return f"{base}/{name}"
 
 
+def _pg_bin(tool, dsn):
+    """pg_dump / pg_restore of the SAME major version as the server when installed (a newer client writes SETs an older server rejects, e.g. transaction_timeout from client 17 into server 16)."""
+    try:
+        r = subprocess.run(["psql", dsn, "-Atc", "show server_version_num"], capture_output=True, text=True, timeout=30)
+        major = str(int(r.stdout.strip()) // 10000)
+        cand = f"/usr/lib/postgresql/{major}/bin/{tool}"
+        if os.path.exists(cand):
+            return cand
+    except Exception:
+        pass
+    return tool
+
+
 def v3_restore_closed_checks(DST_, cur, sql, owner, work):
     import hq, hq_gatemark as G
     from pg_adapter import PgAdapter
@@ -286,8 +299,10 @@ def v3_restore_closed_checks(DST_, cur, sql, owner, work):
         c.cursor().execute(f'drop database if exists "{name}"'); c.cursor().execute(f'create database "{name}"'); c.close()
         prov_names.append((name, admin))
     def dump_to(dest_dsn, dump):
-        r = subprocess.run(["pg_restore", "--no-owner", "-d", dest_dsn, dump], capture_output=True, text=True, timeout=300)
-        bad = [l for l in r.stderr.splitlines() if l.startswith("pg_restore: error") and "already exists" not in l and "errors ignored" not in l]
+        r = subprocess.run([_pg_bin("pg_restore", dest_dsn), "--no-owner", "-d", dest_dsn, dump], capture_output=True, text=True, timeout=300)
+        # the one tolerated error: a client NEWER than the server (no matching binaries installed) sets transaction_timeout, which an older server does not know; it changes no data
+        bad = [l for l in r.stderr.splitlines() if l.startswith("pg_restore: error") and "already exists" not in l and "errors ignored" not in l and "transaction_timeout" not in l]
+        bad = [l for l in bad if not l.strip().startswith("Command was: SET transaction_timeout")]
         return not bad and "FATAL" not in r.stderr, "; ".join(bad)[-200:]
     with mock.patch.dict(os.environ, {"GATE_HWM_FILE": hwm}, clear=False):
         ad_live = PgAdapter(DST + ("&" if "?" in DST else "?") + "options=-c%20timezone%3DUTC")
@@ -300,7 +315,7 @@ def v3_restore_closed_checks(DST_, cur, sql, owner, work):
             check("V3 the owner anchors the sender once the gate is verified after the restore marker; the sender then attests ok and the gate stays open", r_anchor.get("ok") is True and a1.get("ok") is True and sql("select public.ffm_outreach_gate_open()") is True, f"{r_anchor} {a1}")
         DST_.commit()
         dump = os.path.join(work, "provider_snapshot.dump")
-        subprocess.run(["pg_dump", "-Fc", "--no-owner", "-n", "public", "-n", "auth", "-d", DST, "-f", dump], check=True, timeout=300)       # t0: the "provider backup" (gate OPEN, checkpoint staged)
+        subprocess.run([_pg_bin("pg_dump", DST), "-Fc", "--no-owner", "-n", "public", "-n", "auth", "-d", DST, "-f", dump], check=True, timeout=300)       # t0: the "provider backup" (gate OPEN, checkpoint staged)
         # t1: a person opts out AFTER the snapshot; the sender sees it
         cur.execute("insert into public.contact_suppressions (address, reason, recorded_by) values ('latecomer-optout@example.com', 'drill: opted out after the provider snapshot', 'drill')"); DST_.commit()
         with mock.patch.object(hq, "_request", side_effect=ad_live):
