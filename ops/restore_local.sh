@@ -25,7 +25,7 @@ name="fendezy-restore-$$"; pw="$(python3 -c 'import secrets;print(secrets.token_
 cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; unset BACKUP_KEY RESTORE_B2_AUTH RESTORE_DB_URL POSTGRES_PASSWORD pw; }
 trap cleanup EXIT
 export POSTGRES_PASSWORD="$pw"      # passed to docker by NAME (-e POSTGRES_PASSWORD), so the value never appears in ps / docker inspect arguments or bash -x output
-if ! docker run -d --name "$name" -e POSTGRES_PASSWORD -p 127.0.0.1::5432 postgres:17.11 >/dev/null; then
+if ! docker run -d --name "$name" -e POSTGRES_PASSWORD -p 127.0.0.1::5432 postgres:17.11@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f >/dev/null; then   # 17.11 index digest resolved 2026-11-15
   echo "Could not start the throwaway PostgreSQL 17.11 container (is Docker running, and can it pull postgres:17.11?)."; exit 2
 fi
 unset POSTGRES_PASSWORD

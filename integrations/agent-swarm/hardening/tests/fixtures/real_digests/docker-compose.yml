@@ -181,7 +181,7 @@ services:
     restart: 'no'
     init: true
     privileged: false
-    image: nginxinc/nginx-unprivileged:1.27-alpine@sha256:ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12
+    image: nginxinc/nginx-unprivileged:1.30-alpine@sha256:ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12
     user: 101:101
     depends_on:
       api:

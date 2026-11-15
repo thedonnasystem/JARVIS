@@ -1,0 +1,54 @@
+# 2026-11-15 SC review: verifier after real digests resolved (compose + Dockerfile), non-strict
+[PASS] C01  images pinned by digest, never :latest                                                       
+[WARN] C01w digests are PLACEHOLDERS                                                                     replace in worker before any real run (--strict fails on this)
+[PASS] C22  Dockerfile frontend and base pinned by real digest                                           
+[PASS] C02  pull_policy never/if_not_present (no always, no default)                                     
+[PASS] C03  read_only root fs + tmpfs                                                                    
+[PASS] C04  cap_drop ALL, no cap_add                                                                     
+[PASS] C05  no-new-privileges, no unconfined seccomp/apparmor                                            
+[PASS] C06  non-root user on every service                                                               
+[PASS] C07  not privileged, no host namespaces/devices/network_mode                                      
+[PASS] C08  memory + cpu + pids limits on every service                                                  
+[PASS] C09  no docker.sock, no host mounts, <= 1 scratch volume (worker only)                            scratch volume: swarm_worker_scratch
+[PASS] C10  published ports bound to loopback only; none on worker                                       
+[PASS] C11  ANONYMIZED_TELEMETRY=false on api and worker                                                 
+[PASS] C12  one worker, no lead, per-worker key separate from operator key                               
+[PASS] C13  api and worker only on internal:true networks                                                
+[PASS] C14  egress allow-list = only api.anthropic.com; blocked hosts denied                             
+[PASS] C15  vendor/phone-home channels off (templates, improvements, business-use, CLI telemetry)        
+[PASS] C16  no lead (no auto review task), no schedules/heartbeat/integrations                           
+[PASS] C17  secrets via env_file outside repo, none inline, no model key on api                          
+[PASS] C18  worker reaches the API only through worker-gate (disjoint networks, gate URL)                
+[PASS] C19  worker-gate policy: default deny, no task create/config/token/secrets, worker flow allowed   behaviour probed: 27 deny cases, 9 allow cases, MCP tool/batch/secrets rewrites
+[PASS] C20  worker needs no root at runtime: derived image, numeric uid, no gosu/chown, pre-owned tmpfs  
+[PASS] C21  env-only secrets: model key only in worker env, nothing seeds swarm config                   by hand: operator `GET /api/config?includeSecrets=true` must show zero isSecret rows (gate doc 2.1)
+[WARN] R00  runtime NOT VERIFIED                                                                         runtime layer disabled (--no-runtime)
+
+RESULT: PASS (static)  failed=0 warnings=2
+
+# --strict: must still FAIL, only because worker.image is the not-yet-built derived image id placeholder
+[FAIL] C01  images pinned by digest, never :latest                                                       placeholder digest still present in worker (--strict)
+[PASS] C22  Dockerfile frontend and base pinned by real digest                                           
+[PASS] C02  pull_policy never/if_not_present (no always, no default)                                     
+[PASS] C03  read_only root fs + tmpfs                                                                    
+[PASS] C04  cap_drop ALL, no cap_add                                                                     
+[PASS] C05  no-new-privileges, no unconfined seccomp/apparmor                                            
+[PASS] C06  non-root user on every service                                                               
+[PASS] C07  not privileged, no host namespaces/devices/network_mode                                      
+[PASS] C08  memory + cpu + pids limits on every service                                                  
+[PASS] C09  no docker.sock, no host mounts, <= 1 scratch volume (worker only)                            scratch volume: swarm_worker_scratch
+[PASS] C10  published ports bound to loopback only; none on worker                                       
+[PASS] C11  ANONYMIZED_TELEMETRY=false on api and worker                                                 
+[PASS] C12  one worker, no lead, per-worker key separate from operator key                               
+[PASS] C13  api and worker only on internal:true networks                                                
+[PASS] C14  egress allow-list = only api.anthropic.com; blocked hosts denied                             
+[PASS] C15  vendor/phone-home channels off (templates, improvements, business-use, CLI telemetry)        
+[PASS] C16  no lead (no auto review task), no schedules/heartbeat/integrations                           
+[PASS] C17  secrets via env_file outside repo, none inline, no model key on api                          
+[PASS] C18  worker reaches the API only through worker-gate (disjoint networks, gate URL)                
+[PASS] C19  worker-gate policy: default deny, no task create/config/token/secrets, worker flow allowed   behaviour probed: 27 deny cases, 9 allow cases, MCP tool/batch/secrets rewrites
+[PASS] C20  worker needs no root at runtime: derived image, numeric uid, no gosu/chown, pre-owned tmpfs  
+[PASS] C21  env-only secrets: model key only in worker env, nothing seeds swarm config                   by hand: operator `GET /api/config?includeSecrets=true` must show zero isSecret rows (gate doc 2.1)
+[WARN] R00  runtime NOT VERIFIED                                                                         runtime layer disabled (--no-runtime)
+
+RESULT: FAIL  failed=1 warnings=1

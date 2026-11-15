@@ -18,7 +18,7 @@ services:
     restart: 'no'
     init: true
     privileged: false
-    image: ghcr.io/desplega-ai/agent-swarm:2.13.2@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    image: ghcr.io/desplega-ai/agent-swarm:2.13.2@sha256:3cd41bd226743b32a60e578456dd4abe094f4ce837aa8413e043ac1b8c20b589
     user: ${API_UID:-10001}:${API_GID:-10001}
     env_file:
     - ${FENDEZY_SECRETS_DIR:?set FENDEZY_SECRETS_DIR to a directory outside the repo}/api.env
@@ -113,7 +113,7 @@ services:
     restart: 'no'
     init: true
     privileged: false
-    image: python:3.12-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    image: python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89
     user: 10002:10002
     command:
     - python3
@@ -160,7 +160,7 @@ services:
     restart: 'no'
     init: true
     privileged: false
-    image: ubuntu/squid:6.6-24.04_edge@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    image: ubuntu/squid:6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
     user: '13:13'
     configs:
     - source: squid_conf
@@ -184,7 +184,7 @@ services:
     restart: 'no'
     init: true
     privileged: false
-    image: nginxinc/nginx-unprivileged:1.27-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    image: nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03
     user: 101:101
     depends_on:
       api:
