@@ -13,13 +13,18 @@ from fake_b2 import FakeB2  # noqa: E402
 
 KEY = Fernet.generate_key().decode()
 ENV = {"BACKUP_KEY": KEY, "BACKUP_PUT_URL": "https://store.example.com/b/{name}"}
-SCHEMA = {"server_version": "17.0", "tables": [{"name": "leads"}, {"name": "ledger"}, {"name": "push_config"}, {"name": "tasks"}],
+SCHEMA = {"server_version": "17.0", "tables": [{"name": "ideas"}, {"name": "ledger"}, {"name": "push_config"}, {"name": "tasks"}],
           "constraints": [{"table": "tasks", "type": "p", "def": "PRIMARY KEY (id)"}, {"table": "ledger", "type": "p", "def": "PRIMARY KEY (day, kind)"}],
           "functions": [{"sig": "f()", "def": "create function f()"}], "indexes": [], "triggers": []}
-ROWS = {"leads": 3, "ledger": 3, "tasks": 2, "push_config": 1}
+ROWS = {"ideas": 3, "ledger": 3, "tasks": 2, "push_config": 1}
+
+
+POLICY = {"exported": ["ideas", "ledger", "tasks"], "excluded": [{"table": "leads", "class": "client_pii", "reason": "client personal data"}, {"table": "push_config", "class": "secret", "reason": "keys"}], "unclassified": []}
 
 
 def fake_request(method, path, body=None, prefer=None, timeout=30, exact=False):
+    if method == "POST" and path.endswith("/rpc/backup_export_policy"):
+        return POLICY
     if method == "POST" and path.endswith("/rpc/backup_schema"):
         return SCHEMA
     if method == "GET" and "/audit_log" in path:
@@ -43,7 +48,7 @@ class FakeStore:
         self.posts = []
 
     def __call__(self, method, path, body=None, prefer=None, timeout=30, exact=False):
-        if method == "POST" and not path.endswith("/rpc/backup_schema"):
+        if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy")):
             self.posts.append((path, body))
             return None
         return fake_request(method, path, body, prefer)
@@ -67,25 +72,25 @@ class Dump(unittest.TestCase):
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=fake_request):
             blob, m = B.dump()
         self.assertEqual(m["format"], 2)
-        self.assertTrue(m["complete"]); self.assertEqual(m["table_list_source"], "database")
+        self.assertTrue(m["complete"]); self.assertEqual(m["table_list_source"], "database export policy")
         self.assertNotIn("push_config", m["tables"])          # private keys never leave the database
-        self.assertEqual(m["tables"]["leads"]["rows"], 3); self.assertEqual(m["total_rows"], 8)
+        self.assertEqual(m["tables"]["ideas"]["rows"], 3); self.assertEqual(m["total_rows"], 8)
         self.assertEqual(m["schema"]["counts"]["functions"], 1)
         names = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").getnames()
-        self.assertIn("manifest.json", names); self.assertIn("schema.json", names); self.assertIn("data/leads.jsonl", names)
+        self.assertIn("manifest.json", names); self.assertIn("schema.json", names); self.assertIn("data/ideas.jsonl", names)
         self.assertNotIn("data/push_config.jsonl", names)
 
     def test_without_schema_function_backup_is_flagged_incomplete(self):
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=no_schema_request):
             blob, m = B.dump()
-        self.assertFalse(m["complete"]); self.assertIn("built-in", m["table_list_source"])
-        self.assertIn("integration_status", m["tables"]); self.assertIn("alert_state", m["tables"])
+        self.assertFalse(m["complete"]); self.assertEqual(m["table_list_source"], "database export policy")
+        self.assertEqual(sorted(m["tables"]), ["ideas", "ledger", "tasks"])                 # only what the policy allows; no built-in list to fall back on
         self.assertNotIn("push_config", m["tables"]); self.assertNotIn("push_subscriptions", m["tables"])
 
     def test_unicode_survives(self):
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=fake_request):
             blob, _ = B.dump()
-        raw = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").extractfile("data/leads.jsonl").read().decode()
+        raw = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").extractfile("data/ideas.jsonl").read().decode()
         self.assertIn("café \U0001F600", json.loads(raw.split("\n")[0])["note"])
 
     def test_decimals_are_written_exactly_not_through_float(self):
@@ -101,7 +106,7 @@ class Dump(unittest.TestCase):
     def test_backup_reads_with_exact_decimals(self):
         seen = []
         def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if "/rest/v1/leads" in path:
+            if "/rest/v1/ideas" in path:
                 seen.append(exact)
             return fake_request(method, path, body, prefer)
         with mock.patch("hq._request", side_effect=req):
@@ -118,6 +123,8 @@ class Dump(unittest.TestCase):
     def test_paging_reads_every_page(self):
         calls = []
         def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_export_policy"):
+                return {"exported": ["big"], "excluded": [], "unclassified": []}
             if path.endswith("/rpc/backup_schema"):
                 return {"tables": [{"name": "big"}], "constraints": []}
             off = int(path.split("offset=")[1]); calls.append(off)
@@ -133,7 +140,7 @@ class Dump(unittest.TestCase):
             return fake_request(method, path)
         with mock.patch("hq._request", side_effect=req):
             _, m = B.dump()
-        self.assertEqual(m["tables"]["leads"]["rows"], 3)
+        self.assertEqual(m["tables"]["ideas"]["rows"], 3)
 
 
 class Consistency(unittest.TestCase):
@@ -229,18 +236,18 @@ class Preflight(unittest.TestCase):
 
 class Snapshot(unittest.TestCase):
     """backup_snapshot(): every table + schema from ONE SQL statement (mutually consistent)."""
-    TABLES = ["leads", "ledger", "tasks"]
+    TABLES = ["ideas", "ledger", "tasks"]
 
     def snap_req(self, data=None, fail=None, calls=None):
         from decimal import Decimal
-        data = data if data is not None else {"leads": [{"id": 2, "n": "b"}, {"id": 1, "n": "a"}], "ledger": [{"id": 1, "amt": Decimal("30.00")}], "tasks": []}
+        data = data if data is not None else {"ideas": [{"id": 2, "n": "b"}, {"id": 1, "n": "a"}], "ledger": [{"id": 1, "amt": Decimal("30.00")}], "tasks": []}
         def req(method, path, body=None, prefer=None, timeout=30, exact=False):
             if calls is not None:
                 calls.append(path)
             if path.endswith("/rpc/backup_snapshot"):
                 if fail:
                     raise fail
-                return {"data": data, "schema": {**SCHEMA, "tables": [{"name": n} for n in self.TABLES + ["push_config"]], "sequences": [{"name": "s", "last_value": 7}]}, "method": "x"}
+                return {"data": data, "schema": {**SCHEMA, "tables": [{"name": n} for n in self.TABLES + ["push_config"]], "sequences": [{"name": "s", "last_value": 7}]}, "method": "x", "policy": POLICY}
             return fake_request(method, path, body, prefer, exact=exact)
         return req
 
@@ -248,19 +255,19 @@ class Snapshot(unittest.TestCase):
         calls = []
         with mock.patch("hq._request", side_effect=self.snap_req(calls=calls)):
             blob, m = B.dump()
-        self.assertEqual([c for c in calls if "/rest/v1/leads" in c or "/rest/v1/backup_schema" in c or c.endswith("rpc/backup_schema")], [])
+        self.assertEqual([c for c in calls if "/rest/v1/ideas" in c or "/rest/v1/backup_schema" in c or c.endswith("rpc/backup_schema")], [])
         self.assertTrue(m["consistency"]["consistent"]); self.assertIn("single SQL statement", m["consistency"]["method"])
         self.assertEqual(sorted(m["tables"]), self.TABLES); self.assertTrue(m["complete"])
         with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
             self.assertIn(b"30.00", tar.extractfile("data/ledger.jsonl").read())            # exact decimal scale survives
-            lines = tar.extractfile("data/leads.jsonl").read().decode().split("\n")
+            lines = tar.extractfile("data/ideas.jsonl").read().decode().split("\n")
             self.assertEqual(len(lines), 2); self.assertEqual(lines, sorted(lines))          # deterministic order
             self.assertEqual(json.loads(tar.extractfile("schema.json").read())["sequences"][0]["last_value"], 7)
 
     def test_same_data_gives_same_file_hash(self):
         with mock.patch("hq._request", side_effect=self.snap_req()):
             _, m1 = B.dump()
-        rev = {"leads": [{"id": 1, "n": "a"}, {"id": 2, "n": "b"}], "ledger": [{"id": 1, "amt": __import__("decimal").Decimal("30.00")}], "tasks": []}
+        rev = {"ideas": [{"id": 1, "n": "a"}, {"id": 2, "n": "b"}], "ledger": [{"id": 1, "amt": __import__("decimal").Decimal("30.00")}], "tasks": []}
         with mock.patch("hq._request", side_effect=self.snap_req(data=rev)):
             _, m2 = B.dump()
         self.assertEqual({t: v["sha256"] for t, v in m1["tables"].items()}, {t: v["sha256"] for t, v in m2["tables"].items()})
@@ -272,11 +279,11 @@ class Snapshot(unittest.TestCase):
             self.assertIn(text, m["consistency"]["snapshot_unavailable"]); self.assertEqual(m["consistency"]["method"], "two identical full reads")
 
     def test_inconsistent_snapshot_content_is_rejected_not_trusted(self):
-        bad = {"leads": [], "ledger": []}                                    # missing "tasks"
+        bad = {"ideas": [], "ledger": []}                                    # missing "tasks"
         with mock.patch("hq._request", side_effect=self.snap_req(data=bad)):
             _, m = B.dump()
         self.assertIn("does not match", m["consistency"]["snapshot_unavailable"])
-        leaked = {"leads": [], "ledger": [], "tasks": [], "push_config": [{"vapid_private": "SECRET"}]}
+        leaked = {"ideas": [], "ledger": [], "tasks": [], "push_config": [{"vapid_private": "SECRET"}]}
         with mock.patch("hq._request", side_effect=self.snap_req(data=leaked)):
             blob, m = B.dump()
         self.assertNotIn("push_config", m["tables"])
@@ -307,6 +314,8 @@ class ReviewFixes(unittest.TestCase):
 
     def test_row_cap_below_page_size_loses_nothing(self):
         def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_export_policy"):
+                return {"exported": ["big"], "excluded": [], "unclassified": []}
             if path.endswith("/rpc/backup_schema"):
                 return {"tables": [{"name": "big"}], "constraints": []}
             off = int(path.split("offset=")[1]); return [{"id": i} for i in range(off, min(off + 100, 450))]   # server caps every page at 100
@@ -316,6 +325,8 @@ class ReviewFixes(unittest.TestCase):
 
     def test_unordered_fallback_refuses_large_tables(self):
         def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_export_policy"):
+                return {"exported": ["big"], "excluded": [], "unclassified": []}
             if path.endswith("/rpc/backup_schema"):
                 return {"tables": [{"name": "big"}], "constraints": []}
             if "order=" in path:
@@ -417,7 +428,7 @@ class ReviewFixes(unittest.TestCase):
                 raise urllib.error.URLError("down")
             if method == "POST" and path.endswith("/audit_log"):
                 audits.append(body["action"]); return None
-            if method == "POST" and not path.endswith("/rpc/backup_schema"):
+            if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy")):
                 return None
             return fake_request(method, path, body, prefer)
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req), \
@@ -461,8 +472,8 @@ class Crypto(unittest.TestCase):
 
     def test_manifest_mismatch_detected(self):
         with mock.patch.dict(os.environ, ENV):
-            self.assertTrue(B.verify(self.enc, {**self.m, "tables": {**self.m["tables"], "leads": {**self.m["tables"]["leads"], "rows": 4}}}))
-            self.assertTrue(B.verify(self.enc, {**self.m, "tables": {**self.m["tables"], "leads": {**self.m["tables"]["leads"], "sha256": "0" * 64}}}))
+            self.assertTrue(B.verify(self.enc, {**self.m, "tables": {**self.m["tables"], "ideas": {**self.m["tables"]["ideas"], "rows": 4}}}))
+            self.assertTrue(B.verify(self.enc, {**self.m, "tables": {**self.m["tables"], "ideas": {**self.m["tables"]["ideas"], "sha256": "0" * 64}}}))
 
 
 class B2(unittest.TestCase):
