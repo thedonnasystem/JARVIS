@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+# Derived from the stock Agent Swarm worker image. Purpose: run with `user: 1001:1001`, `cap_drop: [ALL]`,
+# `read_only: true`, `no-new-privileges`, with NO root phase at runtime. All root work happens here, at build time.
+# Build out-of-band on the Docker host (the pilot compose never builds or pulls):
+#   docker build --build-arg BASE_IMAGE=ghcr.io/desplega-ai/agent-swarm-worker:2.13.2@sha256:<verified digest> \
+#     -t fendezy/swarm-worker-hardened:2.13.2 -f Dockerfile.worker-hardened .
+#   docker image inspect -f '{{.Id}}' fendezy/swarm-worker-hardened:2.13.2    # -> image: sha256:<id> in the compose file
+# UNVERIFIED: this file has only been linted (hadolint) and statically checked here; it has never been built.
+ARG BASE_IMAGE=ghcr.io/desplega-ai/agent-swarm-worker:2.13.2@sha256:0000000000000000000000000000000000000000000000000000000000000000
+FROM ${BASE_IMAGE}
+
+USER 0:0
+
+# The compose file, the tmpfs ownership and the volume ownership all rely on this uid. Fail the BUILD if it drifts.
+RUN test "$(id -u worker)" = "1001" && test "$(id -g worker)" = "1001" \
+    && test "$(stat -c %u:%g /workspace)" = "1001:1001" \
+    && test "$(stat -c %u:%g /logs)" = "1001:1001" \
+    && test -x /usr/local/bin/agent-swarm && test -x /usr/local/bin/bun \
+    && test -f /usr/local/lib/agent-swarm/entrypoint-api-readiness.ts \
+    && test -f /home/worker/.claude/settings.json && test -f /home/worker/.claude.json
+
+# HOME is mounted as a tmpfs at runtime (the rootfs is read-only), which hides everything the image baked into
+# /home/worker (hook settings, onboarding flag, skills). Keep a root-owned, read-only copy to seed it from.
+RUN cp -a /home/worker /opt/x-seed \
+    && chown -R root:root /opt/x-seed \
+    && chmod -R go-w,a+rX /opt/x-seed
+
+# No setuid/setgid binary and no privilege-drop helper survives into the runtime image. (no-new-privileges blocks
+# setuid at runtime anyway; this removes the thing rather than relying on the flag.)
+RUN find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} + \
+    && rm -f /usr/sbin/gosu /usr/local/bin/gosu /usr/bin/su /usr/bin/sudo
+
+COPY --chmod=0555 entrypoint-hardened.sh /usr/local/bin/entrypoint-hardened.sh
+
+# Build-time smoke test as the runtime uid: the harness CLI must start with an empty tmpfs-like HOME.
+USER 1001:1001
+RUN HOME="$(mktemp -d)" claude --version
+
+ENV HOME=/home/worker \
+    WORKER_LOG_DIR=/logs \
+    LEAD_LOG_DIR=/logs
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/entrypoint-hardened.sh"]
+CMD []

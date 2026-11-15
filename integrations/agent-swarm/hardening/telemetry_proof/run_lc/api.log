@@ -1,0 +1,573 @@
+[HTTP] Explicit GC unavailable; idle MCP transport sweeps remain enabled
+Database initialized at /home/claude/sandbox/swarm_hardening/telemetry_proof/run_lc/data/db.sqlite
+[db] sqlite-vec loaded
+[migrations] Existing database appears incomplete — applying 001_initial migration
+[migrations] Applying: 001_initial
+[migrations] Applied: 001_initial (2.8ms)
+[migrations] Applying: 002_one_time_schedules
+[migrations] Applied: 002_one_time_schedules (1.4ms)
+[migrations] Applying: 003_workflows
+[migrations] Applied: 003_workflows (0.9ms)
+[migrations] Applying: 004_workflow_source
+[migrations] Applied: 004_workflow_source (1.4ms)
+[migrations] Applying: 005_epic_next_steps
+[migrations] Applied: 005_epic_next_steps (0.5ms)
+[migrations] Applying: 006_vcs_provider
+[migrations] Applied: 006_vcs_provider (4.5ms)
+[migrations] Applying: 007_task_dir
+[migrations] Applied: 007_task_dir (0.6ms)
+[migrations] Applying: 008_workflow_redesign
+[migrations] Applied: 008_workflow_redesign (0.6ms)
+[migrations] Applying: 009_tracker_integration
+[migrations] Applied: 009_tracker_integration (2.1ms)
+[migrations] Applying: 010_step_diagnostics
+[migrations] Applied: 010_step_diagnostics (0.4ms)
+[migrations] Applying: 011_step_next_port
+[migrations] Applied: 011_step_next_port (0.5ms)
+[migrations] Applying: 012_trigger_schema
+[migrations] Applied: 012_trigger_schema (0.5ms)
+[migrations] Applying: 013_task_output_schema
+[migrations] Applied: 013_task_output_schema (0.6ms)
+[migrations] Applying: 014_prompt_templates
+[migrations] Applied: 014_prompt_templates (0.3ms)
+[migrations] Applying: 015_workflow_workspace
+[migrations] Applied: 015_workflow_workspace (1.3ms)
+[migrations] Applying: 016_active_session_runner_session
+[migrations] Applied: 016_active_session_runner_session (1.5ms)
+[migrations] Applying: 017_channel_activity_cursors
+[migrations] Applied: 017_channel_activity_cursors (0.3ms)
+[migrations] Applying: 018_fix_seed_double_version
+[migrations] Applied: 018_fix_seed_double_version (0.2ms)
+[migrations] Applying: 019_skills
+[migrations] Applied: 019_skills (0.6ms)
+[migrations] Applying: 020_approval_requests
+[migrations] Applied: 020_approval_requests (0.4ms)
+[migrations] Applying: 021_events
+[migrations] Applied: 021_events (0.4ms)
+[migrations] Applying: 022_context_usage
+[migrations] Applied: 022_context_usage (2.1ms)
+[migrations] Applying: 023_mcp_servers
+[migrations] Applied: 023_mcp_servers (0.7ms)
+[migrations] Applying: 024_add_was_paused
+[migrations] Applied: 024_add_was_paused (0.8ms)
+[migrations] Applying: 025_workflow_run_cancelled_status
+[migrations] Applied: 025_workflow_run_cancelled_status (3.6ms)
+[migrations] Applying: 026_drop_epics
+[migrations] Applied: 026_drop_epics (2.1ms)
+[migrations] Applying: 027_heartbeat_md
+[migrations] Applied: 027_heartbeat_md (0.6ms)
+[migrations] Applying: 028_api_key_tracking
+[migrations] Applied: 028_api_key_tracking (0.8ms)
+[migrations] Applying: 029_task_credential_key_type
+[migrations] Applied: 029_task_credential_key_type (0.6ms)
+[migrations] Applying: 030_iso8601_date_consistency
+[migrations] Applied: 030_iso8601_date_consistency (0.2ms)
+[migrations] Applying: 031_user_registry
+[migrations] Applied: 031_user_registry (1.0ms)
+[migrations] Applying: 032_repo_guidelines
+[migrations] Applied: 032_repo_guidelines (0.6ms)
+[migrations] Applying: 033_vcs_installation_node_id
+[migrations] Applied: 033_vcs_installation_node_id (1.1ms)
+[migrations] Applying: 034_slack_reply_sent
+[migrations] Applied: 034_slack_reply_sent (1.0ms)
+[migrations] Applying: 035_api_key_name_provider
+[migrations] Applied: 035_api_key_name_provider (1.6ms)
+[migrations] Applying: 036_memory_ttl_staleness
+[migrations] Applied: 036_memory_ttl_staleness (1.7ms)
+[migrations] Applying: 037_swarm_version
+[migrations] Applied: 037_swarm_version (0.6ms)
+[migrations] Applying: 038_encrypted_secrets
+[migrations] Applied: 038_encrypted_secrets (0.5ms)
+[migrations] Applying: 039_remove_seed_users
+[migrations] Applied: 039_remove_seed_users (0.1ms)
+[migrations] Applying: 040_slack_thread_composite_index
+[migrations] Applied: 040_slack_thread_composite_index (0.1ms)
+[migrations] Applying: 041_mcp_oauth_tokens
+[migrations] Applied: 041_mcp_oauth_tokens (1.1ms)
+[migrations] Applying: 042_task_context_key
+[migrations] Applied: 042_task_context_key (0.8ms)
+[migrations] Applying: 043_jira_source
+[migrations] Applied: 043_jira_source (2.7ms)
+[migrations] Applying: 044_provider_meta
+[migrations] Applied: 044_provider_meta (1.3ms)
+[migrations] Applying: 046_budgets_and_pricing
+[migrations] Applied: 046_budgets_and_pricing (0.3ms)
+[migrations] Applying: 047_session_costs_cost_source
+[migrations] Applied: 047_session_costs_cost_source (0.7ms)
+[migrations] Applying: 048_agent_provider
+[migrations] Applied: 048_agent_provider (0.6ms)
+[migrations] Applying: 049_wait_states
+[migrations] Applied: 049_wait_states (0.3ms)
+[migrations] Applying: 050_wait_states_scope
+[migrations] Applied: 050_wait_states_scope (1.0ms)
+[migrations] Applying: 051_memory_posteriors_and_retrieval
+[migrations] Applied: 051_memory_posteriors_and_retrieval (1.6ms)
+[migrations] Applying: 052_memory_edges
+[migrations] Applied: 052_memory_edges (0.6ms)
+[migrations] Applying: 053_agent_waiting_for_credentials_status
+[migrations] Applied: 053_agent_waiting_for_credentials_status (2.2ms)
+[migrations] Applying: 054_agent_harness_provider
+[migrations] Applied: 054_agent_harness_provider (0.7ms)
+[migrations] Applying: 055_agent_cred_status
+[migrations] Applied: 055_agent_cred_status (0.7ms)
+[migrations] Applying: 056_drop_agent_tasks_source_check
+[migrations] Applied: 056_drop_agent_tasks_source_check (3.0ms)
+[migrations] Applying: 057_inbox_item_state
+[migrations] Applied: 057_inbox_item_state (0.2ms)
+[migrations] Applying: 058_task_templates
+[migrations] Applied: 058_task_templates (0.2ms)
+[migrations] Applying: 059_pages
+[migrations] Applied: 059_pages (0.3ms)
+[migrations] Applying: 060_page_versions
+[migrations] Applied: 060_page_versions (0.2ms)
+[migrations] Applying: 061_kv_store
+[migrations] Applied: 061_kv_store (0.1ms)
+[migrations] Applying: 062_pages_view_count
+[migrations] Applied: 062_pages_view_count (0.9ms)
+[migrations] Applying: 063_cost_context_schema_relax
+[migrations] Applied: 063_cost_context_schema_relax (9.1ms)
+[migrations] Applying: 064_scripts
+[migrations] Applied: 064_scripts (0.4ms)
+[migrations] Applying: 065_script_embeddings
+[migrations] Applied: 065_script_embeddings (0.1ms)
+[migrations] Applying: 066_scripts_args_json_schema
+[migrations] Applied: 066_scripts_args_json_schema (1.5ms)
+[migrations] Applying: 067_users_first_class
+[migrations] Applied: 067_users_first_class (5.4ms)
+[migrations] Applying: 068_profile_changed_event_type
+[migrations] Applied: 068_profile_changed_event_type (2.5ms)
+[migrations] Applying: 069_agent_tasks_perf_indexes
+[migrations] Applied: 069_agent_tasks_perf_indexes (0.2ms)
+[migrations] Applying: 070_seed_state
+[migrations] Applied: 070_seed_state (0.2ms)
+[migrations] Applying: 071_codex_oauth_pool
+[migrations] Applied: 071_codex_oauth_pool (0.1ms)
+[migrations] Applying: 072_task_attachments
+[migrations] Applied: 072_task_attachments (0.3ms)
+[migrations] Applying: 073_task_attachments_agent_fs_ids
+[migrations] Applied: 073_task_attachments_agent_fs_ids (1.6ms)
+[migrations] Applying: 074_user_budget_scope
+[migrations] Applied: 074_user_budget_scope (4.9ms)
+[migrations] Applying: 076_kapso_sender_user_backfill
+[migrations] Applied: 076_kapso_sender_user_backfill (0.2ms)
+[migrations] Applying: 077_oauth_refresh_locks
+[migrations] Applied: 077_oauth_refresh_locks (0.1ms)
+[migrations] Applying: 078_backfill_gpt_5_5_pricing
+[migrations] Applied: 078_backfill_gpt_5_5_pricing (0.0ms)
+[migrations] Applying: 079_task_followup_config
+[migrations] Applied: 079_task_followup_config (0.9ms)
+[migrations] Applying: 080_skill_system_defaults
+[migrations] Applied: 080_skill_system_defaults (1.2ms)
+[migrations] Applying: 081_metrics
+[migrations] Applied: 081_metrics (0.4ms)
+[migrations] Applying: 082_user_audit_fields
+[migrations] Applied: 082_user_audit_fields (64.1ms)
+[migrations] Applying: 083_script_workflows
+[migrations] Applied: 083_script_workflows (0.5ms)
+[migrations] Applying: 084_script_run_journal_duration
+[migrations] Applied: 084_script_run_journal_duration (1.0ms)
+[migrations] Applying: 085_script_runs_kind
+[migrations] Applied: 085_script_runs_kind (1.6ms)
+[migrations] Applying: 086_pages_default_authed
+[migrations] Applied: 086_pages_default_authed (3.5ms)
+[migrations] Applying: 087_skill_files
+[migrations] Applied: 087_skill_files (0.2ms)
+[migrations] Applying: 088_script_runs_list_indexes
+[migrations] Applied: 088_script_runs_list_indexes (0.2ms)
+[migrations] Applying: 089_harness_variant
+[migrations] Applied: 089_harness_variant (1.9ms)
+[migrations] Applying: 090_model_tiers
+[migrations] Applied: 090_model_tiers (2.2ms)
+[migrations] Applying: 091_seed_swarm_operations_metrics
+[migrations] Applied: 091_seed_swarm_operations_metrics (0.1ms)
+[migrations] Applying: 092_metrics_dashboard_combobox_filters
+[migrations] Applied: 092_metrics_dashboard_combobox_filters (0.2ms)
+[migrations] Applying: 093_slack_message_tracking
+[migrations] Applied: 093_slack_message_tracking (2.2ms)
+[migrations] Applying: 094_mcp_extra_authorize_params
+[migrations] Applied: 094_mcp_extra_authorize_params (1.0ms)
+[migrations] Applying: 095_api_key_rate_limit_windows
+[migrations] Applied: 095_api_key_rate_limit_windows (1.0ms)
+[migrations] Applying: 096_memory_graph_phase1
+[migrations] Applied: 096_memory_graph_phase1 (5.6ms)
+[migrations] Applying: 097_memory_retrieval_grouping
+[migrations] Applied: 097_memory_retrieval_grouping (2.2ms)
+[migrations] Applying: 098_repo_hooks_config
+[migrations] Applied: 098_repo_hooks_config (1.0ms)
+[migrations] Applying: 099_memory_structured_key_versioning
+[migrations] Applied: 099_memory_structured_key_versioning (4.4ms)
+[migrations] Applying: 100_memory_retrieval_source
+[migrations] Applied: 100_memory_retrieval_source (1.1ms)
+[migrations] Applying: 101_script_connections
+[migrations] Applied: 101_script_connections (0.5ms)
+[migrations] Applying: 102_script_apis
+[migrations] Applied: 102_script_apis (1.3ms)
+[migrations] Applying: 103_schedule_target_type
+[migrations] Applied: 103_schedule_target_type (19.3ms)
+[migrations] Applying: 104_task_reasoning_effort
+[migrations] Applied: 104_task_reasoning_effort (2.2ms)
+[migrations] Applying: 105_user_favorites
+[migrations] Applied: 105_user_favorites (0.3ms)
+[migrations] Applying: 106_task_attachments_provider_agnostic
+[migrations] Applied: 106_task_attachments_provider_agnostic (4.4ms)
+[migrations] Applying: 107_memory_usefulness_indexes
+[migrations] Applied: 107_memory_usefulness_indexes (0.2ms)
+[migrations] Applying: 108_rbac_permission_audit
+[migrations] Applied: 108_rbac_permission_audit (0.3ms)
+[migrations] Applying: 109_rbac_roles
+[migrations] Applied: 109_rbac_roles (0.6ms)
+[migrations] Applying: 111_oauth_credential_bindings
+[migrations] Applied: 111_oauth_credential_bindings (7.3ms)
+[migrations] Applying: 112_script_connections_graphql
+[migrations] Applied: 112_script_connections_graphql (4.5ms)
+[migrations] Applying: 113_task_routing_affinity
+[migrations] Applied: 113_task_routing_affinity (1.7ms)
+[migrations] Applying: 114_backfill_gpt_5_6_pricing
+[migrations] Applied: 114_backfill_gpt_5_6_pricing (0.1ms)
+[migrations] Applying: 115_asset_namespace_keys
+[migrations] Applied: 115_asset_namespace_keys (5.8ms)
+[migrations] Applying: 116_favorite_principal_scope
+[migrations] Applied: 116_favorite_principal_scope (4.6ms)
+[migrations] Applying: 117_unified_oauth
+[migrations] Applied: 117_unified_oauth (37.9ms)
+[migrations] Applying: 119_agent_avatar
+[migrations] Applied: 119_agent_avatar (1.9ms)
+[migrations] Applying: 120_task_title
+[migrations] Applied: 120_task_title (1.5ms)
+[migrations] Applying: 121_task_steering_messages
+[migrations] Applied: 121_task_steering_messages (0.3ms)
+[migrations] Applying: 122_steering_handled_note
+[migrations] Applied: 122_steering_handled_note (2.0ms)
+[migrations] Applying: 123_slack_messages
+[migrations] Applied: 123_slack_messages (0.4ms)
+[migrations] Applying: 124_slack_render_v2_state
+[migrations] Applied: 124_slack_render_v2_state (0.1ms)
+[migrations] Applying: 125_task_slack_trigger_message_ts
+[migrations] Applied: 125_task_slack_trigger_message_ts (1.5ms)
+[migrations] Applying: 126_apps
+[migrations] Applied: 126_apps (0.3ms)
+[migrations] Applying: 127_backfill_user_attribution
+[migrations] Applied: 127_backfill_user_attribution (0.2ms)
+[migrations] Applying: 128_session_costs_accuracy
+[migrations] Applied: 128_session_costs_accuracy (6.6ms)
+[migrations] Applying: 129_asset_keys_apps_scripts
+[migrations] Applied: 129_asset_keys_apps_scripts (8.4ms)
+[migrations] Applying: 130_scratch_script_retention_grace
+[migrations] Applied: 130_scratch_script_retention_grace (0.1ms)
+[migrations] Applying: 131_session_logs_created_at_index
+[migrations] Applied: 131_session_logs_created_at_index (0.1ms)
+[migrations] Applying: 132_multi_runtime_instances
+[migrations] Applied: 132_multi_runtime_instances (2.3ms)
+[migrations] Applying: 133_workflow_run_trigger_type
+[migrations] Applied: 133_workflow_run_trigger_type (1.6ms)
+[migrations] Applying: 135_backfill_task_pull_request_attachments
+[migrations] Applied: 135_backfill_task_pull_request_attachments (1.5ms)
+[migrations] Applying: 136_task_requester_provenance
+[migrations] Applied: 136_task_requester_provenance (1.8ms)
+[migrations] Applying: 137_memory_retrieval_composite_index
+[migrations] Applied: 137_memory_retrieval_composite_index (0.2ms)
+[migrations] Applying: 140_approval_request_cancelled_status
+[migrations] Applied: 140_approval_request_cancelled_status (6.3ms)
+[migrations] Applying: 141_scheduled_task_automation_preflight
+[migrations] Applied: 141_scheduled_task_automation_preflight (5.7ms)
+[migrations] Applying: 142_workflow_automation_preflight
+[migrations] Applied: 142_workflow_automation_preflight (5.8ms)
+[migrations] Applying: 143_backfill_gpt_6_astra_pricing
+[migrations] Applied: 143_backfill_gpt_6_astra_pricing (0.1ms)
+[migrations] Applying: 144_slack_relay_obligations
+[migrations] Applied: 144_slack_relay_obligations (0.3ms)
+[migrations] Applying: 145_slack_render_v2_delegation
+[migrations] Applied: 145_slack_render_v2_delegation (3.9ms)
+[migrations] Applying: 147_scheduled_tasks_parent_task
+[migrations] Applied: 147_scheduled_tasks_parent_task (1.7ms)
+[migrations] Applying: 148_pages_svg
+[migrations] Applied: 148_pages_svg (6.4ms)
+[migrations] Applying: 149_session_tokens
+[migrations] Applied: 149_session_tokens (0.2ms)
+[migrations] Applying: 150_deferred_task_waits
+[migrations] Applied: 150_deferred_task_waits (0.2ms)
+[migrations] Applying: 151_repair_scheduled_task_required_params
+[migrations] Applied: 151_repair_scheduled_task_required_params (0.1ms)
+[migrations] Applying: 152_routing_decisions
+[migrations] Applied: 152_routing_decisions (4.3ms)
+[migrations] Applying: 153_deferred_task_wait_members
+[migrations] Applied: 153_deferred_task_wait_members (9.7ms)
+[migrations] Applying: 154_routing_source
+[migrations] Applied: 154_routing_source (1.8ms)
+[migrations] Applying: 155_extensions
+[migrations] Applied: 155_extensions (0.6ms)
+[migrations] Applying: 156_inbox_item_state_read_at
+[migrations] Applied: 156_inbox_item_state_read_at (1.8ms)
+[migrations] Applying: 157_defer_provenance_and_marker
+[migrations] Applied: 157_defer_provenance_and_marker (8.9ms)
+[migrations] Applying: 158_task_citations
+[migrations] Applied: 158_task_citations (0.2ms)
+[migrations] Applying: 159_extension_assets
+[migrations] Applied: 159_extension_assets (0.3ms)
+[migrations] Applying: 161_task_citations_general
+[migrations] Applied: 161_task_citations_general (2.3ms)
+[migrations] Applying: 162_slack_outcome_delivery_abandon
+[migrations] Applied: 162_slack_outcome_delivery_abandon (5.3ms)
+[migrations] Applying: 164_usage_cover_index_and_key_plans
+[migrations] Applied: 164_usage_cover_index_and_key_plans (4.3ms)
+[migrations] Applying: 166_approval_request_auto_cancellation
+[migrations] Applied: 166_approval_request_auto_cancellation (0.2ms)
+[migrations] Applying: 171_memory_retrieval_relevance
+[migrations] Applied: 171_memory_retrieval_relevance (1.9ms)
+[migrations] Applying: 175_workflow_runs_list_index
+[migrations] Applied: 175_workflow_runs_list_index (0.2ms)
+[migrations] Applying: 177_events_event_agent_created_index
+[migrations] Applied: 177_events_event_agent_created_index (0.1ms)
+[migrations] Applying: 182_task_human_free_flag
+[migrations] Applied: 182_task_human_free_flag (2.1ms)
+[migrations] Applying: 183_human_free_reclassify_queue
+[migrations] Applied: 183_human_free_reclassify_queue (0.2ms)
+[migrations] Applying: 184_model_catalog
+[migrations] Applied: 184_model_catalog (9.0ms)
+[migrations] Applying: 185_api_key_auth_failures
+[migrations] Applied: 185_api_key_auth_failures (5.3ms)
+[migrations] Applying: 186_api_key_seat_mismatch
+[migrations] Applied: 186_api_key_seat_mismatch (3.6ms)
+[migrations] Applying: 190_memory_rating_model
+[migrations] Applied: 190_memory_rating_model (2.1ms)
+[migrations] Applying: 191_context_versions_previous_index
+[migrations] Applied: 191_context_versions_previous_index (0.1ms)
+[migrations] Applying: 192_favorites_agent_fs_path
+[migrations] Applied: 192_favorites_agent_fs_path (6.1ms)
+[migrations] Applying: 194_memory_orphan_chunks
+[migrations] Applied: 194_memory_orphan_chunks (0.1ms)
+[migrations] Applying: 195_approval_request_approvals
+[migrations] Applied: 195_approval_request_approvals (3.8ms)
+[migrations] Applying: 196_skill_invocations
+[migrations] Applied: 196_skill_invocations (3.9ms)
+[migrations] Applying: 197_connector_codes
+[migrations] Applied: 197_connector_codes (0.2ms)
+[migrations] Applying: 198_permission_audit_guest
+[migrations] Applied: 198_permission_audit_guest (5.7ms)
+[migrations] Applying: 200_backfill_auto_memory_expiry
+[migrations] Applied: 200_backfill_auto_memory_expiry (0.1ms)
+[migrations] Applying: 201_workflow_replay_columns
+[migrations] Applied: 201_workflow_replay_columns (3.7ms)
+[migrations] Applying: 202_codex_oauth_device_flows
+[migrations] Applied: 202_codex_oauth_device_flows (0.2ms)
+[migrations] Applying: 203_workflow_run_parent_step
+[migrations] Applied: 203_workflow_run_parent_step (1.8ms)
+[migrations] Applying: 204_slack_inbound_receipts
+[migrations] Applied: 204_slack_inbound_receipts (0.5ms)
+[migrations] Applying: 205_favorites_per_dashboard_user
+[migrations] Applied: 205_favorites_per_dashboard_user (0.2ms)
+[migrations] Applying: 206_runtime_pools
+[migrations] Applied: 206_runtime_pools (25.7ms)
+[migrations] Applying: 207_runtime_session_tokens
+[migrations] Applied: 207_runtime_session_tokens (6.3ms)
+[migrations] Applying: 208_task_runtime_dispatch
+[migrations] Applied: 208_task_runtime_dispatch (1.9ms)
+[migrations] Applying: 213_script_connections_sql
+[migrations] Applied: 213_script_connections_sql (5.8ms)
+[migrations] Applying: 215_swarm_config_export_to_env
+[migrations] Applied: 215_swarm_config_export_to_env (2.0ms)
+[migrations] Applying: 216_task_resolved_effort
+[migrations] Applied: 216_task_resolved_effort (1.9ms)
+[migrations] Applying: 217_chat_sdk_state
+[migrations] Applied: 217_chat_sdk_state (1.0ms)
+[migrations] Applying: 219_relabel_pi_context_compactions
+[migrations] Applied: 219_relabel_pi_context_compactions (0.2ms)
+[migrations] Applying: 220_model_profiles
+[migrations] Applied: 220_model_profiles (4.7ms)
+[migrations] Applying: 227_inbox_item_state_last_read_at
+[migrations] Applied: 227_inbox_item_state_last_read_at (2.8ms)
+[migrations] Applying: 230_session_shares
+[migrations] Applied: 230_session_shares (0.3ms)
+[migrations] Applying: 231_slack_tasks_last_updated_index
+[migrations] Applied: 231_slack_tasks_last_updated_index (0.1ms)
+[migrations] Applying: 232_agent_session_tokens
+[migrations] Applied: 232_agent_session_tokens (7.2ms)
+[migrations] Applying: 233_script_run_session_tokens
+[migrations] Applied: 233_script_run_session_tokens (2.0ms)
+[migrations] Applying: 235_chat_relay_defer
+[migrations] Applied: 235_chat_relay_defer (1.0ms)
+[migrations] Applying: 237_session_inbox_cleanup
+[migrations] Applied: 237_session_inbox_cleanup (0.4ms)
+[migrations] Applying: 239_skills_fts
+[migrations] Applied: 239_skills_fts (0.6ms)
+[migrations] Applying: 240_workflow_run_parent_step_attempt
+[migrations] Applied: 240_workflow_run_parent_step_attempt (2.7ms)
+[migrations] Applying: 241_skills_meta_fts
+[migrations] Applied: 241_skills_meta_fts (0.7ms)
+[migrations] Applying: 242_workflow_idempotency_keys
+[migrations] Applied: 242_workflow_idempotency_keys (0.2ms)
+[migrations] Applying: 244_api_key_validation
+[migrations] Applied: 244_api_key_validation (4.6ms)
+[migrations] Applying: 245_script_executor
+[migrations] Applied: 245_script_executor (2.6ms)
+[migrations] Applying: 246_connector_code_kind
+[migrations] Applied: 246_connector_code_kind (2.6ms)
+[migrations] Applying: 247_workflow_run_triggered_by_agent
+[migrations] Applied: 247_workflow_run_triggered_by_agent (2.8ms)
+[migrations] Applying: 250_workflow_run_steps_runid_status_index
+[migrations] Applied: 250_workflow_run_steps_runid_status_index (0.2ms)
+[migrations] Applying: 253_session_summaries
+[migrations] Applied: 253_session_summaries (3.6ms)
+[migrations] Applying: 254_query_audit_indexes
+[migrations] Applied: 254_query_audit_indexes (0.3ms)
+[migrations] Applying: 256_agent_slack_icon
+[migrations] Applied: 256_agent_slack_icon (2.9ms)
+[migrations] Applying: 257_agent_tasks_fts
+[migrations] Applied: 257_agent_tasks_fts (0.8ms)
+[migrations] Applying: 259_session_summaries_open_tasks
+[migrations] Applied: 259_session_summaries_open_tasks (3.7ms)
+[migrations] Applying: 260_runtime_pool_cache
+[migrations] Applied: 260_runtime_pool_cache (3.1ms)
+[migrations] Applying: 262_session_visibility_indexes
+[migrations] Applied: 262_session_visibility_indexes (0.2ms)
+[migrations] Applying: 263_task_list_filter_index
+[migrations] Applied: 263_task_list_filter_index (0.1ms)
+[migrations] Applying: 264_slack_thread_cover_index
+[migrations] Applied: 264_slack_thread_cover_index (0.1ms)
+[migrations] Applying: 266_script_runs_source_task
+[migrations] Applied: 266_script_runs_source_task (6.1ms)
+[migrations] Applying: 269_pages_design_system
+[migrations] Applied: 269_pages_design_system (8.1ms)
+[migrations] Applying: 271_subscription_usage_model
+[migrations] Applied: 271_subscription_usage_model (0.1ms)
+[migrations] Applying: 274_improvements
+[migrations] Applied: 274_improvements (0.2ms)
+[migrations] Applying: 275_task_dispatched_by
+[migrations] Applied: 275_task_dispatched_by (3.0ms)
+[migrations] Applying: 278_slack_render_v2_reconcile
+[migrations] Applied: 278_slack_render_v2_reconcile (3.4ms)
+[migrations] Applying: 279_backfill_learning_expiry
+[migrations] Applied: 279_backfill_learning_expiry (0.1ms)
+[migrations] Applying: 281_model_profiles_pr2
+[migrations] Applied: 281_model_profiles_pr2 (5.8ms)
+[migrations] Applying: 283_workflow_run_definitions
+[migrations] Applied: 283_workflow_run_definitions (3.2ms)
+[migrations] Applying: 284_model_profile_fallbacks
+[migrations] Applied: 284_model_profile_fallbacks (4.9ms)
+[migrations] Applying: 289_automation_savings_daily
+[migrations] Applied: 289_automation_savings_daily (0.4ms)
+[migrations] Applying: 291_task_slack_participants
+[migrations] Applied: 291_task_slack_participants (2.5ms)
+[migrations] Applying: 293_savings_component_links
+[migrations] Applied: 293_savings_component_links (22.2ms)
+[migrations] Applying: 296_automation_savings_daily_read_index
+[migrations] Applied: 296_automation_savings_daily_read_index (0.1ms)
+[migrations] Applying: 297_import_ownership
+[migrations] Applied: 297_import_ownership (0.3ms)
+[migrations] Applying: 301_favorites_key_type
+[migrations] Applied: 301_favorites_key_type (8.1ms)
+[migrations] Applying: 302_checklist_items
+[migrations] Applied: 302_checklist_items (0.2ms)
+[migrations] Applying: 303_task_ui_specs
+[migrations] Applied: 303_task_ui_specs (0.2ms)
+[migrations] Applying: 306_provider_account_telemetry
+[migrations] Applied: 306_provider_account_telemetry (2.6ms)
+[migrations] Applying: 307_session_cost_credential_attribution
+[migrations] Applied: 307_session_cost_credential_attribution (37.6ms)
+[migrations] Applying: 310_session_logs_reasoning
+[migrations] Applied: 310_session_logs_reasoning (5.2ms)
+[migrations] Applying: 312_task_ui_action_runs_repeatable
+[migrations] Applied: 312_task_ui_action_runs_repeatable (14.7ms)
+[migrations] Applying: 314_model_groups
+[migrations] Applied: 314_model_groups (9.2ms)
+[migrations] Applying: 318_superseded_workflow_cut_backfill
+[migrations] Applied: 318_superseded_workflow_cut_backfill (1.1ms)
+[migrations] Applying: 319_user_fk_indexes
+[migrations] Applied: 319_user_fk_indexes (25.6ms)
+[migrations] Applying: 320_session_costs_kind
+[migrations] Applied: 320_session_costs_kind (7.9ms)
+[migrations] Applying: 321_user_merge_jobs
+[migrations] Applied: 321_user_merge_jobs (3.4ms)
+[migrations] Applying: 322_runtime_pool_workspace
+[migrations] Applied: 322_runtime_pool_workspace (5.9ms)
+[migrations] Applying: 323_slack_task_tree_visibility
+[migrations] Applied: 323_slack_task_tree_visibility (6.2ms)
+[migrations] Applying: 326_slack_reconcile_pages
+[migrations] Applied: 326_slack_reconcile_pages (3.3ms)
+[migrations] Applying: 327_mcp_event_subscriptions
+[migrations] Applied: 327_mcp_event_subscriptions (0.5ms)
+[migrations] Applying: 329_workflow_run_retention
+[migrations] Applied: 329_workflow_run_retention (0.2ms)
+[migrations] Applying: 330_request_composition
+[migrations] Applied: 330_request_composition (0.2ms)
+[migrations] Applying: 332_primitive_objects
+[migrations] Applied: 332_primitive_objects (0.3ms)
+[migrations] Applying: 334_agent_history
+[migrations] Applied: 334_agent_history (0.4ms)
+[migrations] Applying: 335_primitive_object_webhooks
+[migrations] Applied: 335_primitive_object_webhooks (3.4ms)
+[migrations] Applying: 337_favorites_session_hidden_key
+[migrations] Applied: 337_favorites_session_hidden_key (9.0ms)
+[migrations] Applying: 338_audit_agent_columns
+[migrations] Applied: 338_audit_agent_columns (25.1ms)
+[migrations] Applying: 339_deferred_event_waits
+[migrations] Applied: 339_deferred_event_waits (0.3ms)
+[migrations] Applying: 340_api_key_spend_cap
+[migrations] Applied: 340_api_key_spend_cap (3.3ms)
+[migrations] Applying: 341_user_token_expiry
+[migrations] Applied: 341_user_token_expiry (5.0ms)
+[secrets] Generated new encryption key at /home/claude/sandbox/swarm_hardening/telemetry_proof/run_lc/data/.encryption-key. BACK THIS FILE UP. Losing it means losing all encrypted secrets.
+[oauth-encryption] No plaintext OAuth secrets to migrate.
+[startup] New database: stored default retention (SESSION_LOG_RETENTION_DAYS=30, AGENT_LOG_RETENTION_DAYS=90, EVENTS_RETENTION_DAYS=90, CONTEXT_VERSIONS_KEEP_LATEST=100, SCRIPT_RUNS_RETENTION_DAYS=30). Rows past these limits are permanently deleted; change or delete each key in Settings → Configuration.
+[secret-registry] registered config=0 oauth=0 scriptApi=0 runtimeController=0 failed=0
+[startup] CAPABILITIES backfilled with previously always-on groups: scripts, slack, tracker, skills, repo (seeded a global swarm_config row; edit or delete it to override)
+[pricing] seed: 11315 new row(s); 11342 candidate(s); modelsdev=loaded
+[startup] Seeded 44 model profiles
+[startup] Seeded 4 model groups
+[rbac] seed sync: roles inserted=2, updated=0; permissions inserted=17, deleted=0; trigger=ensured; users backfilled=0
+[event-loop] stall 1030ms path=unknown statements=0 db_ms=0
+[seed:agent-fs-provision] created=0 updated=0 unchanged=0 preserved=0 retired=0 failed=0
+[event-loop] stall 1473ms path=unknown statements=0 db_ms=0
+[pricing-refresh] refreshed 9489 candidate row(s); inserted=1688; unchanged=7801; pruned=0; catalog=1104; added=0; expiredOverlays=0
+[seed:script] created=41 updated=0 unchanged=0 preserved=0 retired=0 failed=0
+[seed:skill] created=58 updated=0 unchanged=0 preserved=0 retired=0 failed=0
+[seed:workflow] created=11 updated=0 unchanged=0 preserved=0 retired=0 failed=0
+[seed:schedule] created=11 updated=0 unchanged=0 preserved=0 retired=0 failed=0
+[business-use] [2026-11-15T04:43:58.792Z] [ERROR] API key not provided. Set apiKey parameter or BUSINESS_USE_API_KEY environment variable
+[scratch-script-gc] Initial purge removed 0 scratch script row(s)
+MCP HTTP server running on http://localhost:13995/mcp
+Injected 5 swarm_config value(s) into process.env
+[Slack] Disabled via SLACK_DISABLE
+[Queue Stall Alarm] Starting (threshold 30m, interval 5m)
+[GitHub] Host: web https://github.com, API https://api.github.com
+[GitHub] Missing GITHUB_WEBHOOK_SECRET, GitHub integration disabled
+[GitLab] Integration disabled (GITLAB_WEBHOOK_SECRET not set)
+[AzureDevOps] Integration disabled (AZURE_DEVOPS_WEBHOOK_SECRET not set)
+[Bitbucket] Integration disabled (BITBUCKET_WEBHOOK_SECRET not set)
+[AgentMail] Missing AGENTMAIL_WEBHOOK_SECRET, AgentMail integration disabled
+[Linear] Integration disabled or LINEAR_CLIENT_ID not set
+[Jira] Integration disabled or JIRA_CLIENT_ID not set
+[chat-sdk] Disabled (CHAT_SDK_ENABLED is not true)
+[OAuth Keepalive] Starting (interval 720min, buffer 10min)
+[oauth-refresh-sweep] Starting (interval 15min, first run in 60s)
+[db-retention] starting (session_logs=30, agent_log=90, events=90, context_versions=100, script_runs=30, workflow_runs=disabled, dryRun=false)
+[boot-scrub-v14] starting
+boot-scrub-v14: session_logs scanned=0 changed=0 skipped_invalid_json=0
+boot-scrub-v14: agent_tasks scanned=0 changed=0 skipped_invalid_json=0
+boot-scrub-v14: agent_memory scanned=0 changed=0 skipped_invalid_json=0
+boot-scrub-v14: agent_memory_version scanned=0 changed=0 skipped_invalid_json=0
+boot-scrub-v14: events scanned=0 changed=0 skipped_invalid_json=0
+boot-scrub-v14: workflow_run_steps scanned=0 changed=0 skipped_invalid_json=0
+boot-scrub-v14: workflow_runs scanned=0 changed=0 skipped_invalid_json=0
+boot-scrub-v14: kv_entries scanned=0 changed=0 skipped_invalid_json=0
+[boot-scrub-v14] complete
+[boot-args-schema] rewrote 0 of 41 script schemas
+[session-source-backfill] complete scanned=0 moved=0 skipped=0 failed=0
+[boot-reembed-scripts] 41 scripts missing embeddings
+[boot-reembed-scripts] skipped: no working embedding provider (missing OpenAI key?)
+[HTTP] ✓ GET /health → 200 (9.4ms)
+[HTTP] ✓ POST /api/agents/pilot-worker-1/token → 200 (94.9ms)
+[HTTP] ✓ POST /api/agents → 200 (6.0ms)
+[HTTP] ✓ POST /api/agents → 200 (1.5ms)
+[HTTP] ✓ POST /api/tasks → 201 (15.0ms)
+[HTTP] ✓ GET /api/poll → 200 (8.1ms)
+[HTTP] ✓ POST /api/tasks/3b0d5791-576b-49d8-9ff4-94e957d12841/finish → 200 (8.6ms)
+[HTTP] ✓ GET /api/tasks?limit=[REDACTED] → 200 (3.2ms)
+[HTTP] ✓ POST /api/tasks → 201 (8.9ms)
+[HTTP] ✓ GET /api/agents → 200 (1.8ms)
+[HTTP] ⚠️ PUT /api/config → 403 (2.1ms)
+[HTTP] ✓ GET /api/budgets → 200 (0.7ms)
+Shutting down HTTP server...
+[drain] off (API_DRAIN_MAX_MS is 0 or unset): closing without waiting for handoffs
+[OAuth Keepalive] Stopped
+MCP HTTP server closed, and database connection closed

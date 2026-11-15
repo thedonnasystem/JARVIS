@@ -1,0 +1,2 @@
+[FAIL] C20  worker needs no root at runtime: derived image, numeric uid, no gosu/chown, pre-owned tmpfs  entrypoint contains forbidden construct 'gosu'
+RESULT: FAIL  failed=1 warnings=2

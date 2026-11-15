@@ -1,0 +1,26 @@
+== Phase A: API telemetry ON (to loopback sink) so an install id exists in the DB
+   sink events so far: 3
+== Phase B: API restarted with ANONYMIZED_TELEMETRY=false (same DB); mint per-agent worker token
+   mint response keys: ['agentCreated', 'agentId', 'expiresAt', 'plaintext', 'tokenId']
+   worker token present: yes, prefix=aseph
+   worker token on admin-only route /api/agents/pilot-worker-1/token (POST) -> 403
+   worker token on /api/config?scope=global&includeSecrets=true -> 200
+   no key -> 401
+== B1 CONTROL: worker flag UNSET, TEMPLATE_ID=official/coder (expect attempts to leave)
+   [control] connect() destinations: 2; non-loopback: 0 []
+   [control] sink DIRECT_LOOPBACK_REQUEST: 2
+         POST /v1/events {"schema_version":2,"product":"agent-swarm","event":"session.started","occurred_at":"2026-11-15T04:41:25.182Z","source":"wor
+         POST /v1/events {"schema_version":2,"product":"agent-swarm","event":"session.ended","occurred_at":"2026-11-15T04:41:53.052Z","source":"worke
+   [control] sink PROXIED_CONNECT: 1
+         templates.agent-swarm.dev:443
+== B2 HARDENED: worker ANONYMIZED_TELEMETRY=false, no TEMPLATE_ID, TEMPLATE_REGISTRY_URL blank
+   [hardened] connect() destinations: 1; non-loopback: 0 []
+   [hardened] sink: nothing received
+worker boot log tail (hardened):
+[env-reload] Loaded 11 config entries from API
+[boot] waiting for CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY (attempt 4, retry in 10000ms, provider=claude) — Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or route Claude Code through a gateway (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY), Microsoft Foundry (CLAUDE_CODE_USE_FOUNDRY), Amazon Bedrock (CLAUDE_CODE_USE_BEDROCK), or Google Vertex AI (CLAUDE_CODE_USE_VERTEX).
+[env-reload] Loaded 11 config entries from API
+[boot] waiting for CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY (attempt 5, retry in 10000ms, provider=claude) — Set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or route Claude Code through a gateway (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY), Microsoft Foundry (CLAUDE_CODE_USE_FOUNDRY), Amazon Bedrock (CLAUDE_CODE_USE_BEDROCK), or Google Vertex AI (CLAUDE_CODE_USE_VERTEX).
+[worker] Received SIGTERM, shutting down...
+[worker] Marking agent as offline...
+[worker] Agent marked as offline

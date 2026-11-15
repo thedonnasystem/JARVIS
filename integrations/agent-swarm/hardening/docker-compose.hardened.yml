@@ -1,0 +1,216 @@
+# Agent Swarm, hardened PILOT stack for Fendezy HQ. ONE api + ONE worker. NOT USED ANYWHERE YET.
+# Derived from desplega-ai/agent-swarm docker-compose.example.yml (commit 0b75197, v2.13.2).
+# Removed vs the example: minio, minio-init, agent-fs, lead, workers 2..N, caddy, every published worker port,
+# pull_policy: always, :latest, shared admin API_KEY on workers, GITHUB_TOKEN, AWS mounts.
+#
+# STATUS: statically checked (verify_swarm_controls.py + `docker compose config`). NEVER started: no Docker daemon
+# was available. Anything marked UNVERIFIED below must be proven on a real Docker host (see SWARM_PILOT_GATE.md).
+#
+# Secrets live OUTSIDE the repo: export FENDEZY_SECRETS_DIR=/some/dir/outside/repo (chmod 700) and put
+# api.env / worker.env there (templates: secrets.example/). Only placeholder NAMES are in this repo.
+#
+# WORKER GATE (finding of 2026-11-15, see SWARM_PILOT_GATE.md section 5): a per-agent worker token reaches ~313 of 509 API
+# operations upstream (create tasks, set budgets, schedules, scripts, read unmasked config secrets, ...). Swarm has no switch
+# for that and we do not fork it, so the worker is NOT on the API's network. Its only door is `worker-gate`
+# (config/worker_gate.py), a default-deny allow-list proxy (54 operations, no task creation, includeSecrets forced false).
+#   worker_net (internal): worker, worker-gate, egress-proxy      api_net (internal): api, worker-gate, api-ingress
+# NON-ROOT WORKER (finding of 2026-11-15): the worker image is derived (worker/Dockerfile.worker-hardened) so that nothing
+# needs root at runtime: numeric uid 1001, tmpfs HOME seeded from the image, pre-owned volume, no gosu. Built out-of-band.
+#
+# EGRESS ALLOW-LIST (the whole design): the only host a pilot container may reach on the internet is
+#     api.anthropic.com:443      (model API, via the egress-proxy sidecar, HTTPS CONNECT only)
+# Blocked by construction: models.dev, proxy.desplega.sh, templates.agent-swarm.dev, app.agent-swarm.dev,
+# statsig/sentry, ghcr.io (images are pulled out-of-band by digest), github.com, everything else.
+# The api and worker sit ONLY on `internal: true` networks (no route out). The sole path out is the proxy (worker only).
+# If you use another provider, change exactly one host in config/squid.conf and re-run the verifier.
+
+name: swarm-pilot
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pull_policy: never          # images are loaded by digest out-of-band; compose must never pull a moving tag
+  restart: "no"               # a crash must not silently re-run work and spend money
+  init: true
+  privileged: false
+
+services:
+  api:
+    <<: *hardened
+    # Placeholder digest (all zeros). Replace with the digest you verified; verifier --strict refuses placeholders.
+    image: ghcr.io/desplega-ai/agent-swarm:2.13.2@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    # UNVERIFIED: the stock image has no USER (runs as root). A numeric non-root uid is forced here; the SQLite
+    # tmpfs below is created owned by that uid so the DB is writable. Boot must be confirmed on a Docker host.
+    user: "${API_UID:-10001}:${API_GID:-10001}"
+    env_file:
+      - ${FENDEZY_SECRETS_DIR:?set FENDEZY_SECRETS_DIR to a directory outside the repo}/api.env   # API_KEY (operator key), SECRETS_ENCRYPTION_KEY
+    environment:
+      PORT: "3013"
+      DATABASE_PATH: /app/data/db.sqlite
+      ANONYMIZED_TELEMETRY: "false"           # verified in source + live on API (POC report) and worker (this run)
+      IMPROVEMENTS_ENABLED: "false"           # vendor feedback channel off (the install id is sent even with telemetry off)
+      BUSINESS_USE_API_KEY: ""                # SDK stays a no-op
+      BUSINESS_USE_URL: ""
+      HEARTBEAT_DISABLE: "true"               # src/http/index.ts: heartbeat triage never starts
+      OAUTH_KEEPALIVE_DISABLE: "true"
+      OAUTH_REFRESH_SWEEP_DISABLE: "true"
+      SLACK_DISABLE: "true"
+      MEMORY_RATERS: ""                       # empty selects NoopRater (src/be/memory/raters/registry.ts)
+      # Drops scheduling, workflows, slack, tracker, scripts, pages, skills, repo. No schedules, no triggers, no integrations.
+      CAPABILITIES: "core,task-pool,config,mcp,profiles,memory,metrics,kv"
+      RBAC_ENABLED: "true"
+      MCP_BASE_URL: http://api:3013
+      # No model key, no GitHub, no Slack, no OPENAI/OPENROUTER here. The API holds no provider credential.
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/data:size=256m,uid=${API_UID:-10001},gid=${API_GID:-10001},mode=0700   # EPHEMERAL db: do not restart api mid-pilot
+    networks: [api_net]
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.0
+    pids_limit: 256                           # UNVERIFIED sizing: idle API measured ~29 threads upstream; scripts are off here
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3013/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    <<: *hardened
+    # DERIVED image (worker/Dockerfile.worker-hardened), built out-of-band from the pinned stock digest; reference it by its
+    # image id. Placeholder id (all zeros): verifier --strict refuses it.
+    image: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    # No root phase: numeric uid/gid that the Dockerfile asserts at build time (`id -u worker` = 1001). The stock entrypoint
+    # (root, chown, gosu, /etc/gitconfig) is replaced by entrypoint-hardened.sh. UNVERIFIED on a Docker host: boot with
+    # read_only + cap_drop ALL + this uid has been emulated (tests/run_entrypoint_emulation.sh) but never run in Docker.
+    user: "${WORKER_UID:-1001}:${WORKER_GID:-1001}"
+    depends_on:
+      worker-gate: {condition: service_healthy}
+    env_file:
+      - ${FENDEZY_SECRETS_DIR:?set FENDEZY_SECRETS_DIR to a directory outside the repo}/worker.env  # API_KEY=<per-agent worker token>, ANTHROPIC_API_KEY=<dedicated capped key>
+    environment:
+      AGENT_ID: pilot-worker-1                # the worker token is minted for exactly this agent id; worker-gate pins the same id
+      AGENT_ROLE: worker
+      HARNESS_PROVIDER: claude
+      MCP_BASE_URL: http://worker-gate:3014   # the filtering gate, never http://api:3013 (entrypoint refuses anything else)
+      ANONYMIZED_TELEMETRY: "false"           # worker path verified: src/telemetry.ts emit() gate + live strace (see report)
+      BUSINESS_USE_API_KEY: ""
+      BUSINESS_USE_URL: ""
+      IMPROVEMENTS_ENABLED: "false"
+      MEMORY_RATERS: ""
+      SLACK_DISABLE: "true"
+      TEMPLATE_ID: ""                         # runner.ts only contacts the template registry when TEMPLATE_ID is set
+      TEMPLATE_REGISTRY_URL: http://127.0.0.1:9   # belt and braces: image default is https://templates.agent-swarm.dev
+      # Claude Code CLI's own phone-home traffic
+      DISABLE_TELEMETRY: "1"
+      DISABLE_ERROR_REPORTING: "1"
+      DISABLE_AUTOUPDATER: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      # The only way out: the allow-listing proxy. The API side is reached only through worker-gate (no proxy).
+      HTTPS_PROXY: http://egress-proxy:3128
+      HTTP_PROXY: http://egress-proxy:3128
+      NO_PROXY: worker-gate,localhost,127.0.0.1
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+      - /logs:size=64m,uid=${WORKER_UID:-1001},gid=${WORKER_GID:-1001},mode=0700
+      # HOME is a tmpfs owned by the runtime uid; entrypoint-hardened.sh seeds it from /opt/worker-home-seed (no root, no chown).
+      - /home/worker:size=512m,uid=${WORKER_UID:-1001},gid=${WORKER_GID:-1001},mode=0700
+    volumes:
+      - swarm_worker_scratch:/workspace       # the ONE writable persistent location; a NEW named volume inherits the image's 1001 ownership. No host paths, no docker.sock.
+    networks: [worker_net]
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.5
+    pids_limit: 512
+    stop_grace_period: 20s
+
+  # Default-deny allow-list proxy between worker and API. Python stdlib only; source mounted from config/worker_gate.py.
+  worker-gate:
+    <<: *hardened
+    image: python:3.12-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000   # UNVERIFIED image choice; any image with python3 >= 3.10 works
+    user: "10002:10002"
+    command: ["python3", "-I", "/gate/worker_gate.py"]
+    depends_on:
+      api: {condition: service_healthy}
+    configs:
+      - source: worker_gate_py
+        target: /gate/worker_gate.py
+    environment:
+      GATE_AGENT_ID: pilot-worker-1           # MUST equal worker AGENT_ID (verifier C19 checks)
+      GATE_UPSTREAM: api:3013
+      GATE_LISTEN: 0.0.0.0:3014
+      GATE_LOG: stdout
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks: [worker_net, api_net]           # the ONLY service attached to both; the worker cannot resolve or route to `api`
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "python3", "-I", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:3014/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  egress-proxy:
+    <<: *hardened
+    image: ubuntu/squid:6.6-24.04_edge@sha256:0000000000000000000000000000000000000000000000000000000000000000   # UNVERIFIED image choice; semantics are in config/squid.conf
+    user: "13:13"
+    configs:
+      - source: squid_conf
+        target: /etc/squid/squid.conf
+    tmpfs:
+      - /var/spool/squid:size=16m,uid=13,gid=13
+      - /var/log/squid:size=64m,uid=13,gid=13
+      - /var/run:size=4m,uid=13,gid=13
+    networks: [worker_net, egress]            # the ONLY service on the `egress` network; the API is not on worker_net
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+
+  # Dumb TCP-ish reverse proxy so HQ on the host can reach the API on 127.0.0.1 only. A published port is
+  # impossible from an internal-only network, so this is the single host-facing door.
+  api-ingress:
+    <<: *hardened
+    image: nginxinc/nginx-unprivileged:1.27-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    user: "101:101"
+    depends_on:
+      api: {condition: service_healthy}
+    configs:
+      - source: ingress_conf
+        target: /etc/nginx/nginx.conf
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    ports:
+      - "127.0.0.1:${HQ_API_PORT:-13013}:8080"   # loopback only; never 0.0.0.0
+    networks: [api_net, hq_edge]              # operator-only door; the worker is not on api_net, so it cannot reach this
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+
+configs:
+  squid_conf:
+    file: ./config/squid.conf
+  ingress_conf:
+    file: ./config/nginx-ingress.conf
+  worker_gate_py:
+    file: ./config/worker_gate.py
+
+volumes:
+  swarm_worker_scratch: {}
+
+networks:
+  api_net:
+    internal: true                            # api, worker-gate, api-ingress. No route to the internet, the host, or the worker.
+  worker_net:
+    internal: true                            # worker, worker-gate, egress-proxy. The API is NOT here.
+  egress: {}                                  # proxy only
+  hq_edge: {}                                 # ingress only (needed so the loopback port can be published)
