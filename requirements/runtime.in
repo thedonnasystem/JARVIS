@@ -1,0 +1,13 @@
+# Runtime dependencies that bot.py / hq_*.py actually import (audited from `import` statements across *.py).
+# Source of truth for requirements/runtime.lock. Do not install from this file; install the lock (see HARDENING_NOTES.md).
+# Same constraints as the repo-root requirements.txt (which Railway still builds from), plus `cryptography`, which
+# hq_backup.py imports but requirements.txt never declared.
+anthropic>=0.40.0
+python-telegram-bot[job-queue]>=21.0
+python-dotenv>=1.0.0
+claude-agent-sdk>=0.1.0
+psycopg2-binary>=2.9.9
+# PROPRIETARY (Bitwarden SDK License, internal use only, needs counsel; see LICENSING_AND_DEPENDENCY_REVIEW.md). Flagged, not removed.
+bitwarden-sdk>=2.1.0
+pywebpush>=2.0.0
+cryptography>=42.0

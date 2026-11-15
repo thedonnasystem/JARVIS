@@ -1,0 +1,10 @@
+# Review ownership for the places where a mistake is hardest to undo. Pair with "Require review from Code Owners" in branch protection
+# (owner setting, not changed here). The owner is the repository owner account.
+/migrations/            @thedonnasystem
+/dist/APPLY_ALL.sql     @thedonnasystem
+/ops/                   @thedonnasystem
+/.github/               @thedonnasystem
+/requirements/          @thedonnasystem
+/requirements.txt       @thedonnasystem
+/.gitleaks.toml         @thedonnasystem
+/Procfile               @thedonnasystem

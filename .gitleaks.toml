@@ -1,0 +1,57 @@
+# gitleaks config (CI job `secret-scan`). Default ruleset + exact-path+regex allowlists for known synthetic/public values.
+# Every entry below was reviewed on Nov 15 2026 against a full-history scan (207 commits, all branches): no real secret found.
+# Rules for adding an entry: exact file path (anchored, no wildcards) AND a regex on the line (regexTarget=line); never a directory,
+# never a rule-wide or path-only allowlist; say why it is not a secret. New findings must be fixed (rotate + remove), not allowlisted.
+title = "JARVIS / Fendezy HQ"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Swarm hardening evidence log: probe seeded FAKE_GLOBAL_SECRET with a throwaway value (stored form shown)"
+condition = "AND"
+paths = ['''^integrations/agent-swarm/hardening/evidence/dbquery_secret_probe\.log$''']
+regexTarget = "line"
+regexes = ['''FAKE_GLOBAL_SECRET''']
+
+[[allowlists]]
+description = "Swarm worker telemetry proof: throwaway API key for a local stub, harness-only"
+condition = "AND"
+paths = ['''^integrations/agent-swarm/hardening/telemetry_proof/run_worker_proof\.sh$''']
+regexTarget = "line"
+regexes = ['''BUSINESS_USE_API_KEY=''']
+
+[[allowlists]]
+description = "Swarm entrypoint emulation test: literal dummy API_KEY values passed to a stubbed entrypoint"
+condition = "AND"
+paths = ['''^integrations/agent-swarm/hardening/tests/run_entrypoint_emulation\.sh$''']
+regexTarget = "line"
+regexes = ['''API_KEY=''']
+
+[[allowlists]]
+description = "SQL test: deliberately credential-shaped string to prove set_venture_config refuses it"
+condition = "AND"
+paths = ['''^sqltests/venture_deals_replies_check\.sql$''']
+regexTarget = "line"
+regexes = ['''C6 credential accepted''']
+
+[[allowlists]]
+description = "Unit test: deliberately credential-shaped string to prove save_procedure refuses it"
+condition = "AND"
+paths = ['''^test_hq_ventures\.py$''']
+regexTarget = "line"
+regexes = ['''Use token: .* to sign in to the portal''']
+
+[[allowlists]]
+description = "Supabase publishable key, public by design (webapp/app.js header comment); data access is via owner-checked RPCs"
+condition = "AND"
+paths = ['''^webapp/app\.js$''', '''^webapp/apply/apply\.js$''']
+regexTarget = "line"
+regexes = ['''(?:SB_KEY|KEY) = 'sb_publishable_''']
+
+[[allowlists]]
+description = "Vendored minified supabase-js bundle (first line); false positive on library source"
+condition = "AND"
+paths = ['''^webapp/vendor/supabase\.js$''']
+regexTarget = "line"
+regexes = ['''exports\.supabase=t\(\)''']
