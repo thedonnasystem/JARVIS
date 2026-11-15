@@ -38,6 +38,7 @@ from dotenv import load_dotenv
 
 import hq
 import hq_engine
+import hq_executor
 import hq_commands
 import hq_meter
 import hq_web
@@ -2575,6 +2576,8 @@ def main() -> None:
     if hq.hq_enabled():
         app.job_queue.run_repeating(hq.deliver_owner_messages, interval=60, first=15, name="hq-owner-messages")
         app.job_queue.run_repeating(hq_engine.tick, interval=300, first=45, name="hq-engine")
+        app.job_queue.run_repeating(hq_executor.expire_stale_job, interval=hq_executor.EXPIRE_EVERY_SECONDS, first=120, name="hq-executor-expire",
+                                    job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 60})
         hq_web.configure(jarvis_reply)
         app.job_queue.run_repeating(hq_web.poll, interval=hq_web.POLL_SECONDS, first=20, name="hq-web",
                                     job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 5})

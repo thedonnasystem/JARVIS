@@ -1,6 +1,7 @@
 import unittest, urllib.error, io, json
 from unittest import mock
 import hq, hq_engine as E
+from datetime import datetime, timezone
 
 
 def http_err(code, msg):
@@ -213,13 +214,68 @@ class T(unittest.TestCase):
 
     def test_first_tick_after_start_releases_orphans(self):
         b = Board()
-        E._started = False
+        E._started = False; E._llm_recovered = False
         with mock.patch.object(hq, "_request", b):
             E._recover_stale()
             first = list(b.patches)
             E._recover_stale()
         self.assertTrue(any("llm_calls?status=eq.reserved" in p[0] and p[1]["status"] == "released" for p in first))
         self.assertEqual(sum("llm_calls" in p[0] for p in b.patches), 1)  # only on the first tick
+
+    def _recover_with(self, get_runs):
+        b = Board()
+        orig = b.__call__
+        def req(method, path, body=None, timeout=30, prefer=None):
+            if method == "GET" and path.startswith("/rest/v1/executor_runs"): return get_runs(path)
+            return orig(method, path, body, timeout, prefer)
+        E._started = False; E._llm_recovered = False
+        with mock.patch.object(hq, "_request", req):
+            E._recover_stale()
+        return b
+
+    def test_restart_keeps_running_executor_reservations(self):
+        b = self._recover_with(lambda p: [{"llm_call_id": "bbb"}, {"llm_call_id": "aaa"}, {"llm_call_id": "aaa"}])
+        rel = [p[0] for p in b.patches if "llm_calls" in p[0]]
+        self.assertEqual(len(rel), 1); self.assertIn("&id=not.in.(aaa,bbb)", rel[0])
+
+    def test_restart_without_executor_tables_still_releases_orphans(self):
+        def missing(p): raise http_err(404, "relation does not exist")
+        b = self._recover_with(missing)
+        rel = [p[0] for p in b.patches if "llm_calls" in p[0]]
+        self.assertEqual(len(rel), 1); self.assertNotIn("not.in", rel[0]); self.assertTrue(E._started)
+
+    def test_unreadable_runs_do_not_reuse_startup_grace(self):
+        # regression: _running_executor_calls() -> None used to leave _started False, so every tick requeued fresh 'doing' tasks
+        b = Board()
+        E._started = False; E._llm_recovered = False
+        with mock.patch.object(hq, "_request", b), mock.patch.object(E, "_running_executor_calls", return_value=None):
+            E._recover_stale()
+            E._recover_stale()
+        tp = [p[0] for p in b.patches if "tasks?status=eq.doing" in p[0]]
+        self.assertEqual(len(tp), 2)
+        def mins_ago(path):
+            c = path.split("updated_at=lt.")[1]
+            return (datetime.now(timezone.utc) - datetime.strptime(c, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)).total_seconds() / 60
+        self.assertLess(mins_ago(tp[0]), E.STARTUP_GRACE_MINUTES + 0.5)
+        self.assertGreater(mins_ago(tp[1]), E.STALE_MINUTES - 0.5)   # second call: normal stale cutoff, fresh tasks untouched
+        self.assertFalse(any("llm_calls" in p[0] for p in b.patches))
+        self.assertTrue(E._started); self.assertFalse(E._llm_recovered)
+
+    def test_only_404_or_pgrst205_means_table_absent(self):
+        for code in (400, 401, 403, 500):
+            with mock.patch.object(hq, "_request", side_effect=http_err(code, "bad")):
+                self.assertIsNone(E._running_executor_calls(), code)
+        with mock.patch.object(hq, "_request", side_effect=http_err(404, "x")):
+            self.assertEqual(E._running_executor_calls(), [])
+        with mock.patch.object(hq, "_request", side_effect=http_err(400, "PGRST205 table not in schema cache")):
+            self.assertEqual(E._running_executor_calls(), [])
+
+    def test_restart_fails_closed_and_retries_when_runs_unreadable(self):
+        def broken(p): raise http_err(500, "boom")
+        b = self._recover_with(broken)
+        self.assertFalse(any("llm_calls" in p[0] for p in b.patches)); self.assertFalse(E._llm_recovered)
+        b = self._recover_with(lambda p: [])   # next tick, readable again
+        self.assertTrue(any("llm_calls" in p[0] for p in b.patches)); self.assertTrue(E._llm_recovered)
 
     def test_unblock_matches_title_with_colons(self):
         b = Board(tasks=[{"id": "t1", "title": "Finish: call rules"}, {"id": "t2", "title": "Other"}])
