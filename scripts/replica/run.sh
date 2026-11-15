@@ -58,4 +58,14 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do   # the whole or
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after rollback: $f"; exit 1; }
 done
 echo "rollback drill OK (and the migrations re-apply cleanly afterwards)"
+echo "rollback drill: ops/rollback_insurance_classifier.sql restores the strict guards and removes the classifier objects (twice = idempotent), then everything re-applies"
+psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/ops/rollback_insurance_classifier.sql" >/dev/null 2>&1 || { echo "INSURANCE ROLLBACK FAILED to run"; exit 1; }
+psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/ops/rollback_insurance_classifier.sql" >/dev/null 2>&1 || { echo "INSURANCE ROLLBACK is not idempotent"; exit 1; }
+ic="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and proname in ('ws_classify_text','ws_fold_text','ws_leet_text','ws_health_extra_hit','ws_personal_context_hit','ws_identifier_hit','ws_add_approved_term','ws_remove_approved_term','ws_terms_immutable')) || '/' || coalesce(to_regclass('public.ws_approved_terms')::text, 'none') || '/' || (position('ws_classify_text' in pg_get_functiondef('public.ws_guard()'::regprocedure)) + position('ws_classify_text' in pg_get_functiondef('public.ffm_guard()'::regprocedure)))")"
+[ "$ic" = "0/none/0" ] || { echo "INSURANCE ROLLBACK DRILL FAILED: $ic"; exit 1; }
+psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -c "do \$\$ declare w uuid; begin insert into public.client_workspaces (slug, name, vertical) values ('ic-drill', 'Drill', 'insurance') returning id into w; begin insert into public.ws_campaigns (workspace_id, name) values (w, 'Critical illness insurance'); raise exception 'DRILL: old strict guard let health wording through'; exception when sqlstate 'P0001' then if sqlerrm like 'DRILL%' then raise; end if; end; delete from public.client_workspaces where id = w; end \$\$;" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "INSURANCE ROLLBACK DRILL FAILED: strict guard not restored"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after insurance rollback: $f"; exit 1; }
+done
+echo "insurance rollback drill OK (and the migrations re-apply cleanly afterwards)"
 echo "REPLICA OK"

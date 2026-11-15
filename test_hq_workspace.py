@@ -29,5 +29,19 @@ class Screen(unittest.TestCase):
                 W.add_lead("w", None, "n")
 
 
+class Classify(unittest.TestCase):
+    def test_allowed_and_blocked_shapes(self):
+        with mock.patch.object(W, "_rpc", return_value={"allowed": True, "reasons": ["approved_product_term"]}) as m:
+            self.assertEqual(W.classify_text("health insurance", "ws-1"), {"allowed": True, "reasons": ["approved_product_term"]})
+        self.assertEqual(m.call_args[0], ("ws_classify_text", {"p_text": "health insurance", "p_ws": "ws-1"}))
+        with mock.patch.object(W, "_rpc", return_value={"allowed": False, "reasons": ["health", "health:residual"]}):
+            self.assertEqual(W.classify_text("x")["allowed"], False)
+
+    def test_fails_closed_on_odd_replies(self):
+        for bad in (None, [], "true", {"reasons": []}, {"allowed": "true"}, {"allowed": 1}):
+            with mock.patch.object(W, "_rpc", return_value=bad):
+                self.assertFalse(W.classify_text("x", "w")["allowed"], bad)
+
+
 if __name__ == "__main__":
     unittest.main()

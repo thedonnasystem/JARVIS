@@ -36,4 +36,5 @@
 20261118_ffm_onboarding_v1.sql
 20261119_ffm_consent_v1.sql
 20261119_backup_exclude_client_pii_v1.sql
+20261122_insurance_classifier_v1.sql
 20261112_lockdown_v1.sql
