@@ -1,0 +1,13 @@
+#!/bin/bash
+# stub agent-swarm: reports the privilege state the real worker would inherit, and probes what it can write
+echo "stub agent-swarm role=$1"
+echo "uid=$(id -u) gid=$(id -g) cwd=$PWD"
+grep -E '^(CapEff|CapBnd|NoNewPrivs)' /proc/self/status
+for p in /usr/bin/x /etc/x /usr/local/bin/x /opt/worker-home-seed/x; do
+  if ( : > "$p" ) 2>/dev/null; then echo "WRITABLE $p"; rm -f "$p"; else echo "readonly $p"; fi
+done
+for p in "$HOME/x" "$WORKSPACE_DIR/x" "$LOGS_DIR/x" /tmp/x; do
+  if ( : > "$p" ) 2>/dev/null; then echo "writable $p"; rm -f "$p"; else echo "NOT-WRITABLE $p"; fi
+done
+echo "HOME-listing: $(ls -A "$HOME" | tr '\n' ' ')"
+echo "mcp.json mode: $(stat -c %a "$WORKSPACE_DIR/.mcp.json")"

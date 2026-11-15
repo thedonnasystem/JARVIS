@@ -1,0 +1,11 @@
+mint worker token: 200 ['agentCreated', 'agentId', 'expiresAt', 'plaintext', 'tokenId']
+worker registers with its token: 200
+worker token tries to register a LEAD agent: 200 {'id': 'pilot-worker-1', 'name': 'pilot-worker', 'isLead': False, 'status': 'idle', 'runtimePoolId': None, 'runtimeProvi
+operator creates task: 201 pending
+worker polls with token: 200 {'trigger': {'type': 'task_assigned', 'taskId': '3b0d5791-576b-49d8-9ff4-94e957d12841', 't
+worker finishes: 200
+tasks after finish: [('completed', 'stub task')]
+worker token creates a new task: 201
+worker token lists agents: 200
+worker token writes global config: 403
+GET /api/budgets (operator): 200 {'budgets': []}

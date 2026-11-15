@@ -1,0 +1,139 @@
+diff --git a/bot.py b/bot.py
+index 40a670b..7a583a7 100644
+--- a/bot.py
++++ b/bot.py
+@@ -38,6 +38,7 @@ from dotenv import load_dotenv
+ 
+ import hq
+ import hq_engine
++import hq_executor
+ import hq_commands
+ import hq_meter
+ import hq_web
+@@ -2575,6 +2576,8 @@ def main() -> None:
+     if hq.hq_enabled():
+         app.job_queue.run_repeating(hq.deliver_owner_messages, interval=60, first=15, name="hq-owner-messages")
+         app.job_queue.run_repeating(hq_engine.tick, interval=300, first=45, name="hq-engine")
++        app.job_queue.run_repeating(hq_executor.expire_stale_job, interval=hq_executor.EXPIRE_EVERY_SECONDS, first=120, name="hq-executor-expire",
++                                    job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 60})
+         hq_web.configure(jarvis_reply)
+         app.job_queue.run_repeating(hq_web.poll, interval=hq_web.POLL_SECONDS, first=20, name="hq-web",
+                                     job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 5})
+diff --git a/hq_executor.py b/hq_executor.py
+index f3cdd03..9799b0c 100644
+--- a/hq_executor.py
++++ b/hq_executor.py
+@@ -6,11 +6,18 @@ HQ stays the only authority for money, permissions and the kill switch. An execu
+   3. executor_complete -> HQ settles the real cost; a crash is settled as failed, never left reserved
+ The work callable is injected, so the executor is replaceable and this module can be tested without one.
+ """
++import asyncio
+ import hashlib
+ import json
++import logging
++import urllib.error
+ 
+ import hq
+ 
++logger = logging.getLogger(__name__)
++EXPIRE_EVERY_SECONDS = 600   # how often the bot settles stale executor runs
++_warned_missing = False
++
+ 
+ class ExecutorRefused(Exception):
+     """HQ said no. Nothing was executed and nothing was reserved."""
+@@ -55,3 +62,33 @@ def run(executor: str, agent: str, task_id: str, est_cents: int, purpose: str, w
+ 
+ def expire_stale(minutes: int = 60) -> int:
+     return int(_rpc("executor_expire_stale", {"p_minutes": int(minutes)}))
++
++
++def expire_stale_sync(minutes: int = 60):
++    """Settle executor runs stuck in 'running' (charges the full reservation, so a hung worker cannot hide spend).
++    Never raises. Returns the number settled, or None if it could not run (HQ off, migration not applied, network)."""
++    global _warned_missing
++    if not hq.hq_enabled():
++        return None
++    try:
++        n = expire_stale(minutes)
++    except urllib.error.HTTPError as e:
++        if e.code in (400, 404):   # executor_expire_stale not installed yet (migration 20261117_executor_gate_v1 not applied): a quiet no-op
++            if not _warned_missing:
++                logger.info("executor_expire_stale is not installed yet; skipping (HTTP %s)", e.code)
++                _warned_missing = True
++        else:
++            logger.warning("executor_expire_stale failed: HTTP %s", e.code)
++        return None
++    except Exception:
++        logger.exception("executor_expire_stale failed")
++        return None
++    if n:
++        logger.warning("settled %s stale executor run(s) at their full reservation", n)
++    return n
++
++
++async def expire_stale_job(context) -> None:
++    """Repeating job (python-telegram-bot job_queue). Deliberately NOT part of hq_engine.tick: that returns early when the kill switch
++    or a credits pause is on, and settling stale reservations must keep working then."""
++    await asyncio.to_thread(expire_stale_sync)
+diff --git a/test_hq_executor_schedule.py b/test_hq_executor_schedule.py
+new file mode 100644
+index 0000000..0c2c1fd
+--- /dev/null
++++ b/test_hq_executor_schedule.py
+@@ -0,0 +1,55 @@
++import asyncio
++import re
++import unittest
++import urllib.error
++from unittest import mock
++
++import hq_executor as EX
++
++
++def http(code):
++    return urllib.error.HTTPError("http://x", code, "err", {}, None)
++
++
++class ExpireStale(unittest.TestCase):
++    def setUp(self):
++        EX._warned_missing = False
++
++    def test_off_when_hq_disabled_makes_no_call(self):
++        with mock.patch.object(EX.hq, "hq_enabled", return_value=False), mock.patch.object(EX, "_rpc") as r:
++            self.assertIsNone(EX.expire_stale_sync())
++        r.assert_not_called()
++
++    def test_calls_rpc_with_minutes_and_returns_count(self):
++        with mock.patch.object(EX.hq, "hq_enabled", return_value=True), mock.patch.object(EX, "_rpc", return_value=2) as r:
++            self.assertEqual(EX.expire_stale_sync(60), 2)
++        r.assert_called_once_with("executor_expire_stale", {"p_minutes": 60})
++
++    def test_missing_function_is_quiet_noop_and_logs_once(self):
++        with mock.patch.object(EX.hq, "hq_enabled", return_value=True), mock.patch.object(EX, "_rpc", side_effect=http(404)), \
++                self.assertLogs(EX.logger, "INFO") as lg:
++            self.assertIsNone(EX.expire_stale_sync()); self.assertIsNone(EX.expire_stale_sync())
++        self.assertEqual(len(lg.records), 1)
++
++    def test_other_errors_never_raise(self):
++        for exc in (http(500), RuntimeError("boom"), TimeoutError()):
++            with mock.patch.object(EX.hq, "hq_enabled", return_value=True), mock.patch.object(EX, "_rpc", side_effect=exc), \
++                    self.assertLogs(EX.logger):
++                self.assertIsNone(EX.expire_stale_sync())
++
++    def test_async_job_runs_sync_in_thread(self):
++        with mock.patch.object(EX, "expire_stale_sync", return_value=0) as s:
++            asyncio.run(EX.expire_stale_job(None))
++        s.assert_called_once_with()
++
++    def test_bot_registers_job_every_10_minutes_independent_of_engine_tick(self):
++        src = open("bot.py").read()
++        self.assertIn("import hq_executor", src)
++        m = re.search(r"run_repeating\(hq_executor\.expire_stale_job, interval=hq_executor\.EXPIRE_EVERY_SECONDS", src)
++        self.assertTrue(m, "bot.py does not schedule hq_executor.expire_stale_job")
++        self.assertEqual(EX.EXPIRE_EVERY_SECONDS, 600)
++        self.assertNotIn("expire_stale", open("hq_engine.py").read())
++
++
++if __name__ == "__main__":
++    unittest.main()

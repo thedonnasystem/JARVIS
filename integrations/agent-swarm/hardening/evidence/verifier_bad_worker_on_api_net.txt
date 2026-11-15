@@ -1,0 +1,2 @@
+[FAIL] C18  worker reaches the API only through worker-gate (disjoint networks, gate URL)                worker and api share network(s) ['api_net']: the worker could bypass the gate; services attached to both the worker side and the api side: ['api-
+RESULT: FAIL  failed=1 warnings=2

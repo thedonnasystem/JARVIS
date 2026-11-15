@@ -51,7 +51,10 @@ def configured() -> bool:
 
 def _fernet():
     from cryptography.fernet import Fernet
-    return Fernet(os.environ["BACKUP_KEY"].encode())
+    try:
+        return Fernet(os.environ["BACKUP_KEY"].encode())
+    except Exception:   # never echo the value: Fernet's own message can include parts of it
+        raise BackupError("BACKUP_KEY is not a valid encryption key (must be a 44-character Fernet key ending in =)") from None
 
 
 # ------------------------------------------------------------------ dump
@@ -419,6 +422,31 @@ def b2_put(name: str, data: bytes, bucket_id: str, prefix: str, token: str, api:
     raise last
 
 
+PUT_ATTEMPTS = 3
+
+
+def _put_one(target: str, name: str, data: bytes, headers: dict, others_stored: bool) -> dict:
+    """PUT one file. Network errors, 408, 429 and 5xx are retried with backoff (a transient outage must not cost a night's backup);
+    401/403/413 and other 4xx are final and say what to check. Messages never contain the URL, the key or the auth value."""
+    suffix = " (the backup file itself was stored, but its checksum file was not)" if others_stored else ""
+    for attempt in range(PUT_ATTEMPTS):
+        try:
+            status, _ = _call("PUT", target, headers, data)
+        except (urllib.error.URLError, OSError):
+            status = None
+        if status is not None and 200 <= status < 300:
+            return {"bytes": len(data)}
+        retryable = status is None or status in (408, 429) or status >= 500
+        if retryable and attempt + 1 < PUT_ATTEMPTS:
+            time.sleep(min(2 ** attempt, 8) if not _NO_SLEEP else 0)
+            continue
+        if status is None:
+            raise BackupError(f"backup target unreachable after {PUT_ATTEMPTS} tries (network error){suffix}")
+        hint = {401: ": check BACKUP_AUTH", 403: ": check BACKUP_AUTH", 413: ": the target refused the file size", 404: ": check BACKUP_PUT_URL"}.get(status, "")
+        raise BackupError(f"upload of {name} failed (HTTP {status}{hint}){suffix}")
+    raise BackupError(f"upload of {name} failed")   # unreachable; keeps the type checker honest
+
+
 def put_files(files: dict[str, bytes]) -> dict:
     """Upload every file ({name: bytes}) to the configured target. Raises BackupError on any failure; returns non-secret details."""
     url = os.environ["BACKUP_PUT_URL"]
@@ -435,10 +463,7 @@ def put_files(files: dict[str, bytes]) -> dict:
         headers["Authorization"] = os.environ["BACKUP_AUTH"]
     out = {}
     for n, d in files.items():
-        status, _ = _call("PUT", url.replace("{name}", urllib.parse.quote(n, safe="")), headers, d)
-        if not 200 <= status < 300:
-            raise BackupError(f"upload of {n} failed (HTTP {status})")
-        out[n] = {"bytes": len(d)}
+        out[n] = _put_one(url.replace("{name}", urllib.parse.quote(n, safe="")), n, d, headers, bool(out))
     return {"target": "put", "files": out}
 
 
@@ -507,7 +532,7 @@ _RUN_LOCK = threading.Lock()
 def _tell_owner(body: str) -> None:
     """Best effort. A failed notification must never turn a good backup into a reported failure."""
     try:
-        hq._request("POST", "/rest/v1/owner_messages", {"from_agent": "jarvis", "kind": "info", "channel": "telegram", "body": body}, prefer="return=minimal")
+        hq._request("POST", "/rest/v1/owner_messages", {"from_agent": "jarvis", "kind": "health", "channel": "telegram", "body": body}, prefer="return=minimal")
     except Exception:
         logger.warning("backup: owner message not delivered")
 

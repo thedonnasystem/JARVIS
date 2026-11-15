@@ -3907,8 +3907,58 @@ grant execute on function public.ws_add_lead(uuid, uuid, text, text, text, text,
 grant execute on function public.ws_record_spend(uuid, uuid, integer, text) to service_role;
 grant execute on function public.ws_summary(uuid) to service_role;
 
+-- ===== 20261118_executor_sweep_v1.sql =====
+-- Executor sweep v1: fixes the two findings of RELEASE_PLAN_executor_ffm.md that must be closed before any executor is enabled.
+-- Does NOT edit 20261117_executor_gate_v1.sql / 20261117_client_workspaces_v1.sql (PR #5, not yet applied). Requires executor_gate_v1 first (APPLY_ORDER).
+--   1. finding 1 (reservation accounting): the bot's _recover_stale() releases EVERY llm_calls row still 'reserved' at restart, which hid the
+--      spend of a running executor run from the daily caps. A BEFORE UPDATE trigger on llm_calls now keeps a reservation that belongs to a
+--      'running' executor_run reserved (the update of that one row is skipped; every other row, and every other status change such as
+--      settle_llm_call -> 'done', is untouched). The sweep executor_expire_stale (unchanged) settles it at the full reservation.
+--      The trigger tolerates a missing executor_runs table (rollback order), so it can never break llm_calls updates.
+--   2. finding 3: executor_complete is re-created so executor_runs.actual_cents for a FAILED run equals the amount charged
+--      (greatest(actual, est), same as llm_calls). Same signature, security definer, search_path, revoke/grant as before.
+create index if not exists executor_runs_running_call_idx on public.executor_runs (llm_call_id) where status = 'running';
+
+create or replace function public.llm_calls_executor_guard() returns trigger
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  if to_regclass('public.executor_runs') is not null
+     and exists (select 1 from public.executor_runs where llm_call_id = old.id and status = 'running') then
+    return null;   -- keep the reservation: a running executor run's spend must keep counting against the daily caps
+  end if;
+  return new;
+end $$;
+revoke all on function public.llm_calls_executor_guard() from public, anon, authenticated;
+
+drop trigger if exists llm_calls_executor_guard on public.llm_calls;
+create trigger llm_calls_executor_guard before update of status on public.llm_calls
+  for each row when (old.status = 'reserved' and new.status in ('released', 'failed'))
+  execute function public.llm_calls_executor_guard();
+
+create or replace function public.executor_complete(p_run uuid, p_actual_cents integer, p_status text, p_result_sha256 text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare r public.executor_runs; v_charge integer;
+begin
+  if p_status not in ('done', 'failed') then raise exception 'status must be done or failed'; end if;
+  if p_actual_cents is null or p_actual_cents < 0 then raise exception 'actual cents must be >= 0'; end if;
+  select * into r from public.executor_runs where id = p_run for update;
+  if r.id is null then raise exception 'unknown run'; end if;
+  if r.status <> 'running' then raise exception 'run is not running (status %)', r.status; end if;
+  -- a failed run is still money spent: settle it as 'done' at no less than the reservation so the daily caps (which only count reserved/done) keep counting it
+  v_charge := case when p_status = 'failed' then greatest(p_actual_cents, r.est_cents) else p_actual_cents end;
+  perform public.settle_llm_call(r.llm_call_id, v_charge, 'done');
+  update public.executor_runs set status = p_status, actual_cents = v_charge, result_sha256 = p_result_sha256, finished_at = now() where id = p_run;   -- reports what was charged
+  insert into public.audit_log (actor, action, target, detail)
+    values (r.agent_slug, 'executor_' || p_status, r.executor,
+            jsonb_build_object('run', p_run, 'est_cents', r.est_cents, 'actual_cents', p_actual_cents, 'charged_cents', v_charge, 'overrun', p_actual_cents > r.est_cents));
+  return jsonb_build_object('ok', true, 'overrun', p_actual_cents > r.est_cents);
+end $$;
+
+revoke all on function public.executor_complete(uuid, integer, text, text) from public, anon, authenticated;
+grant execute on function public.executor_complete(uuid, integer, text, text) to service_role;
+
 -- ===== 20261118_ffm_onboarding_v1.sql =====
--- FF Marketing onboarding v1 (builds on 20261117_client_workspaces_v1). Additive: 7 tables, 2 views, 22 functions. Touches no existing object.
+-- FF Marketing onboarding v1 (builds on 20261117_client_workspaces_v1). Additive: 7 tables, 2 views, 28 functions (21 ffm_* + 7 closed app_ffm_* owner wrappers). Touches no existing object.
 --   * onboarding: a template per vertical is copied into per-workspace checklist items; a workspace cannot be activated until every
 --     REQUIRED item holds an owner/client-supplied value, a monthly budget is set, AND an owner approval row exists that is still current
 --     (any later change to an item or to the budget makes the approval stale)
@@ -4042,14 +4092,18 @@ insert into public.ffm_onboarding_templates (vertical, key, title, provider, req
   ('insurance', 'lead_fields_agreed', 'Agreed list of lead fields passed to the client''s own systems', 'client', true, 'subset of: name, email, phone, source, campaign_id, stage, created_at', 130)
 on conflict (vertical, key) do nothing;
 
--- guard: same detector as ws_guard (ws_sensitive_hits), but ids / timestamps / numbers are not scanned, because a random uuid or timestamp
--- can compact into a long digit run and would cause random false refusals
+-- guard: same detector as ws_guard (ws_sensitive_hits). Only columns whose DATABASE TYPE is uuid or timestamptz are skipped (a random uuid or
+-- timestamp can compact into a long digit run and would cause random false refusals); the type guarantees the value cannot be free text.
+-- Every other string column is scanned whatever the value looks like: there is NO value-shape skip (a regex skip on the value was bypassable,
+-- e.g. '2026-01-01 123456789'). Numbers/booleans/arrays are constrained by their own types and CHECKs.
 create or replace function public.ffm_guard() returns trigger
 language plpgsql set search_path to 'public' as $$
 declare k text; v text; hits text[]; allv text := ''; j jsonb := to_jsonb(new);
 begin
-  for k, v in select key, value #>> '{}' from jsonb_each(j) where jsonb_typeof(value) = 'string' loop
-    if v ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' or v ~ '^\d{4}-\d\d-\d\d[T ][0-9:.+\-Z ]+$' then continue; end if;
+  for k, v in select e.key, e.value #>> '{}' from jsonb_each(j) e
+              where jsonb_typeof(e.value) = 'string'
+                and not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = e.key and a.attnum > 0 and not a.attisdropped
+                                  and a.atttypid in ('uuid'::regtype, 'timestamptz'::regtype)) loop
     hits := public.ws_sensitive_hits(v);
     if array_length(hits, 1) > 0 then
       raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(hits, ', ') using errcode = 'P0001';
@@ -4373,6 +4427,80 @@ grant execute on function public.ffm_funnel(uuid, timestamptz, timestamptz) to s
 grant execute on function public.ffm_lead_booked_rate(uuid, timestamptz, timestamptz) to service_role;
 grant execute on function public.ffm_spend_report(uuid) to service_role;
 grant execute on function public.ffm_weekly_report(uuid, timestamptz, timestamptz) to service_role;
+
+-- ---- owner wrappers for the PWA (pattern: app_needs_you -> created CLOSED) ----
+-- Each re-checks is_app_owner() itself and fails closed (42501) for anon, signed-in strangers and the bot (service_role has no auth.uid()).
+-- They only read, set the budget, approve/revoke the ACTIVATION approval, or approve a creative. There is deliberately NO wrapper for
+-- ffm_activate, campaign/routing approval or anything that launches: activation stays a dry-run service path and nothing here spends or sends.
+-- Opening them to the signed-in owner means adding the names to the lockdown keep-open list (an applied migration): owner sign-off, see
+-- ops/pending_signoff/ffm_open_app_ffm.txt. Until then they are service_role only, exactly like app_needs_you.
+create or replace function public.app_ffm_workspaces() returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+begin
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
+  return coalesce((select jsonb_agg(jsonb_build_object('id', w.id, 'slug', w.slug, 'name', w.name, 'vertical', w.vertical, 'status', w.status,
+           'monthly_budget_cents', w.monthly_budget_cents, 'readiness', public.ffm_readiness(w.id)) order by w.created_at)
+         from public.client_workspaces w where w.status in ('draft', 'active')), '[]'::jsonb);
+end $$;
+
+create or replace function public.app_ffm_inputs(p_ws uuid) returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+begin
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
+  return coalesce((select jsonb_agg(jsonb_build_object('key', i.template_key, 'title', i.title, 'provider', i.provider, 'required', i.required,
+           'status', i.status, 'provided_by', i.provided_by, 'blocked_until', i.blocked_until, 'value', i.value_text) order by i.template_key)
+         from public.ffm_onboarding_items i where i.workspace_id = p_ws), '[]'::jsonb);
+end $$;
+
+create or replace function public.app_ffm_set_budget(p_ws uuid, p_cents integer) returns void
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
+  perform public.ffm_set_budget(p_ws, p_cents);
+end $$;
+
+create or replace function public.app_ffm_approve_activation(p_ws uuid, p_note text default null) returns uuid
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
+  return public.ffm_owner_approve(p_ws, 'activation', null, p_note);   -- kind is fixed: this wrapper cannot approve a campaign or a routing rule
+end $$;
+
+create or replace function public.app_ffm_revoke_approval(p_approval uuid) returns void
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
+  perform public.ffm_revoke_approval(p_approval);
+end $$;
+
+create or replace function public.app_ffm_approve_creative(p_ws uuid, p_creative uuid) returns void
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
+  perform public.ffm_set_creative_status(p_ws, p_creative, 'approved');   -- status only; approving a creative launches nothing
+end $$;
+
+create or replace function public.app_ffm_weekly_report(p_ws uuid, p_from timestamptz default null, p_to timestamptz default null) returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+begin
+  if not public.is_app_owner() then raise exception 'not authorized' using errcode = '42501'; end if;
+  return public.ffm_weekly_report(p_ws, p_from, p_to);
+end $$;
+
+revoke all on function public.app_ffm_workspaces() from public, anon, authenticated;
+revoke all on function public.app_ffm_inputs(uuid) from public, anon, authenticated;
+revoke all on function public.app_ffm_set_budget(uuid, integer) from public, anon, authenticated;
+revoke all on function public.app_ffm_approve_activation(uuid, text) from public, anon, authenticated;
+revoke all on function public.app_ffm_revoke_approval(uuid) from public, anon, authenticated;
+revoke all on function public.app_ffm_approve_creative(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.app_ffm_weekly_report(uuid, timestamptz, timestamptz) from public, anon, authenticated;
+grant execute on function public.app_ffm_workspaces() to service_role;
+grant execute on function public.app_ffm_inputs(uuid) to service_role;
+grant execute on function public.app_ffm_set_budget(uuid, integer) to service_role;
+grant execute on function public.app_ffm_approve_activation(uuid, text) to service_role;
+grant execute on function public.app_ffm_revoke_approval(uuid) to service_role;
+grant execute on function public.app_ffm_approve_creative(uuid, uuid) to service_role;
+grant execute on function public.app_ffm_weekly_report(uuid, timestamptz, timestamptz) to service_role;
 
 -- ===== 20261112_lockdown_v1.sql =====
 -- Security lockdown (found on first live apply): functions made with plain CREATE FUNCTION are executable by anon/authenticated by default.

@@ -1,0 +1,218 @@
+name: swarm-pilot
+x-hardened:
+  read_only: true
+  cap_drop: &id001
+  - ALL
+  security_opt: &id002
+  - no-new-privileges:true
+  pull_policy: never
+  restart: 'no'
+  init: true
+  privileged: false
+services:
+  api:
+    read_only: true
+    cap_drop: *id001
+    security_opt: *id002
+    pull_policy: never
+    restart: 'no'
+    init: true
+    privileged: false
+    image: ghcr.io/desplega-ai/agent-swarm:2.13.2@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    user: ${API_UID:-10001}:${API_GID:-10001}
+    env_file:
+    - ${FENDEZY_SECRETS_DIR:?set FENDEZY_SECRETS_DIR to a directory outside the repo}/api.env
+    environment:
+      PORT: '3013'
+      DATABASE_PATH: /app/data/db.sqlite
+      ANONYMIZED_TELEMETRY: 'false'
+      IMPROVEMENTS_ENABLED: 'false'
+      BUSINESS_USE_API_KEY: ''
+      BUSINESS_USE_URL: ''
+      HEARTBEAT_DISABLE: 'true'
+      OAUTH_KEEPALIVE_DISABLE: 'true'
+      OAUTH_REFRESH_SWEEP_DISABLE: 'true'
+      SLACK_DISABLE: 'true'
+      MEMORY_RATERS: ''
+      CAPABILITIES: core,task-pool,config,mcp,profiles,memory,metrics,kv
+      RBAC_ENABLED: 'true'
+      MCP_BASE_URL: http://api:3013
+    tmpfs:
+    - /tmp:size=64m,mode=1777
+    - /app/data:size=256m,uid=${API_UID:-10001},gid=${API_GID:-10001},mode=0700
+    networks:
+    - api_net
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget -q --spider http://127.0.0.1:3013/health || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  worker:
+    read_only: true
+    cap_drop: *id001
+    security_opt: *id002
+    pull_policy: never
+    restart: 'no'
+    init: true
+    privileged: false
+    image: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    user: ${WORKER_UID:-1001}:${WORKER_GID:-1001}
+    depends_on:
+      worker-gate:
+        condition: service_healthy
+    env_file:
+    - ${FENDEZY_SECRETS_DIR:?set FENDEZY_SECRETS_DIR to a directory outside the repo}/api.env
+    environment:
+      AGENT_ID: pilot-worker-1
+      AGENT_ROLE: worker
+      HARNESS_PROVIDER: claude
+      MCP_BASE_URL: http://worker-gate:3014
+      ANONYMIZED_TELEMETRY: 'false'
+      BUSINESS_USE_API_KEY: ''
+      BUSINESS_USE_URL: ''
+      IMPROVEMENTS_ENABLED: 'false'
+      MEMORY_RATERS: ''
+      SLACK_DISABLE: 'true'
+      TEMPLATE_ID: ''
+      TEMPLATE_REGISTRY_URL: http://127.0.0.1:9
+      DISABLE_TELEMETRY: '1'
+      DISABLE_ERROR_REPORTING: '1'
+      DISABLE_AUTOUPDATER: '1'
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+      HTTPS_PROXY: http://egress-proxy:3128
+      HTTP_PROXY: http://egress-proxy:3128
+      NO_PROXY: worker-gate,localhost,127.0.0.1
+    tmpfs:
+    - /tmp:size=512m,mode=1777
+    - /logs:size=64m,uid=${WORKER_UID:-1001},gid=${WORKER_GID:-1001},mode=0700
+    - /home/worker:size=512m,uid=${WORKER_UID:-1001},gid=${WORKER_GID:-1001},mode=0700
+    volumes:
+    - swarm_worker_scratch:/workspace
+    networks:
+    - worker_net
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.5
+    pids_limit: 512
+    stop_grace_period: 20s
+  worker-gate:
+    read_only: true
+    cap_drop: *id001
+    security_opt: *id002
+    pull_policy: never
+    restart: 'no'
+    init: true
+    privileged: false
+    image: python:3.12-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    user: 10002:10002
+    command:
+    - python3
+    - -I
+    - /gate/worker_gate.py
+    depends_on:
+      api:
+        condition: service_healthy
+    configs:
+    - source: worker_gate_py
+      target: /gate/worker_gate.py
+    environment:
+      GATE_AGENT_ID: pilot-worker-1
+      GATE_UPSTREAM: api:3013
+      GATE_LISTEN: 0.0.0.0:3014
+      GATE_LOG: stdout
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+    tmpfs:
+    - /tmp:size=16m,mode=1777
+    networks:
+    - worker_net
+    - api_net
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    pids_limit: 128
+    healthcheck:
+      test:
+      - CMD
+      - python3
+      - -I
+      - -c
+      - import urllib.request as u; u.urlopen('http://127.0.0.1:3014/health', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  egress-proxy:
+    read_only: true
+    cap_drop: *id001
+    security_opt: *id002
+    pull_policy: never
+    restart: 'no'
+    init: true
+    privileged: false
+    image: ubuntu/squid:6.6-24.04_edge@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    user: '13:13'
+    configs:
+    - source: squid_conf
+      target: /etc/squid/squid.conf
+    tmpfs:
+    - /var/spool/squid:size=16m,uid=13,gid=13
+    - /var/log/squid:size=64m,uid=13,gid=13
+    - /var/run:size=4m,uid=13,gid=13
+    networks:
+    - worker_net
+    - egress
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+  api-ingress:
+    read_only: true
+    cap_drop: *id001
+    security_opt: *id002
+    pull_policy: never
+    restart: 'no'
+    init: true
+    privileged: false
+    image: nginxinc/nginx-unprivileged:1.27-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    user: 101:101
+    depends_on:
+      api:
+        condition: service_healthy
+    configs:
+    - source: ingress_conf
+      target: /etc/nginx/nginx.conf
+    tmpfs:
+    - /tmp:size=16m,mode=1777
+    ports:
+    - 127.0.0.1:${HQ_API_PORT:-13013}:8080
+    networks:
+    - api_net
+    - hq_edge
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+configs:
+  squid_conf:
+    file: ./config/squid.conf
+  ingress_conf:
+    file: ./config/nginx-ingress.conf
+  worker_gate_py:
+    file: ./config/worker_gate.py
+volumes:
+  swarm_worker_scratch: {}
+networks:
+  api_net:
+    internal: true
+  worker_net:
+    internal: true
+  egress: {}
+  hq_edge: {}
