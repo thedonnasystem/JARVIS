@@ -1,0 +1,58 @@
+name: npm-audit
+# Advisory scan + registry-signature check of the PWA smoke-test toolchain (webtests/package-lock.json: jsdom and its tree, dev only, never deployed).
+# Separate workflow/job name so the required checks `unit` and `migrations` are untouched. Read-only token, no secrets, no new dependencies.
+# Policy (blocking):  any advisory of severity HIGH or CRITICAL, or any package whose registry signature/attestation does not verify.
+# Policy (reported, not blocking): moderate/low advisories are printed in the log; the weekly run keeps them visible.
+# Why all dependencies are audited (no --omit=dev): every package in this lock IS a devDependency; omitting dev would audit nothing.
+# Why path-filtered: an advisory published tomorrow must not block an unrelated PR; the weekly schedule is what catches new advisories.
+on:
+  pull_request:
+    paths: ["webtests/package.json", "webtests/package-lock.json", ".github/workflows/npm-audit.yml"]
+  push:
+    branches: ["overnight-build"]
+    paths: ["webtests/package.json", "webtests/package-lock.json"]
+  schedule:
+    - cron: "29 6 * * 1"
+permissions:
+  contents: read
+concurrency:
+  group: npm-audit-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  npm-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: webtests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lock hygiene (registry host, integrity on every entry, no install scripts)
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          pk = json.load(open("package-lock.json"))["packages"]
+          bad = []
+          for k, v in pk.items():
+              if not k:
+                  continue
+              if not str(v.get("resolved", "")).startswith("https://registry.npmjs.org/"):
+                  bad.append(f"{k}: resolved={v.get('resolved')!r}")
+              if not str(v.get("integrity", "")).startswith("sha512-"):
+                  bad.append(f"{k}: no sha512 integrity")
+              if v.get("hasInstallScript"):
+                  bad.append(f"{k}: has an install script (review before allowing)")
+          print(f"{len(pk) - 1} packages checked, {len(bad)} problem(s)")
+          print("\n".join(bad))
+          sys.exit(1 if bad else 0)
+          PY
+      - name: Advisories, full report (not blocking; reads the lockfile only, nothing is installed)
+        run: npm audit --package-lock-only || true
+      - name: Advisories at HIGH or CRITICAL (blocking)
+        run: npm audit --package-lock-only --audit-level=high
+      - name: Install exactly the lock (same flags as scripts/gate.sh) for the signature check
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Registry signatures and provenance attestations (blocking)
+        run: npm audit signatures
