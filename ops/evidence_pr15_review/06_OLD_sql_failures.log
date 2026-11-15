@@ -1,0 +1,4 @@
+ERROR:  F4a normalize_phone(+91 (0)98 1234 5678) = <NULL>, expected +919812345678
+ERROR:  F6a key case 15 (upper:fixture-upper): got ok, expected format
+ERROR:  F5b 12:00:00.75 is not 12:00:00 (rounded, not floored): cap|v1|36:37a64546-e0a5-47b2-9a39-ab4a53ab4f805:ref-15:email2:v164:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+ERROR:  F7a channel 'sms' returned NULL (allowed) with the gate open

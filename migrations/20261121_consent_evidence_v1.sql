@@ -30,6 +30,21 @@ begin
   return encode(sha256(op || sha256(ip || convert_to(p_msg, 'UTF8'))), 'hex');
 end $$;
 
+-- Length (1-3) of the country calling code at the start of a digit string, by the E.164 allocation rules (no code is a prefix of another). Used only by normalize_phone.
+create or replace function public.ffm_cc_len(d text) returns integer
+language sql immutable strict set search_path to 'pg_catalog' as $$
+  select case substr(d, 1, 1)
+    when '1' then 1 when '7' then 1
+    when '2' then case when substr(d, 1, 2) in ('20', '27') then 2 else 3 end
+    when '3' then case when substr(d, 2, 1) in ('0', '1', '2', '3', '4', '6', '9') then 2 else 3 end
+    when '4' then case when substr(d, 2, 1) = '2' then 3 else 2 end
+    when '5' then case when substr(d, 2, 1) in ('0', '9') then 3 else 2 end
+    when '6' then case when substr(d, 2, 1) in ('7', '8', '9') then 3 else 2 end
+    when '8' then case when substr(d, 2, 1) in ('1', '2', '4', '6') then 2 else 3 end
+    when '9' then case when substr(d, 2, 1) in ('0', '1', '2', '3', '4', '5', '8') then 2 else 3 end
+    else 3 end
+$$;
+
 -- ONE phone normaliser for SQL and Python (hq_consent.normalize_phone mirrors it; a test runs one table of inputs through both).
 -- Output '+<digits>' or NULL ("not one clean phone number": every caller treats NULL as "do not contact by phone").
 --   handled: spaces, dots, dashes, parentheses, +1 / 1 / 001 prefixes, fullwidth digits and plus (NFKC), Arabic-Indic and Persian digits, zero-width and bidi marks,
@@ -45,9 +60,9 @@ begin
   t := translate(normalize(regexp_replace(p, '[​-‏⁠﻿‪-‮]', '', 'g'), NFKC),
                  '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹‐‑‒–—―−', '01234567890123456789-------');
   t := btrim(t);
-  t := regexp_replace(t, '\s*(ext\.?|extension|x|#)\s*[0-9]{1,6}$', '', 'i');
-  if t = '' or t ~ '[^0-9+()\-.\s]' or position('+' in t) > 1 or length(t) - length(replace(t, '+', '')) > 1 then return null; end if;
-  paren0 := t ~ '\(\s*0\s*\)';
+  t := regexp_replace(t, '[ \t\n\r\f\v]*(ext\.?|extension|x|#)[ \t\n\r\f\v]*[0-9]{1,6}$', '', 'i');   -- ASCII whitespace ONLY (PG's \s also matches U+2028, U+2029, U+1680; Python's mirror does not)
+  if t = '' or t ~ '[^0-9+()\-. \t\n\r\f\v]' or position('+' in t) > 1 or length(t) - length(replace(t, '+', '')) > 1 then return null; end if;
+  paren0 := t ~ '\([ \t\n\r\f\v]*0[ \t\n\r\f\v]*\)';
   d := regexp_replace(t, '[^0-9]', '', 'g');
   if left(t, 1) = '+' then
     null;
@@ -61,20 +76,23 @@ begin
     return null;
   end if;
   if d ~ '^0' or length(d) < 8 or length(d) > 15 then return null; end if;
-  -- TRUNK PREFIX (review finding 4): '+44 (0)20 7946 0958', '+44 020 ...' and '+44 20 ...' are ONE number. Strip one 0 right after the country code where 0 is a trunk prefix.
-  -- Italy (39) keeps its 0 (part of the number), Spain/Portugal have none. Where the "(0)" marker or a stray 0 cannot be interpreted safely the result is NULL, which every caller treats as "refuse".
+  -- TRUNK PREFIX (review finding 4, extended in the re-review): '+44 (0)20 7946 0958', '+44 020 ...' and '+44 20 ...' are ONE number. The country code is read with the E.164 length rules
+  -- (ffm_cc_len); for a country on the trunk list one 0 right after it is dropped. Italy (39) keeps its 0. For EVERY OTHER country a 0 right after the country code, or a "(0)", is ambiguous
+  -- and gives NULL, which every caller treats as "refuse" (fail closed). Hungary writes its trunk as '06'.
   if d !~ '^1' then
-    cc := case when d ~ '^(971|966|212|962|961)' then substr(d, 1, 3) when d ~ '^(44|20|33|49|61|90)' then substr(d, 1, 2) when d ~ '^351' then '351' when d ~ '^(39|34)' then substr(d, 1, 2) else null end;
-    rest := case when cc is null then null else substr(d, length(cc) + 1) end;
-    if cc in ('44', '20', '33', '49', '61', '90', '971', '966', '212', '962', '961') then
+    cc := substr(d, 1, public.ffm_cc_len(d));
+    rest := substr(d, length(cc) + 1);
+    if cc = '36' then
+      if rest ~ '^06' then d := cc || substr(rest, 3); elsif rest ~ '^0' or paren0 then return null; end if;
+    elsif cc = any (array['31','353','91','81','46','27','41','972','32','43','45','47','48','7','55','52','54','60','62','63','64','65','66','84','82','86','880','92','94','234','254','255','256',
+                          '213','216','218','20','964','965','968','973','974','970','963','967','98','93','355','40','30','420','421','359','385','386','381','380','375','372','371','370',
+                          '44','33','49','61','90','971','966','212','962','961']) then
       if rest ~ '^00' then return null; end if;
       if rest ~ '^0' then d := cc || substr(rest, 2); elsif paren0 then return null; end if;
     elsif cc = '39' then
       if paren0 then return null; end if;            -- "(0)" says the 0 is optional; in Italy it is not: ambiguous
-    elsif cc in ('34', '351') then
-      if paren0 or rest ~ '^0' then return null; end if;
-    elsif paren0 then
-      return null;                                   -- a "(0)" after a country code we do not know: ambiguous
+    elsif rest ~ '^0' or paren0 then
+      return null;                                   -- any other country: a 0 after the country code (or a "(0)") cannot be interpreted safely
     end if;
     if length(d) < 8 or length(d) > 15 then return null; end if;
   elsif paren0 then
@@ -91,6 +109,7 @@ language sql immutable strict set search_path to 'pg_catalog' as $$ select octet
 
 -- Key quality policy (review finding 1). NULL = acceptable; otherwise a reason code (never the key). hq_consent.key_problem mirrors it (shared table sqltests/data/key_cases.tsv).
 --   length        fewer than 32 or more than 200 characters
+--   format        not exactly 64 lowercase hex characters (python3 -c "import secrets;print(secrets.token_hex(32))"): ffm_key_fingerprint, key_check in the suppression export and the ffm_set_key return value are HMAC(key, fixed text), so a phrase would be open to offline guessing
 --   low_entropy   fewer than 12 distinct characters, Shannon entropy under 3.0 bits per character, or one character making up more than a quarter of the key
 --   repeated_pattern   an 8-character piece occurring twice, 6+ identical characters in a row, or 8+ characters in a sequence (abcdefgh, 87654321)
 --   related_key   p_other (the other key) is equal to, contained in, contains, or shares a 12-character piece with this key
@@ -102,6 +121,7 @@ begin
   if p_value is null then return 'missing'; end if;
   n := char_length(p_value);
   if n < 32 or n > 200 then return 'length'; end if;
+  if p_value !~ '^[0-9a-f]{64}$' then return 'format'; end if;   -- exactly 64 lowercase hex characters (32 random bytes): the key fingerprints are HMACs of FIXED strings, so a guessable phrase could be brute-forced offline
   select count(*), max(c), -sum((c::float8 / n) * ln(c::float8 / n)) / ln(2.0) into d, mx, h from (select count(*) as c from regexp_split_to_table(p_value, '') ch group by ch) q;
   if d < 12 or h < 3.0 or mx * 4 > n then return 'low_entropy'; end if;
   if exists (select 1 from generate_series(1, n - 7) g group by substr(p_value, g, 8) having count(*) > 1) then return 'repeated_pattern'; end if;
@@ -220,7 +240,7 @@ begin
   if exists (select 1 from public.ffm_secrets where name = p_name) then raise exception 'key refused: % is already set and cannot be replaced', p_name; end if;
   why := public.ffm_key_problem(p_value, (select value from public.ffm_secrets where name <> p_name limit 1));
   if why is not null then
-    raise exception 'key refused (%): use 64 random hex characters from a CSPRNG, and the capture key and the suppression key must be two UNRELATED values', why;   -- never echo the value
+    raise exception 'key refused (%): use exactly 64 lowercase hex characters from a CSPRNG (secrets.token_hex(32)), and the capture key and the suppression key must be two UNRELATED values', why;   -- never echo the value
   end if;
   insert into public.ffm_secrets (name, value, set_by) values (p_name, p_value, coalesce(nullif(btrim(p_by), ''), 'owner'));
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_key_set', 'key/' || p_name, jsonb_build_object('name', p_name));   -- never the value
@@ -244,7 +264,7 @@ end $$;
 -- canonical text that the form endpoint signs (hq_consent.capture_seal builds the same string)
 create or replace function public.ffm_capture_canonical(p_ws uuid, p_ref text, p_channel text, p_wv text, p_wsha text, p_at timestamptz, p_contact text, p_asha text) returns text
 language sql immutable set search_path to 'public' as $$
-  select 'cap|v1|' || public.ffm_lp(p_ws::text) || public.ffm_lp(p_ref) || public.ffm_lp(p_channel) || public.ffm_lp(p_wv) || public.ffm_lp(p_wsha) || public.ffm_lp((extract(epoch from p_at))::bigint::text)
+  select 'cap|v1|' || public.ffm_lp(p_ws::text) || public.ffm_lp(p_ref) || public.ffm_lp(p_channel) || public.ffm_lp(p_wv) || public.ffm_lp(p_wsha) || public.ffm_lp(floor(extract(epoch from p_at))::bigint::text)
          || public.ffm_lp(p_contact) || public.ffm_lp(p_asha)
 $$;
 
@@ -354,6 +374,7 @@ end $$;
 -- 8. grants -----------------------------------------------------------------------------------------------------------------------------------------------------------
 revoke all on function public.ffm_hmac_sha256(text, text) from public, anon, authenticated;
 revoke all on function public.ffm_lp(text) from public, anon, authenticated;
+revoke all on function public.ffm_cc_len(text) from public, anon, authenticated;
 revoke all on function public.ffm_key_problem(text, text) from public, anon, authenticated;
 revoke all on function public.normalize_phone(text) from public, anon, authenticated;
 revoke all on function public.ffm_append_only() from public, anon, authenticated;
@@ -368,6 +389,7 @@ revoke all on function public.ffm_register_capture_owner(uuid, text, text, text,
 revoke all on function public.ffm_record_consent(uuid, uuid, text, text, text, text, timestamptz, text, text) from public, anon, authenticated;
 grant execute on function public.ffm_hmac_sha256(text, text) to service_role;
 grant execute on function public.ffm_lp(text) to service_role;
+grant execute on function public.ffm_cc_len(text) to service_role;
 grant execute on function public.ffm_key_problem(text, text) to service_role;
 grant execute on function public.ffm_contact_mac(text, text, text) to service_role;
 grant execute on function public.normalize_phone(text) to service_role;

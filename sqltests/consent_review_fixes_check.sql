@@ -2,14 +2,17 @@
 -- One block per finding, each in its own transaction that is rolled back, so that against the OLD code every block reports its OWN failure (run with ON_ERROR_STOP off to see them all).
 -- Every block raises 'Fn ...' on failure; with the fixes applied nothing is raised.
 --   F1  HMAC oracle / key reuse / forged capture      F2  outreach path ignores the gate     F3  app_owners writable by service_role
---   F4  phone trunk-prefix variants + fail closed      F6  key handling (weak keys, shared vectors)
+--   F4  phone trunk-prefix variants + fail closed + 6,000-case differential corpus      F6  key handling (64 hex only, shared vectors)
+--   F5b fractional-second capture time (floor, like Python)      F7  unknown / NULL outbox channel fails closed
 -- (F5, the restore tool, is tested in test_restore_backup.py.)
 grant usage on schema public to anon, authenticated, service_role;
 create temporary table if not exists phone_cases (input text, expected text);
 create temporary table if not exists key_cases (value_spec text, other_spec text, expected text);
-truncate phone_cases; truncate key_cases;
+create temporary table if not exists phone_fuzz (input text, expected text);
+truncate phone_cases; truncate key_cases; truncate phone_fuzz;
 \copy phone_cases from 'sqltests/data/phone_cases.tsv'
 \copy key_cases from 'sqltests/data/key_cases.tsv'
+\copy phone_fuzz from 'sqltests/data/phone_fuzz.tsv'
 
 create or replace function pg_temp.as_owner(p boolean) returns void language plpgsql as $$
 begin
@@ -237,6 +240,14 @@ begin
     if public.normalize_phone(x.input) is distinct from x.expected then raise exception 'F4a normalize_phone(%) = %, expected %', x.input, public.normalize_phone(x.input), x.expected; end if;
   end loop;
   if n < 80 then raise exception 'F4a phone case table not loaded (%)', n; end if;
+  -- F4a2 re-review item 3 (and 1): the differential corpus, the SAME rows test_hq_consent runs through Python. Column 2 is the Python result.
+  n := 0;
+  for x in select input, expected from phone_fuzz loop
+    n := n + 1;
+    if public.normalize_phone(x.input) is distinct from x.expected then raise exception 'F4a2 fuzz case %: normalize_phone(%) = %, python says %', n, quote_literal(x.input), public.normalize_phone(x.input), x.expected; end if;
+  end loop;
+  if n < 5000 then raise exception 'F4a2 fuzz corpus not loaded (%)', n; end if;
+  if public.normalize_phone(E'+44\u202820 7946 0958') is not null or public.normalize_phone(E'+44\u202920 7946 0958') is not null or public.normalize_phone(E'+44\u168020 7946 0958') is not null then raise exception 'F4a3 a Unicode separator was accepted as whitespace'; end if;
   if public.normalize_phone('+44 (0)20 7946 0958') is distinct from public.normalize_phone('+44 20 7946 0958') then raise exception 'F4b UK trunk variants differ'; end if;
   if public.normalize_phone('+20 010 1234 5678') is distinct from public.normalize_phone('+20 10 1234 5678') then raise exception 'F4b Egypt trunk variants differ'; end if;
 
@@ -273,18 +284,30 @@ end $$;
 rollback;
 
 -- ===================================================== F6: key policy, shared vectors =====================================================
+-- the spec language (decoded identically by test_hq_consent.key_spec): \N | lit:<text> | sha256:<seed> | mix:<seedA>:<seedB>:<n> | splice:<seed>:<text> | upper:<seed>
+create or replace function pg_temp.keyspec(p text) returns text language plpgsql as $$
+declare k text := split_part(p, ':', 1); a text := split_part(p, ':', 2); b text := split_part(p, ':', 3); c text := split_part(p, ':', 4); v text;
+begin
+  if p is null or p = '\N' then return null; end if;
+  if k = 'lit' then return substr(p, 5); end if;
+  if k = 'sha256' then return pg_temp.key(a); end if;
+  if k = 'mix' then return left(pg_temp.key(a), c::int) || left(pg_temp.key(b), 64 - c::int); end if;
+  if k = 'splice' then v := pg_temp.key(a); return left(v, 20) || b || substr(v, 21 + length(b)); end if;
+  if k = 'upper' then return upper(pg_temp.key(a)); end if;
+  raise exception 'bad key spec %', p;
+end $$;
 begin;
 do $$
 declare x record; v text; o text; got text; n int := 0;
 begin
   for x in select * from key_cases loop
     n := n + 1;
-    v := case when x.value_spec like 'sha256:%' then encode(sha256(convert_to(substr(x.value_spec, 8), 'UTF8')), 'hex') else substr(x.value_spec, 5) end;
-    o := case when x.other_spec = '\N' then null when x.other_spec like 'sha256:%' then encode(sha256(convert_to(substr(x.other_spec, 8), 'UTF8')), 'hex') else substr(x.other_spec, 5) end;
+    v := pg_temp.keyspec(x.value_spec);
+    o := pg_temp.keyspec(x.other_spec);
     got := coalesce(public.ffm_key_problem(v, o), 'ok');
     if got <> x.expected then raise exception 'F6a key case % (%): got %, expected %', n, left(x.value_spec, 30), got, x.expected; end if;
   end loop;
-  if n < 15 then raise exception 'F6a key case table not loaded'; end if;
+  if n < 20 then raise exception 'F6a key case table not loaded'; end if;
   -- the owner path refuses a weak key and never echoes the value in the error or the audit log
   perform pg_temp.mk_owner(); perform pg_temp.as_owner(true);
   begin
@@ -294,8 +317,52 @@ begin
     if sqlerrm like 'F6b%' then raise; end if;
     if sqlerrm like '%abcdefghij%' then raise exception 'F6c the refusal message echoes the key: %', sqlerrm; end if;
   end;
+  begin
+    perform public.ffm_set_key('capture_signing_key', 'correct-horse-battery-staple-2024-correct-horse-battery', 'owner');
+    raise exception 'F6e a guessable phrase was accepted as a key';
+  exception when others then
+    if sqlerrm like 'F6e%' then raise; end if;
+  end;
   perform public.ffm_set_key('capture_signing_key', encode(sha256(convert_to('fixture-capture-key', 'UTF8')), 'hex'), 'owner');
   if exists (select 1 from public.audit_log where detail::text like '%' || substr(encode(sha256(convert_to('fixture-capture-key', 'UTF8')), 'hex'), 1, 20) || '%') then raise exception 'F6d key in the audit log'; end if;
+end $$;
+rollback;
+
+-- ===================================================== F5b: fractional-second captured_at =====================================================
+begin;
+do $$
+declare w uuid := gen_random_uuid(); a text; b text;
+begin
+  a := public.ffm_capture_canonical(w, 'ref-1', 'email', 'v1', repeat('b', 64), '2026-11-01 12:00:00+00', 'c', repeat('a', 64));
+  b := public.ffm_capture_canonical(w, 'ref-1', 'email', 'v1', repeat('b', 64), '2026-11-01 12:00:00.75+00', 'c', repeat('a', 64));
+  if a <> b then raise exception 'F5b 12:00:00.75 is not 12:00:00 (rounded, not floored): % vs %', a, b; end if;
+  b := public.ffm_capture_canonical(w, 'ref-1', 'email', 'v1', repeat('b', 64), '2026-11-01 12:00:00.999999+00', 'c', repeat('a', 64));
+  if a <> b then raise exception 'F5b .999999 rounds up: %', b; end if;
+  b := public.ffm_capture_canonical(w, 'ref-1', 'email', 'v1', repeat('b', 64), '2026-11-01 11:59:59.999999+00', 'c', repeat('a', 64));
+  if a = b then raise exception 'F5b 11:59:59.999999 equals 12:00:00'; end if;
+  if a not like '%10:1793534400%' then raise exception 'F5b unexpected epoch in %', a; end if;   -- the value test_hq_consent asserts too
+end $$;
+rollback;
+
+-- ===================================================== F7: unknown / NULL channel fails closed =====================================================
+begin;
+do $$
+declare KP constant text := encode(sha256(convert_to('fixture-suppression-key', 'UTF8')), 'hex'); ch text; r text;
+begin
+  perform pg_temp.open_gate(KP);
+  foreach ch in array array['sms', 'Email', 'EMAIL', 'whatsapp', '', ' email', 'email ', 'phone'] loop
+    r := public.outreach_recipient_problem(ch, 'clean@example.com', null);
+    if r is distinct from 'unknown_channel' then raise exception 'F7a channel % returned % with the gate open', quote_literal(ch), coalesce(r, 'NULL (allowed)'); end if;
+  end loop;
+  if public.outreach_recipient_problem(null, 'clean@example.com', null) is distinct from 'unknown_channel' then raise exception 'F7b NULL channel allowed'; end if;
+  -- the five real channels (outbox_channel_check) are still allowed when the gate is open and the recipient is clean
+  if public.outreach_recipient_problem('email', 'clean@example.com', null) is not null then raise exception 'F7c email refused'; end if;
+  if public.outreach_recipient_problem('text', '+44 20 7946 0958', null) is not null then raise exception 'F7c text refused'; end if;
+  if public.outreach_recipient_problem('call', '+44 20 7946 0958', null) is not null then raise exception 'F7c call refused'; end if;
+  if public.outreach_recipient_problem('post', '1 Example Street', null) is not null then raise exception 'F7c post refused'; end if;
+  if public.outreach_recipient_problem('telegram', '@handle', null) is not null then raise exception 'F7c telegram refused'; end if;
+  perform pg_temp.close_gate();
+  if public.outreach_recipient_problem('post', '1 Example Street', null) is distinct from 'suppression_unverified' then raise exception 'F7d post allowed with the gate closed'; end if;
 end $$;
 rollback;
 select 'consent_review_fixes_check: done';

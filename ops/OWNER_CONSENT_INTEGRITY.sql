@@ -2,6 +2,7 @@
 -- Nothing here enables outreach by itself; it only prepares the evidence and suppression controls. Replace every <...>.
 -- The owner calls need your auth uid: in the SQL editor set it for this transaction first (your uid from Authentication > Users):
 --   select set_config('request.jwt.claim.sub', '<YOUR-AUTH-UID>', true);
+-- A key is EXACTLY 64 lowercase hex characters (32 random bytes). Passphrases are refused: the stored fingerprints are HMACs of fixed strings, so a guessable key could be brute-forced offline.
 -- Generate keys on YOUR computer (python3 -c "import secrets;print(secrets.token_hex(32))"), keep them in the password manager, never in chat. Delete the editor snippet afterwards.
 
 -- KEY RULES (PR #15 review): the two keys must be UNRELATED random values (64 hex characters each from the command above, generated twice). ffm_set_key refuses a weak key, a repeated
@@ -36,7 +37,7 @@ select public.ffm_register_wording('<workspace uuid>', '<wording version, e.g. f
 --    suppressions missing. FIRST, before anything else:
 select set_config('request.jwt.claim.sub', '<YOUR-AUTH-UID>', true);
 select public.ffm_close_outreach_gate('restore: suppression list not re-verified', 'owner');
---    then re-establish the list, then verify against an INDEPENDENT checkpoint (the audit-log record of the last export, or the file hash held outside the database: restore_backup.py --expect-sha256).
+--    then re-establish the list, then verify against an INDEPENDENT checkpoint (the file hash YOU recorded outside the database when you made the export: restore_backup.py --expect-sha256. NOT audit_log: service_role can write audit_log, so it proves nothing. A provider restore can also bring back a 'verified' gate with an older list: close the gate first).
 --    ffm_import_suppression_hashes() followed by ffm_verify_suppression() is circular (the import IS the checkpoint) and proves nothing by itself.
 
 -- 5. After a restore (see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 8), AFTER re-establishing the list from the provider backup and/or:

@@ -1,0 +1,72 @@
+F.FF.F...F.F...........
+======================================================================
+FAIL: test_a_guessable_phrase_is_refused_whatever_its_entropy (test_hq_consent.KeyPolicy.test_a_guessable_phrase_is_refused_whatever_its_entropy)
+Re-review item 5: the key fingerprints are HMACs of fixed strings, so only 64 lowercase hex characters (32 random bytes) are accepted.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/claude-0/oldtree/test_hq_consent.py", line 203, in test_a_guessable_phrase_is_refused_whatever_its_entropy
+    self.assertIn(C.key_problem(phrase), ("length", "format"), phrase)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: None not found in ('length', 'format') : correct horse battery staple 2024!!
+
+======================================================================
+FAIL: test_identical_and_contained_keys_are_refused (test_hq_consent.KeyPolicy.test_identical_and_contained_keys_are_refused)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/claude-0/oldtree/test_hq_consent.py", line 196, in test_identical_and_contained_keys_are_refused
+    self.assertEqual(C.key_problem("Q" + K1, K1), "format")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'related_key' != 'format'
+- related_key
++ format
+
+
+======================================================================
+FAIL: test_shared_table_with_the_sql_test (test_hq_consent.KeyPolicy.test_shared_table_with_the_sql_test)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/claude-0/oldtree/test_hq_consent.py", line 192, in test_shared_table_with_the_sql_test
+    self.assertEqual(C.key_problem(v, o) or "ok", want, (v[:20], want))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'ok' != 'format'
+- ok
++ format
+ : ('107940B7DD9602FA69D7', 'format')
+
+======================================================================
+FAIL: test_differential_fuzz_corpus_is_in_sync_and_unicode_separators_are_rejected (test_hq_consent.Phone.test_differential_fuzz_corpus_is_in_sync_and_unicode_separators_are_rejected)
+Re-review item 3: 6,000 generated inputs (sqltests/data/phone_fuzz.tsv) run through BOTH implementations (this file; the SQL test runs the same rows). The corpus must equal what
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/claude-0/oldtree/test_hq_consent.py", line 57, in test_differential_fuzz_corpus_is_in_sync_and_unicode_separators_are_rejected
+    self.assertEqual(r.returncode, 0, r.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : phone_fuzz.tsv is out of date: run python3 scripts/gen_phone_fuzz.py
+
+
+======================================================================
+FAIL: test_shared_table_with_the_sql_test (test_hq_consent.Phone.test_shared_table_with_the_sql_test)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/claude-0/oldtree/test_hq_consent.py", line 32, in test_shared_table_with_the_sql_test
+    self.assertEqual(C.normalize_phone(a), want, repr(a))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: None != '+919812345678' : '+91 (0)98 1234 5678'
+
+======================================================================
+FAIL: test_trunk_zero_for_every_listed_country_and_fail_closed_for_the_rest (test_hq_consent.Phone.test_trunk_zero_for_every_listed_country_and_fail_closed_for_the_rest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/claude-0/oldtree/test_hq_consent.py", line 69, in test_trunk_zero_for_every_listed_country_and_fail_closed_for_the_rest
+    self.assertEqual(C.normalize_phone(trunk), C.normalize_phone(plain), trunk)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '+310612345678' != '+31612345678'
+- +310612345678
+?    -
++ +31612345678
+ : +31 06 12345678
+
+----------------------------------------------------------------------
+Ran 23 tests in 0.176s
+
+FAILED (failures=6)

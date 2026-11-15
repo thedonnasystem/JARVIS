@@ -375,6 +375,9 @@ create or replace function public.outreach_recipient_problem(p_channel text, p_t
 language plpgsql stable security definer set search_path to 'public' as $$
 declare dnc boolean := false;
 begin
+  -- an unknown, differently-cased or NULL channel is a "no" (fail closed). The five channels are exactly outbox_channel_check in production (read-only check Nov 15 2026): email, text, call, post, telegram.
+  -- post and telegram have no address list to consult (a postal address or a chat handle is not on contact_suppressions), so for them the gate and the lead flag are the whole check.
+  if p_channel is null or p_channel not in ('email', 'text', 'call', 'post', 'telegram') then return 'unknown_channel'; end if;
   if not public.ffm_outreach_gate_open() then return 'suppression_unverified'; end if;
   if p_lead is not null then select do_not_contact into dnc from public.leads where id = p_lead; end if;
   if coalesce(dnc, false) then return 'lead_do_not_contact'; end if;

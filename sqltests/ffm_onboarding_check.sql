@@ -60,7 +60,7 @@ begin
     if not has_function_privilege('service_role', f, 'execute') then raise exception 'F6 service_role cannot execute %', f; end if;
   end loop;
   select count(*) into n from pg_proc where pronamespace = 'public'::regnamespace and proname like 'ffm\_%';
-  if n <> 51 then raise exception 'F6b expected 51 ffm functions (21 onboarding + 7 consent + 12 evidence (+ffm_lp, ffm_key_problem) + 11 suppression integrity (-ffm_suppression_mac, +ffm_sup_message)), found %', n; end if;
+  if n <> 52 then raise exception 'F6b expected 52 ffm functions (+ffm_cc_len; 21 onboarding + 7 consent + 12 evidence (+ffm_lp, ffm_key_problem) + 11 suppression integrity (-ffm_suppression_mac, +ffm_sup_message)), found %', n; end if;
 
   -- two clients
   insert into public.client_workspaces (slug, name, vertical) values ('f-mortgage', 'Test Mortgage Broker', 'mortgage') returning id into a;

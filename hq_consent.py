@@ -27,7 +27,30 @@ _INVISIBLE = re.compile("[​-‏⁠﻿‪-‮]")
 _TRANS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹‐‑‒–—―−", "01234567890123456789" + "-" * 7)
 _WS = "[ \t\n\r\f\v]"
 _EXT = re.compile(_WS + r"*(ext\.?|extension|x|#)" + _WS + r"*[0-9]{1,6}\Z", re.I)
-_TRUNK = ("44", "20", "33", "49", "61", "90", "971", "966", "212", "962", "961")
+_TRUNK = frozenset("""31 353 91 81 46 27 41 972 32 43 45 47 48 7 55 52 54 60 62 63 64 65 66 84 82 86 880 92 94 234 254 255 256 213 216 218 20 964 965 968 973 974 970 963 967 98 93
+355 40 30 420 421 359 385 386 381 380 375 372 371 370 44 33 49 61 90 971 966 212 962 961""".split())   # (36 Hungary is special-cased: its trunk prefix is "06")
+
+
+def cc_len(d: str) -> int:
+    """Length of the country calling code at the start of a digit string (E.164 allocation rules). Mirror of public.ffm_cc_len."""
+    c, n = d[0], d[1:2]
+    if c in "17":
+        return 1
+    if c == "2":
+        return 2 if d[:2] in ("20", "27") else 3
+    if c == "3":
+        return 2 if n in tuple("0123469") else 3
+    if c == "4":
+        return 3 if n == "2" else 2
+    if c == "5":
+        return 3 if n in ("0", "9") else 2
+    if c == "6":
+        return 3 if n in ("7", "8", "9") else 2
+    if c == "8":
+        return 2 if n in ("1", "2", "4", "6") else 3
+    if c == "9":
+        return 2 if n in tuple("0123458") else 3
+    return 3
 _BAD = re.compile(r"[^0-9+()\-." + " \t\n\r\f\v" + "]")
 
 
@@ -53,12 +76,17 @@ def normalize_phone(p):
         return None
     if d.startswith("0") or len(d) < 8 or len(d) > 15:
         return None
-    # trunk prefix (review finding 4): see the SQL comment. Strip one 0 after the country code where it is a trunk prefix; ambiguous forms are None.
+    # trunk prefix (review finding 4 and the re-review): see the SQL comment. One 0 after the country code is stripped for the countries in _TRUNK; Italy keeps it;
+    # any OTHER country with a 0 after the country code (or a "(0)") is ambiguous -> None (fail closed).
     if not d.startswith("1"):
-        m = re.match(r"(971|966|212|962|961)", d) or re.match(r"(44|20|33|49|61|90)", d) or re.match(r"(351)", d) or re.match(r"(39|34)", d)
-        cc = m.group(1) if m else None
-        rest = d[len(cc):] if cc else None
-        if cc in _TRUNK:
+        cc = d[:cc_len(d)]
+        rest = d[len(cc):]
+        if cc == "36":
+            if rest.startswith("06"):
+                d = cc + rest[2:]
+            elif rest.startswith("0") or paren0:
+                return None
+        elif cc in _TRUNK:
             if rest.startswith("00"):
                 return None
             if rest.startswith("0"):
@@ -68,10 +96,7 @@ def normalize_phone(p):
         elif cc == "39":
             if paren0:
                 return None
-        elif cc in ("34", "351"):
-            if paren0 or rest.startswith("0"):
-                return None
-        elif paren0:
+        elif rest.startswith("0") or paren0:
             return None
         if len(d) < 8 or len(d) > 15:
             return None
@@ -117,6 +142,8 @@ def key_problem(value, other=None):
     n = len(value)
     if n < 32 or n > 200:
         return "length"
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        return "format"      # exactly 64 lowercase hex characters: the fingerprints are HMACs of FIXED strings, so a guessable phrase could be brute-forced offline
     cnt = collections.Counter(value)
     h = -sum((c / n) * math.log2(c / n) for c in cnt.values())
     if len(cnt) < 12 or h < 3.0 or max(cnt.values()) * 4 > n:
@@ -137,12 +164,12 @@ def key_problem(value, other=None):
 
 def _epoch(at) -> int:
     if isinstance(at, (int, float)):
-        return int(at)
+        return math.floor(at)
     if isinstance(at, str):
         at = dt.datetime.fromisoformat(at.replace("Z", "+00:00"))
     if at.tzinfo is None:
         raise ValueError("captured_at must carry a time zone")
-    return int(at.timestamp())
+    return math.floor(at.timestamp())      # FLOOR, like SQL floor(extract(epoch ...)): a fraction of a second never rounds up
 
 
 _REF_OK = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,99}\Z")

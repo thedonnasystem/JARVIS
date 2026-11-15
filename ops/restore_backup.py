@@ -12,7 +12,7 @@ because triggers are switched off while rows are loaded).
   python3 ops/restore_backup.py --b2-latest --wipe --report report.json
 
 What it checks, in order (any failure => non-zero exit, and the report says which):
-  1 the encrypted file's sha256 equals its .sha256 sidecar (and --expect-sha256 if given, e.g. the value in audit_log)
+  1 the encrypted file's sha256 equals its .sha256 sidecar (and --expect-sha256 if given, from the owner's own records, never audit_log)
   2 it decrypts with BACKUP_KEY; manifest, schema.json and every table file match the manifest's sha256 and row counts
   3 the schema (extensions, sequences, tables, functions, constraints, indexes, triggers, views, RLS, policies, grants) is rebuilt from schema.json
   4 every row is loaded; foreign keys are validated; sequences are advanced
@@ -22,7 +22,7 @@ What it checks, in order (any failure => non-zero exit, and the report says whic
   7 smoke tests that exercise restored functions (spend gateway refuses when the kill switch is on; capital_mode() runs)
   8 SUPPRESSION: the keyed-hash suppression list in the file is checked (sha256, count, digest recomputed here), staged in the restored database as the EXPECTED CHECKPOINT,
     and the outreach gate is set to 'unverified' (default-deny). The restored database must refuse all outreach (ffm_outreach_gate_open() = false) or the restore FAILS.
-    A restore REQUIRES --expect-sha256 (the file hash from your audit log / own records): only then is the file's checkpoint staged. With --i-accept-unverified-suppression instead, the
+    A restore REQUIRES --expect-sha256 (the file hash from the owner's OWN records, NOT audit_log: service_role can write it): only then is the file's checkpoint staged. With --i-accept-unverified-suppression instead, the
     checkpoint in the file is IGNORED and the gate stays closed. A schema with no outreach gate at all FAILS the restore. A provider restore (PITR / pg_dump) does NOT go through this tool:
     the owner must run ffm_close_outreach_gate immediately after it (BACKUP_RECOVERY.md).
     Nothing is verified automatically: the owner re-supplies the suppression key, imports/restores the list and runs the owner-only verification (printed at the end).
@@ -710,7 +710,7 @@ def main():
     if not (args.file or args.b2_latest or args.b2_name or args.list):
         ap.error("give --file, --b2-latest, --b2-name or --list")
     if not (args.list or args.verify_only or args.expect_sha256 or args.i_accept_unverified_suppression):
-        ap.error("a restore needs --expect-sha256 <the file hash recorded in the audit log / your own records> (so the suppression checkpoint inside the file can be trusted), "
+        ap.error("a restore needs --expect-sha256 <the file hash recorded in YOUR OWN records, not audit_log (service_role can write it)> (so the suppression checkpoint inside the file can be trusted), "
                  "or --i-accept-unverified-suppression (the checkpoint is then ignored and the outreach gate stays closed)")
     rep = {"started_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "steps": {}}
     code = 0

@@ -83,7 +83,7 @@ begin
   if exists (select 1 from pg_proc where pronamespace = 'public'::regnamespace and proname in ('ffm_secret', 'ffm_get_key', 'get_secret')) then raise exception 'G5 a function that hands out a key exists'; end if;
   for x in select p.oid::regprocedure::text as sig, p.oid, pg_get_functiondef(p.oid) as def from pg_proc p where p.pronamespace = 'public'::regnamespace
               and p.proname in ('ffm_hmac_sha256', 'normalize_phone', 'ffm_append_only', 'ffm_capture_immutable', 'ffm_contact_mac', 'ffm_set_key', 'ffm_key_fingerprint', 'ffm_register_wording',
-                                'ffm_capture_canonical', 'ffm_ingest_capture', 'ffm_register_capture_owner', 'ffm_record_consent', 'ffm_gate_no_delete', 'ffm_lp', 'ffm_key_problem', 'ffm_sup_message', 'outreach_send_allowed', 'outreach_recipient_problem', 'is_suppressed',
+                                'ffm_capture_canonical', 'ffm_ingest_capture', 'ffm_register_capture_owner', 'ffm_record_consent', 'ffm_gate_no_delete', 'ffm_lp', 'ffm_cc_len', 'ffm_key_problem', 'ffm_sup_message', 'outreach_send_allowed', 'outreach_recipient_problem', 'is_suppressed',
                                 'ffm_is_phone_suppressed', 'ffm_outreach_gate_open', 'ffm_outreach_gate_status', 'ffm_close_outreach_gate', 'ffm_suppression_set', 'ffm_suppression_digest',
                                 'backup_suppression_export', 'ffm_stage_suppression_checkpoint', 'ffm_import_suppression_hashes', 'ffm_verify_suppression', 'ffm_contact_status', 'ffm_can_contact',
                                 'ffm_withdraw_consent', 'ffm_erase_lead', 'outbox_dnc_guard') loop

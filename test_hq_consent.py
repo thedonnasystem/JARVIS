@@ -49,6 +49,29 @@ class Phone(unittest.TestCase):
             self.assertEqual(len(got), 1, g); self.assertIsNotNone(next(iter(got)), g)
         self.assertEqual(C.normalize_phone("+39 06 1234 5678"), "+390612345678")     # Italy keeps its 0
 
+    def test_differential_fuzz_corpus_is_in_sync_and_unicode_separators_are_rejected(self):
+        """Re-review item 3: 6,000 generated inputs (sqltests/data/phone_fuzz.tsv) run through BOTH implementations (this file; the SQL test runs the same rows). The corpus must equal what
+        the generator produces from the Python mirror, so it cannot drift."""
+        import subprocess, sys
+        r = subprocess.run([sys.executable, "-I", os.path.join(HERE, "scripts", "gen_phone_fuzz.py"), "--check"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with open(os.path.join(HERE, "sqltests", "data", "phone_fuzz.tsv"), encoding="utf-8", newline="") as f:
+            n = sum(1 for _ in f)
+        self.assertGreaterEqual(n, 5000)
+        for sep in ("\u2028", "\u2029", "\u1680"):
+            self.assertIsNone(C.normalize_phone(f"+44{sep}20 7946 0958"), repr(sep))
+            self.assertIsNone(C.normalize_phone(f"+44 20 7946 0958{sep}"), repr(sep))
+
+    def test_trunk_zero_for_every_listed_country_and_fail_closed_for_the_rest(self):
+        for cc, mob in (("31", "6 12345678"), ("353", "1 234 5678"), ("91", "98 1234 5678"), ("81", "90 1234 5678"), ("46", "70 123 45 67"), ("27", "82 123 4567"), ("41", "79 123 45 67"), ("972", "50 123 4567")):
+            plain, trunk, par = f"+{cc} {mob}", f"+{cc} 0{mob}", f"+{cc} (0)" + mob
+            self.assertIsNotNone(C.normalize_phone(plain), plain)
+            self.assertEqual(C.normalize_phone(trunk), C.normalize_phone(plain), trunk)
+            self.assertEqual(C.normalize_phone(par), C.normalize_phone(plain), par)
+        for unknown in ("+977 01 123 4567", "+995 0 32 123 4567", "+977 (0)1 123 4567", "+36 0 20 123 4567"):
+            self.assertIsNone(C.normalize_phone(unknown), unknown)
+        self.assertEqual(C.cc_len("353123"), 3); self.assertEqual(C.cc_len("31612"), 2); self.assertEqual(C.cc_len("7912"), 1); self.assertEqual(C.cc_len("20101"), 2); self.assertEqual(C.cc_len("212612"), 3)
+
     def test_invisible_and_none(self):
         self.assertIsNone(C.normalize_phone(None))
         self.assertEqual(C.normalize_phone("613​-555-0101‎"), "+16135550101")
@@ -59,7 +82,7 @@ class Phone(unittest.TestCase):
 
     def test_ambiguous_or_unusable_is_none(self):
         for bad in ["555-0101", "1-800-FLOWERS", "44 20 7946 0958", "613-555-0101, 613-555-0102", "+1 (013) 555-0101", "call me 613-555-0101", "",
-                    "+39 (0)6 1234 5678", "+34 0612 345 678", "+91 (0)98 1234 5678", "+44 00 20 7946 0958"]:
+                    "+39 (0)6 1234 5678", "+34 0612 345 678", "+44 00 20 7946 0958"]:
             self.assertIsNone(C.normalize_phone(bad), bad)
 
 
@@ -109,6 +132,16 @@ class Primitives(unittest.TestCase):
             self.assertNotEqual(C.sup_message(canon[:cut], canon[cut:]), canon)
         self.assertFalse(canon.startswith("sup|v1|"))
 
+    def test_fractional_seconds_truncate_like_sql_floor(self):
+        """Re-review item 2: SQL floor(extract(epoch)), not a rounding cast. 12:00:00.75 and 12:00:00 give the same canonical text; so does 11:59:59.999999 -> ...:59."""
+        base = dict(workspace_id="w", capture_ref="ref-1", channel="sms", wording_version="v1", wording_sha256="b" * 64, contact="c", artifact_sha256="a" * 64)
+        z = dt.timezone.utc
+        a = C.capture_canonical(captured_at=dt.datetime(2026, 11, 1, 12, 0, 0, tzinfo=z), **base)
+        self.assertEqual(a, C.capture_canonical(captured_at=dt.datetime(2026, 11, 1, 12, 0, 0, 750000, tzinfo=z), **base))
+        self.assertEqual(a, C.capture_canonical(captured_at="2026-11-01T12:00:00.999999Z", **base))
+        self.assertEqual(a, C.capture_canonical(captured_at=1793534400.75, **base))
+        self.assertNotEqual(a, C.capture_canonical(captured_at=dt.datetime(2026, 11, 1, 11, 59, 59, 999999, tzinfo=z), **base))
+
     def test_lp(self):
         self.assertEqual(C.lp("ab"), "2:ab"); self.assertEqual(C.lp("é"), "2:é")   # BYTE length, as octet_length in SQL
         self.assertEqual(C.lp(""), "0:")
@@ -119,28 +152,57 @@ class Primitives(unittest.TestCase):
         self.assertNotEqual(C.capture_seal(K1, **kw), C.capture_seal(K2, **kw))
 
 
+def key_spec(x):
+    """Decode a key_cases.tsv spec (the SQL test decodes the same): \\N, lit:<text>, sha256:<seed>, mix:<seedA>:<seedB>:<n> (n hex chars of A then the rest of B), splice:<seed>:<text> (text written over
+    characters 20.. of sha256(seed)), upper:<seed>. Keys are derived at run time so no key-shaped literal sits in the repository."""
+    h = lambda t: hashlib.sha256(t.encode()).hexdigest()
+    if x == "\\N":
+        return None
+    kind, _, rest = x.partition(":")
+    if kind == "lit":
+        return rest
+    if kind == "sha256":
+        return h(rest)
+    if kind == "mix":
+        a, b, n = rest.split(":")
+        return h(a)[:int(n)] + h(b)[:64 - int(n)]
+    if kind == "splice":
+        seed, ins = rest.split(":")
+        v = h(seed)
+        return v[:20] + ins + v[20 + len(ins):]
+    if kind == "upper":
+        return h(rest).upper()
+    raise ValueError(x)
+
+
 def key_cases():
     out = []
-    with open(os.path.join(HERE, "sqltests", "data", "key_cases.tsv"), encoding="utf-8") as f:
+    with open(os.path.join(HERE, "sqltests", "data", "key_cases.tsv"), encoding="utf-8", newline="") as f:
         for line in f:
             v, o, want = line.rstrip("\n").split("\t")
-            spec = lambda x: None if x == "\\N" else (hashlib.sha256(x[7:].encode()).hexdigest() if x.startswith("sha256:") else x[4:])
-            out.append((spec(v), spec(o), want))
+            out.append((key_spec(v), key_spec(o), want))
     return out
 
 
 class KeyPolicy(unittest.TestCase):
     def test_shared_table_with_the_sql_test(self):
         cases = key_cases()
-        self.assertGreater(len(cases), 15)
+        self.assertGreater(len(cases), 20)
         for v, o, want in cases:
             self.assertEqual(C.key_problem(v, o) or "ok", want, (v[:20], want))
 
     def test_identical_and_contained_keys_are_refused(self):
         self.assertEqual(C.key_problem(K1, K1), "related_key")
-        self.assertEqual(C.key_problem("Q" + K1, K1), "related_key")
+        self.assertEqual(C.key_problem("Q" + K1, K1), "format")
         self.assertIsNone(C.key_problem(K1, K2))
         self.assertEqual(C.key_problem(None), "missing")
+
+    def test_a_guessable_phrase_is_refused_whatever_its_entropy(self):
+        """Re-review item 5: the key fingerprints are HMACs of fixed strings, so only 64 lowercase hex characters (32 random bytes) are accepted."""
+        for phrase in ("correct horse battery staple 2024!!", "correct-horse-battery-staple-2024-correct-horse-battery-staple", "Zq8!mK3#vR7$pL2@xN5%tB9^wC4&yH6*jD1-aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW"):
+            self.assertIn(C.key_problem(phrase), ("length", "format"), phrase)
+        self.assertEqual(C.key_problem(K1.upper()), "format")
+        self.assertIsNone(C.key_problem(K1))
 
     def test_cli_never_prints_the_key(self):
         import subprocess, sys
