@@ -4,6 +4,7 @@
 --   O  S3  2-character CJK / Korean / Arabic names, a two-part name in either order, small-caps and Latin-alpha look-alikes
 --   P      a JSON number that is a known phone under an allow-listed key
 begin;
+\ir include/legacy_spec.sql
 do $$
 declare
   v uuid; ag text; ctx jsonb; pads text; f record; a text; i int; r text; res text; n0 int; k0 text; txt text; snap jsonb; rec record; nm text; fn text; sn text; tpl text[]; s text;

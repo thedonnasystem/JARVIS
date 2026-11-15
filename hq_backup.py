@@ -207,6 +207,12 @@ def check_redaction(snap: dict) -> dict:
     return red
 
 
+def blanked_columns(spec) -> list:
+    """TABLE.COLUMN of every column the database exports blank (mode 'blank': free text written by agents, scrapers, clients or counterparties). They go into the manifest so the restore tool
+    knows they hold no data: it restores them as NULL where the column allows it and as an empty value (empty string / {} / []) where it does not."""
+    return sorted(f"{x.get('table_name')}.{x.get('column_name')}" for x in spec or [] if isinstance(x, dict) and x.get("mode") == "blank")
+
+
 def strict_columns(spec) -> dict:
     """{table: [column]} of every strict column in the snapshot's own spec (so a new column the database treats as strict is checked here too)."""
     out = {}
@@ -325,18 +331,35 @@ def _read_all(names, schema) -> dict:
     return out
 
 
+def _epoch() -> dict | None:
+    """The redaction-source epoch vector (backup_epoch(): one counter bumped by owner-only triggers on every insert, update, delete and truncate of a client / lead / suppression source table and of the deny-list,
+    plus the source row counts and a hash of the redaction code and the export policy). None when the database cannot tell: that is NOT consistent."""
+    try:
+        e = hq._request("POST", "/rest/v1/rpc/backup_epoch", {}, timeout=60)
+    except Exception:
+        return None
+    return e if isinstance(e, dict) and isinstance(e.get("seq"), int) and not isinstance(e.get("seq"), bool) else None
+
+
 def _read_consistent(names, schema) -> tuple[dict, dict]:
-    """The REST API cannot give one transaction across requests, so read every table twice and accept only when both passes
-    are byte-identical (nothing changed anywhere while we were reading). Retries a few times; if the data keeps moving the
-    backup is still made but is flagged consistent=False so the owner knows and the restore tool warns."""
-    first = _read_all(names, schema)
+    """Fallback (no database snapshot function): the REST API cannot give one transaction across requests, so every table is read twice and the pass counts only when both reads are
+    byte-identical AND the redaction-source epoch is the same before and after (nothing changed anywhere). Without a readable epoch the result is NOT verified consistent, and a backup
+    that is not verified consistent is never uploaded (run())."""
+    last = None
     for attempt in range(1, CONSISTENCY_ATTEMPTS + 1):
+        e0 = _epoch()
+        first = _read_all(names, schema)
         second = _read_all(names, schema)
+        e1 = _epoch()
         moved = sorted(t for t in names if hashlib.sha256(first[t][0]).digest() != hashlib.sha256(second[t][0]).digest())
-        if not moved:
-            return second, {"consistent": True, "method": "two identical full reads", "attempts": attempt}
-        first = second
-    return second, {"consistent": False, "method": "two identical full reads", "attempts": CONSISTENCY_ATTEMPTS, "changing_tables": moved[:10]}
+        epoch_state = "unavailable" if (e0 is None or e1 is None) else ("unchanged" if e0 == e1 else "changed")
+        last = (second, moved, epoch_state, attempt)
+        if not moved and epoch_state == "unchanged":
+            return second, {"consistent": True, "method": "two identical full reads and an unchanged source epoch", "epoch": epoch_state, "attempts": attempt}
+        if epoch_state == "unavailable":
+            break                                                     # retrying cannot make an unreadable epoch readable
+    second, moved, epoch_state, attempt = last
+    return second, {"consistent": False, "method": "two identical full reads and an unchanged source epoch", "epoch": epoch_state, "attempts": attempt, "changing_tables": moved[:10]}
 
 
 def _encode_rows(rows: list) -> tuple[bytes, int]:
@@ -352,6 +375,24 @@ def _snapshot_cost() -> dict | None:
         return None
 
 
+def _deny_prepare():
+    """The whole-export deny-list scan, once, for this run. Returns this run's id (random, bound to the caller) or None (then every page runs the whole scan itself: slower, never skipped)."""
+    try:
+        prep = hq._request("POST", "/rest/v1/rpc/backup_deny_prepare", {}, timeout=300)
+        run = prep.get("run") if isinstance(prep, dict) else None
+        return run if isinstance(run, str) and len(run) == 36 else None
+    except Exception:
+        return None
+
+
+def _deny_release(run) -> None:
+    """Delete THIS run's cached scan result (and expired ones). Best effort: the database also expires and purges them."""
+    try:
+        hq._request("POST", "/rest/v1/rpc/backup_deny_release", {"p_run": run} if run else {}, timeout=60)
+    except Exception:
+        pass
+
+
 def _read_paged(pol: dict, schema: dict) -> tuple[dict, dict, dict]:
     """Redacted export in pages for volumes one statement cannot cover. Every table's RAW digest (a hash, no data) is read before and after the pages;
     equal digests prove nothing changed while we read (the same claim as two identical full reads, with no raw text leaving the database). Retries, then flags consistent=False."""
@@ -360,38 +401,37 @@ def _read_paged(pol: dict, schema: dict) -> tuple[dict, dict, dict]:
     check_redaction({"redaction": meta})
     last = None
     for attempt in range(1, CONSISTENCY_ATTEMPTS + 1):
+        e0 = _epoch()
         before = {t: hq._request("POST", "/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
-        run = None
-        try:                                           # the deny-list scan of the WHOLE export once, so a page's result never depends on which rows share it (a failure here only makes each page do the scan itself)
-            prep = hq._request("POST", "/rest/v1/rpc/backup_deny_prepare", {}, timeout=300)
-            run = prep.get("run") if isinstance(prep, dict) else None
-        except Exception:
-            run = None
-        data = {}
-        for t in names:
-            rows, off = [], 0
-            while off < MAX_ROWS_PER_TABLE:
-                page = hq._request("POST", "/rest/v1/rpc/backup_snapshot_page", {"p_table": t, "p_offset": off, "p_limit": PAGE_REDACT, **({"p_run": run} if run else {})}, timeout=180)
-                got = page.get("rows") if isinstance(page, dict) else None
-                if not isinstance(got, list):
-                    raise BackupError(f"{t}: backup_snapshot_page() returned an unexpected result")
-                if not got:
-                    break
-                rows.extend(got)
-                off += len(got)
-            else:
-                raise BackupError(f"{t}: more than {MAX_ROWS_PER_TABLE} rows; refusing to write a partial backup")
-            data[t] = rows
+        run = _deny_prepare()
         try:
-            hq._request("POST", "/rest/v1/rpc/backup_deny_release", {}, timeout=60)
-        except Exception:
-            pass
+            data = {}
+            for t in names:
+                rows, off = [], 0
+                while off < MAX_ROWS_PER_TABLE:
+                    page = hq._request("POST", "/rest/v1/rpc/backup_snapshot_page", {"p_table": t, "p_offset": off, "p_limit": PAGE_REDACT, **({"p_run": run} if run else {})}, timeout=180)
+                    got = page.get("rows") if isinstance(page, dict) else None
+                    if not isinstance(got, list):
+                        raise BackupError(f"{t}: backup_snapshot_page() returned an unexpected result")
+                    if not got:
+                        break
+                    rows.extend(got)
+                    off += len(got)
+                else:
+                    raise BackupError(f"{t}: more than {MAX_ROWS_PER_TABLE} rows; refusing to write a partial backup")
+                data[t] = rows
+        finally:
+            _deny_release(run)                         # on success AND on any exception: this run's cached scan result is deleted (an unreleased one also expires by itself)
         after = {t: hq._request("POST", "/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
+        e1 = _epoch()
+        epoch_state = "unavailable" if (e0 is None or e1 is None) else ("unchanged" if e0 == e1 else "changed")
         moved = sorted(t for t in names if before[t] != after[t])
-        last = (data, meta, moved)
-        if not moved:
-            return data, meta, {"consistent": True, "method": "paged redacted read between two identical raw table digests", "attempts": attempt}
-    return last[0], last[1], {"consistent": False, "method": "paged redacted read between two raw table digests", "attempts": CONSISTENCY_ATTEMPTS, "changing_tables": last[2][:10]}
+        last = (data, meta, moved, epoch_state)
+        if not moved and epoch_state == "unchanged":
+            return data, meta, {"consistent": True, "method": "paged redacted read between two identical raw table digests and an unchanged redaction-source epoch", "epoch": epoch_state, "attempts": attempt}
+        if epoch_state == "unavailable":
+            break
+    return last[0], last[1], {"consistent": False, "method": "paged redacted read between two raw table digests and the redaction-source epoch", "epoch": last[3], "attempts": CONSISTENCY_ATTEMPTS, "changing_tables": last[2][:10]}
 
 
 def _try_snapshot() -> tuple[dict | None, str]:
@@ -428,7 +468,7 @@ def dump() -> tuple[bytes, dict]:
         pdata, meta, cons = _read_paged(pol, schema)
         unc = assert_redacted(pdata, meta.get("spec"))
         manifest["redaction"] = {"mode": "database_paged", "version": meta["version"], "estimated_single_statement_seconds": cost["est_seconds"],
-                                 "columns": sorted(f"{s['table_name']}.{s['column_name']}" for s in meta["spec"] if isinstance(s, dict)), "fields_failed_closed": unc}
+                                 "columns": sorted(f"{s['table_name']}.{s['column_name']}" for s in meta["spec"] if isinstance(s, dict)), "blanked_columns": blanked_columns(meta["spec"]), "fields_failed_closed": unc}
         data_by_table = {t: _encode_rows(rows) for t, rows in sorted(pdata.items())}
         manifest["table_list_source"] = "database export policy"
         manifest["consistency"] = cons
@@ -447,7 +487,7 @@ def dump() -> tuple[bytes, dict]:
         schema = snap["schema"]
         unc = assert_redacted(snap["data"], snap["redaction"]["spec"])
         manifest["redaction"] = {"mode": "database", "version": snap["redaction"]["version"], "known_client_terms": snap["redaction"].get("known_client_terms"),
-                                 "columns": sorted(f"{s['table_name']}.{s['column_name']}" for s in snap["redaction"]["spec"] if isinstance(s, dict)), "fields_failed_closed": unc}
+                                 "columns": sorted(f"{s['table_name']}.{s['column_name']}" for s in snap["redaction"]["spec"] if isinstance(s, dict)), "blanked_columns": blanked_columns(snap["redaction"]["spec"]), "fields_failed_closed": unc}
         data_by_table = {t: _encode_rows(rows) for t, rows in sorted(snap["data"].items())}
         manifest["table_list_source"] = "database export policy"
         manifest["consistency"] = {"consistent": True, "method": "single SQL statement snapshot (all tables + schema)", "attempts": 1}
@@ -489,6 +529,16 @@ def dump() -> tuple[bytes, dict]:
     return buf.getvalue(), manifest
 
 
+def _require_verified_consistency(manifest: dict) -> None:
+    """A backup is uploaded ONLY when its consistency was explicitly verified: consistency.consistent is exactly True. False, missing, None, a string or anything else is refused, whatever
+    the export mode (single statement, paged, fallback). The previous verified backup is never touched (the bot's key cannot delete; nothing here overwrites a name)."""
+    c = manifest.get("consistency") if isinstance(manifest, dict) else None
+    if not (isinstance(c, dict) and c.get("consistent") is True):
+        why = "missing" if not isinstance(c, dict) else ("the data changed while it was read" if c.get("consistent") is False else "unknown")
+        ep = c.get("epoch") if isinstance(c, dict) else None
+        raise BackupError(f"backup not verified consistent ({why}{', source epoch ' + str(ep) if ep else ''}); not uploaded, the previous verified backup is kept; will retry later")
+
+
 def encrypt(blob: bytes) -> bytes:
     return _fernet().encrypt(blob)
 
@@ -502,6 +552,8 @@ def verify(encrypted: bytes, manifest: dict) -> list[str]:
             stored = json.loads(tar.extractfile("manifest.json").read())
             if stored != manifest:
                 problems.append("manifest inside the file differs from the one that was built")
+            if not (isinstance(manifest.get("consistency"), dict) and manifest["consistency"].get("consistent") is True):
+                problems.append("consistency is not verified true")
             for t, meta in manifest["tables"].items():
                 f = tar.extractfile(f"data/{t}.jsonl")
                 raw = b"" if f is None else f.read()
@@ -802,6 +854,7 @@ def run(force: bool = False) -> dict:
                 out["reason"] = "could not read backup state"; return out
         try:
             blob, manifest = dump()
+            _require_verified_consistency(manifest)
             enc = encrypt(blob)
             problems = verify(enc, manifest)
             if problems:
@@ -831,8 +884,6 @@ def run(force: bool = False) -> dict:
         except Exception:
             out["reason"] = "uploaded, but the audit row could not be written"
             logger.warning("backup: audit row not written")
-        if not manifest["consistency"]["consistent"]:
-            _tell_owner("Backup saved, but the data was changing while it was read, so tables may be slightly out of step with each other. Tomorrow's backup will try again.")
         if not manifest["complete"]:
             _tell_owner("Backup saved, but it holds data only: the schema snapshot function is not installed in the database yet. Ask for the backup_schema migration.")
     finally:

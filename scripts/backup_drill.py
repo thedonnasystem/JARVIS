@@ -180,7 +180,7 @@ def main():
         enc = next(f["bytes"] for f in fake.files if f["fileName"].endswith(".enc"))
         check("3 stored object is ciphertext (no plaintext leak)", b"Lead 3" not in enc and b"example.com" not in enc and b"caf\xc3\xa9" not in enc and Fernet(key.encode()).decrypt(enc) != enc)
         check("4 stored sha256 equals sha256 of stored bytes", out["sha256"] == hashlib.sha256(enc).hexdigest())
-        audit = adapter("GET", "/rest/v1/audit_log?action=eq.backup_ok&select=detail&limit=1")
+        audit = adapter("GET", "/rest/v1/audit_log?action=eq.backup_ok&select=detail&order=at.desc&limit=1")   # newest: earlier runs in the same scratch DB (the race check) leave their own backup_ok rows
         check("5 audit_log recorded backup_ok with checksum and no secret", bool(audit) and audit[0]["detail"]["sha256"] == out["sha256"]
               and key not in json.dumps(audit) and "secretW" not in json.dumps(audit))
 
@@ -219,6 +219,10 @@ def main():
             dcur.execute("select has_schema_privilege('anon','public','USAGE'), has_schema_privilege('service_role','public','USAGE')")
             sp = dcur.fetchone()
         check("14 comments (table, column, view, function) and schema USAGE grants are restored", cm == ("Reference table: it's \"quoted\" 美味", "human label", "view comment", "returns the capital mode") and sp == (True, True), f"{cm} {sp}")
+        with psycopg2.connect(DST) as dc, dc.cursor() as dcur:
+            dcur.execute("select (select count(*) from public.tasks where result is not null and result <> ''), (select count(*) from public.memory where content <> ''), (select count(*) from public.memory where kind = 'fact' and source is null), (select count(*) from public.memory)")
+            bl = dcur.fetchone()
+        check("E1 RESTORE OF BLANKED COLUMNS: tasks.result / memory.content come back empty, memory.source satisfies memory_fact_needs_source (marker), no constraint broken", bl[0] == 0 and bl[1] == 0 and bl[2] == 0 and bl[3] > 0, str(bl))
         import io as _io, tarfile as _tf
         mf = json.loads(_tf.open(fileobj=_io.BytesIO(Fernet(key.encode()).decrypt(enc)), mode="r:gz").extractfile("manifest.json").read())
         _tar = _tf.open(fileobj=_io.BytesIO(Fernet(key.encode()).decrypt(enc)), mode="r:gz")
@@ -250,10 +254,10 @@ def main():
               and any(r["action"] == "do_not_contact" and r["detail"].get("reason_code") in ("unsubscribe_reply", "owner_text") for r in _rows["audit_log"]), f"audit {aud}, tasks {tsk}")
         check("P6 the setter payout is in the ledger by setter id (source fix), and the won deal by deal id, with the amounts", setter_notes >= 1 and any(r["note"].startswith("Setter payout (close): setter ") and r["amount_cents"] == 36000 for r in _led)
               and any(r["note"].startswith("deal ") and r["note"].endswith(": owner confirmed win") and r["amount_cents"] == 250000 for r in _led), "")
-        _t = {r["title"]: r["result"] for r in _rows["tasks"]}
-        check("P7 task results: the clean business text survives, the raw/encoded ones are redacted or fail closed, and the oversize drill result fails closed", all("3 prospects, 2 verified" in _t[k] and "https://acmeplumbing.ca/about" in _t[k] for k in _t if k.startswith("Drill research") and "encoded" not in k)
-              and all("Vandenbroek" not in (v or "") for v in _t.values()) and any(v == "[redacted:uncertain]" for k, v in _t.items() if k.startswith("Task 5 ")), "")
-        check("P8 the export says what it redacted (manifest) and that nothing needed the code-level fallback", mf.get("redaction", {}).get("mode") == "database" and "tasks.result" in mf["redaction"]["columns"] and "agent_runs.summary" in mf["redaction"]["columns"], json.dumps(mf.get("redaction"))[:160])
+        _t = {r["id"]: r["result"] for r in _rows["tasks"]}
+        check("P7 task results are BLANK in the off-site file (agent-written free text is not exported: structured-only or blank), so no seeded client text, clean or encoded, can be in them; the oversize drill result too", len(_t) > 0 and all(v in ("", None) for v in _t.values()), f"{len(_t)} tasks, non-blank: {[k for k, v in _t.items() if v not in ('', None)][:3]}")
+        check("P8 the export says what it redacted (manifest) and that nothing needed the code-level fallback", mf.get("redaction", {}).get("mode") == "database" and "tasks.result" in mf["redaction"]["columns"] and "agent_runs.summary" in mf["redaction"]["columns"]
+              and {"tasks.result", "tasks.title", "tasks.detail", "memory.content", "owner_messages.body", "missions.result", "escalations.evidence", "agent_runs.summary"} <= set(mf["redaction"].get("blanked_columns", [])), json.dumps(mf.get("redaction"))[:160])
         check("2b the backup used the single-statement database snapshot (consistent=True)", mf["consistency"]["consistent"] and "single SQL statement" in mf["consistency"]["method"], json.dumps(mf["consistency"]))
         # live-concurrency proof: a writer commits paired rows into two tables (one transaction each) while snapshots are taken; every snapshot must show matching pairs
         import threading, time
@@ -336,6 +340,7 @@ def main():
         for t in ("ledger", "memory", "tasks"):
             data[t] = [json.loads(ln) for ln in tar.extractfile(f"data/{t}.jsonl").read().decode().split("\n") if ln.strip()]
         rr = {}
+        R.apply_blanks(json.loads(tar.extractfile("schema.json").read()), data, json.loads(tar.extractfile("manifest.json").read()), {})   # the restore applies the blanks to the loaded rows before comparing, so the control must too
         ok_dmg = R.verify_rows(cur, data, rr)
         conn.rollback(); conn.close()
         check("N7 row verifier catches a deleted row and an altered value", (not ok_dmg) and not rr["rows"]["ledger"]["identical"] and not rr["rows"]["memory"]["identical"] and rr["rows"]["tasks"]["identical"],

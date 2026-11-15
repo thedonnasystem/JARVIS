@@ -6,6 +6,7 @@
 --   D  integrity: ledger / audit_log / tasks / agent_runs identical to the live rows in everything except the redacted column; counts and sums equal
 --   E  grants, response shape, idempotence
 begin;
+\ir include/legacy_spec.sql
 create temp table lv (id text, input text, forbid text[], keep text[], expect text) on commit drop;
 do $$
 declare

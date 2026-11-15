@@ -26,7 +26,12 @@ REDACTION = {"version": 2, "known_client_terms": 4, "spec": [{"table_name": t, "
 POLICY = {"exported": ["ideas", "ledger", "tasks"], "excluded": [{"table": "leads", "class": "client_pii", "reason": "client personal data"}, {"table": "push_config", "class": "secret", "reason": "keys"}], "unclassified": []}
 
 
+EPOCH = {"seq": 1, "rows": {"leads": 1}, "denylist_rows": 3, "code": "x"}      # what backup_epoch() returns; tests mutate it to model a change between reads
+
+
 def fake_request(method, path, body=None, prefer=None, timeout=30, exact=False):
+    if method == "POST" and path.endswith("/rpc/backup_epoch"):
+        return json.loads(json.dumps(EPOCH))
     if method == "POST" and path.endswith("/rpc/backup_export_policy"):
         return POLICY
     if method == "POST" and path.endswith("/rpc/backup_schema"):
@@ -52,7 +57,7 @@ class FakeStore:
         self.posts = []
 
     def __call__(self, method, path, body=None, prefer=None, timeout=30, exact=False):
-        if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy")):
+        if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch")):
             self.posts.append((path, body))
             return None
         return fake_request(method, path, body, prefer)
@@ -163,7 +168,7 @@ class Consistency(unittest.TestCase):
     def test_stable_data_is_consistent(self):
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=fake_request):
             _, m = B.dump()
-        self.assertTrue(m["consistency"]["consistent"]); self.assertEqual(m["consistency"]["method"], "two identical full reads")
+        self.assertTrue(m["consistency"]["consistent"]); self.assertTrue(m["consistency"]["method"].startswith("two identical full reads"))
         self.assertEqual(m["consistency"]["attempts"], 1); self.assertIn("snapshot_unavailable", m["consistency"])
 
     def test_data_that_settles_is_retried_then_consistent(self):
@@ -179,20 +184,126 @@ class Consistency(unittest.TestCase):
             _, m = B.dump()
         self.assertFalse(m["consistency"]["consistent"])
         self.assertEqual(m["consistency"]["changing_tables"], ["tasks"])
-        self.assertEqual(calls["n"], 1 + B.CONSISTENCY_ATTEMPTS)   # bounded: no endless loop
+        self.assertEqual(calls["n"], 2 * B.CONSISTENCY_ATTEMPTS)   # bounded: two reads per attempt, no endless loop
 
-    def test_inconsistent_backup_still_saved_and_owner_told(self):
-        req, calls = self._moving()
-        sent = []
+    def _run_with(self, req_fn, put=None):
+        sent, audits, puts = [], [], []
         def wrapped(method, path, body=None, prefer=None, timeout=30, exact=False):
             if method == "POST" and path.endswith("/owner_messages"):
-                sent.append(body["body"])
-            return req(method, path, body, prefer)
-        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=wrapped), \
-             mock.patch.object(B, "put_files", return_value={"target": "t", "files": {}}):
+                sent.append(body["body"]); return None
+            if method == "POST" and path.endswith("/audit_log"):
+                audits.append(body["action"]); return None
+            return req_fn(method, path, body, prefer)
+        def fake_put(files):
+            puts.append(sorted(files)); return {"target": "t", "files": {}}
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=wrapped), mock.patch.object(B, "put_files", side_effect=put or fake_put):
             r = B.run(force=True)
-        self.assertTrue(r["ok"])
-        self.assertTrue(any("out of step" in m for m in sent))
+        return r, sent, audits, puts
+
+    def test_inconsistent_backup_is_never_uploaded_and_is_reported_as_failure(self):
+        """Owner directive A: consistent:false is refused (it used to be saved with a warning)."""
+        req, calls = self._moving()
+        r, sent, audits, puts = self._run_with(req)
+        self.assertFalse(r["ok"]); self.assertIn("not verified consistent", r["reason"])
+        self.assertEqual(puts, []); self.assertEqual(audits, ["backup_failed"]); self.assertEqual(len(sent), 1); self.assertIn("Backup failed", sent[0])
+
+    def test_fallback_without_a_readable_epoch_is_not_verified_and_is_refused(self):
+        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_epoch"):
+                raise urllib.error.HTTPError(path, 404, "no function", {}, None)
+            return fake_request(method, path, body, prefer)
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req):
+            _, m = B.dump()
+        self.assertFalse(m["consistency"]["consistent"]); self.assertEqual(m["consistency"]["epoch"], "unavailable")
+        r, sent, audits, puts = self._run_with(req)
+        self.assertFalse(r["ok"]); self.assertEqual(puts, [])
+
+    def test_a_source_epoch_that_changes_during_the_fallback_read_is_refused(self):
+        n = {"c": 0}
+        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_epoch"):
+                n["c"] += 1
+                return {**EPOCH, "seq": n["c"]}        # a different value on every read: a lead changed between the reads
+            return fake_request(method, path, body, prefer)
+        r, sent, audits, puts = self._run_with(req)
+        self.assertFalse(r["ok"]); self.assertEqual(puts, [])
+
+    def test_missing_unknown_or_non_boolean_consistency_is_refused_in_every_mode(self):
+        for bad in (None, {}, {"consistent": None}, {"consistent": "true"}, {"consistent": 1}, {"consistent": False}, "yes"):
+            with self.subTest(bad=bad):
+                real_dump = B.dump
+                def fake_dump():
+                    blob, m = real_dump()
+                    m = dict(m)
+                    if bad is None:
+                        m.pop("consistency", None)
+                    else:
+                        m["consistency"] = bad
+                    return blob, m
+                puts = []
+                with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=fake_request), mock.patch.object(B, "dump", fake_dump), \
+                     mock.patch.object(B, "put_files", side_effect=lambda f: puts.append(f) or {"target": "t", "files": {}}):
+                    r = B.run(force=True)
+                self.assertFalse(r["ok"], bad); self.assertEqual(puts, [], bad)
+
+    def test_previous_good_backup_is_preserved_when_the_next_one_is_refused(self):
+        """Run 1 uploads and is audited; run 2 sees a changing epoch: nothing is uploaded, nothing is deleted or overwritten, the status still points at run 1, the failure is audited and the owner told."""
+        store = {}
+        def put(files):
+            for k, v in files.items():
+                assert k not in store, "a stored backup name was overwritten"
+                store[k] = v
+            return {"target": "t", "files": {}}
+        r1, _, a1, _ = self._run_with(fake_request, put=put)
+        self.assertTrue(r1["ok"]); good = dict(store); self.assertEqual(a1, ["backup_ok"])
+        n = {"c": 0}
+        def moving(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_epoch"):
+                n["c"] += 1
+                return {**EPOCH, "seq": n["c"]}
+            return fake_request(method, path, body, prefer)
+        r2, sent, a2, _ = self._run_with(moving, put=put)
+        self.assertFalse(r2["ok"]); self.assertEqual(a2, ["backup_failed"]); self.assertEqual(store, good)       # byte-identical: the good backup was neither replaced nor removed
+        self.assertTrue(any("Backup failed" in m for m in sent))
+
+
+class RestoreRefusesUnverified(unittest.TestCase):
+    """ops/restore_backup.py never restores an archive whose manifest does not say consistent:true (unless --allow-unverified, for forensics)."""
+    def _archive(self, consistency):
+        real = B.dump
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=fake_request):
+            blob, m = real()
+        import tarfile as tf
+        out = io.BytesIO()
+        with tf.open(fileobj=io.BytesIO(blob), mode="r:gz") as src, tf.open(fileobj=out, mode="w:gz") as dst:
+            for mem in src.getmembers():
+                data = src.extractfile(mem).read()
+                if mem.name == "manifest.json":
+                    mm = json.loads(data)
+                    if consistency is None:
+                        mm.pop("consistency", None)
+                    else:
+                        mm["consistency"] = consistency
+                    data = json.dumps(mm, separators=(",", ":"), sort_keys=True).encode()
+                info = tf.TarInfo(mem.name); info.size = len(data); dst.addfile(info, io.BytesIO(data))
+        with mock.patch.dict(os.environ, ENV):
+            return B.encrypt(out.getvalue())
+
+    def test_refuses_false_missing_and_unknown_and_accepts_true(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops"))
+        import restore_backup as R
+        for bad in (None, {"consistent": False}, {"consistent": "true"}, {}):
+            enc = self._archive(bad)
+            with mock.patch.dict(os.environ, ENV), self.assertRaises(R.Fail, msg=str(bad)):
+                R.open_archive(enc, None, "x", None, {})
+        enc = self._archive({"consistent": True, "method": "t"})
+        with mock.patch.dict(os.environ, ENV):
+            R.open_archive(enc, None, "x", None, {})
+            R.ALLOW_UNVERIFIED = True
+            try:
+                R.open_archive(self._archive({"consistent": False}), None, "x", None, {})
+            finally:
+                R.ALLOW_UNVERIFIED = False
 
 
 class Preflight(unittest.TestCase):
@@ -280,7 +391,7 @@ class Snapshot(unittest.TestCase):
         for err, text in ((urllib.error.HTTPError("u", 500, "x", {}, None), "HTTP 500"), (urllib.error.HTTPError("u", 404, "x", {}, None), "not installed"), (TimeoutError(), "TimeoutError")):
             with mock.patch("hq._request", side_effect=self.snap_req(fail=err)):
                 _, m = B.dump()
-            self.assertIn(text, m["consistency"]["snapshot_unavailable"]); self.assertEqual(m["consistency"]["method"], "two identical full reads")
+            self.assertIn(text, m["consistency"]["snapshot_unavailable"]); self.assertTrue(m["consistency"]["method"].startswith("two identical full reads"))
 
     def test_inconsistent_snapshot_content_is_rejected_not_trusted(self):
         bad = {"ideas": [], "ledger": []}                                    # missing "tasks"
@@ -428,20 +539,19 @@ class ReviewFixes(unittest.TestCase):
     def test_owner_message_failure_does_not_turn_a_good_backup_into_a_failure(self):
         audits = []
         def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_schema"):
+                raise urllib.error.HTTPError(path, 404, "no function", {}, None)       # an incomplete (data-only) backup: the one that sends the owner a notice
             if method == "POST" and path.endswith("/owner_messages"):
                 raise urllib.error.URLError("down")
             if method == "POST" and path.endswith("/audit_log"):
                 audits.append(body["action"]); return None
-            if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy")):
+            if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch")):
                 return None
             return fake_request(method, path, body, prefer)
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req), \
              mock.patch.object(B, "put_files", return_value={"target": "t", "files": {}}), \
              mock.patch.object(B, "dump", wraps=B.dump) as d:
-            # force an inconsistent dump so the owner message path runs
-            orig = B._read_consistent
-            with mock.patch.object(B, "_read_consistent", lambda n, s: (orig(n, s)[0], {"consistent": False, "method": "x", "attempts": 3})):
-                r = B.run(force=True)
+            r = B.run(force=True)
         self.assertTrue(r["ok"]); self.assertEqual(audits, ["backup_ok"])
 
     def test_concurrent_run_is_refused(self):
@@ -816,6 +926,33 @@ class LeakRedactionV2(unittest.TestCase):
         self.assertEqual(state["prepared"], 1); self.assertEqual(state["released"], 1)                       # the whole-export deny scan once per run, released after the pages
         self.assertEqual(state["runs"], {"11111111-1111-4111-8111-111111111111"})                             # every page carries the run id
 
+    def test_a_failed_page_still_releases_the_runs_cache_row(self):
+        """Owner directive C: try/finally. A page that fails (or any exception) must not leave this run's cached scan result behind."""
+        r, state = self._paged_req()
+        def failing(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_snapshot_page") and body["p_table"] == "ideas" and body["p_offset"] == 200:
+                raise urllib.error.HTTPError(path, 500, "boom", {}, None)
+            return r(method, path, body, prefer, timeout, exact)
+        released = []
+        def tracking(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_deny_release"):
+                released.append(body)
+            return failing(method, path, body, prefer, timeout, exact)
+        with mock.patch("hq._request", side_effect=tracking):
+            with self.assertRaises(Exception):
+                B.dump()
+        self.assertEqual(released, [{"p_run": "11111111-1111-4111-8111-111111111111"}])
+
+    def test_a_malformed_run_id_is_not_used(self):
+        r, state = self._paged_req()
+        def bad(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_deny_prepare"):
+                return {"run": "not-a-uuid", "prepared": True}
+            return r(method, path, body, prefer, timeout, exact)
+        with mock.patch("hq._request", side_effect=bad):
+            B.dump()
+        self.assertEqual(state["runs"], {None})              # every page then runs its own whole scan (slower, never skipped)
+
     def test_paged_export_flags_a_table_that_changed_while_reading(self):
         r, _ = self._paged_req(mutate_after_pages=True)
         with mock.patch("hq._request", side_effect=r):
@@ -847,7 +984,7 @@ class FallbackMatchesSpec(unittest.TestCase):
 
     def test_the_spec_has_the_expected_shape(self):
         self.assertGreater(len(self.rows), 200)
-        self.assertGreater(sum(1 for r in self.rows if r[3] in ("strict", "light")), 100)
+        self.assertGreater(sum(1 for r in self.rows if r[3] in ("strict", "light", "blank")), 100)
 
     def test_every_strict_light_and_blank_column_is_blanked_by_the_fallback(self):
         import hq_backup_keep

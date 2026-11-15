@@ -37,5 +37,38 @@ class Acl(unittest.TestCase):
         self.assertEqual(R._acl_grants(None), [])
 
 
+class Blanks(unittest.TestCase):
+    SCHEMA = {"tables": [{"name": "tasks", "columns": [{"name": "result", "type": "text", "notnull": False}, {"name": "title", "type": "text", "notnull": True}, {"name": "tags", "type": "text[]", "notnull": True}, {"name": "meta", "type": "jsonb", "notnull": True}, {"name": "kind", "type": "text", "notnull": True}]}]}
+
+    def test_blank_columns_restore_empty_and_keep_not_null(self):
+        data = {"tasks": [{"id": 1, "result": "", "title": "", "tags": None, "meta": None, "kind": "x"}]}
+        rep = {}
+        R.apply_blanks(self.SCHEMA, data, {"redaction": {"blanked_columns": ["tasks.result", "tasks.title", "tasks.tags", "tasks.meta"]}}, rep)
+        r = data["tasks"][0]
+        self.assertIsNone(r["result"])                                  # nullable -> NULL
+        self.assertEqual((r["title"], r["tags"], r["meta"]), ("", [], {}))   # NOT NULL -> empty value of the right type
+        self.assertEqual(r["kind"], "x")                                 # not blanked: untouched
+        self.assertEqual(rep["blanked_fields_restored_empty"], 4)
+
+    def test_check_constraint_columns_get_a_marker_that_satisfies_them(self):
+        schema = {"tables": [{"name": "memory", "columns": [{"name": "source", "type": "text", "notnull": False}]}, {"name": "payment_instructions", "columns": [{"name": "payee", "type": "text", "notnull": True}]}],
+                  "constraints": [{"table": "memory", "type": "c", "name": "memory_fact_needs_source", "def": "CHECK (((kind <> 'fact'::text) OR (source IS NOT NULL)))"},
+                                  {"table": "payment_instructions", "type": "c", "name": "p", "def": "CHECK ((length(payee) >= 2))"}]}
+        data = {"memory": [{"source": ""}], "payment_instructions": [{"payee": ""}]}
+        R.apply_blanks(schema, data, {"redaction": {"blanked_columns": ["memory.source", "payment_instructions.payee"]}}, {})
+        self.assertEqual(data["memory"][0]["source"], R.BLANK_MARKER)       # not NULL, not ''
+        self.assertGreaterEqual(len(data["payment_instructions"][0]["payee"]), 2)
+
+    def test_unlisted_column_is_never_touched(self):
+        data = {"tasks": [{"id": 1, "result": "keep me", "title": "t", "tags": ["a"], "meta": {"a": 1}, "kind": "x"}]}
+        R.apply_blanks(self.SCHEMA, data, {"redaction": {"blanked_columns": []}}, {})
+        self.assertEqual(data["tasks"][0]["result"], "keep me")
+
+    def test_missing_table_or_column_is_ignored(self):
+        data = {"tasks": [{"id": 1}]}
+        R.apply_blanks(self.SCHEMA, data, {"redaction": {"blanked_columns": ["nope.x", "tasks.nope"]}}, {})
+        self.assertEqual(data["tasks"][0], {"id": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

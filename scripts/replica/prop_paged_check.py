@@ -9,6 +9,7 @@ ops = ["Paid deal 12 of 2026-11-02, $1,250.00 CAD to Hydro Ottawa invoice INV-20
        "Quote #4412 for Smith Plumbing and Heating HVAC install 4,800 CAD", "Rent due 2026-12-01 amount 1,900.00", "Li Ng Wu Ali Lee Ho committee meeting minutes", "Invoice 1042 paid via e-transfer, ref 88421937", "weekly KPI: leads 41, replies 6, booked 2"]
 names = list(CORES.values()) + leads
 tabs = ['tasks.result','ledger.note','agent_runs.summary','escalations.summary','audit_log.v','audit_log.key_deep','tasks.title','tasks.detail','memory.content','ideas.name']
+cur.execute(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'sqltests', 'include', 'legacy_spec.sql')).read())      # the pre-blanking classification (engine test, see the include)
 q("set local session_replication_role = replica")
 N=700; adv=0
 for i in range(N):

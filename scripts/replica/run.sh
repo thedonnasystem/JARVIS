@@ -37,6 +37,8 @@ if python3 -c "import psycopg2" 2>/dev/null; then   # isolated-per-variant leak 
   echo "isolated leak matrix (quick) and paged == single property check"
   REPLICA_URL="$REPLICA_URL" python3 "$here/isolated_leak_check.py" quick || { echo "ISOLATED LEAK MATRIX FAILED"; exit 1; }
   REPLICA_URL="$REPLICA_URL" python3 "$here/prop_paged_check.py" 1 || { echo "PAGED != SINGLE PROPERTY CHECK FAILED"; exit 1; }
+  echo "backup consistency race matrix (item A/B): real hq_backup.run() with committed changes between pages"
+  REPLICA_URL="$REPLICA_URL" python3 "$here/backup_race_check.py" || { echo "BACKUP RACE CHECK FAILED"; exit 1; }
 elif [ -n "${REQUIRE_INTEGRATION:-}" ]; then echo "psycopg2 missing but REQUIRE_INTEGRATION is set"; exit 1; fi
 echo "sprint rollback drill: ops/rollback_sprint12.sql removes only the Sprint 1-2 objects and leaves Phase 1 and the suppression list in place"
 psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/ops/rollback_sprint12.sql" >/dev/null 2>&1 || { echo "SPRINT ROLLBACK FAILED to run"; exit 1; }

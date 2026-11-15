@@ -186,6 +186,32 @@ begin
   end loop;
 end $$;
 
+-- EPOCH (backup consistency): ONE monotonic counter, bumped by statement-level triggers on every source table (insert, update, delete AND truncate) and on the deny-list. A SEQUENCE on purpose:
+-- nextval takes no row lock, so writers never wait for each other or deadlock on it, and a rolled-back writer still moves it (a false alarm discards an archive; it never hides a change).
+-- Owner-only: the sequence has no API privilege, the trigger function is a SECURITY DEFINER trigger (not callable), the ffm_ name keeps it out of the export and out of PostgREST.
+create sequence if not exists public.ffm_redaction_epoch_seq;
+revoke all on sequence public.ffm_redaction_epoch_seq from public, anon, authenticated, service_role;
+drop table if exists public.ffm_redaction_epoch;
+create or replace function public.redaction_epoch_bump() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+begin
+  perform nextval('public.ffm_redaction_epoch_seq');
+  return null;
+end $$;
+revoke all on function public.redaction_epoch_bump() from public, anon, authenticated, service_role;
+do $$
+declare t record;
+begin
+  for t in select distinct s.table_name from public.redaction_sources() s where to_regclass('public.' || s.table_name) is not null loop
+    execute format('drop trigger if exists redaction_epoch on public.%I', t.table_name);
+    execute format('create trigger redaction_epoch after insert or update or delete on public.%I for each statement execute function public.redaction_epoch_bump()', t.table_name);
+    execute format('drop trigger if exists redaction_epoch_trunc on public.%I', t.table_name);
+    execute format('create trigger redaction_epoch_trunc after truncate on public.%I for each statement execute function public.redaction_epoch_bump()', t.table_name);
+  end loop;
+  drop trigger if exists redaction_epoch on public.ffm_redaction_denylist;
+  create trigger redaction_epoch after insert on public.ffm_redaction_denylist for each statement execute function public.redaction_epoch_bump();
+end $$;
+
 -- counts only, never a hash
 create or replace function public.redaction_denylist_status() returns jsonb
 language sql stable security definer set search_path to 'pg_catalog' as $$

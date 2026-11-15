@@ -6,6 +6,7 @@ import json, os, re, sys, unicodedata
 import psycopg2
 
 URL = os.environ["REPLICA_URL"]
+LEGACY = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "sqltests", "include", "legacy_spec.sql")).read()   # the pre-blanking classification: this test exercises the redaction ENGINE on tasks.result etc.
 QUICK = len(sys.argv) > 1 and sys.argv[1] == "quick"
 # (full name, surname-ish fragment that must never reach the export, squashed)
 PEOPLE = [("Corvin Ashgrove-Pellew", "ashgrovepellew"), ("Fenella D'Arcy-Fenwhistle", "darcyfenwhistle"), ("Ottoline Brackenridge", "brackenridge"),
@@ -57,6 +58,7 @@ def case(state, name, frag, label, spelling, col):
     con = psycopg2.connect(URL); con.autocommit = False
     cur = con.cursor()
     try:
+        cur.execute(LEGACY)
         cur.execute("select id from ventures order by slug limit 1"); v = cur.fetchone()[0]
         cur.execute("insert into leads (venture_id, name, email, phone, status) values (%s, %s, %s, %s, 'new')", (v, name, "x@" + frag + "-iso.example", "613-555-0399"))
         if state == "erased":
@@ -73,7 +75,7 @@ def case(state, name, frag, label, spelling, col):
         for t in single:
             rows, off = [], 0
             while True:
-                cur.execute("select public.backup_snapshot_page(%s, %s, 1, %s::uuid)", (t, off, run))
+                cur.execute("select public.backup_snapshot_page(%s, %s, %s, %s::uuid)", (t, off, 7 if QUICK else 1, run))   # quick: pages of 7 (the full matrix and prop_paged_check keep page size 1)
                 got = cur.fetchone()[0]["rows"]
                 if not got: break
                 rows += got; off += len(got)
