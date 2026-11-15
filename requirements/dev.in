@@ -1,0 +1,7 @@
+# Test / CI tooling on top of the runtime set. Source of truth for requirements/dev.lock.
+-c runtime.lock
+-r runtime.in
+# integrations/agent-swarm/hardening tests import yaml
+PyYAML>=6.0
+# dependency vulnerability scan of the locks (CI job `supply-chain`)
+pip-audit>=2.7

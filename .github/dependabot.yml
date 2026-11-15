@@ -1,0 +1,30 @@
+version: 2
+# Version updates open as PRs that show the lock diff; nothing auto-merges. Weekly, grouped to keep PR noise down.
+# NOTE: dependabot's pip ecosystem updates requirements/*.in-derived files only if they are plain requirements; the hashed
+# *.lock files are regenerated with `uv pip compile` (see HARDENING_NOTES.md). Dependabot therefore tracks the unpinned
+# root requirements.txt (what Railway builds) and the .in files as a nudge to re-lock.
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        update-types: ["minor", "patch"]
+    labels: ["dependencies"]
+  - package-ecosystem: "pip"
+    directory: "/requirements"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 5
+    groups:
+      python-lock-inputs:
+        update-types: ["minor", "patch"]
+    labels: ["dependencies"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
+    labels: ["dependencies"]
