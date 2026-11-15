@@ -367,7 +367,7 @@ begin
   begin perform public.backup_snapshot_page('tasks', -1, 10); raise exception 'I3b bad offset accepted'; exception when others then if sqlerrm like 'I3b%' then raise; end if; end;
   begin perform public.backup_table_digest('ffm_redaction_denylist'); raise exception 'I3c deny-list digest allowed'; exception when others then if sqlerrm like 'I3c%' then raise; end if; end;
   if (public.backup_snapshot_cost() ->> 'est_seconds')::numeric is null then raise exception 'I4 cost estimate missing'; end if;
-  foreach f in array array['public.backup_snapshot_page(text,integer,integer)', 'public.backup_table_digest(text)', 'public.backup_snapshot_cost()', 'public.backup_redaction_meta(jsonb)', 'public.redaction_denylist_status()'] loop
+  foreach f in array array['public.backup_snapshot_page(text,integer,integer,uuid)', 'public.backup_table_digest(text)', 'public.backup_snapshot_cost()', 'public.backup_redaction_meta(jsonb)', 'public.redaction_denylist_status()'] loop
     foreach k in array array['anon', 'authenticated'] loop
       if has_function_privilege(k, f, 'execute') then raise exception 'I5 % can execute %', k, f; end if;
     end loop;

@@ -153,7 +153,7 @@ end $$;
 
 -- agent_runs.summary: scrubbed on every write, whoever writes it (LIGHT mode: patterns and known client names; never blanks the summary)
 create or replace function public.agent_runs_scrub() returns trigger
-language plpgsql security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql security definer set search_path to 'pg_catalog' as $$
 begin
   if new.summary is not null then new.summary := public.backup_redact_text(new.summary, null, null, 'light'); end if;   -- LEAK-SOURCE-FIX v1
   return new;
@@ -163,7 +163,7 @@ create trigger agent_runs_scrub before insert or update of summary on public.age
 
 -- what the backup preflight checks: both the export redaction and the source fixes are installed AND are the definitions in force
 create or replace function public.backup_redaction_status() returns jsonb
-language sql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language sql stable security definer set search_path to 'pg_catalog' as $$
   select jsonb_build_object('version', 2,
     'snapshot_redacts', coalesce((select p.prosrc like '%backup_table_expr%' and p.prosrc like '%backup_deny_scan%' and p.prosrc like '%backup_redaction_context%' from pg_proc p where p.oid = to_regprocedure('public.backup_snapshot(text[])')), false),
     'redactor_installed', to_regprocedure('public.backup_redact_text(text,jsonb,integer,text)') is not null and to_regprocedure('public.backup_redaction_spec()') is not null,

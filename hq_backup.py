@@ -144,7 +144,10 @@ def _blank(o):
     return o
 
 
-_NOT_TEXT = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9:.]+(?:Z|[+-][0-9:]+)?)?|-?[0-9]+(?:\.[0-9]+)?")
+_NOT_TEXT = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"                                              # uuid
+                       r"|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?(?:Z|[+-][0-9]{2}(?::?[0-9]{2})?)?)?"       # ISO date / date-time (a colon-separated time only)
+                       r"|-?[0-9]{1,6}(?:\.[0-9]{1,4})?")                                                                                                 # a short number (never 7+ digits: that can be a phone)
+_DIGIT_RUN = re.compile(r"[0-9][0-9 .()/+-]{5,}[0-9]|[0-9]{7,}")
 
 
 def _blank_value(o, inside=False):
@@ -159,6 +162,29 @@ def _blank_value(o, inside=False):
     if inside and not isinstance(o, bool) and isinstance(o, (int, float)) and _number_is_contact_like("", o):
         return 0                                  # 7+ digits (a phone number as a JSON number); counts, cents and flags keep their value
     return o
+
+
+def _string_leaves(o):
+    if isinstance(o, str):
+        yield o
+    elif isinstance(o, dict):
+        for k, v in o.items():
+            yield str(k)
+            yield from _string_leaves(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from _string_leaves(v)
+
+
+def assert_no_digit_runs(table: str, rows: list) -> None:
+    """Fallback output only: in every column the fallback blanked (not KEEP, light ones included) no string or key may still hold a run of 7+ digits (a phone number written any way)."""
+    for r in rows:
+        for c, v in r.items():
+            if (table, c) in KEEP_COLUMNS or v is None:
+                continue
+            for sv in _string_leaves(v):
+                if sv != UNCERTAIN and _DIGIT_RUN.search(_UUID_ISO.sub(" ", sv)):
+                    raise BackupError(f"digits that can be a phone number survive in {table}.{c}; refusing to write the backup")
 
 
 def blank_leak_columns(table: str, rows: list) -> list:
@@ -293,6 +319,7 @@ def _read_all(names, schema) -> dict:
     out = {}
     for t in names:
         rows = blank_leak_columns(t, _read_table(t, schema))
+        assert_no_digit_runs(t, rows)
         assert_redacted({t: rows})          # the same second lock as for the database-redacted path: a contact-like leaf in a strict column refuses the backup
         out[t] = (("\n".join(row_json(r) for r in rows)).encode(), len(rows))
     return out
@@ -334,11 +361,17 @@ def _read_paged(pol: dict, schema: dict) -> tuple[dict, dict, dict]:
     last = None
     for attempt in range(1, CONSISTENCY_ATTEMPTS + 1):
         before = {t: hq._request("POST", "/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
+        run = None
+        try:                                           # the deny-list scan of the WHOLE export once, so a page's result never depends on which rows share it (a failure here only makes each page do the scan itself)
+            prep = hq._request("POST", "/rest/v1/rpc/backup_deny_prepare", {}, timeout=300)
+            run = prep.get("run") if isinstance(prep, dict) else None
+        except Exception:
+            run = None
         data = {}
         for t in names:
             rows, off = [], 0
             while off < MAX_ROWS_PER_TABLE:
-                page = hq._request("POST", "/rest/v1/rpc/backup_snapshot_page", {"p_table": t, "p_offset": off, "p_limit": PAGE_REDACT}, timeout=180)
+                page = hq._request("POST", "/rest/v1/rpc/backup_snapshot_page", {"p_table": t, "p_offset": off, "p_limit": PAGE_REDACT, **({"p_run": run} if run else {})}, timeout=180)
                 got = page.get("rows") if isinstance(page, dict) else None
                 if not isinstance(got, list):
                     raise BackupError(f"{t}: backup_snapshot_page() returned an unexpected result")
@@ -349,6 +382,10 @@ def _read_paged(pol: dict, schema: dict) -> tuple[dict, dict, dict]:
             else:
                 raise BackupError(f"{t}: more than {MAX_ROWS_PER_TABLE} rows; refusing to write a partial backup")
             data[t] = rows
+        try:
+            hq._request("POST", "/rest/v1/rpc/backup_deny_release", {}, timeout=60)
+        except Exception:
+            pass
         after = {t: hq._request("POST", "/rest/v1/rpc/backup_table_digest", {"p_table": t}, timeout=120) for t in names}
         moved = sorted(t for t in names if before[t] != after[t])
         last = (data, meta, moved)

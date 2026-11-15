@@ -462,7 +462,9 @@ class Crypto(unittest.TestCase):
     def test_roundtrip_and_ciphertext_hides_content(self):
         with mock.patch.dict(os.environ, ENV):
             self.assertEqual(B.verify(self.enc, self.m), [])
-        self.assertNotIn(b"leads0", self.enc); self.assertNotIn(b"caf", self.enc)
+        for off in range(0, min(len(self.blob), 4096) - 24, 512):        # 24-byte plaintext markers: a 3-byte one appears by chance in random ciphertext about 0.4 % of runs
+            self.assertNotIn(self.blob[off:off + 24], self.enc)
+        self.assertNotIn(b"leads0", self.enc)
 
     def test_tampered_ciphertext_is_detected(self):
         bad = bytearray(self.enc); bad[len(bad) // 2] ^= 1
@@ -789,7 +791,14 @@ class LeakRedactionV2(unittest.TestCase):
                 if mutate_after_pages and state["pages"]:
                     state["digest"] += 1
                 return {"rows": 1, "md5": f"{body['p_table']}-{state['digest']}"}
+            if path.endswith("/rpc/backup_deny_prepare"):
+                state["prepared"] = state.get("prepared", 0) + 1
+                return {"run": "11111111-1111-4111-8111-111111111111", "prepared": True, "terms": 0}
+            if path.endswith("/rpc/backup_deny_release"):
+                state["released"] = state.get("released", 0) + 1
+                return {"released": True}
             if path.endswith("/rpc/backup_snapshot_page"):
+                state.setdefault("runs", set()).add(body.get("p_run"))
                 state["pages"].append((body["p_table"], body["p_offset"]))
                 return {"rows": rows[body["p_table"]][body["p_offset"]: body["p_offset"] + body["p_limit"]], "n": 0, "ms": 1}
             if path.endswith("/rpc/backup_snapshot"):
@@ -804,6 +813,8 @@ class LeakRedactionV2(unittest.TestCase):
         self.assertEqual(m["redaction"]["mode"], "database_paged"); self.assertEqual(m["tables"]["ideas"]["rows"], 450)
         self.assertTrue(m["consistency"]["consistent"])
         self.assertEqual([o for t, o in state["pages"] if t == "ideas"], [0, 200, 400, 450])
+        self.assertEqual(state["prepared"], 1); self.assertEqual(state["released"], 1)                       # the whole-export deny scan once per run, released after the pages
+        self.assertEqual(state["runs"], {"11111111-1111-4111-8111-111111111111"})                             # every page carries the run id
 
     def test_paged_export_flags_a_table_that_changed_while_reading(self):
         r, _ = self._paged_req(mutate_after_pages=True)
@@ -863,6 +874,17 @@ class FallbackMatchesSpec(unittest.TestCase):
         self.assertEqual(list(out.values())[1]["[redacted:key1]"], 0)       # the 10-digit number (a phone) is gone
         self.assertEqual(list(out.values())[0], 1)
         B.assert_redacted({t: [{c: out}]})                                  # the second lock passes on the fallback output
+
+    def test_digit_strings_that_can_be_phone_numbers_are_blanked_by_the_fallback(self):
+        """Round 4 item 5: digit-only strings survived (_NOT_TEXT matched any digits)."""
+        for bad in ("6135550199", "123456789", "613.5550199", "-6135550199", "2026-11-15 613.555.0199", "2026-11-15T6135550199", "1234567"):
+            out = B.blank_leak_columns("ideas", [{"id": 1, "zz_new_note": bad}])[0]["zz_new_note"]
+            self.assertEqual(out, B.UNCERTAIN, bad)
+        for ok in ("2026-11-15T10:30:00+00:00", "2026-11-15", "12", "125000", "3f2a1b4c-1111-4222-8333-444455556666"):
+            self.assertEqual(B.blank_leak_columns("ideas", [{"id": 1, "zz_new_note": ok}])[0]["zz_new_note"], ok)
+        with self.assertRaises(B.BackupError):
+            B.assert_no_digit_runs("ideas", [{"id": 1, "zz_new_note": "call 6135550199"}])      # the second lock on the fallback output
+        B.assert_no_digit_runs("ideas", [{"id": 1, "zz_new_note": B.UNCERTAIN}])
 
     def test_a_column_nobody_classified_is_blanked_and_plain_ids_survive(self):
         out = B.blank_leak_columns("ideas", [{"id": "3f2a1b4c-1111-4222-8333-444455556666", "zz_new_note": "Jean Tremblay", "created_at": "2026-11-15T10:30:00+00:00", "n": 5, "ok": True, "status": "new"}])[0]

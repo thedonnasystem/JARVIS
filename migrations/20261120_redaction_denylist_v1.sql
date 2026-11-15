@@ -34,7 +34,7 @@ insert into public.ffm_redaction_keys (name, value)
 
 -- append-only: a hash is never changed or removed (an erased name must stay redacted)
 create or replace function public.redaction_denylist_immutable() returns trigger
-language plpgsql set search_path to 'pg_catalog', 'public' as $$
+language plpgsql set search_path to 'pg_catalog' as $$
 begin
   raise exception 'ffm_redaction_denylist and ffm_redaction_keys are append-only: nothing is updated, deleted or truncated';
 end $$;
@@ -52,7 +52,7 @@ create trigger keys_no_truncate before truncate on public.ffm_redaction_keys for
 -- SECURITY INVOKER on purpose: the lockdown migration (last) grants execute on EVERY function to service_role, so a definer function here would be callable by it. As invoker it needs the caller to be able to read
 -- the key table, which only the owner (and so the definer functions backup_redaction_context / the capture trigger) can: a direct call by service_role fails with 'permission denied'.
 create or replace function public.redaction_pads() returns text
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare kv text; k bytea; ik bytea := decode(repeat('00', 64), 'hex'); ok bytea := decode(repeat('00', 64), 'hex'); i int;
 begin
   select value into kv from public.ffm_redaction_keys where name = 'denylist_hmac';
@@ -70,15 +70,15 @@ revoke all on function public.redaction_pads() from public, anon, authenticated,
 
 -- HMAC-SHA256(key, kind ':' value) as hex, from the pads. Pure SQL so the planner inlines it.
 create or replace function public.redaction_h(p_pads text, p_kind text, p_val text) returns text
-language sql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$
+language sql immutable parallel safe set search_path to 'pg_catalog' as $$
   select encode(sha256(decode(split_part(p_pads, ':', 2), 'hex') || sha256(decode(split_part(p_pads, ':', 1), 'hex') || convert_to(p_kind || ':' || p_val, 'UTF8'))), 'hex')
 $$;
 revoke all on function public.redaction_h(text, text, text) from public, anon, authenticated, service_role;
 
 -- records one value. kind: n name, e email, p phone, c contact (email if it has an @, else phone). Returns the number of new hashes.
 create or replace function public.redaction_capture(p_kind text, p_value text) returns integer
-language plpgsql volatile set search_path to 'pg_catalog', 'public' as $$
-declare pads text; f text; tok text[]; w text; sq text; d text; n int := 0; stop text[] := public.backup_stopwords(); kind text := p_kind;
+language plpgsql volatile set search_path to 'pg_catalog' as $$
+declare pads text; f text; tok text[]; w text; sq text; d text; n int := 0; stop text[] := public.backup_stopwords(); kind text := p_kind; a int; b int; c text;
 begin
   if p_value is null or btrim(p_value) = '' then return 0; end if;
   pads := public.redaction_pads();
@@ -113,6 +113,13 @@ begin
   if cardinality(tok) = 0 then return 0; end if;
   sq := array_to_string(tok, '');
   if length(sq) >= 5 then insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'f', sq), 'f') on conflict do nothing; end if;
+  -- every contiguous run of adjacent tokens, squashed: a hyphenated or apostrophe surname written WITHOUT its separator ('Ashgrove-Pellew' -> 'ashgrovepellew', "D'Arcy" -> 'darcy'), a first name + surname pair, in any position
+  for a in 1..least(cardinality(tok), 8) loop
+    for b in a + 1..least(cardinality(tok), 8) loop
+      c := array_to_string(tok[a:b], '');
+      if length(c) >= 5 and c <> sq then insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'f', c), 'f') on conflict do nothing; end if;
+    end loop;
+  end loop;
   foreach w in array tok loop
     if length(w) >= (case when w ~ '[^\x01-\x7f]' then 2 else 3 end) and not (w = any (stop)) and w !~ '^[0-9]+$' then
       insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'n', w), 'n') on conflict do nothing;
@@ -127,7 +134,7 @@ revoke all on function public.redaction_capture(text, text) from public, anon, a
 
 -- trigger: TG_ARGV = 'column:kind' pairs. Captures NEW and OLD values (the old value is what an erasure or an update would otherwise lose).
 create or replace function public.redaction_capture_trg() returns trigger
-language plpgsql volatile security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
 declare a text; col text; kind text; jn jsonb; jo jsonb; r record; nm text;
 begin
   if TG_LEVEL = 'STATEMENT' then       -- TRUNCATE: every value, before it goes
@@ -152,7 +159,7 @@ revoke all on function public.redaction_capture_trg() from public, anon, authent
 
 -- the tables and columns that hold a person's or company's name / email / phone (the same sources backup_redaction_context() reads). A sqltest fails when a client table gains a name-like column that is not here.
 create or replace function public.redaction_sources() returns table (table_name text, column_name text, kind text)
-language sql immutable set search_path to 'pg_catalog', 'public' as $$
+language sql immutable set search_path to 'pg_catalog' as $$
   select * from (values ('leads', 'name', 'n'), ('leads', 'phone', 'c'), ('leads', 'email', 'e'), ('ws_leads', 'name', 'n'), ('ws_leads', 'phone', 'c'), ('ws_leads', 'email', 'e'),
                         ('setters', 'name', 'n'), ('setters', 'contact', 'c'), ('client_workspaces', 'name', 'n'), ('setter_events', 'client', 'n'),
                         ('contact_suppressions', 'address', 'e'), ('outbox', 'to_ref', 'c')) v (table_name, column_name, kind)
@@ -181,7 +188,7 @@ end $$;
 
 -- counts only, never a hash
 create or replace function public.redaction_denylist_status() returns jsonb
-language sql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language sql stable security definer set search_path to 'pg_catalog' as $$
   select jsonb_build_object('key_present', exists (select 1 from public.ffm_redaction_keys where name = 'denylist_hmac'),
     'hashes', (select count(*) from public.ffm_redaction_denylist),
     'by_kind', coalesce((select jsonb_object_agg(kind, n) from (select kind, count(*) n from public.ffm_redaction_denylist group by kind) q), '{}'::jsonb),

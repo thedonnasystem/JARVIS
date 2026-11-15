@@ -4917,7 +4917,7 @@ grant execute on function public.backup_snapshot(text[]) to service_role;
 drop function if exists public.backup_deny_scan(jsonb, jsonb);
 drop function if exists public.backup_redaction_spec() cascade;
 create or replace function public.backup_fold_text(p text) returns text
-language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable set search_path to 'pg_catalog' as $$
 declare t text;
 begin
   if p is null then return null; end if;
@@ -4932,7 +4932,7 @@ begin
 end $$;
 
 create or replace function public.backup_unescape_text(p text) returns text
-language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable set search_path to 'pg_catalog' as $$
 declare t text := p; m text; n int; seq text; named text[] := array['amp','&','lt','<','gt','>','quot','"','apos','''','nbsp',' ','commat','@','period','.','colon',':','sol','/','lpar','(','rpar',')',
       'lsqb','[','rsqb',']','lbrack','[','rbrack',']','lcub','{','rcub','}','plus','+','comma',',','hyphen','-','dash','-','lowbar','_','num','#','semi',';','excl','!','percnt','%','equals','=','quest','?'];
   i int;
@@ -4964,7 +4964,7 @@ end $$;
 
 
 create or replace function public.backup_normalise(p text) returns text
-language plpgsql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable parallel safe set search_path to 'pg_catalog' as $$
 declare t text; nxt text; i int;
 begin
   if p is null then return null; end if;
@@ -4979,7 +4979,7 @@ begin
 end $$;
 
 create or replace function public.backup_stopwords() returns text[]
-language sql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$
+language sql immutable parallel safe set search_path to 'pg_catalog' as $$
   select array['the','and','for','inc','ltd','llc','corp','company','group','services','service','solutions','ottawa','canada','ontario','toronto','barrhaven','kanata','home','homes','real','estate','realty',
                'mortgage','mortgages','insurance','plumbing','heating','cooling','electric','electrical','roofing','construction','contracting','contractors','cleaning','renovation','renovations','design',
                'studio','law','legal','dental','care','auto','detailing','energy','les','des','pour','avec','management','consulting','marketing','agency','store','shop','ltee','cie','enr','com','www','http','https',
@@ -4988,11 +4988,11 @@ language sql immutable parallel safe set search_path to 'pg_catalog', 'public' a
 $$;
 
 create or replace function public.backup_re_escape(p text) returns text
-language sql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$ select regexp_replace(p, '([\\^$.|?*+()\[\]{}])', '\\\1', 'g') $$;
+language sql immutable parallel safe set search_path to 'pg_catalog' as $$ select regexp_replace(p, '([\\^$.|?*+()\[\]{}])', '\\\1', 'g') $$;
 
 -- fragment windows of a chain such as 'z.o.r.b.a.t.r.o.v' or 'zorba.trov': every contiguous run of 2+ fragments, squashed, 5+ letters. Rare input only.
 create or replace function public.backup_windows(p text) returns setof text
-language plpgsql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable parallel safe set search_path to 'pg_catalog' as $$
 declare f text[]; n int; i int; j int; s text;
 begin
   f := array(select x from unnest(regexp_split_to_array(p, '[^a-z0-9]+')) x where x <> '');
@@ -5008,7 +5008,7 @@ end $$;
 
 -- assembles the context object from the term arrays (live names, plus names the deny-list adds)
 create or replace function public.backup_ctx_build(p_phrases text[], p_parts text[], p_squashed text[], p_phones text[], p_base jsonb default '{}'::jsonb) returns jsonb
-language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable set search_path to 'pg_catalog' as $$
 declare alts text[]; nre text; sq text[]; ph text[];
 begin
   alts := array(select distinct x from unnest(coalesce(p_phrases, '{}') || coalesce(p_parts, '{}')) x where x <> '');
@@ -5023,7 +5023,7 @@ end $$;
 
 -- adds what the deny-list scan found (plaintext terms that occur in the data) to a context
 create or replace function public.backup_ctx_add(p_ctx jsonb, p_found jsonb) returns jsonb
-language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable set search_path to 'pg_catalog' as $$
 declare ph text[]; pa text[]; sq text[]; pn text[]; x text; tok text[];
 begin
   if p_found is null then return p_ctx; end if;
@@ -5047,7 +5047,7 @@ end $$;
 -- fast, exact twin of ws_sensitive_hits() for the NON-digit categories (the redactor ignores the three digit-shaped ones). Same normalisation, same stems; the per-word health loop is ONE alternation.
 -- Valid only while ws_sensitive_hits() is the definition whose md5 is in backup_detector_pins(); the snapshot checks that and otherwise calls ws_sensitive_hits() itself (slower, never wrong).
 create or replace function public.backup_topic_core(k text, kc text) returns text[]
-language plpgsql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable parallel safe set search_path to 'pg_catalog' as $$
 declare hits text[] := '{}';
 begin
   if k ~ '(^|[^a-z])s[ ._\-]*i[ ._\-]*n([^a-z]|$)' or k ~ '(^|[^a-z])(ssn|nas)([^a-z]|$)'
@@ -5063,14 +5063,14 @@ end $$;
 
 -- cheap pre-filter for the twin: two regexes (one over the compacted text, one over the lower-cased text) that match whenever ANY category of backup_topic_core could match. Generated from the core's own patterns.
 create or replace function public.backup_topic_fast(k text, kc text) returns text[]
-language plpgsql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable parallel safe set search_path to 'pg_catalog' as $$
 begin
   if kc !~ '(?:(socialinsurance|passport|driverslicen|driverlicen|governmentid|healthcard|ohip|dateofbirth))|(?:(bankstatement|accountnumber|accountno|bankaccount|chequingaccount|routingnumber|transitnumber|institutionnumber|voidcheque|voidcheck|directdeposit|bankingdetails|iban))|(?:(creditscore|creditreport|creditcheck|credithistory|creditrating|equifax|transunion|experian|beaconscore))|(?:(mortgageapplication|loanapplication|preapproval|noticeofassessment|paystub|employmentletter|incomeverification|proofofincome|networth|income|salary|taxreturn))|(?:(diabet|cancer|tumou?r|chemo|radiotherap|oncolog|leuk[a]?emi|lymphoma|melanoma|hypertens|hypotens|cholesterol|asthma|epilep|seizure|dementia|alzheimer|parkinson|arthritis|osteoporo|fibromyalg|multiplesclerosis|cysticfibrosis|crohn|colitis|dialysis|transplant|pacemaker|insulin|inhaler|antibiotic|antidepress|opioid|painkill|steroid|heartattack|heartdisease|heartcondition|heartfailure|heartmurmur|bloodpressure|bloodsugar|bloodtest|bloodwork|bloodthinner|cardiac|cardiolog|cardiovascular|thyroid|kidney|ulcerative|migraine|chronic(?!le)|medical|medication|medicine|medicinal|medicare|medicaid|prescri|pharmac|diagnos|disabilit|pregnan|miscarriage|fertility|abortion|contracepti|maternity|mentalhealth|mentalillness|psychiatr|psychotherap|bipolar|schizophren|depress|anxiety|ptsd|autis|dyslexi|therap|surger|surgical|surgeon|hospital(?!ity)|hospice|palliative|ambulance|clinic|physician|symptom|disease|illness|sickness|syndrome|disorder|infection|infectious|covid|vaccin|allerg|injur|wheelchair|impairment|addict|alcoholi|substanceabuse|overdose|suicid|selfharm|eatingdisorder|anorexi|bulimi|obesity|paralys|hearingloss|hearingaid|apnea|apnoea|biops|mammogra|xray|ctscan|smoker|smoking|tobacco|nicotine|cigarette|cannabis|marijuana|patientrecord|patientfile|patientchart|patienthistory|patientinfo|patientnumber|patientid|patients|health))' and k !~ '(?:(^|[^a-z])s[ ._\-]*i[ ._\-]*n([^a-z]|$))|(?:(^|[^a-z])(ssn|nas)([^a-z]|$))|(?:(^|[^a-z])fico([^a-z]|$))|(?:(^|[^a-z0-9])(t4a?|noa)([^a-z0-9]|$))|(?:(^|[^a-z])(?:h[ ._\-]?e[ ._\-]?a[ ._\-]?r[ ._\-]?t|h[ ._\-]?e[ ._\-]?a[ ._\-]?r[ ._\-]?t[ ._\-]?s|h[._\-]?i[._\-]?v|a[._\-]?i[._\-]?d[._\-]?s|m[ ._\-]?e[ ._\-]?n[ ._\-]?t[ ._\-]?a[ ._\-]?l|m[ ._\-]?e[ ._\-]?n[ ._\-]?t[ ._\-]?a[ ._\-]?l[ ._\-]?l[ ._\-]?y|s[._\-]?i[._\-]?c[._\-]?k|d[ ._\-]?o[ ._\-]?c[ ._\-]?t[ ._\-]?o[ ._\-]?r|d[ ._\-]?o[ ._\-]?c[ ._\-]?t[ ._\-]?o[ ._\-]?r[ ._\-]?s|n[ ._\-]?u[ ._\-]?r[ ._\-]?s[ ._\-]?e|n[ ._\-]?u[ ._\-]?r[ ._\-]?s[ ._\-]?e[ ._\-]?s|r[._\-]?x|m[._\-]?e[._\-]?d[._\-]?s|a[._\-]?d[._\-]?h[._\-]?d|o[._\-]?c[._\-]?d|c[._\-]?o[._\-]?p[._\-]?d|d[._\-]?r[._\-]?u[._\-]?g|d[ ._\-]?r[ ._\-]?u[ ._\-]?g[ ._\-]?s|v[._\-]?a[._\-]?p[._\-]?e|v[ ._\-]?a[ ._\-]?p[ ._\-]?e[ ._\-]?s|v[ ._\-]?a[ ._\-]?p[ ._\-]?i[ ._\-]?n[ ._\-]?g|s[ ._\-]?t[ ._\-]?r[ ._\-]?o[ ._\-]?k[ ._\-]?e|s[ ._\-]?t[ ._\-]?r[ ._\-]?o[ ._\-]?k[ ._\-]?e[ ._\-]?s|l[._\-]?u[._\-]?n[._\-]?g|l[ ._\-]?u[ ._\-]?n[ ._\-]?g[ ._\-]?s|u[ ._\-]?l[ ._\-]?c[ ._\-]?e[ ._\-]?r|u[ ._\-]?l[ ._\-]?c[ ._\-]?e[ ._\-]?r[ ._\-]?s|m[._\-]?r[._\-]?i|i[._\-]?v[._\-]?f|s[ ._\-]?t[ ._\-]?e[ ._\-]?n[ ._\-]?t|o[ ._\-]?b[ ._\-]?e[ ._\-]?s[ ._\-]?e|d[._\-]?e[._\-]?a[._\-]?f|d[ ._\-]?e[ ._\-]?a[ ._\-]?f[ ._\-]?n[ ._\-]?e[ ._\-]?s[ ._\-]?s)([^a-z]|$))' then return '{}'::text[]; end if;
   return public.backup_topic_core(k, kc);
 end $$;
 
 create or replace function public.backup_topic_hits(p_text text) returns text[]
-language plpgsql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable parallel safe set search_path to 'pg_catalog' as $$
 declare t text; k text;
 begin
   t := translate(normalize(regexp_replace(coalesce(p_text, ''), '[\u200b-\u200d\u2060\ufeff]', '', 'g'), NFKC), '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789');
@@ -5079,19 +5079,19 @@ begin
 end $$;
 
 create or replace function public.backup_detector_pins() returns text[]
-language sql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$
+language sql immutable parallel safe set search_path to 'pg_catalog' as $$
   select array['e13e47c15c1d034043a21938e14e0431']::text[]     -- md5(pg_get_functiondef(ws_sensitive_hits)) that backup_topic_hits() was proven equal to (sqltests/leak_redaction_check.sql, section G)
 $$;
 
 -- the client names that exist in the database RIGHT NOW. Contains client data: service role only, and it is never part of a snapshot.
 -- Returns the FULL context (every live name compiled, so a direct call is exact). backup_snapshot() narrows it (backup_ctx_hot) to the names that actually occur in the exported text.
 create or replace function public.backup_redaction_context() returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare
   src text; tbl text; col text; kind text; v text; f text; tok text[]; w text; d text; pads text; deny boolean := false; fast boolean := false;
   stop text[] := public.backup_stopwords();
   phrases text[] := '{}'; parts text[] := '{}'; squashed text[] := '{}'; phones text[] := '{}';
-  live jsonb := '[]'::jsonb; ent_t text[]; ent_p text[]; ent_s text; ent_ss text[];
+  live jsonb := '[]'::jsonb; a int; b int; ent_s2 text; ent_t text[]; ent_p text[]; ent_s text; ent_ss text[];
 begin
   foreach src in array array['leads.name:n', 'leads.phone:c', 'leads.email:e', 'setters.name:n', 'setters.contact:c', 'ws_leads.name:n', 'ws_leads.phone:c', 'ws_leads.email:e',
                               'client_workspaces.name:n', 'setter_events.client:n', 'contact_suppressions.address:e', 'outbox.to_ref:c'] loop
@@ -5113,6 +5113,12 @@ begin
                                  else array_to_string(array(select public.backup_re_escape(x) from unnest(tok) x), '[^a-z0-9]{0,3}') end;
       if length(array_to_string(tok, '')) >= 5 then ent_s := regexp_replace(array_to_string(tok, ''), '[^a-z0-9]', '', 'g'); squashed := squashed || ent_s; ent_ss := ent_ss || ent_s; end if;
       if kind <> 'e' then
+        for a in 1..least(cardinality(tok), 8) loop           -- adjacent tokens squashed ('ashgrovepellew', 'darcy'), like the deny-list capture
+          for b in a + 1..least(cardinality(tok), 8) loop
+            ent_s2 := regexp_replace(array_to_string(tok[a:b], ''), '[^a-z0-9]', '', 'g');
+            if length(ent_s2) >= 5 and ent_s2 <> coalesce(ent_s, '') then squashed := squashed || ent_s2; ent_ss := ent_ss || ent_s2; end if;
+          end loop;
+        end loop;
         foreach w in array tok loop
           if length(w) >= (case when w ~ '[^\x01-\x7f]' then 2 else 3 end) and not (w = any (stop)) and w !~ '^[0-9]+$' then
             parts := parts || public.backup_re_escape(w); ent_t := ent_t || w; ent_p := ent_p || public.backup_re_escape(w);
@@ -5135,7 +5141,7 @@ end $$;
 -- deny-list current) plus the names the deny-list adds. Names that are not in the text cannot be matched in it, and a smaller pattern is what keeps the redactor fast as the client list grows.
 -- The full name pattern stays in the context ('alts_full') for the one case that needs it: a decoded base64/hex blob.
 create or replace function public.backup_ctx_hot(p_ctx jsonb, p_found jsonb) returns jsonb
-language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable set search_path to 'pg_catalog' as $$
 declare e jsonb; ph text[] := '{}'; sq text[] := '{}'; names text[]; chains text[]; keep boolean; base jsonb;
 begin
   base := p_ctx - 'live' - 'phrases' - 'parts' - 'name_re' - 'squashed' - 'sq_re' - 'phones' - 'n_terms';
@@ -5157,7 +5163,7 @@ end $$;
 
 -- context for a DECODED blob (base64/hex): every live name (not only the ones that occur in the raw text) plus what the deny-list finds in the decoded text
 create or replace function public.backup_ctx_blob(p_ctx jsonb, p_found jsonb) returns jsonb
-language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql immutable set search_path to 'pg_catalog' as $$
 declare alts text; extra text[] := '{}'; x text; c jsonb := p_ctx;
 begin
   if p_found is not null then c := public.backup_ctx_add(p_ctx, p_found); end if;
@@ -5172,7 +5178,7 @@ end $$;
 
 -- SQL text that finds, in a subquery of lower-case normalised strings (column s), the candidates whose keyed hash is in the deny-list. $1 = pads.
 create or replace function public.backup_deny_query(p_src text) returns text
-language sql immutable set search_path to 'pg_catalog', 'public' as $$
+language sql immutable set search_path to 'pg_catalog' as $$
   select format($q$
     with src as materialized (%1$s),
     toks as materialized (select distinct w from src, unnest(string_to_array(regexp_replace(src.s, '[^a-z0-9\u0080-\uffff]+', ' ', 'g'), ' ')) w where length(w) >= case when w ~ '[^\x01-\x7f]' then 2 else 3 end and w !~ '^[0-9]+$')
@@ -5194,7 +5200,7 @@ $$;
 -- SECURITY INVOKER on purpose: it executes SQL text. As invoker it runs with the CALLER's rights, so service_role (the lockdown migration grants it execute on everything) cannot read the key or the
 -- deny-list through it, and cannot write; only the definer functions that build the text from catalog names (backup_deny_scan / backup_deny_terms) run it as the owner.
 create or replace function public.backup_deny_run(p_src text, p_pads text) returns jsonb
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare r record; n text[] := '{}'; f text[] := '{}'; e text[] := '{}'; p text[] := '{}';
 begin
   for r in execute public.backup_deny_query(p_src) using p_pads loop
@@ -5205,11 +5211,11 @@ end $$;
 
 -- ONE string (decoded blob, a direct call, the agent_runs trigger): the deny-list terms in it as a context addition, or null when there is nothing to check
 create or replace function public.backup_deny_terms(p_text text, p_ctx jsonb) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare pads text;
 begin
   if p_text is null or coalesce(p_ctx ->> 'deny', 'false') <> 'true' then return null; end if;
-  pads := public.redaction_pads();                         -- derived HERE, inside the definer function: no context, argument or result ever carries the pads
+  begin pads := public.redaction_pads(); exception when insufficient_privilege then return null; end;     -- SECURITY INVOKER: only a caller that may read the key (the owner, i.e. backup_snapshot / the page function / the triggers) gets deny-list answers; service_role gets none                         -- derived HERE, inside the definer function: no context, argument or result ever carries the pads
   if pads is null then return null; end if;
   return public.backup_deny_run('select ' || quote_literal(lower(public.backup_normalise(p_text))) || '::text as s', pads);
 end $$;
@@ -5220,7 +5226,7 @@ end $$;
 -- unredacted and unflagged. backup_type_ok() lists the types that are either handled by backup_effective_spec() (text-like, json, enums, text arrays, domains over text) or cannot carry
 -- a name (numbers, booleans, uuid, date/time, money, arrays of those). Any other type makes its TABLE "unclassified": not exported, listed in backup_export_policy()->unclassified.
 create or replace function public.backup_type_ok(p_oid oid) returns boolean
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare t record; b record;
   safe constant text[] := array['bool', 'int2', 'int4', 'int8', 'numeric', 'float4', 'float8', 'uuid', 'date', 'time', 'timetz', 'timestamp', 'timestamptz', 'interval', 'money'];
   txt constant text[] := array['text', 'varchar', 'bpchar'];
@@ -5241,7 +5247,7 @@ begin
 end $$;
 
 create or replace function public.backup_export_policy() returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare res jsonb;
 begin
   with recursive tabs as (
@@ -5282,7 +5288,7 @@ begin
   return res;
 end $$;
 create or replace function public.backup_effective_spec(p_exported jsonb) returns table (table_name text, column_name text, kind text, mode text, max_len integer, reason text, classified boolean)
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 begin
   return query select c.relname::text, a.attname::text,
          case when ty.typname in ('json', 'jsonb') then 'json' when ty.typcategory = 'A' then 'array' else 'text' end,
@@ -5296,11 +5302,11 @@ begin
 end $$;
 
 create or replace function public.backup_deny_scan(p_exported jsonb, p_ctx jsonb, p_only text default null, p_off integer default null, p_lim integer default null) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare r record; raw text; res jsonb; n text[] := '{}'; f text[] := '{}'; e text[] := '{}'; p text[] := '{}'; pads text;
 begin
   if coalesce(p_ctx ->> 'deny', 'false') <> 'true' then return null; end if;
-  pads := public.redaction_pads(); if pads is null then return null; end if;      -- derived inside this definer function, never carried by the context
+  begin pads := public.redaction_pads(); exception when insufficient_privilege then return null; end; if pads is null then return null; end if;      -- SECURITY INVOKER (see backup_deny_terms): a caller without the key gets nothing
   for r in select * from public.backup_effective_spec(p_exported) where mode in ('strict', 'light') and (p_only is null or table_name = p_only) loop
     raw := case r.kind when 'json' then format('regexp_replace(t.%I::text, ''\\.'', '' '', ''g'')', r.column_name)
                        when 'array' then format('array_to_string(t.%I::text[], '' '')', r.column_name)
@@ -5315,7 +5321,7 @@ begin
 end $$;
 
 create or replace function public.backup_redact_patterns(p_t text, p_ctx jsonb) returns text
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare t text := p_t; m text; d text; nre text := coalesce(p_ctx ->> 'name_re', '');
 begin
   if t is null then return null; end if;
@@ -5354,7 +5360,7 @@ begin
 end $$;
 
 create or replace function public.backup_probe_encoded(p_t text, p_ctx jsonb, p_depth integer default 0) returns text
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare t text := p_t; m text; b text; dec text; f text; padded text; c2 jsonb;
 begin
   if t is null or p_depth > 2 then return t; end if;
@@ -5384,7 +5390,7 @@ end $$;
 
 
 create or replace function public.backup_redact_text_full(p text, p_ctx jsonb, p_max integer, p_mode text) returns text
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare
   u constant text := '[redacted:uncertain]';
   ctx jsonb; t text; t1 text; r text; nxt text; m text; i int; prot text[] := '{}'; sq text; sq2 text; s text; dg text; rt text; rc text; nre text; sqre text; hits text[]; found jsonb; plain boolean; k text; kc text; wsp text;
@@ -5493,7 +5499,7 @@ end $$;
 -- full redactor acts on: digits (under 7 in all), '@', URLs, long blobs, spelled-out digit runs, a known name, a known squashed name, and (strict) the topic detector is clear.
 -- sqltests/leak_redaction_check.sql section G proves, on a corpus, that the exits and the full redactor give the same answer.
 create or replace function public.backup_redact_text(p text, p_ctx jsonb default null, p_max integer default 20000, p_mode text default 'strict') returns text
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare nre text; sqre text; hits text[]; is_strict boolean := (p_mode = 'strict');
   rot26 constant text := 'nopqrstuvwxyzabcdefghijklmNOPQRSTUVWXYZABCDEFGHIJKLM';
 begin
@@ -5520,7 +5526,7 @@ begin
 end $$;
 
 create or replace function public.backup_redact_json_k(j jsonb, p_key text, p_ctx jsonb, p_max integer, p_mode text) returns jsonb
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare k text := lower(coalesce(p_key, '')); digits int;
 begin
   if j is null then return null; end if;
@@ -5552,10 +5558,10 @@ begin
 end $$;
 
 create or replace function public.backup_redact_json(j jsonb, p_ctx jsonb, p_max integer default 500, p_mode text default 'strict') returns jsonb
-language sql stable set search_path to 'pg_catalog', 'public' as $$ select public.backup_redact_json_k(j, null, p_ctx, p_max, p_mode) $$;
+language sql stable set search_path to 'pg_catalog' as $$ select public.backup_redact_json_k(j, null, p_ctx, p_max, p_mode) $$;
 
 create or replace function public.backup_redact_array(a text[], p_ctx jsonb, p_max integer, p_mode text) returns jsonb
-language sql stable set search_path to 'pg_catalog', 'public' as $$
+language sql stable set search_path to 'pg_catalog' as $$
   select case when a is null then null else coalesce((select jsonb_agg(public.backup_redact_text(x, p_ctx, p_max, p_mode) order by o) from unnest(a) with ordinality z (x, o)), '[]'::jsonb) end
 $$;
 
@@ -5567,7 +5573,7 @@ $$;
 -- A column that is NOT in this list is treated as STRICT by backup_snapshot() and reported under redaction.unclassified_columns; sqltests/leak_redaction_check.sql (section F) FAILS when one exists,
 -- so adding a text column to an exported table cannot silently leak and cannot go unreviewed.
 create or replace function public.backup_redaction_spec() returns table (table_name text, column_name text, kind text, mode text, max_len integer, reason text)
-language sql immutable set search_path to 'pg_catalog', 'public' as $$
+language sql immutable set search_path to 'pg_catalog' as $$
   select * from (values
     ('account_requests', 'account_login', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('account_requests', 'needs', 'array', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5826,7 +5832,7 @@ language sql immutable set search_path to 'pg_catalog', 'public' as $$
 $$;
 
 create or replace function public.backup_redact_row(p_table text, p_row jsonb, p_ctx jsonb) returns jsonb
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare s record; v jsonb := p_row;
 begin
   for s in select * from public.backup_redaction_spec() x where x.table_name = p_table and x.mode <> 'keep' loop
@@ -5842,7 +5848,7 @@ end $$;
 
 -- the SQL expression (over alias t, context in $1) that turns one row of an exported table into its redacted jsonb
 create or replace function public.backup_table_expr(p_table text, p_exported jsonb) returns text
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare r text;
 begin
   select case when count(es.column_name) filter (where es.mode <> 'keep') = 0 then 'to_jsonb(t)'
@@ -5857,7 +5863,7 @@ end $$;
 
 -- primary-key ORDER BY list of a table (a stable order for paging); falls back to the row text itself
 create or replace function public.backup_pk_order(p_table text) returns text
-language sql stable set search_path to 'pg_catalog', 'public' as $$
+language sql stable set search_path to 'pg_catalog' as $$
   select coalesce((select string_agg(quote_ident(a.attname), ', ' order by k.ord) from pg_index i join pg_class c on c.oid = i.indrelid
                      cross join lateral unnest(i.indkey) with ordinality k (attnum, ord) join pg_attribute a on a.attrelid = c.oid and a.attnum = k.attnum
                     where c.relnamespace = 'public'::regnamespace and c.relname = p_table and i.indisprimary), 'to_jsonb(t)::text')
@@ -5868,7 +5874,7 @@ $$;
 -- The scan, the context and the data all run in this one statement's snapshot (STABLE function): the single-statement consistency claim holds. For data volumes that do not fit one statement
 -- (backup_snapshot_cost() says so) hq_backup.py pages the same redaction per table (backup_snapshot_page + backup_table_digest) and proves consistency by comparing raw digests before and after.
 create or replace function public.backup_snapshot(skip text[] default array['push_config', 'push_subscriptions']) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare q text; res jsonb; pol jsonb := public.backup_export_policy(); ctx jsonb; found jsonb; t0 timestamptz := clock_timestamp(); t1 timestamptz; deny_hits int := 0;
 begin
   ctx := public.backup_redaction_context();
@@ -5894,7 +5900,7 @@ end $$;
 
 -- what was redacted and how (never client data)
 create or replace function public.backup_redaction_meta(p_pol jsonb default null) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare pol jsonb := coalesce(p_pol, public.backup_export_policy()); spec jsonb; uncls jsonb;
 begin
   select coalesce(jsonb_agg(jsonb_build_object('table_name', e.table_name, 'column_name', e.column_name, 'kind', e.kind, 'mode', e.mode, 'max_len', e.max_len)), '[]'::jsonb),
@@ -5903,16 +5909,46 @@ begin
   return jsonb_build_object('version', 2, 'unclassified_columns', uncls, 'spec', spec);
 end $$;
 
+-- The whole-export deny-list scan, done once for a paged run (see backup_snapshot_page). The result is the set of candidate strings of the exported text that are on the deny-list (strings that are
+-- already in the exported rows, nothing from the list itself); it is kept in an owner-only table for 30 minutes or until backup_deny_release(). Returns counts only.
+create table if not exists public.ffm_redaction_found (id integer primary key check (id = 1), found jsonb not null, at timestamptz not null default now());
+alter table public.ffm_redaction_found add column if not exists run uuid;
+alter table public.ffm_redaction_found enable row level security;
+revoke all on public.ffm_redaction_found from public, anon, authenticated, service_role;
+create or replace function public.backup_deny_prepare() returns jsonb
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+declare pol jsonb := public.backup_export_policy(); ctx jsonb := public.backup_redaction_context(); found jsonb; rid uuid := gen_random_uuid();
+begin
+  found := public.backup_deny_scan(pol -> 'exported', ctx);
+  delete from public.ffm_redaction_found;
+  if found is not null then insert into public.ffm_redaction_found (id, found, run) values (1, found, rid); end if;
+  return jsonb_build_object('run', rid, 'prepared', found is not null, 'terms', case when found is null then 0 else jsonb_array_length(found -> 'names') + jsonb_array_length(found -> 'chains') + jsonb_array_length(found -> 'emails') + jsonb_array_length(found -> 'phones') end);
+end $$;
+create or replace function public.backup_deny_release() returns jsonb
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+begin
+  delete from public.ffm_redaction_found;
+  return jsonb_build_object('released', true);
+end $$;
+revoke all on function public.backup_deny_prepare() from public, anon, authenticated;
+revoke all on function public.backup_deny_release() from public, anon, authenticated;
+grant execute on function public.backup_deny_prepare() to service_role;
+grant execute on function public.backup_deny_release() to service_role;
+
 -- ONE PAGE of one exported table, redacted exactly like the snapshot (context and scan computed for this page). For volumes that do not fit one statement.
-create or replace function public.backup_snapshot_page(p_table text, p_offset integer, p_limit integer) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+drop function if exists public.backup_snapshot_page(text, integer, integer);
+create or replace function public.backup_snapshot_page(p_table text, p_offset integer, p_limit integer, p_run uuid default null) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare pol jsonb := public.backup_export_policy(); ctx jsonb; found jsonb; res jsonb; ord text; t0 timestamptz := clock_timestamp();
 begin
   if p_table is null or not ((pol -> 'exported') ? p_table) or p_table in ('push_config', 'push_subscriptions') then raise exception 'backup_snapshot_page: % is not an exportable table', p_table; end if;
   if p_offset is null or p_offset < 0 or p_limit is null or p_limit < 1 or p_limit > 5000 then raise exception 'backup_snapshot_page: bad offset/limit'; end if;
   ord := public.backup_pk_order(p_table);
   ctx := public.backup_redaction_context();
-  found := public.backup_deny_scan(pol -> 'exported', ctx, p_table, p_offset, p_limit);
+  -- The found-name set must NOT depend on which rows share a page (a neighbouring row that spells a name whole makes the squashed check catch a glued form in another row): it is the set of the WHOLE export,
+  -- exactly what the single statement uses. backup_deny_prepare() computes it once per run and returns a run id; a page call that passes that id reuses the stored set (owner-only table, 30 minutes), any other call simply runs the whole scan here (slow, same result, never stale).
+  select f.found into found from public.ffm_redaction_found f where p_run is not null and f.id = 1 and f.run = p_run and f.at > now() - interval '30 minutes';     -- only a caller that holds the run id of ITS prepare (hq_backup.py) reuses it
+  if found is null then found := public.backup_deny_scan(pol -> 'exported', ctx); end if;
   ctx := public.backup_ctx_hot(ctx, found) || jsonb_build_object('scanned', true);
   execute format('select coalesce(jsonb_agg(%s), ''[]''::jsonb) from (select * from public.%I t order by %s offset %s limit %s) t', public.backup_table_expr(p_table, pol -> 'exported'), p_table, ord, p_offset, p_limit)
     into res using ctx;
@@ -5921,7 +5957,7 @@ end $$;
 
 -- raw (unredacted) digest of a table: equal digests before and after a paged export prove nothing changed while it was read. Reveals nothing but a hash.
 create or replace function public.backup_table_digest(p_table text) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare pol jsonb := public.backup_export_policy(); r jsonb;
 begin
   if p_table is null or not ((pol -> 'exported') ? p_table) then raise exception 'backup_table_digest: % is not an exportable table', p_table; end if;
@@ -5931,7 +5967,7 @@ end $$;
 
 -- how much work one backup_snapshot() statement is, in seconds (per-character costs measured on the scratch machine: see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2). hq_backup.py pages above its limit.
 create or replace function public.backup_snapshot_cost() returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare pol jsonb := public.backup_export_policy(); e record; chars bigint; strict_chars bigint := 0; light_chars bigint := 0; rows bigint := 0; n bigint; expr text;
 begin
   for e in select * from public.backup_effective_spec(pol -> 'exported') where mode in ('strict', 'light') loop
@@ -5979,7 +6015,7 @@ revoke all on function public.backup_snapshot(text[]) from public, anon, authent
 revoke all on function public.backup_table_expr(text, jsonb) from public, anon, authenticated;
 revoke all on function public.backup_pk_order(text) from public, anon, authenticated;
 revoke all on function public.backup_redaction_meta(jsonb) from public, anon, authenticated;
-revoke all on function public.backup_snapshot_page(text, integer, integer) from public, anon, authenticated;
+revoke all on function public.backup_snapshot_page(text, integer, integer, uuid) from public, anon, authenticated;
 revoke all on function public.backup_table_digest(text) from public, anon, authenticated;
 revoke all on function public.backup_snapshot_cost() from public, anon, authenticated;
 grant execute on function public.backup_export_policy() to service_role;
@@ -5996,9 +6032,19 @@ grant execute on function public.backup_redact_row(text, jsonb, jsonb) to servic
 grant execute on function public.backup_effective_spec(jsonb) to service_role;
 grant execute on function public.backup_snapshot(text[]) to service_role;
 grant execute on function public.backup_redaction_meta(jsonb) to service_role;
-grant execute on function public.backup_snapshot_page(text, integer, integer) to service_role;
+grant execute on function public.backup_snapshot_page(text, integer, integer, uuid) to service_role;
 grant execute on function public.backup_table_digest(text) to service_role;
 grant execute on function public.backup_snapshot_cost() to service_role;
+
+-- search_path hijack: with Supabase's default ACL the API roles may CREATE objects in schema public, so a function created there with the name of a builtin could run with the owner's rights inside a definer
+-- function that has public on its search_path. Every function of the leak migrations now sets search_path = pg_catalog ONLY (all other references are schema-qualified), and the API roles lose CREATE on public
+-- (nothing in this repository creates objects as an API role: migrations run as the owner; PostgREST needs USAGE only).
+revoke create on schema public from public;
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then execute 'revoke create on schema public from anon'; end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then execute 'revoke create on schema public from authenticated'; end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then execute 'revoke create on schema public from service_role'; end if;
+end $$;
 
 -- ===== 20261120_redaction_denylist_v1.sql =====
 -- PERSISTENT REDACTION DENY-LIST: names, emails and phone numbers of people the system has ever known, kept as KEYED HASHES only, so the off-site export can still redact them after the
@@ -6037,7 +6083,7 @@ insert into public.ffm_redaction_keys (name, value)
 
 -- append-only: a hash is never changed or removed (an erased name must stay redacted)
 create or replace function public.redaction_denylist_immutable() returns trigger
-language plpgsql set search_path to 'pg_catalog', 'public' as $$
+language plpgsql set search_path to 'pg_catalog' as $$
 begin
   raise exception 'ffm_redaction_denylist and ffm_redaction_keys are append-only: nothing is updated, deleted or truncated';
 end $$;
@@ -6055,7 +6101,7 @@ create trigger keys_no_truncate before truncate on public.ffm_redaction_keys for
 -- SECURITY INVOKER on purpose: the lockdown migration (last) grants execute on EVERY function to service_role, so a definer function here would be callable by it. As invoker it needs the caller to be able to read
 -- the key table, which only the owner (and so the definer functions backup_redaction_context / the capture trigger) can: a direct call by service_role fails with 'permission denied'.
 create or replace function public.redaction_pads() returns text
-language plpgsql stable set search_path to 'pg_catalog', 'public' as $$
+language plpgsql stable set search_path to 'pg_catalog' as $$
 declare kv text; k bytea; ik bytea := decode(repeat('00', 64), 'hex'); ok bytea := decode(repeat('00', 64), 'hex'); i int;
 begin
   select value into kv from public.ffm_redaction_keys where name = 'denylist_hmac';
@@ -6073,15 +6119,15 @@ revoke all on function public.redaction_pads() from public, anon, authenticated,
 
 -- HMAC-SHA256(key, kind ':' value) as hex, from the pads. Pure SQL so the planner inlines it.
 create or replace function public.redaction_h(p_pads text, p_kind text, p_val text) returns text
-language sql immutable parallel safe set search_path to 'pg_catalog', 'public' as $$
+language sql immutable parallel safe set search_path to 'pg_catalog' as $$
   select encode(sha256(decode(split_part(p_pads, ':', 2), 'hex') || sha256(decode(split_part(p_pads, ':', 1), 'hex') || convert_to(p_kind || ':' || p_val, 'UTF8'))), 'hex')
 $$;
 revoke all on function public.redaction_h(text, text, text) from public, anon, authenticated, service_role;
 
 -- records one value. kind: n name, e email, p phone, c contact (email if it has an @, else phone). Returns the number of new hashes.
 create or replace function public.redaction_capture(p_kind text, p_value text) returns integer
-language plpgsql volatile set search_path to 'pg_catalog', 'public' as $$
-declare pads text; f text; tok text[]; w text; sq text; d text; n int := 0; stop text[] := public.backup_stopwords(); kind text := p_kind;
+language plpgsql volatile set search_path to 'pg_catalog' as $$
+declare pads text; f text; tok text[]; w text; sq text; d text; n int := 0; stop text[] := public.backup_stopwords(); kind text := p_kind; a int; b int; c text;
 begin
   if p_value is null or btrim(p_value) = '' then return 0; end if;
   pads := public.redaction_pads();
@@ -6116,6 +6162,13 @@ begin
   if cardinality(tok) = 0 then return 0; end if;
   sq := array_to_string(tok, '');
   if length(sq) >= 5 then insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'f', sq), 'f') on conflict do nothing; end if;
+  -- every contiguous run of adjacent tokens, squashed: a hyphenated or apostrophe surname written WITHOUT its separator ('Ashgrove-Pellew' -> 'ashgrovepellew', "D'Arcy" -> 'darcy'), a first name + surname pair, in any position
+  for a in 1..least(cardinality(tok), 8) loop
+    for b in a + 1..least(cardinality(tok), 8) loop
+      c := array_to_string(tok[a:b], '');
+      if length(c) >= 5 and c <> sq then insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'f', c), 'f') on conflict do nothing; end if;
+    end loop;
+  end loop;
   foreach w in array tok loop
     if length(w) >= (case when w ~ '[^\x01-\x7f]' then 2 else 3 end) and not (w = any (stop)) and w !~ '^[0-9]+$' then
       insert into public.ffm_redaction_denylist (h, kind) values (public.redaction_h(pads, 'n', w), 'n') on conflict do nothing;
@@ -6130,7 +6183,7 @@ revoke all on function public.redaction_capture(text, text) from public, anon, a
 
 -- trigger: TG_ARGV = 'column:kind' pairs. Captures NEW and OLD values (the old value is what an erasure or an update would otherwise lose).
 create or replace function public.redaction_capture_trg() returns trigger
-language plpgsql volatile security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
 declare a text; col text; kind text; jn jsonb; jo jsonb; r record; nm text;
 begin
   if TG_LEVEL = 'STATEMENT' then       -- TRUNCATE: every value, before it goes
@@ -6155,7 +6208,7 @@ revoke all on function public.redaction_capture_trg() from public, anon, authent
 
 -- the tables and columns that hold a person's or company's name / email / phone (the same sources backup_redaction_context() reads). A sqltest fails when a client table gains a name-like column that is not here.
 create or replace function public.redaction_sources() returns table (table_name text, column_name text, kind text)
-language sql immutable set search_path to 'pg_catalog', 'public' as $$
+language sql immutable set search_path to 'pg_catalog' as $$
   select * from (values ('leads', 'name', 'n'), ('leads', 'phone', 'c'), ('leads', 'email', 'e'), ('ws_leads', 'name', 'n'), ('ws_leads', 'phone', 'c'), ('ws_leads', 'email', 'e'),
                         ('setters', 'name', 'n'), ('setters', 'contact', 'c'), ('client_workspaces', 'name', 'n'), ('setter_events', 'client', 'n'),
                         ('contact_suppressions', 'address', 'e'), ('outbox', 'to_ref', 'c')) v (table_name, column_name, kind)
@@ -6184,7 +6237,7 @@ end $$;
 
 -- counts only, never a hash
 create or replace function public.redaction_denylist_status() returns jsonb
-language sql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language sql stable security definer set search_path to 'pg_catalog' as $$
   select jsonb_build_object('key_present', exists (select 1 from public.ffm_redaction_keys where name = 'denylist_hmac'),
     'hashes', (select count(*) from public.ffm_redaction_denylist),
     'by_kind', coalesce((select jsonb_object_agg(kind, n) from (select kind, count(*) n from public.ffm_redaction_denylist group by kind) q), '{}'::jsonb),
@@ -6349,7 +6402,7 @@ end $$;
 
 -- agent_runs.summary: scrubbed on every write, whoever writes it (LIGHT mode: patterns and known client names; never blanks the summary)
 create or replace function public.agent_runs_scrub() returns trigger
-language plpgsql security definer set search_path to 'pg_catalog', 'public' as $$
+language plpgsql security definer set search_path to 'pg_catalog' as $$
 begin
   if new.summary is not null then new.summary := public.backup_redact_text(new.summary, null, null, 'light'); end if;   -- LEAK-SOURCE-FIX v1
   return new;
@@ -6359,7 +6412,7 @@ create trigger agent_runs_scrub before insert or update of summary on public.age
 
 -- what the backup preflight checks: both the export redaction and the source fixes are installed AND are the definitions in force
 create or replace function public.backup_redaction_status() returns jsonb
-language sql stable security definer set search_path to 'pg_catalog', 'public' as $$
+language sql stable security definer set search_path to 'pg_catalog' as $$
   select jsonb_build_object('version', 2,
     'snapshot_redacts', coalesce((select p.prosrc like '%backup_table_expr%' and p.prosrc like '%backup_deny_scan%' and p.prosrc like '%backup_redaction_context%' from pg_proc p where p.oid = to_regprocedure('public.backup_snapshot(text[])')), false),
     'redactor_installed', to_regprocedure('public.backup_redact_text(text,jsonb,integer,text)') is not null and to_regprocedure('public.backup_redaction_spec()') is not null,

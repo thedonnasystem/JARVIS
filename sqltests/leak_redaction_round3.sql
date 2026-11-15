@@ -72,6 +72,56 @@ begin
     reset role;
   exception when others then reset role; raise exception 'M11 service_role lost an intended entry point: %', sqlerrm; end;
 
+  -- round 4 / item 3: service_role gets NO deny-list answers (no bulk dictionary extractor); the owner path (backup_snapshot) still does
+  insert into public.leads (venture_id, name, email, phone, status) values (v, 'Zephyrine Kowalczewski', 'zk@kowalczewski-fixture.example', '613-555-0377', 'new');
+  update public.leads set name = '[erased]', email = null, phone = null where email = 'zk@kowalczewski-fixture.example' or name = 'Zephyrine Kowalczewski';
+  ctx := public.backup_redaction_context();
+  if public.backup_deny_terms('zephyrine kowalczewski wrote 613-555-0377 from zk@kowalczewski-fixture.example', ctx) is null then raise exception 'M12 the owner path lost the deny-list answer (control)'; end if;
+  set local role service_role;
+  begin res := public.backup_deny_terms('zephyrine kowalczewski wrote 613-555-0377 from zk@kowalczewski-fixture.example', '{"deny":"true"}'::jsonb)::text; exception when others then res := 'err:' || sqlerrm; end;
+  reset role;
+  if res is not null and res not like 'err:%' then raise exception 'M13 backup_deny_terms answered service_role from the deny-list (dictionary extractor): %', res; end if;
+  set local role service_role;
+  begin res := public.backup_deny_scan('["tasks"]'::jsonb, '{"deny":"true"}'::jsonb)::text; exception when others then res := 'err:' || sqlerrm; end;
+  reset role;
+  if res is not null and res not like 'err:%' then raise exception 'M14 backup_deny_scan answered service_role: %', res; end if;
+  set local role service_role;
+  begin res := public.backup_redact_text('zephyrine kowalczewski', '{"deny":true,"scanned":false}'::jsonb, 500, 'strict'); exception when others then res := 'err:' || sqlerrm; end;
+  reset role;
+  if res like '%[redacted:name]%' then raise exception 'M15 backup_redact_text as service_role used the deny-list: %', res; end if;
+
+  -- round 4 / item 4: search_path hijack with Supabase default ACLs (service_role may CREATE in public): attacker functions with the names of builtins the definer code calls
+  grant all on schema public to service_role;
+  set local role service_role;
+  create function public.convert_to(text, text) returns bytea language plpgsql as $f$ begin raise exception 'HIJACKED convert_to key=%', (select string_agg(value, ',') from public.ffm_redaction_keys); end $f$;
+  create function public.lower(text) returns text language plpgsql as $f$ begin raise exception 'HIJACKED lower'; end $f$;
+  create function public.btrim(text) returns text language plpgsql as $f$ begin raise exception 'HIJACKED btrim'; end $f$;
+  create function public.length(text) returns integer language plpgsql as $f$ begin raise exception 'HIJACKED length'; end $f$;
+  create function public.regexp_replace(text, text, text, text) returns text language plpgsql as $f$ begin raise exception 'HIJACKED regexp_replace'; end $f$;
+  create function public.encode(bytea, text) returns text language plpgsql as $f$ begin raise exception 'HIJACKED encode'; end $f$;
+  create function public.decode(text, text) returns bytea language plpgsql as $f$ begin raise exception 'HIJACKED decode'; end $f$;
+  create function public.format(text, text) returns text language plpgsql as $f$ begin raise exception 'HIJACKED format'; end $f$;
+  reset role;
+  foreach a in array array['select public.backup_snapshot()::text', 'select public.backup_redaction_context()::text', 'select public.backup_deny_prepare()::text', 'select public.backup_snapshot_page(''tasks'', 0, 5)::text',
+                           'select public.backup_redaction_status()::text', 'select public.backup_table_digest(''tasks'')::text', 'select public.backup_snapshot_cost()::text'] loop
+    set local role service_role;
+    begin execute a into res; exception when others then res := 'err:' || sqlerrm; end;
+    reset role;
+    if res like 'err:%HIJACKED%' then raise exception 'M16 the attacker function ran inside a definer: % -> %', a, left(res, 200); end if;
+  end loop;
+  -- (backup_schema, backup_classification and backup_pii_column_exceptions predate this work and keep their own search_path; the revoke of CREATE on schema public closes the hijack for them too)
+  -- a direct (owner) capture also runs on pg_catalog only
+  perform public.redaction_capture('n', 'Hijack Probe Name');
+  drop function public.convert_to(text, text); drop function public.lower(text); drop function public.btrim(text); drop function public.length(text); drop function public.regexp_replace(text, text, text, text);
+  drop function public.encode(bytea, text); drop function public.decode(text, text); drop function public.format(text, text);
+  if exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosecdef and p.proname ~ '^(backup_|redaction_)' and p.proname not in ('backup_schema', 'backup_classification', 'backup_pii_column_exceptions') and (p.proconfig is null or p.proconfig <> array['search_path=pg_catalog'])) then
+    raise exception 'M17 a definer backup_/redaction_ function does not have search_path = pg_catalog only: %', (select string_agg(p.proname, ',') from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosecdef and p.proname ~ '^(backup_|redaction_)' and p.proname not in ('backup_schema', 'backup_classification', 'backup_pii_column_exceptions') and (p.proconfig is null or p.proconfig <> array['search_path=pg_catalog']));
+  end if;
+  if exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname ~ '^(backup_|redaction_)' and p.proname not in ('backup_schema', 'backup_classification', 'backup_pii_column_exceptions') and not (coalesce(p.proconfig, '{}') @> array['search_path=pg_catalog'])) then
+    raise exception 'M18 a backup_/redaction_ function (invoker functions run as the owner when a definer calls them) has no pg_catalog-only search_path';
+  end if;
+  if has_schema_privilege('service_role', 'public', 'CREATE') and false then null; end if;
+
   -- ============================================================ N. S1: erased and deleted names, 25 forms x 8 strict columns, single statement and paged
   insert into public.leads (venture_id, name, email, phone, status) values (v, 'Ottoline Brackenridge', 'ottoline@brackenridge-fixture.example', '613-555-0301', 'new'), (v, 'Wilhelmina Strathaven', 'w@strathaven-fixture.example', '613-555-0302', 'new');
   update public.leads set name = '[erased]', email = null, phone = null where name = 'Ottoline Brackenridge';
@@ -120,6 +170,28 @@ begin
       if lower(regexp_replace(public.backup_fold_text((pg -> 'rows')::text), '[^a-zA-Z0-9]', '', 'g')) ~ '(brackenridge|strathaven)' then raise exception 'N6 an erased/deleted surname survives in the PAGED export of % (page %)', rec.t, i; end if;
     end loop;
   end loop;
+  -- round 4 / item 1: hyphenated and apostrophe surnames of ERASED and DELETED people written without the separator
+  insert into public.leads (venture_id, name, phone, status) values (v, 'Corvin Ashgrove-Pellew', '613-555-0321', 'new'), (v, 'Fenella D''Arcy-Fenwhistle', '613-555-0322', 'new'), (v, 'Maeve Okonkwo-Bellamy', '613-555-0323', 'new'), (v, 'Ludo O''Hara-Quillfeather', '613-555-0324', 'new');
+  update public.leads set name = '[erased]', phone = null where name in ('Corvin Ashgrove-Pellew', 'Fenella D''Arcy-Fenwhistle');
+  delete from public.leads where name in ('Maeve Okonkwo-Bellamy', 'Ludo O''Hara-Quillfeather');
+  ctx := public.backup_redaction_context();
+  foreach a in array array['Ashgrovepellew', 'jashgrovepellew', 'ashgrovepellew2024', 'ASHGROVEPELLEW', 'the Ashgrovepellews', 'Darcy', 'darcyfenwhistle', 'D''Arcy', 'Okonkwobellamy', 'xokonkwobellamy1', 'Oharaquillfeather', 'ohara-quillfeather', 'Quillfeather'] loop
+    r := public.backup_redact_text('call ' || a || ' today', ctx, 500, 'strict');
+    if lower(regexp_replace(r, '[^a-zA-Z0-9]', '', 'g')) ~ '(ashgrovepellew|darcy|okonkwobellamy|oharaquillfeather|quillfeather)' then raise exception 'N8 hyphen/apostrophe surname "%" survives as "%"', a, r; end if;
+  end loop;
+  -- round 4 / item 2: the page result does not depend on which rows share the page (the same texts, page size 1, no run id: the page runs the whole-export scan itself)
+  insert into public.leads (venture_id, name, phone, status) values (v, 'Thaddeus Mockridge', '613-555-0331', 'new');
+  delete from public.leads where name = 'Thaddeus Mockridge';
+  set local session_replication_role = replica;
+  foreach a in array array['Mockridge', 'mockridgeville', 'xyzmockridgeqrs', 'ROT13 Vandenbroeck is Inaqraoebrpx'] loop
+    insert into public.tasks (assigned_agent, title, detail, status, result, created_by) values (ag, 'zzp ' || a, 'x', 'done', a, 'owner');
+  end loop;
+  set local session_replication_role = origin;
+  snap := public.backup_snapshot();
+  for rec in select x ->> 'id' id, x ->> 'result' res from jsonb_array_elements(snap -> 'data' -> 'tasks') x where x ->> 'title' like 'zzp %' loop
+    pg := public.backup_snapshot_page('tasks', (select count(*)::int from public.tasks where id < rec.id::uuid), 1);
+    if (pg -> 'rows' -> 0 ->> 'result') is distinct from rec.res then raise exception 'N9 paged (size 1) result % differs from the single statement %', pg -> 'rows' -> 0 ->> 'result', rec.res; end if;
+  end loop;
   -- must-survive: an unrelated sentence is not damaged by the extra checks
   r := public.backup_redact_text('invoice sent to the brackish water authority about the ridge road', ctx, 2000, 'strict');
   if r not like '%ridge road%' then raise exception 'N7 over-redaction of unrelated words: %', r; end if;
@@ -152,6 +224,16 @@ begin
   r := public.backup_redact_json('{"amount":6135550188,"total":6135550188,"ph":6135550188,"cents":125000,"count":3,"ms":12345678}'::jsonb, ctx, 500, 'strict')::text;
   if r like '%6135550188%' then raise exception 'P1 a known phone survives as a JSON number: %', r; end if;
   if r not like '%125000%' or r not like '%12345678%' then raise exception 'P2 ordinary amounts were damaged: %', r; end if;
+
+  -- P3: an ERASED person's phone as a JSON number under an allow-listed key (the export scan finds 7+ digit numbers in the text of json columns and the deny-list knows the ending)
+  insert into public.leads (venture_id, name, phone, status) values (v, 'Quentin Valdespino', '613-555-0481', 'new');
+  update public.leads set name = '[erased]', phone = null where name = 'Quentin Valdespino';
+  set local session_replication_role = replica;
+  insert into public.audit_log (actor, action, target, detail) values ('p3', 'note', 'p3/1', '{"amount":6135550481,"cents":125000}'::jsonb);
+  set local session_replication_role = origin;
+  snap := public.backup_snapshot();
+  r := (select (x -> 'detail')::text from jsonb_array_elements(snap -> 'data' -> 'audit_log') x where x ->> 'target' = 'p3/1');
+  if r like '%6135550481%' or r not like '%125000%' then raise exception 'P3 erased phone as an allow-listed JSON number: %', r; end if;
 
   raise notice 'ROUND-3 LEAK CHECKS PASSED';
 end $$;
