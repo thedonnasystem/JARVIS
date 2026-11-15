@@ -58,4 +58,16 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do   # the whole or
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after rollback: $f"; exit 1; }
 done
 echo "rollback drill OK (and the migrations re-apply cleanly afterwards)"
+echo "leak-redaction rollback drill: ops/rollback_leak_redaction.sql must restore the live (Nov 15) definitions of the writers and the repo-head backup_snapshot exactly"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_leak_redaction.sql >/dev/null 2>&1) || { echo "LEAK ROLLBACK FAILED to run"; exit 1; }
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_leak_redaction.sql >/dev/null 2>&1) || { echo "LEAK ROLLBACK is not idempotent"; exit 1; }
+got="$(psql "$REPLICA_URL" -At -c "select p.oid::regprocedure::text||' '||md5(pg_get_functiondef(p.oid)) from pg_proc p where p.pronamespace='public'::regnamespace and p.prokind='f' and p.proname in ('mark_do_not_contact','record_lead_reply','setter_record_payout','set_deal_stage','confirm_deal_won','backup_snapshot') order by 1")"
+want="$(grep -E '^[a-z_]+\(' "$root/ops/live_function_md5_20261115.txt" | sort)"
+[ "$got" = "$want" ] || { echo "LEAK ROLLBACK DRILL FAILED"; diff <(echo "$got") <(echo "$want"); exit 1; }
+left="$(psql "$REPLICA_URL" -At -c "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname in ('backup_fold_text','backup_unescape_text','backup_redaction_context','backup_redact_patterns','backup_probe_encoded','backup_redact_text','backup_redact_json','backup_redaction_spec','backup_redact_row','backup_redaction_status','agent_runs_scrub')")"
+[ "$left" = "0" ] || { echo "LEAK ROLLBACK DRILL FAILED: $left redaction functions remain"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the leak rollback: $f"; exit 1; }
+done
+echo "leak rollback drill OK (live definitions restored exactly, then the migrations re-apply cleanly)"
 echo "REPLICA OK"

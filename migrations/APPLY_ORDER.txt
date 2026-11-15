@@ -36,4 +36,6 @@
 20261118_ffm_onboarding_v1.sql
 20261119_ffm_consent_v1.sql
 20261119_backup_exclude_client_pii_v1.sql
+20261120_backup_redact_leak_paths_v1.sql
+20261120_leak_source_prevention_v1.sql
 20261112_lockdown_v1.sql

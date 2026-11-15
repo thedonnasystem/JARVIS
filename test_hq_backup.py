@@ -19,6 +19,8 @@ SCHEMA = {"server_version": "17.0", "tables": [{"name": "ideas"}, {"name": "ledg
 ROWS = {"ideas": 3, "ledger": 3, "tasks": 2, "push_config": 1}
 
 
+REDACTION = {"version": 1, "known_client_terms": 4, "spec": [{"table_name": t, "column_name": c, "kind": "text", "mode": "strict", "max_len": 500}
+                                                              for t, c in (("audit_log", "detail"), ("ledger", "note"), ("tasks", "result"), ("agent_runs", "summary"))]}
 POLICY = {"exported": ["ideas", "ledger", "tasks"], "excluded": [{"table": "leads", "class": "client_pii", "reason": "client personal data"}, {"table": "push_config", "class": "secret", "reason": "keys"}], "unclassified": []}
 
 
@@ -238,7 +240,7 @@ class Snapshot(unittest.TestCase):
     """backup_snapshot(): every table + schema from ONE SQL statement (mutually consistent)."""
     TABLES = ["ideas", "ledger", "tasks"]
 
-    def snap_req(self, data=None, fail=None, calls=None):
+    def snap_req(self, data=None, fail=None, calls=None, redaction=None):
         from decimal import Decimal
         data = data if data is not None else {"ideas": [{"id": 2, "n": "b"}, {"id": 1, "n": "a"}], "ledger": [{"id": 1, "amt": Decimal("30.00")}], "tasks": []}
         def req(method, path, body=None, prefer=None, timeout=30, exact=False):
@@ -247,7 +249,7 @@ class Snapshot(unittest.TestCase):
             if path.endswith("/rpc/backup_snapshot"):
                 if fail:
                     raise fail
-                return {"data": data, "schema": {**SCHEMA, "tables": [{"name": n} for n in self.TABLES + ["push_config"]], "sequences": [{"name": "s", "last_value": 7}]}, "method": "x", "policy": POLICY}
+                return {"data": data, "schema": {**SCHEMA, "tables": [{"name": n} for n in self.TABLES + ["push_config"]], "sequences": [{"name": "s", "last_value": 7}]}, "method": "x", "policy": POLICY, "redaction": redaction if redaction is not None else REDACTION}
             return fake_request(method, path, body, prefer, exact=exact)
         return req
 
@@ -660,3 +662,80 @@ class Run(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeakRedaction(unittest.TestCase):
+    """The second lock in code for the client-text leak paths (audit_log.detail, ledger.note, tasks.result, agent_runs.summary)."""
+    TABLES = Snapshot.TABLES
+
+    def req(self, data, redaction=None, drop_redaction=False):
+        def r(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_snapshot"):
+                snap = {"data": data, "schema": {**SCHEMA, "tables": [{"name": n} for n in self.TABLES + ["push_config"]]}, "method": "x", "policy": POLICY}
+                if not drop_redaction:
+                    snap["redaction"] = redaction if redaction is not None else REDACTION
+                return snap
+            return fake_request(method, path, body, prefer, exact=exact)
+        return r
+
+    def test_snapshot_without_redaction_is_refused_and_not_downgraded(self):
+        data = {"ideas": [], "ledger": [{"id": 1, "note": "Setter payout (close): Sam Setter"}], "tasks": []}
+        with mock.patch("hq._request", side_effect=self.req(data, drop_redaction=True)):
+            with self.assertRaises(B.BackupError) as e:
+                B.dump()
+        self.assertIn("did not redact", str(e.exception))
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(data, drop_redaction=True)):
+            self.assertFalse(B.run(force=True)["ok"])
+
+    def test_redaction_spec_must_cover_all_four_paths(self):
+        thin = {"version": 1, "spec": [{"table_name": "ledger", "column_name": "note"}]}
+        with mock.patch("hq._request", side_effect=self.req({"ideas": [], "ledger": [], "tasks": []}, redaction=thin)):
+            with self.assertRaises(B.BackupError) as e:
+                B.dump()
+        self.assertIn("audit_log.detail", str(e.exception))
+        with mock.patch("hq._request", side_effect=self.req({"ideas": [], "ledger": [], "tasks": []}, redaction={"version": 0, "spec": REDACTION["spec"]})):
+            with self.assertRaises(B.BackupError):
+                B.dump()
+
+    def test_contact_data_surviving_in_a_strict_column_blocks_the_backup(self):
+        for bad in ({"ledger": [{"id": 1, "note": "paid jane.doe@example.com"}]}, {"ledger": [{"id": 1, "note": "call 613-555-0142"}]},
+                    {"tasks": [{"id": 1, "result": "x 6135550142 y"}]}):
+            data = {"ideas": [], "ledger": [], "tasks": [], **bad}
+            with mock.patch("hq._request", side_effect=self.req(data)):
+                with self.assertRaises(B.BackupError) as e:
+                    B.dump()
+            self.assertIn("refusing to write the backup", str(e.exception))
+
+    def test_clean_and_failed_closed_fields_pass_and_are_counted(self):
+        data = {"ideas": [], "ledger": [{"id": 1, "note": "deal 3f2a1b4c-1111-4222-8333-444455556666: owner confirmed win", "amount_cents": 250000}],
+                "tasks": [{"id": 1, "result": B.UNCERTAIN}, {"id": 2, "result": "Done: 4 prospects"}]}
+        with mock.patch("hq._request", side_effect=self.req(data)):
+            blob, m = B.dump()
+        self.assertEqual(m["redaction"]["mode"], "database"); self.assertEqual(m["redaction"]["fields_failed_closed"], {"tasks.result": 1})
+        self.assertIn("ledger.note", m["redaction"]["columns"]); self.assertIn("agent_runs.summary", m["redaction"]["columns"])
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+            self.assertIn(b"250000", tar.extractfile("data/ledger.jsonl").read())
+
+    def test_fallback_never_exports_the_free_text_of_the_leak_columns(self):
+        rows = {"ideas": [{"id": 1, "v": "keep me"}], "ledger": [{"id": 1, "kind": "expense", "amount_cents": 36000, "note": "Setter payout (close): Sam Setter"}],
+                "tasks": [{"id": 1, "status": "done", "title": "Follow up Jean Tremblay", "detail": "call 613-555-0142", "result": "Jean Tremblay jean@x.com"}]}
+        def r(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_snapshot"):
+                raise urllib.error.HTTPError(path, 404, "no function", {}, None)
+            if method == "GET" and "/rest/v1/" in path and "audit_log" not in path:
+                t = path.split("/rest/v1/")[1].split("?")[0]
+                return rows.get(t, []) if "offset=0" in path else []
+            return fake_request(method, path, body, prefer, exact=exact)
+        with mock.patch("hq._request", side_effect=r):
+            blob, m = B.dump()
+        self.assertEqual(m["redaction"]["mode"], "fallback_blanked")
+        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+            allj = b"".join(tar.extractfile(n).read() for n in tar.getnames() if n.startswith("data/"))
+        for secret in (b"Tremblay", b"Sam Setter", b"613-555", b"jean@x.com"):
+            self.assertNotIn(secret, allj)
+        self.assertIn(b"36000", allj); self.assertIn(b'"status":"done"', allj); self.assertIn(b"keep me", allj)
+
+    def test_blank_keeps_json_structure_numbers_and_booleans(self):
+        out = B.blank_leak_columns("audit_log", [{"id": 7, "action": "do_not_contact", "detail": {"leads_marked": 2, "ok": True, "reason": "Jean 613-555-0142", "ids": ["a", 3]}}])[0]
+        self.assertEqual(out["detail"], {"leads_marked": 2, "ok": True, "reason": B.UNCERTAIN, "ids": [B.UNCERTAIN, 3]}); self.assertEqual(out["action"], "do_not_contact")
+        self.assertEqual(B.blank_leak_columns("ideas", [{"id": 1, "v": "x"}]), [{"id": 1, "v": "x"}])

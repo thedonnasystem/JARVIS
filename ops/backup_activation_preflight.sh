@@ -48,7 +48,7 @@ for v in RESTORE_B2_AUTH RESTORE_B2_BUCKET_ID RESTORE_DB_URL; do
   [ -n "${!v:-}" ] && bad "$v is set here; restore variables must never live in Railway" || ok "$v is not set (good)"
 done
 # 5 repo pieces the flow depends on
-for f in hq_backup.py ops/restore_backup.py ops/restore_local.sh migrations/20261113_backup_schema_v1.sql; do
+for f in hq_backup.py hq_scrub.py ops/restore_backup.py ops/restore_local.sh migrations/20261113_backup_schema_v1.sql migrations/20261120_backup_redact_leak_paths_v1.sql migrations/20261120_leak_source_prevention_v1.sql; do
   [ -f "$root/$f" ] && ok "found $f" || bad "missing $f"
 done
 python3 -c "import psycopg2" 2>/dev/null && ok "psycopg2 available (needed by the restore tool on YOUR computer)" || warn "psycopg2-binary not installed here (needed only where you run the restore drill)"
@@ -72,7 +72,7 @@ PY
 fi
 # 7 client-PII exclusion. The DATABASE decides what is exported (public.backup_export_policy(), migration 20261119_backup_exclude_client_pii_v1). This check reads that decision
 # (table NAMES only, never rows or the URL) and requires: the function exists; no client table is on the exported list; nothing is unclassified.
-# WARN (FAIL with --require-pii-exclusion) otherwise. Then the KNOWN LEAK PATHS below need an explicit owner decision (BACKUP_LEAK_PATHS_ACCEPTED=1).
+# WARN (FAIL with --require-pii-exclusion) otherwise. Then section 8 below requires the client-text leak paths to be closed (redaction installed).
 pii_flag() { if [ "$reqpii" = 1 ]; then bad "$1"; else warn "$1"; fi; }
 dburl="${PII_CHECK_DB_URL:-${REPLICA_URL:-}}"
 if [ -z "$dburl" ]; then pii_flag "client-PII policy check could not run: set PII_CHECK_DB_URL (read-only connection string of the target DB)"
@@ -87,7 +87,17 @@ else
     else ok "export policy: ${nexp} tables exported, no client table on the list, nothing unclassified"; fi
   fi
 fi
-if [ "${BACKUP_LEAK_PATHS_ACCEPTED:-0}" = 1 ]; then ok "owner has accepted the known client-text leak paths (BACKUP_LEAK_PATHS_ACCEPTED=1)"
-else pii_flag "KNOWN LEAK PATHS need an owner decision: client names/notes can be copied into EXPORTED tables (audit_log.detail.reason, ledger.note for setter payouts, tasks.result, agent_runs.summary). See DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2. Set BACKUP_LEAK_PATHS_ACCEPTED=1 only after the owner decides"; fi
+# 8 the known client-text leak paths (audit_log.detail.reason, ledger.note of setter payouts, tasks.result, agent_runs.summary; DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2) are CLOSED when both
+# layers are installed in the target database: the source fixes (migration 20261120_leak_source_prevention_v1) and the export redaction inside backup_snapshot() (20261120_backup_redact_leak_paths_v1).
+# The check reads public.backup_redaction_status(), which inspects the definitions actually in force (not a flag anyone can set). BACKUP_LEAK_PATHS_ACCEPTED=1 no longer passes this check:
+# accepting the leak was option (c); the owner chose (a)+(b), so the only way to pass is to have the redaction installed.
+if [ -z "$dburl" ] || ! command -v psql >/dev/null 2>&1; then pii_flag "KNOWN LEAK PATHS: cannot check whether the redaction is installed (set PII_CHECK_DB_URL, psql needed)"
+else
+  st="$(psql "$dburl" -Atqc "select concat_ws(' ', coalesce(s->>'snapshot_redacts','f'), coalesce(s->>'sources_fixed','f'), coalesce(s->>'redactor_installed','f'), coalesce(s->>'agent_runs_trigger','f')) from (select public.backup_redaction_status() s) q" 2>/dev/null)"; rc=$?
+  if [ $rc != 0 ] || [ -z "$st" ]; then pii_flag "KNOWN LEAK PATHS: backup_redaction_status() is not installed - apply migrations 20261120_backup_redact_leak_paths_v1 and 20261120_leak_source_prevention_v1 (see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2)"
+  elif [ "$st" = "true true true true" ]; then ok "client-text leak paths closed: source fixes + export redaction are installed (backup_redaction_status)"
+  else pii_flag "KNOWN LEAK PATHS: redaction only partly installed (snapshot_redacts/sources_fixed/redactor_installed/agent_runs_trigger = $st) - DO NOT ACTIVATE"; fi
+  [ "${BACKUP_LEAK_PATHS_ACCEPTED:-0}" = 1 ] && warn "BACKUP_LEAK_PATHS_ACCEPTED=1 is ignored: it no longer substitutes for the redaction (owner decision: close the leak paths, do not accept them)"
+fi
 echo; echo "Result: $fails FAIL, $warns WARN."; echo "Not checked here (check by eye): bucket is Private; lifecycle rule set; BACKUP_KEY stored in 2 places; migration 20261113_backup_schema_v1.sql applied (the Telegram /backup check shows it)."
 [ "$fails" = 0 ]

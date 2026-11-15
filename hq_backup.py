@@ -28,6 +28,22 @@ SKIP = {"push_config", "push_subscriptions"}   # hold private keys / endpoints: 
 # (public.backup_export_policy(), migration 20261119_backup_exclude_client_pii_v1). This pattern is a SECOND, independent lock in this code: whatever the database says,
 # a table that matches it is never written to a backup file. It is deliberately narrower than the database list; it exists so one wrong allow-list entry cannot leak.
 ALWAYS_EXCLUDE = re.compile(r"^(ws_|ffm_)|^(client_workspaces|leads|outbox|lead_replies|deals|contact_suppressions|setters|setter_events|setter_payouts)$")
+# Client text that the system copies into EXPORTED tables (DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2). The database redacts these columns inside backup_snapshot()
+# (migration 20261120_backup_redact_leak_paths_v1, mirrored by public.backup_redaction_spec()); this is the SECOND, independent lock in code:
+#   * a snapshot that does not say it was redacted for all four required paths is refused (an old backup_snapshot() would export the raw text);
+#   * the two-read fallback never exports these columns' text (it blanks them: REDACTION_BLANK);
+#   * after redaction, any email address or phone number still found in a strict column makes the backup REFUSE to be written.
+UNCERTAIN = "[redacted:uncertain]"
+REDACTION_VERSION = 1
+REQUIRED_REDACTION = {("audit_log", "detail"), ("ledger", "note"), ("tasks", "result"), ("agent_runs", "summary")}
+REDACTION_BLANK = {   # table -> [(column, kind)]; kind json keeps keys, numbers and booleans and blanks every string
+    "audit_log": [("detail", "json")], "ledger": [("note", "text")], "tasks": [("result", "text"), ("title", "text"), ("detail", "text")], "agent_runs": [("summary", "text")],
+    "escalations": [("summary", "text"), ("evidence", "json")], "memory": [("content", "text")], "owner_messages": [("body", "text")], "human_handoffs": [("task", "text"), ("why_human", "text")],
+    "missions": [("result", "text")]}
+STRICT_COLUMNS = {"audit_log": ["detail"], "ledger": ["note"], "tasks": ["result"], "agent_runs": ["summary"], "escalations": ["summary"]}
+_EMAIL = re.compile(r"[A-Za-z0-9._%+'-]{2,}@[A-Za-z0-9-]{2,}(?:\.[A-Za-z0-9-]{2,})+")
+_UUID_ISO = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9:.]+(?:Z|[+-][0-9:]+)?)?|[0-9a-fA-F]{32,}")   # ids, timestamps and hashes are not phone numbers
+_PHONE = re.compile(r"(?<![0-9])\(?[0-9]{3}\)?[ .\-][0-9]{3}[ .\-][0-9]{4}(?![0-9])|(?<![0-9])[0-9]{10,}(?![0-9])")
 # (the old built-in table list is gone on purpose: with no database export policy there is no off-site export, so a table can never be exported just because a list here names it)
 ORDER = {"company_profile": "venture_slug", "departments": "slug", "agents": "slug", "app_owners": "email", "dayjob_days": "day",
          "tool_registry": "slug", "systems": "name", "action_policy": "action", "model_prices": "model", "setters": "id",
@@ -70,6 +86,68 @@ def get_schema() -> dict | None:
     if not isinstance(s, dict) or not s.get("tables"):
         raise BackupError("backup_schema() returned an unexpected result")
     return s
+
+
+def _strings(o):
+    if isinstance(o, str):
+        yield o
+    elif isinstance(o, dict):
+        for k, v in o.items():
+            yield from _strings(k); yield from _strings(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from _strings(v)
+
+
+def _blank(o):
+    if isinstance(o, str):
+        return UNCERTAIN
+    if isinstance(o, dict):
+        return {k: _blank(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_blank(v) for v in o]
+    return o
+
+
+def blank_leak_columns(table: str, rows: list) -> list:
+    """Two-read fallback only: the database did not redact, so the free-text leak columns of these rows are replaced by the marker (ids, numbers, statuses and keys are kept)."""
+    cols = REDACTION_BLANK.get(table)
+    if not cols:
+        return rows
+    out = []
+    for r in rows:
+        r = dict(r)
+        for c, _kind in cols:
+            if r.get(c) is not None:
+                r[c] = _blank(r[c])
+        out.append(r)
+    return out
+
+
+def check_redaction(snap: dict) -> dict:
+    """A snapshot is only trusted if the database says it redacted every required leak path (an old backup_snapshot() would carry the raw client text)."""
+    red = snap.get("redaction")
+    if not (isinstance(red, dict) and isinstance(red.get("version"), int) and red["version"] >= REDACTION_VERSION and isinstance(red.get("spec"), list)):
+        raise BackupError("backup_snapshot() did not redact the client-text leak paths (migration 20261120_backup_redact_leak_paths_v1 missing); refusing to export")
+    have = {(str(s.get("table_name")), str(s.get("column_name"))) for s in red["spec"] if isinstance(s, dict)}
+    missing = sorted(REQUIRED_REDACTION - have)
+    if missing:
+        raise BackupError("the redaction spec does not cover " + ", ".join(f"{t}.{c}" for t, c in missing) + "; refusing to export")
+    return red
+
+
+def assert_redacted(data: dict) -> dict:
+    """Second lock: after redaction no email address or phone number may remain in a strict column. Returns {table.column: number of fields that fail closed}."""
+    uncertain = {}
+    for t, cols in STRICT_COLUMNS.items():
+        for row in data.get(t) or []:
+            for c in cols:
+                for sv in _strings(row.get(c)):
+                    if sv == UNCERTAIN:
+                        uncertain[f"{t}.{c}"] = uncertain.get(f"{t}.{c}", 0) + 1
+                    elif _EMAIL.search(sv) or _PHONE.search(_UUID_ISO.sub(" ", sv)):
+                        raise BackupError(f"contact data is still present in {t}.{c} after redaction; refusing to write the backup")
+    return uncertain
 
 
 def _check_policy(p) -> dict:
@@ -149,7 +227,7 @@ def _read_all(names, schema) -> dict:
     """One pass over every table: {table: (jsonl bytes, row count)}."""
     out = {}
     for t in names:
-        rows = _read_table(t, schema)
+        rows = blank_leak_columns(t, _read_table(t, schema))
         out[t] = (("\n".join(row_json(r) for r in rows)).encode(), len(rows))
     return out
 
@@ -184,6 +262,7 @@ def _try_snapshot() -> tuple[dict | None, str]:
         return None, f"backup_snapshot() failed ({type(e).__name__})"
     if not isinstance(snap, dict) or not isinstance(snap.get("data"), dict) or not isinstance(snap.get("schema"), dict) or not snap["schema"].get("tables"):
         return None, "backup_snapshot() returned an unexpected result"
+    check_redaction(snap)                              # raises BackupError: a snapshot that was not redacted is never written, and is not "fallen back" from either
     pol = _check_policy(snap.get("policy"))            # a snapshot without a policy is from the old function, which exports client data: refuse (raises BackupError)
     want = sorted(t for t in pol["exported"] if t not in SKIP)
     if sorted(snap["data"]) != want or SKIP & set(snap["data"]) or any(ALWAYS_EXCLUDE.search(t) for t in snap["data"]):
@@ -200,6 +279,9 @@ def dump() -> tuple[bytes, dict]:
     if snap:
         pol = snap["policy"]
         schema = snap["schema"]
+        unc = assert_redacted(snap["data"])
+        manifest["redaction"] = {"mode": "database", "version": snap["redaction"]["version"], "known_client_terms": snap["redaction"].get("known_client_terms"),
+                                 "columns": sorted(f"{s['table_name']}.{s['column_name']}" for s in snap["redaction"]["spec"] if isinstance(s, dict)), "fields_failed_closed": unc}
         data_by_table = {t: _encode_rows(rows) for t, rows in sorted(snap["data"].items())}
         manifest["table_list_source"] = "database export policy"
         manifest["consistency"] = {"consistent": True, "method": "single SQL statement snapshot (all tables + schema)", "attempts": 1}
@@ -211,6 +293,7 @@ def dump() -> tuple[bytes, dict]:
         manifest["table_list_source"] = "database export policy"
         data_by_table, manifest["consistency"] = _read_consistent(names, schema)
         manifest["consistency"]["snapshot_unavailable"] = why
+        manifest["redaction"] = {"mode": "fallback_blanked", "columns": sorted(f"{t}.{c}" for t, cs in REDACTION_BLANK.items() for c, _ in cs if t in names)}
         if schema:
             # Read the schema AGAIN after the data: sequence positions must not be older than the rows we saved (a restored sequence behind the
             # data would hand out ids that already exist). If the table list changed while we were reading, refuse: tomorrow's run starts clean.

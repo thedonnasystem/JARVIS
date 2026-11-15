@@ -2,7 +2,7 @@
 
 > ## DO NOT ACTIVATE until the owner has completed the checklist below
 > - The client-PII exclusion is BUILT (PR #11, migration `20261119_backup_exclude_client_pii_v1`): the database decides what is exported (`backup_export_policy()`); client tables are never exported. It is **not live** until that migration is applied under release authorization.
-> - **Known leak paths remain** (see `DATA_CLASSIFICATION_AND_BACKUP_POLICY.md` section 2): client names/notes can be copied into exported tables (`audit_log` reasons, setter payout ledger notes, `tasks.result`, `agent_runs.summary`). The preflight fails until the owner decides (`BACKUP_LEAK_PATHS_ACCEPTED=1`) or those paths are redacted at source.
+> - **Known leak paths are CLOSED in code (PR for migrations `20261120_*`), not yet live**: client text is no longer copied into `audit_log` reasons / setter payout ledger notes / task output at the source, and `backup_snapshot()` redacts those four paths again at export and fails closed (`DATA_CLASSIFICATION_AND_BACKUP_POLICY.md` section 2). The preflight passes this only when `backup_redaction_status()` shows both layers installed; `BACKUP_LEAK_PATHS_ACCEPTED=1` no longer substitutes for it.
 > - **Gate:** `ops/backup_activation_preflight.sh --require-pii-exclusion` with `PII_CHECK_DB_URL` pointing at the target DB must show no FAIL.
 > - Do not set `BACKUP_KEY`, `BACKUP_PUT_URL` or `BACKUP_AUTH` in Railway before then.
 

@@ -28,6 +28,7 @@ import hq_missions
 import hq_evidence
 import hq_mail
 import hq_backup
+import hq_scrub
 import hq_bank
 import hq_waterfall
 
@@ -533,7 +534,7 @@ def _ask_owner(t: dict, text: str) -> bool:
                                "body": f"Question from {t['assigned_agent']} (task: {t['title'][:80]}):\n{q}",
                                "options": opts, "ref_table": "tasks", "ref_id": t["id"]})
     _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked", "updated_at": _now(),
-                                          "result": f"{WAITING_PREFIX} {q}\n\n{text}"[:20000]})
+                                          "result": f"{WAITING_PREFIX} {_scrub_stored(q + chr(10) * 2 + text)}"[:20000]})
     return True
 
 
@@ -1060,10 +1061,17 @@ def _work_tasks_inner() -> bool:
         except Exception:
             logger.exception("HQ task brief failed")
         escalate = bool(re.search(r"(?im)^\s*ESCALATE\b", text))
-        _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked" if escalate else "done", "result": text[:8000], "updated_at": _now()})
+        stored = _scrub_stored(text)   # the model's RAW output was used above (leads, drafts, facts); the copy that is STORED (and exported) is scrubbed of client contact data
+        _patch(f"tasks?id=eq.{_q(t['id'])}", {"status": "blocked" if escalate else "done", "result": stored[:8000], "updated_at": _now()})
         if escalate:
-            _insert("escalations", {"from_agent": t["assigned_agent"], "kind": "uncertain", "summary": f"{t['title']}: {text[:1500]}"})
+            _insert("escalations", {"from_agent": t["assigned_agent"], "kind": "uncertain", "summary": f"{t['title']}: {stored[:1500]}"})
     return True
+
+
+def _scrub_stored(text):
+    """Client contact data (emails, phones, personal URLs, names of known leads/setters/clients) out of text that is STORED in an exported table. Never raises; on any
+    problem it stores the marker, not the raw text. See hq_scrub.py and DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2."""
+    return hq_scrub.scrub_stored(text, _get)
 
 
 def _attached_research(t: dict) -> str:

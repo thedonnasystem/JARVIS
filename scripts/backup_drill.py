@@ -76,14 +76,71 @@ def seed(conn):
     conn.commit()
 
 
+LEAK_TOKENS = ["Vandenbroek", "Prisca", "Lachapelle", "Théodore", "Theodore", "Zalewski", "Ximena", "Zorro Bakery", "Quenneville", "Odalys", "Brightwater", "prisca@", "vandenbroek-drill", "setters-drill", "ximena@",
+               "lachapelle@", "quenneville-drill", "odalys.q"]
+LEAK_PHONES = ["6135550911", "5145550912", "8195550913", "6135550914"]
+
+
+def seed_leaks(conn):
+    """Seed client names / emails / phones THROUGH the real writers (record_lead_reply, mark_do_not_contact, setter_record_payout, deals) and through the places agent output lands (tasks.result,
+    escalations.summary, agent_runs.summary). Nothing is inserted into audit_log or ledger directly: the point is to prove the leak paths, not to plant data."""
+    import hq_scrub
+    cur = conn.cursor()
+    cur.execute("select id from ventures order by slug limit 1"); v = cur.fetchone()[0]
+    cur.execute("select slug from agents where status='active' order by slug limit 1"); ag = cur.fetchone()[0]
+    cur.execute("insert into leads (venture_id, name, email, phone, status) values (%s,'Prisca Vandenbroek','prisca@vandenbroek-drill.example','613-555-0911','sent') returning id", (v,)); l1 = cur.fetchone()[0]
+    cur.execute("insert into leads (venture_id, name, email, phone, status) values (%s,'Théodore Lachapelle','lachapelle@lachapelle-drill.example','514-555-0912','sent') returning id", (v,)); l2 = cur.fetchone()[0]
+    cur.execute("insert into leads (venture_id, name, email, phone, status) values (%s,'Brightwater Plumbing','info@brightwater-drill.example','613-555-0914','sent') returning id", (v,)); l3 = cur.fetchone()[0]
+    cur.execute("select public.record_lead_reply(%s,'unsubscribe',%s,'owner:drill')", (l1, "Prisca Vandenbroek says: call me at 613-555-0911 or write prisca@vandenbroek-drill.example, stop."))
+    cur.execute("select public.mark_do_not_contact(%s,%s,'owner:drill')", (l2, "Théodore Lachapelle asked by phone 514-555-0912 to be removed"))
+    cur.execute("select public.record_lead_reply(%s,'interested',%s,'owner:drill')", (l3, "Brightwater Plumbing: ask for Prisca Vandenbroek on 613-555-0914"))
+    cur.execute("select public.create_deal(%s,250000,'owner:drill',%s)", (l3, "Brightwater note: Prisca Vandenbroek"))
+    cur.execute("select id from deals where lead_id=%s", (l3,)); d = cur.fetchone()[0]
+    cur.execute("select public.set_deal_stage(%s,'negotiating','owner:drill',%s)", (d, "Prisca Vandenbroek wants 10% off, 613-555-0914"))
+    cur.execute("select public.confirm_deal_won(%s,250000,'expected','owner:drill',%s)", (d, "signed by Prisca Vandenbroek"))
+    cur.execute("select public.setter_add('Ximena Zalewski','ximena@setters-drill.example','salons')")
+    cur.execute("select id from setters where name='Ximena Zalewski'"); sid = cur.fetchone()[0]
+    for kind in ("booked", "closed", "closed", "closed"):
+        cur.execute("select public.setter_log('ximena',%s,'Zorro Bakery Drill',null)", (kind,))
+    cur.execute("select public.setter_record_payout('Ximena Zalewski','close',36000,'drill-ref')")
+    cur.execute("insert into client_workspaces (slug, name) values ('drill-leak','Brightwater Holdings') returning id"); ws = cur.fetchone()[0]
+    cur.execute("insert into ws_campaigns (workspace_id, name) values (%s,'drill camp') returning id", (ws,)); cp = cur.fetchone()[0]
+    cur.execute("select public.ws_add_lead(%s,%s,'Odalys Quenneville','odalys.q@quenneville-drill.example','819-555-0913','web form')", (ws, cp))
+    # what the engine does: researcher output is SCRUBBED by hq_scrub before it is stored. The same raw output is also stored UNSCRUBBED in a second row, to prove the export layer on its own.
+    cur.execute("select name from leads union select name from setters union select name from ws_leads union select name from client_workspaces")
+    names = [r[0] for r in cur.fetchall()]
+    cur.execute("select email, phone from leads union select email, phone from ws_leads")
+    em = cur.fetchall()
+    known = hq_scrub.Known(names=names, contacts=[p for _, p in em if p], emails=[e for e, _ in em if e])
+    raw = ("Researched Prisca Vandenbroek (Brightwater Plumbing).\nPublished email: prisca@vandenbroek-drill.example\nPhone: (613) 555-0911\nLinkedIn: https://www.linkedin.com/in/prisca-vandenbroek-77\n"
+           "Odalys Quenneville <odalys.q@quenneville-drill.example> 819.555.0913; Zorro Bakery Drill; Ximena Zalewski; Théodore Lachapelle\nFound 3 prospects, 2 verified; see https://acmeplumbing.ca/about\nVERDICT: PASS")
+    for title, res in (("Drill research (scrubbed by the engine)", hq_scrub.scrub(raw, known)), ("Drill research (raw, only the export layer protects it)", raw),
+                       ("Drill research (encoded)", "see cHJpc2NhQHZhbmRlbmJyb2VrLWRyaWxsLmV4YW1wbGU= and 0x" + "prisca@vandenbroek-drill.example".encode().hex() + " and Prisca\u00a0Vandenbroek")):
+        cur.execute("insert into tasks (venture_id, assigned_agent, created_by, title, detail, status, priority, result) values (%s,%s,'system',%s,%s,'done',2,%s)",
+                    (v, ag, title, "Prompt mentions Prisca Vandenbroek 613-555-0911", res))
+    cur.execute("insert into escalations (from_agent, kind, summary) values (%s,'uncertain',%s)", (ag, "Drill research: Prisca Vandenbroek prisca@vandenbroek-drill.example 613-555-0911"))
+    cur.execute("select id from agents where slug=%s", (ag,)); aid = cur.fetchone()[0]
+    cur.execute("insert into agent_runs (agent_id, status, summary) values (%s,'ok',%s)", (aid, "Run summary: contacted Prisca Vandenbroek (prisca@vandenbroek-drill.example, 613-555-0911); 3 leads, $0.12"))
+    cur.execute("set local session_replication_role = replica")          # bypass the source trigger for ONE row: the export layer must catch what the source layer did not
+    cur.execute("insert into agent_runs (agent_id, status, summary) values (%s,'ok',%s)", (aid, "Raw run summary: Théodore Lachapelle 514-555-0912 lachapelle@lachapelle-drill.example"))
+    cur.execute("set local session_replication_role = origin")
+    conn.commit()
+    return {"leads": [l1, l2, l3]}
+
+
 WHERE = {"audit_log": " where action <> 'backup_ok'"}     # the backup writes its own audit row AFTER it has dumped the table
 
 
+REDACTED = {}      # table -> [columns] that the export redacts on purpose (public.backup_redaction_spec()); filled in main()
+
+
 def counts(dsn, tables):
+    """(row count, content hash) per table. The columns the export redacts on purpose are left out of the hash and compared separately (checks P4/P5)."""
     out = {}
     with psycopg2.connect(dsn) as c, c.cursor() as cur:
         for t in tables:
-            cur.execute(f'select count(*), md5(coalesce(string_agg(to_jsonb(x)::text, \'|\' order by to_jsonb(x)::text), \'\')) from public."{t}" x{WHERE.get(t, "")}')
+            row = "to_jsonb(x)" + "".join(f" - '{col}'" for col in REDACTED.get(t, []))
+            cur.execute(f'select count(*), md5(coalesce(string_agg(({row})::text, \'|\' order by ({row})::text), \'\')) from public."{t}" x{WHERE.get(t, "")}')
             out[t] = cur.fetchone()
     return out
 
@@ -103,7 +160,12 @@ def main():
     from pg_adapter import PgAdapter
     import hq_backup as B
 
-    src = psycopg2.connect(SRC); seed(src); src.close()
+    src = psycopg2.connect(SRC); seed(src); seed_leaks(src)
+    with src.cursor() as sc:
+        sc.execute("select table_name, column_name from public.backup_redaction_spec()")
+        for t_, c_ in sc.fetchall():
+            REDACTED.setdefault(t_, []).append(c_)
+    src.close()
     key = Fernet.generate_key().decode()           # throwaway key for this drill only
     work = tempfile.mkdtemp(prefix="drill_")
     with FakeB2() as fake:
@@ -163,6 +225,34 @@ def main():
         _client = [n for n in _names if n.startswith("data/") and (n[5:].split(".")[0] in ("leads", "outbox", "lead_replies", "deals", "contact_suppressions", "setters", "setter_events", "setter_payouts", "client_workspaces") or n[5:].startswith(("ws_", "ffm_")))]
         check("P1 CLIENT PII IS NOT IN THE OFF-SITE FILE: no client table files, and none of the seeded lead names/emails/phones appear in any data file", not _client and b"lead1@example.com" not in _blob and b"Lead 3" not in _blob and b"+1613555" not in _blob and "schema.json" in _names, f"client files: {_client}")
         check("P2 the file carries the export policy (what was excluded and why) and the schema still rebuilds the empty client tables", any(t["name"] == "leads" for t in json.loads(_tar.extractfile("schema.json").read())["tables"]) and any(e[0] == "leads" for e in mf.get("excluded", [])), "")
+        # ---- the four client-text leak paths (DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2): seeded THROUGH the real writers, then searched for in EVERYTHING in the decrypted backup
+        def fold(x):
+            import unicodedata
+            return "".join(ch for ch in unicodedata.normalize("NFD", x.lower()) if not unicodedata.combining(ch))
+        def leak_found(blob):
+            txt = fold(blob.decode("utf-8", "replace"))
+            sq, dg = "".join(ch for ch in txt if ch.isalnum()), "".join(ch for ch in txt if ch.isdigit())
+            return [t for t in LEAK_TOKENS if fold(t) in txt or "".join(ch for ch in fold(t) if ch.isalnum()) in sq] + [p_ for p_ in LEAK_PHONES if p_ in dg]
+        _all = b"".join(_tar.extractfile(n).read() for n in _names)                      # data/*, schema.json, manifest.json: the whole file
+        _found = leak_found(_all)
+        check("P3 NO SEEDED CLIENT NAME, EMAIL OR PHONE ANYWHERE IN THE DECRYPTED BACKUP (seeded through record_lead_reply, mark_do_not_contact, setter_record_payout, deals, researcher results, escalations, agent_runs)", not _found, f"found: {_found}")
+        check("N9 negative control: the P3 search finds a planted name, a spaced/accented name and a phone number in a copy of the backup (so P3 can fail)", len(leak_found(_all + " pRiScA  VANDENBROEK, Théodore ( 613 ) 555-0911".encode())) >= 4 and not leak_found(b"nothing to see here 42"), "")
+        _rows = {t: [json.loads(ln) for ln in _tar.extractfile(f"data/{t}.jsonl").read().decode().split("\n") if ln.strip()] for t in ("audit_log", "ledger", "tasks", "agent_runs", "escalations")}
+        with psycopg2.connect(SRC) as sc, sc.cursor() as scur:
+            scur.execute("select count(*), coalesce(sum(amount_cents),0), count(*) filter (where kind='revenue'), count(*) filter (where kind='expense') from ledger"); led = scur.fetchone()
+            scur.execute("select count(*) from audit_log where action <> 'backup_ok'"); aud = scur.fetchone()[0]
+            scur.execute("select count(*) from tasks"); tsk = scur.fetchone()[0]
+            scur.execute("select count(*) from ledger where note like 'Setter payout (close): setter %' and note not like '%Ximena%'"); setter_notes = scur.fetchone()[0]
+        _led = _rows["ledger"]
+        check("P4 financial records intact: ledger row count, sum of amounts and revenue/expense counts are identical in the backup", (len(_led), sum(r["amount_cents"] for r in _led), sum(1 for r in _led if r["kind"] == "revenue"), sum(1 for r in _led if r["kind"] == "expense")) == led, f"source {led}")
+        check("P5 audit_log and tasks: same row counts and ids; actions unchanged; the do_not_contact rows are present with reason CODES only", len([r for r in _rows["audit_log"] if r["action"] != "backup_ok"]) == aud and len(_rows["tasks"]) == tsk
+              and any(r["action"] == "do_not_contact" and r["detail"].get("reason_code") in ("unsubscribe_reply", "owner_text") for r in _rows["audit_log"]), f"audit {aud}, tasks {tsk}")
+        check("P6 the setter payout is in the ledger by setter id (source fix), and the won deal by deal id, with the amounts", setter_notes >= 1 and any(r["note"].startswith("Setter payout (close): setter ") and r["amount_cents"] == 36000 for r in _led)
+              and any(r["note"].startswith("deal ") and r["note"].endswith(": owner confirmed win") and r["amount_cents"] == 250000 for r in _led), "")
+        _t = {r["title"]: r["result"] for r in _rows["tasks"]}
+        check("P7 task results: the clean business text survives, the raw/encoded ones are redacted or fail closed, and the oversize drill result fails closed", all("3 prospects, 2 verified" in _t[k] and "https://acmeplumbing.ca/about" in _t[k] for k in _t if k.startswith("Drill research") and "encoded" not in k)
+              and all("Vandenbroek" not in (v or "") for v in _t.values()) and any(v == "[redacted:uncertain]" for k, v in _t.items() if k.startswith("Task 5 ")), "")
+        check("P8 the export says what it redacted (manifest) and that nothing needed the code-level fallback", mf.get("redaction", {}).get("mode") == "database" and "tasks.result" in mf["redaction"]["columns"] and "agent_runs.summary" in mf["redaction"]["columns"], json.dumps(mf.get("redaction"))[:160])
         check("2b the backup used the single-statement database snapshot (consistent=True)", mf["consistency"]["consistent"] and "single SQL statement" in mf["consistency"]["method"], json.dumps(mf["consistency"]))
         # live-concurrency proof: a writer commits paired rows into two tables (one transaction each) while snapshots are taken; every snapshot must show matching pairs
         import threading, time
