@@ -14,7 +14,7 @@ import { JSDOM } from 'jsdom';
 import { snapshot, tick } from './lib/harness.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const rd = (p) => readFileSync(path.join(ROOT, p), 'utf8');
+const rd = (p) => readFileSync(path.resolve(ROOT, p), 'utf8');
 const NEW = process.env.SB_VENDOR || path.join('webapp', 'vendor', 'supabase.js');   // library under test (default: what ships)
 const OLD = path.join('webtests', 'fixtures', 'supabase-2.45.4.umd.js.gz');   // gzip: keeps a minified third-party bundle out of secret-scan heuristics              // the previous release, for cross-version tests
 const rdOld = () => gunzipSync(readFileSync(path.join(ROOT, OLD)));
