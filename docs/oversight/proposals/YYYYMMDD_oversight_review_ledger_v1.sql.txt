@@ -1,0 +1,135 @@
+-- PROPOSAL ONLY: not in migrations/, not in APPLY_ORDER.txt, not in dist/APPLY_ALL.sql. NEVER APPLIED ANYWHERE AND NEVER RUN, not
+-- even on a scratch database (no database was available to the author or to the reviewer of this text). Treat every line as
+-- unproven until it has run on a replica with an sqltests/ file.
+--
+-- File name: the date prefix is a PLACEHOLDER (YYYYMMDD). Prefixes 20261120, 20261121 and 20261122 are used by the leak-redaction,
+-- consent and insurance branches and 20261123 by the org-architecture branch. At adoption pick the next free date AFTER every
+-- migration merged by then, add the file to migrations/APPLY_ORDER.txt BEFORE the lockdown migration and AFTER the migration
+-- that defines public.ffm_require_owner(), rebuild dist/APPLY_ALL.sql, lint it (scripts/lint_migrations.py), test it on a replica,
+-- have it reviewed independently, and let the Owner release it like any production migration.
+--
+-- Purpose: a database mirror of ops/oversight/ledger/reviews.jsonl. The file stays the source; this table is a copy with its own
+-- append-only guard, written one exact ledger LINE at a time.
+--
+-- What the mirror does and does not give you (plain statement)
+--   * The database recomputes entry_hash from the line it is given (oversight_line_hash) and refuses a line whose hash, seq or
+--     prev_hash is wrong. A row therefore always is a well-formed ledger entry that chains to the row before it.
+--   * It does NOT prove the row is the entry in the repository file. The writer role (service_role: the bot, which agents can
+--     redeploy) can still insert a fabricated entry with a correct hash, and because the table is append-only the first writer
+--     wins: after that the real ledger no longer fits and the mirror is stuck. That is detectable (the file and the table
+--     disagree at a known seq) and it needs the database owner to repair. If that is not acceptable, drop
+--     oversight_record_review and let only the owner path write (option noted at the end).
+--   * The table owner / superuser can disable the triggers. The mirror raises the bar; it is not proof against the database owner.
+
+create table if not exists public.oversight_reviews (
+  seq          bigint primary key,                       -- same seq as the file
+  entry_id     text not null unique,
+  entry_type   text not null check (entry_type in ('review', 'mechanical_check', 'import', 'continuation', 'owner_decision')),
+  subject_sha  text check (subject_sha ~ '^[0-9a-f]{40}$'),
+  subject_pr   integer,
+  reviewer_id  text,
+  author_id    text,
+  recommendation text check (recommendation in ('APPROVE', 'REJECT', 'NEEDS_MORE_WORK', 'RECOMMEND_APPROVE')),
+  prev_hash    text not null check (prev_hash ~ '^[0-9a-f]{64}$'),
+  entry_hash   text not null unique check (entry_hash ~ '^[0-9a-f]{64}$'),
+  line         text not null,                            -- the exact ledger line (ASCII). Must contain no client PII (reviews are about code).
+  recorded_at  timestamptz not null default now(),
+  check (entry_type = 'continuation' or subject_sha is not null),
+  check (entry_type not in ('review', 'import') or reviewer_id is distinct from author_id)
+);
+alter table public.oversight_reviews enable row level security;         -- no policy: default deny
+revoke all on public.oversight_reviews from public, anon, authenticated, service_role;
+
+-- entry_hash of one ledger line, recomputed here. ledger.py defines entry_hash = sha256(canonical JSON of the entry WITHOUT its
+-- entry_hash member). The stored line IS the canonical JSON of the whole entry (sorted keys, no spaces, ASCII only), so cutting the
+-- member `"entry_hash":"<hex>"` and its comma out of the line gives exactly the hashed text. No JSON re-serialisation is needed,
+-- which is the only way to get byte-identical results in SQL. (scripts/test_oversight_ledger.py checks this cut on every line
+-- of the real ledger, in Python; the SQL itself is untested.)
+create or replace function public.oversight_line_hash(p_line text) returns text language plpgsql immutable set search_path = pg_catalog as $$
+declare v_hash text; v_member text; v_pos integer; v_pre text;
+begin
+  if p_line is null or p_line ~ '[^\x20-\x7e]' then raise exception 'oversight: a ledger line is one line of printable ASCII'; end if;
+  v_hash := (p_line::jsonb)->>'entry_hash';
+  if v_hash is null or v_hash !~ '^[0-9a-f]{64}$' then raise exception 'oversight: the line has no entry_hash'; end if;
+  v_member := '"entry_hash":"' || v_hash || '"';
+  v_pos := position(v_member || ',' in p_line);
+  if v_pos > 0 then
+    v_pre := overlay(p_line placing '' from v_pos for length(v_member) + 1);
+  else
+    v_pos := position(',' || v_member in p_line);
+    if v_pos = 0 then raise exception 'oversight: entry_hash member not found in the line'; end if;
+    v_pre := overlay(p_line placing '' from v_pos for length(v_member) + 1);
+  end if;
+  if encode(sha256(convert_to(v_pre, 'UTF8')), 'hex') <> v_hash then raise exception 'oversight: entry_hash does not match the line'; end if;
+  return v_hash;
+end $$;
+revoke all on function public.oversight_line_hash(text) from public, anon, authenticated;
+
+-- append-only: no update, delete or truncate by anyone; each row must be the next seq, chain to the previous row, and carry
+-- columns that equal what its own line says (so a direct insert cannot store columns that disagree with the line).
+create or replace function public.oversight_reviews_guard() returns trigger language plpgsql set search_path = pg_catalog as $$
+declare v_prev text; v_max bigint; e jsonb;
+begin
+  if tg_op <> 'INSERT' then raise exception 'oversight_reviews is append-only'; end if;
+  e := new.line::jsonb;
+  if new.entry_hash is distinct from public.oversight_line_hash(new.line) then raise exception 'oversight_reviews: entry_hash column does not match the line'; end if;
+  if new.seq is distinct from (e->>'seq')::bigint or new.prev_hash is distinct from e->>'prev_hash' or new.entry_id is distinct from e->>'id'
+     or new.entry_type is distinct from e->>'type' or new.subject_sha is distinct from e->'subject'->>'sha' then
+    raise exception 'oversight_reviews: columns do not match the line';
+  end if;
+  select max(seq) into v_max from public.oversight_reviews;
+  if new.seq is distinct from coalesce(v_max, 0) + 1 then raise exception 'oversight_reviews: seq % is not the next entry', new.seq; end if;
+  select entry_hash into v_prev from public.oversight_reviews where seq = new.seq - 1;
+  if new.prev_hash is distinct from coalesce(v_prev, repeat('0', 64)) then raise exception 'oversight_reviews: chain broken at seq %', new.seq; end if;
+  return new;
+end $$;
+revoke all on function public.oversight_reviews_guard() from public, anon, authenticated;
+create trigger oversight_reviews_guard before insert or update or delete on public.oversight_reviews for each row execute function public.oversight_reviews_guard();
+create trigger oversight_reviews_no_truncate before truncate on public.oversight_reviews for each statement execute function public.oversight_reviews_guard();
+
+-- Writer: the bot (service_role) may mirror review / mechanical_check / import / continuation lines. Never an owner decision.
+-- The refused keys are ledger.py OWNER_ONLY_FIELDS, all eight (a test keeps the two lists equal).
+create or replace function public.oversight_record_review(p_line text) returns bigint language plpgsql security definer set search_path = pg_catalog as $$
+declare e jsonb; v_hash text;
+begin
+  v_hash := public.oversight_line_hash(p_line);
+  e := p_line::jsonb;
+  if e->>'type' not in ('review', 'mechanical_check', 'import', 'continuation') then raise exception 'only the owner path records owner decisions'; end if;
+  if e ?| array['owner_decision', 'owner_approved', 'owner_signature', 'decision', 'signature', 'key_id', 'review_hash', 'releases'] then
+    raise exception 'owner fields are not allowed here';
+  end if;
+  insert into public.oversight_reviews (seq, entry_id, entry_type, subject_sha, subject_pr, reviewer_id, author_id, recommendation, prev_hash, entry_hash, line)
+  values ((e->>'seq')::bigint, e->>'id', e->>'type', e->'subject'->>'sha', (e->'subject'->>'pr')::integer,
+          e->'reviewer'->>'id', e->'author'->>'id', coalesce(e->>'recommendation', e->>'verdict'), e->>'prev_hash', v_hash, p_line);
+  return (e->>'seq')::bigint;
+end $$;
+revoke all on function public.oversight_record_review(text) from public, anon, authenticated;
+
+-- Owner path: only the signed-in owner (existing pattern: public.ffm_require_owner(), which refuses service_role) can mirror a decision.
+-- Same binding as ledger.py: the decision names an EARLIER non-owner entry by id, by entry_hash and by head SHA.
+-- The Ed25519 signature is still verified off-database by ledger.py; this function guarantees WHO inserted the row and WHAT it is bound to.
+create or replace function public.oversight_record_owner_decision(p_line text) returns bigint language plpgsql security definer set search_path = pg_catalog as $$
+declare e jsonb; v_hash text; r record;
+begin
+  perform public.ffm_require_owner();
+  v_hash := public.oversight_line_hash(p_line);
+  e := p_line::jsonb;
+  if e->>'type' <> 'owner_decision' then raise exception 'not an owner decision'; end if;
+  select entry_hash, subject_sha, entry_type into r from public.oversight_reviews where entry_id = e->>'review_id';
+  if not found or r.entry_type = 'owner_decision' then raise exception 'unknown review'; end if;
+  if r.entry_hash is distinct from e->>'review_hash' then raise exception 'review_hash does not match the mirrored review'; end if;
+  if r.subject_sha is distinct from e->'subject'->>'sha' then raise exception 'the decision is for another head than the review'; end if;
+  insert into public.oversight_reviews (seq, entry_id, entry_type, subject_sha, subject_pr, recommendation, prev_hash, entry_hash, line)
+  values ((e->>'seq')::bigint, e->>'id', 'owner_decision', e->'subject'->>'sha', (e->'subject'->>'pr')::integer, null, e->>'prev_hash', v_hash, p_line);
+  return (e->>'seq')::bigint;
+end $$;
+revoke all on function public.oversight_record_owner_decision(text) from public, anon, authenticated, service_role;
+
+-- Open points for the reviewer of this proposal (not solved here):
+--  1. The lockdown's blanket `grant execute on all functions ... to service_role` would re-grant oversight_record_owner_decision;
+--     it is safe only because ffm_require_owner() refuses service_role. Decide whether a postlock revoke is wanted as well.
+--  2. Poisoning by the writer role (see the top of this file). Stricter option: do not create oversight_record_review; the Owner
+--     mirrors every line through an owner-only function. Costs the Owner a manual step per entry.
+--  3. `sha256(bytea)` needs PostgreSQL 11 or later (Supabase is). `?|` and `overlay` are core.
+--  4. Backup policy: add the table to the export policy (internal, no PII) or exclude it explicitly.
+--  5. Rollback: drop the three functions, the triggers and the table (data loss of the mirror only; the file remains).
