@@ -1,0 +1,4 @@
+{
+ "note": "Ed25519 public keys allowed to sign owner_decision entries in ops/oversight/ledger/reviews.jsonl. EMPTY ON PURPOSE: no owner decision can be recorded until the Owner registers a key himself (docs/oversight/CHARTER.md, owner decision OD-2). Only the Owner may change this file; the oversight agent and coding agents may not.",
+ "keys": []
+}
