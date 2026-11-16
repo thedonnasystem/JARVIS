@@ -1198,6 +1198,8 @@ begin
   if v = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb, 'free', false); end if;
   res := public.ws_classify_core(p_value, null, false, false, false);            -- the old screen first, always: nothing it refused is ever accepted here
   if not (res ->> 'allowed')::boolean then return res || nofree; end if;
+  -- values the erasure functions write themselves (ffm_erase_lead): never refused, or an erasure in an insurance workspace would fail
+  if (p_col in ('name', 'source') and v = '[erased]') or (p_table = 'ffm_consent_log' and p_col = 'source' and v ~ '^erasure:(erasure_request|withdrawal|retention_expired|other)$') then return res || nofree; end if;
   if p_table = 'ws_leads' and p_col = 'name' then return public.ws_person_name_check(p_value) || nofree; end if;
   if p_table = 'ws_leads' and p_col = 'email' and v ~* '^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{3,80}\.[a-z]{2,10}$' then
     for w in select m[1] from regexp_matches(public.ws_fold_text(v), '[a-z]{3,}', 'g') as m loop
@@ -1245,9 +1247,14 @@ end $$;
 --     "Structural" columns (enums, template keys, actor tags) are exempt from the vocabulary test only: every category and the health screen still apply to them.
 create or replace function public.ws_guard() returns trigger
 language plpgsql set search_path to 'pg_catalog' as $$
-declare k text; v text; t text; e record; res jsonb; allv text := ''; freev text := ''; j jsonb := to_jsonb(new); v_ws uuid; c_ws uuid; ctx boolean := false; person boolean; n_vals integer := 0; n_free integer := 0;
+declare k text; v text; t text; e record; res jsonb; allv text := ''; freev text := ''; j jsonb := to_jsonb(new); jo jsonb; v_ws uuid; c_ws uuid; ctx boolean := false; person boolean; n_vals integer := 0; n_free integer := 0;
 begin
   person := tg_table_name <> all (array['ws_campaigns', 'ws_ledger']);
+  if tg_op = 'UPDATE' then
+    jo := to_jsonb(old);
+    -- a row that MOVES to another workspace (or a workspace that changes vertical) is screened in full, like a new row
+    if (jo -> 'workspace_id') is distinct from (j -> 'workspace_id') or (tg_table_name = 'client_workspaces' and (jo -> 'vertical') is distinct from (j -> 'vertical')) then jo := null; end if;
+  end if;
   -- insurance screen: decided by the workspace (for a workspace row: by its own vertical). Fails closed, see ws_insurance_context.
   if tg_table_name = 'client_workspaces' then
     v_ws := nullif(j ->> 'id', '')::uuid;
@@ -1271,8 +1278,9 @@ begin
   for e in select key, value from jsonb_each(j - array['id', 'workspace_id', 'campaign_id', 'created_at', 'status', 'stage', 'amount_cents', 'monthly_budget_cents']) loop
     v := e.value #>> '{}'; t := jsonb_typeof(e.value);
     continue when v is null or btrim(v) = '' or t = 'boolean';
-    if person and ctx and t = 'string' then
-      -- S2: a person table of an insurance workspace gets the insurance screen, column by column (ws_person_column_check)
+    if person and ctx and t = 'string' and (jo is null or (jo -> e.key) is distinct from e.value) then
+      -- S2: a person table of an insurance workspace gets the insurance screen, column by column (ws_person_column_check). On UPDATE only the values that CHANGE get it
+      -- (an unchanged value keeps the old screen below, exactly as before, so a stage change or an erasure of a row stored earlier is never blocked by its old note).
       res := public.ws_person_column_check(tg_table_name, e.key, v, v_ws);
       if (res ->> 'free')::boolean then freev := freev || ' ' || v; n_free := n_free + 1; end if;
     else
@@ -1295,9 +1303,14 @@ end $$;
 
 create or replace function public.ffm_guard() returns trigger
 language plpgsql set search_path to 'pg_catalog' as $$
-declare k text; v text; res jsonb; allv text := ''; freev text := ''; j jsonb := to_jsonb(new); v_ws uuid; c_ws uuid; ctx boolean := false; person boolean; structural boolean; n_vals integer := 0; n_free integer := 0;
+declare k text; v text; res jsonb; allv text := ''; freev text := ''; j jsonb := to_jsonb(new); jo jsonb; v_ws uuid; c_ws uuid; ctx boolean := false; person boolean; structural boolean; n_vals integer := 0; n_free integer := 0;
 begin
   person := tg_table_name <> all (array['ffm_ad_sets', 'ffm_creatives', 'ffm_approvals', 'ffm_onboarding_items']);
+  if tg_op = 'UPDATE' then
+    jo := to_jsonb(old);
+    -- a row that MOVES to another workspace (or a workspace that changes vertical) is screened in full, like a new row
+    if (jo -> 'workspace_id') is distinct from (j -> 'workspace_id') or (tg_table_name = 'client_workspaces' and (jo -> 'vertical') is distinct from (j -> 'vertical')) then jo := null; end if;
+  end if;
   v_ws := nullif(j ->> 'workspace_id', '')::uuid;
   ctx := v_ws is not null and public.ws_insurance_context(null, v_ws);
   c_ws := case when person then null else v_ws end;        -- person tables: the old strict screen (no waiver) stays the first test for every value
@@ -1312,9 +1325,16 @@ begin
         raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
       end if;
       continue;                                                                -- already screened as a whole: not joined with the other columns (an e-mail / link here is legitimate)
-    elsif person and ctx then
-      -- S2: a person table (routing, consent) of an insurance workspace gets the insurance screen, column by column (ws_person_column_check)
+    elsif person and ctx and (jo is null or (jo ->> k) is distinct from v) then
+      -- S2: a person table (routing, consent) of an insurance workspace gets the insurance screen, column by column (ws_person_column_check); on UPDATE only for the values that change
       res := public.ws_person_column_check(tg_table_name, k, v, v_ws);
+      -- A WITHDRAWAL IS NEVER LOST FOR ITS WORDING: when the source or the evidence reference of a withdrawal passes the old screen but not the insurance screen, the row is stored
+      -- with the fixed tag 'withdrawal' (or without the reference) instead of being refused. The text is not stored; the withdrawal is.
+      if not (res ->> 'allowed')::boolean and tg_table_name = 'ffm_consent_log' and tg_op = 'INSERT' and j ->> 'basis' = 'withdrawn' and k in ('source', 'evidence_ref')
+         and (public.ws_classify_core(v, null, false, false, false) ->> 'allowed')::boolean then
+        if k = 'source' then new.source := 'withdrawal'; else new.evidence_ref := null; end if;
+        continue;
+      end if;
       if (res ->> 'free')::boolean then freev := freev || ' ' || v; n_free := n_free + 1; end if;
     else
       -- a structural column (enum, template key, actor tag, template title, date) skips only the vocabulary test, and only when the value really looks like one

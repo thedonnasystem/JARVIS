@@ -1208,6 +1208,26 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
     -- a lead NOTE is default-deny (wording on no list is refused); L (asserted limit): a workspace NAME is a list screen (business names are not vocabulary), so the same wording is stored there
     perform pg_temp.expect_fail(format($q$select public.ws_add_lead(%L, %L, 'Pat Example', null, null, 'web form', 'wants coverage because of a scare last year')$q$, ins4, c4), 'Sensitive data refused%unknown_word%');
     insert into public.client_workspaces (slug, name, vertical) values ('ic-s2-l', 'wants coverage because of a scare last year', 'insurance');
+    -- EXPECTED: rows that were stored BEFORE this migration stay usable. An UPDATE screens the values that change; an unchanged old note does not block a stage change, but cannot be re-written.
+    set local session_replication_role = replica;
+    insert into public.ws_leads (workspace_id, campaign_id, name, source, note) values (ins4, c4, 'Old Row', 'web form', 'wants a callback about renewal, ask for the evening') returning id into wx;
+    set local session_replication_role = origin;
+    update public.ws_leads set stage = 'contacted' where id = wx;
+    perform pg_temp.expect_fail(format($q$update public.ws_leads set note = 'wants a callback about renewal, takes metformin daily' where id = %L$q$, wx), 'Sensitive data refused%');
+    perform pg_temp.expect_fail(format($q$update public.ws_leads set stage = 'booked', note = 'age forty five' where id = %L$q$, wx), 'Sensitive data refused%');
+    -- a row that moves INTO an insurance workspace is screened in full, even when only workspace_id changes
+    insert into public.ws_leads (workspace_id, name, source, note) values (other, 'Moved Row', 'web form', 'takes metformin daily') returning id into wn;
+    perform pg_temp.expect_fail(format($q$update public.ws_leads set workspace_id = %L where id = %L$q$, ins4, wn), 'Sensitive data refused%');
+    insert into public.client_workspaces (slug, name, vertical) values ('ic-mv', 'Takes metformin daily', 'mortgage');
+    perform pg_temp.expect_fail($q$update public.client_workspaces set vertical = 'insurance' where slug = 'ic-mv'$q$, 'Sensitive data refused%');
+    -- EXPECTED: a WITHDRAWAL in an insurance workspace is never refused for its wording (the text is replaced by a fixed tag), and an ERASURE works (it writes its own fixed values)
+    tid := public.ffm_withdraw_consent(ins4, wx, 'email', 'said to stop calling, moving away next spring', 'voicemail left on the office line', 'bot');
+    if (select source || '/' || coalesce(evidence_ref, 'null') from public.ffm_consent_log where id = tid) <> 'withdrawal/null' then raise exception 'R4.S2 withdrawal wording was stored or the withdrawal was lost'; end if;
+    if public.ffm_can_contact(wx, 'email') then raise exception 'R4.S2 the withdrawal did not take effect'; end if;
+    perform pg_temp.expect_fail(format($q$select public.ffm_withdraw_consent(%L, %L, 'sms', 'has diabetes, stop', null, 'bot')$q$, ins4, wx), 'Sensitive data refused%');   -- (the old screen still refuses, as before this migration)
+    perform pg_temp.expect_fail(format($q$select public.ffm_record_consent(%L, %L, 'sms', 'express', 'v1', 'said yes on the phone, takes metformin daily', now(), 'form-1', 'bot')$q$, ins4, l4), 'Sensitive data refused%');   -- a consent row gets no such exception
+    perform public.ffm_erase_lead(ins4, wx, 'erasure_request');
+    if (select name || '/' || coalesce(note, 'null') from public.ws_leads where id = wx) <> '[erased]/null' then raise exception 'R4.S2 erasure did not blank the lead'; end if;
     -- L (asserted limit): the lead NAME column holds names, so a one-word value on no list is stored; the source tag is a list screen (one or two plain words)
     insert into public.ws_leads (workspace_id, campaign_id, name, source) values (ins4, c4, 'Diabeetus', 'web form');
 
