@@ -1377,7 +1377,7 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
     foreach s in array array['form-abc-001', 'fresh-1', 'inquiry-77', 'cap_7f3a9c.v2', 'form-submission-1001', 'Form_A.v2-0042', 'web-' || repeat('a1', 40)] loop
       insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (i5, l5, 'email', 'implied', 'form-a-v2', 'web form', now(), s, 'owner');
     end loop;
-    foreach s in array array['diabetes-form-2', 'bank statement attached', 'diabetes form 2', 'form-1984-03-12', 'makes_85k', 'age45', 'fortyfive-1'] loop
+    foreach s in array array['diabetes-form-2', 'bank statement attached', 'diabetes form 2', 'form-1984-03-12', 'makes_85k', 'age45', 'fortyfive-1', '613-555-0199', 'web-k1a2p3'] loop
       perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'implied', 'v1', 'web form', now(), %L, 'owner')$q$, i5, l5, s), 'Sensitive data refused%');
     end loop;
     foreach s in array array['via telegram: reply STOP', 'via post: unspecified', 'no usable identifier for sms: reply STOP', 'no usable identifier for email: unspecified'] loop

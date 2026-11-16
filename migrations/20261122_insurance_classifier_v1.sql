@@ -1284,7 +1284,9 @@ begin
     if v ~ '^[A-Za-z][A-Za-z_:.-]{0,50}[0-9]{0,6}[A-Za-z]{0,3}$' and public.ws_structural_value(p_table, 'kind', v) then return res || nofree; end if;
     -- round 5 (integration S7): a consent evidence reference in the capture-reference shape of PR #20 (^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$, an opaque form-submission id): no vocabulary test,
     -- but every word gets the name / health / pay / age / number checks and every earlier category applies (the old screen above already ran)
-    if p_table = 'ffm_consent_log' and v ~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' and public.ws_structural_value(p_table, 'evidence_ref', v) then return res || nofree; end if;
+    -- (at least one letter: a bare number such as a phone number is not a reference)
+    if p_table = 'ffm_consent_log' and v ~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' and v ~ '[A-Za-z]' and public.ws_identifier_hit(public.ws_fold_text(v)) is not true
+       and public.ws_structural_value(p_table, 'evidence_ref', v) then return res || nofree; end if;
     return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word'), 'free', false);
   end if;
   -- a lead / consent SOURCE tag ("web form", "referral", "meta_ad"): one or two plain words, each of them clear of every deny list (people, narrative, health, names, numbers, pay / debt).
