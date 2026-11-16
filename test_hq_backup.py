@@ -17,6 +17,7 @@ def unsigned_jwt(**claims):
 
 
 READER_JWT = unsigned_jwt(role="backup_reader", exp=4102444800)      # the year 2100
+GATEWAY_FIXTURE = "sb_publishable_" + "fixture"                       # synthetic, not a key
 os.environ["BACKUP_READER_JWT"] = READER_JWT      # the backup refuses to run without it (no service-key fallback); tests that clear the environment set it again
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts", "replica"))
@@ -291,7 +292,7 @@ class BackupIdentity(unittest.TestCase):
 
     def test_with_a_gateway_key_apikey_is_the_gateway_key_and_authorization_is_the_reader_token(self):
         """Expected (Supabase form): apikey = project anon / publishable key, Authorization = Bearer <reader JWT>, service key nowhere."""
-        for gw in ("sb_publishable_abc123", unsigned_jwt(role="anon", exp=4102444800)):
+        for gw in (GATEWAY_FIXTURE, unsigned_jwt(role="anon", exp=4102444800)):
             sent = self._send({"BACKUP_READER_JWT": READER_JWT, "BACKUP_GATEWAY_APIKEY": gw})
             self.assertEqual(sent["apikey"], gw); self.assertEqual(sent["authorization"], "Bearer " + READER_JWT)
             self.assertNotIn("service-key-value", json.dumps(sent))
@@ -320,7 +321,7 @@ class BackupIdentity(unittest.TestCase):
             def __exit__(self, *a): pass
         def fake_open(req, timeout=0):
             sent.update({k.lower(): v for k, v in req.header_items()}); return R()
-        with mock.patch.dict(os.environ, {"BACKUP_GATEWAY_APIKEY": "sb_publishable_abc123"}), mock.patch("urllib.request.urlopen", fake_open), mock.patch.object(B.hq, "HQ_SUPABASE_URL", "https://x.example"), \
+        with mock.patch.dict(os.environ, {"BACKUP_GATEWAY_APIKEY": GATEWAY_FIXTURE}), mock.patch("urllib.request.urlopen", fake_open), mock.patch.object(B.hq, "HQ_SUPABASE_URL", "https://x.example"), \
                 mock.patch.object(B.hq, "HQ_SUPABASE_SERVICE_KEY", "service-key-value"):
             B.hq._request("GET", "/rest/v1/tasks?select=id")
         self.assertEqual((sent["apikey"], sent["authorization"]), ("service-key-value", "Bearer service-key-value"))

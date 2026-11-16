@@ -26,7 +26,7 @@ begin
   insert into public.setter_events (setter_id, kind, client) values (setter_id, 'closed', 'Quillfeather Bakery');
   insert into public.setter_events (setter_id, kind, client) values (setter_id, 'closed', 'Quillfeather Bakery');
   insert into public.setter_events (setter_id, kind, client) values (setter_id, 'closed', 'Quillfeather Bakery');
-  insert into public.client_workspaces (slug, name) values ('zz-leak', 'Wexcombe Holdings Ltd') returning id into ws;
+  insert into public.client_workspaces (slug, name, vertical) values ('zz-leak', 'Wexcombe Holdings Ltd', 'mortgage') returning id into ws;
   insert into public.ws_campaigns (workspace_id, name) values (ws, 'zz camp') returning id into cp;
   perform public.ws_add_lead(ws, cp, 'Odalys Quenneville', 'odalys.q@quenneville-co.example', '819-555-0123', 'web form');
   insert into public.ventures (slug, name, kind) values ('zz-visible-leak', 'ZZVISIBLELEAK venture', 'lab');

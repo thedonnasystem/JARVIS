@@ -104,7 +104,7 @@ def seed_leaks(conn):
     for kind in ("booked", "closed", "closed", "closed"):
         cur.execute("select public.setter_log('ximena',%s,'Zorro Bakery Drill',null)", (kind,))
     cur.execute("select public.setter_record_payout('Ximena Zalewski','close',36000,'drill-ref')")
-    cur.execute("insert into client_workspaces (slug, name) values ('drill-leak','Brightwater Holdings') returning id"); ws = cur.fetchone()[0]
+    cur.execute("insert into client_workspaces (slug, name, vertical) values ('drill-leak','Brightwater Holdings','mortgage') returning id"); ws = cur.fetchone()[0]
     cur.execute("insert into ws_campaigns (workspace_id, name) values (%s,'drill camp') returning id", (ws,)); cp = cur.fetchone()[0]
     cur.execute("select public.ws_add_lead(%s,%s,'Odalys Quenneville','odalys.q@quenneville-drill.example','819-555-0913','web form')", (ws, cp))
     # what the engine does: researcher output is SCRUBBED by hq_scrub before it is stored. The same raw output is also stored UNSCRUBBED in a second row, to prove the export layer on its own.

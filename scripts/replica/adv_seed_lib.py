@@ -20,7 +20,7 @@ q("update leads set name='[erased]', email=null, phone=null where name='Ravi Cha
 q("insert into leads (venture_id,name,status) values (%s,'Odile Vandenbroeck','new')", v)
 q("delete from leads where name='Odile Vandenbroeck'")
 q("select public.setter_add('Marcus Zzyxwell','marcus.zzyxwell@setters.example','salons')")
-q("insert into client_workspaces (slug,name) values ('zz-x','Wexcombe Holdings Ltd')")
+q("insert into client_workspaces (slug,name,vertical) values ('zz-x','Wexcombe Holdings Ltd','mortgage')")
 ws = q("select id from client_workspaces where slug='zz-x'")[0][0]
 q("insert into ws_campaigns (workspace_id,name) values (%s,'zz camp')", ws)
 cp = q("select id from ws_campaigns where workspace_id=%s", ws)[0][0]
