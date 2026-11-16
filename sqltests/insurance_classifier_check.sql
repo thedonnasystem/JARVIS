@@ -1374,10 +1374,10 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
     -- R5.S7 (integration with PR #20) the consent columns. EXPECTED: PR #20's machine codes and generated shapes are accepted exactly in an insurance workspace (verification codes, 'unverified'
     --   basis, capture-reference evidence, version labels, 'via <channel>: ' / 'no usable identifier for <channel>: ' withdrawal prefixes); sensitive evidence is still refused.
     l5 := public.ws_add_lead(i5, c5, 'Pat Example', 'r5i@example.com', '613-555-0153', 'web form');
-    foreach s in array array['form-abc-001', 'fresh-1', 'inquiry-77', 'cap_7f3a9c.v2', 'form-submission-1001', 'Form_A.v2-0042', 'web-' || repeat('a1', 40)] loop
+    foreach s in array array['form-abc-001', 'fresh-1', 'inquiry-77', 'cap_7f3a9c.v2', 'form-submission-1001', 'Form_A.v2-0042', 'web-' || repeat('a1', 40), 'form-d2-' || substr(md5('x'), 1, 8)] loop
       insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (i5, l5, 'email', 'implied', 'form-a-v2', 'web form', now(), s, 'owner');
     end loop;
-    foreach s in array array['diabetes-form-2', 'bank statement attached', 'diabetes form 2', 'form-1984-03-12', 'makes_85k', 'age45', 'fortyfive-1', '613-555-0199', 'web-k1a2p3'] loop
+    foreach s in array array['diabetes-form-2', 'bank statement attached', 'diabetes form 2', 'form-1984-03-12', 'makes_85k', 'age45', 'fortyfive-1', '613-555-0199', 'call-613.555.0199'] loop
       perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'implied', 'v1', 'web form', now(), %L, 'owner')$q$, i5, l5, s), 'Sensitive data refused%');
     end loop;
     foreach s in array array['via telegram: reply STOP', 'via post: unspecified', 'no usable identifier for sms: reply STOP', 'no usable identifier for email: unspecified'] loop

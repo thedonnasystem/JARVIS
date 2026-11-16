@@ -476,7 +476,7 @@ begin
     -- the all-columns scan of a row (round 5): a period in one column and a money-sized number in another ("you get more than 85,000" + "a year"), and a possessive pay / debt word next to any
     -- amount in the row ("your mortgage" + "from $999 a month")
     if m ~ ('[^a-z]' || per) and m ~ '[0-9]{3}|[0-9][ ,.][0-9]{3}|zzcov|[^a-z](?:hundred|thousand|million|mille|cent)' then return true; end if;     -- (a money-sized number: a short date or count is not)
-    if n ~ ('[^a-z](?:your|you|votre|vos|ton|ta|tes|his|her|their|leur|leurs|son|sa|ses) (?:[a-z]+ )?' || payw || '(?![a-z])') and n ~ 'zzprice|zzcov|zzcount|[0-9]' then return true; end if;
+    if n ~ ('[^a-z](?:your|you|votre|vos|ton|ta|tes|his|her|their|leur|leurs|son|sa|ses) (?:[a-z]+ )?' || payw || '(?![a-z])') and m ~ 'zzprice|zzcov|zzcount|[0-9]{3}|[0-9][ ,.][0-9]{3}|%' then return true; end if;
   elsif n ~ ('[^a-z]' || payw || '(?![a-z])') then
     if m ~ ('zzprice|zzcov|zzcount|%|[0-9]|[^a-z]' || replace(nw, '|one|', '|') || '(?![a-z])') then return true; end if;      -- ("one" alone is a pronoun far more often than a number)
   end if;
@@ -1284,8 +1284,8 @@ begin
     if v ~ '^[A-Za-z][A-Za-z_:.-]{0,50}[0-9]{0,6}[A-Za-z]{0,3}$' and public.ws_structural_value(p_table, 'kind', v) then return res || nofree; end if;
     -- round 5 (integration S7): a consent evidence reference in the capture-reference shape of PR #20 (^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$, an opaque form-submission id): no vocabulary test,
     -- but every word gets the name / health / pay / age / number checks and every earlier category applies (the old screen above already ran)
-    -- (at least one letter: a bare number such as a phone number is not a reference)
-    if p_table = 'ffm_consent_log' and v ~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' and v ~ '[A-Za-z]' and public.ws_identifier_hit(public.ws_fold_text(v)) is not true
+    -- (at least one letter, and no phone-number shape: the old screen removes phone-shaped numbers before its digit rules, so "613-555-0199" would otherwise pass)
+    if p_table = 'ffm_consent_log' and v ~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' and v ~ '[A-Za-z]' and v !~ '[0-9]{3}[._-]?[0-9]{3}[._-]?[0-9]{4}'
        and public.ws_structural_value(p_table, 'evidence_ref', v) then return res || nofree; end if;
     return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word'), 'free', false);
   end if;
