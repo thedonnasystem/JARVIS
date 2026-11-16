@@ -1,0 +1,1483 @@
+{
+  "$schema": "./divisions.schema.json",
+  "contract_version": "1.0.0",
+  "generated_note": "Hand-maintained contract. PROPOSAL: nothing here is active. Validate with scripts/org_contract.py.",
+  "global": {
+    "ai_daily_cap_cents": 330,
+    "ai_daily_cap_source": "owner-stated cap of $3.30/day; the database value system_state.daily_spend_cap_cents is authoritative at run time",
+    "lifecycle": [
+      "dormant",
+      "staged",
+      "active"
+    ],
+    "default_permission": "deny",
+    "activation": "separate owner-approved release; not possible in contract version 1 or in migration 20261123_org_divisions_v1",
+    "capability_catalog": [
+      {
+        "id": "mission.propose",
+        "tier": "green",
+        "description": "Propose a mission for the division (a row for review; runs nothing)."
+      },
+      {
+        "id": "mission.create",
+        "tier": "yellow",
+        "description": "Create a mission inside the division, within its envelope and templates."
+      },
+      {
+        "id": "mission.run",
+        "tier": "yellow",
+        "description": "Advance an approved division mission step by step through the existing mission engine."
+      },
+      {
+        "id": "task.create",
+        "tier": "green",
+        "description": "Create tasks for agents of the same division."
+      },
+      {
+        "id": "llm.spend",
+        "tier": "yellow",
+        "description": "Reserve model spend through the existing spend gateway (reserve_llm_budget / reserve_spend), inside the division envelope."
+      },
+      {
+        "id": "memory.read",
+        "tier": "green",
+        "description": "Read the division's own memory rows."
+      },
+      {
+        "id": "memory.write",
+        "tier": "green",
+        "description": "Write the division's own memory rows (free text: never client personal data)."
+      },
+      {
+        "id": "research.fetch",
+        "tier": "yellow",
+        "description": "Fetch public web pages through the evidence path (evidence_sources)."
+      },
+      {
+        "id": "outbox.draft",
+        "tier": "yellow",
+        "description": "Write outreach DRAFTS for owner review. Never sends."
+      },
+      {
+        "id": "kpi.report",
+        "tier": "green",
+        "description": "Publish the division's KPI numbers to the corporate report."
+      },
+      {
+        "id": "org.propose",
+        "tier": "green",
+        "description": "File an org_changes proposal (new agent, workflow, shutdown). The owner decides."
+      },
+      {
+        "id": "workspace.read",
+        "tier": "yellow",
+        "description": "Read aggregate, non-personal figures of the division's own client workspaces."
+      }
+    ],
+    "never_delegable_prefixes": [
+      "kill_switch.",
+      "spend_cap.",
+      "budget.",
+      "grant.",
+      "delegation.",
+      "division.",
+      "permission.",
+      "executor.",
+      "payment.",
+      "bank.",
+      "backup.",
+      "deploy.",
+      "migration.",
+      "owner.",
+      "privacy.",
+      "consent.",
+      "outbox.send",
+      "secret.",
+      "agent.create",
+      "agent.activate"
+    ]
+  },
+  "jarvis": {
+    "role": "chief_operating_officer",
+    "slug": "jarvis",
+    "only_agent_that_contacts_owner": true,
+    "may": [
+      "route work to division managers",
+      "consolidate division reports for the owner",
+      "propose org changes (org_changes) for the owner to decide"
+    ],
+    "may_not": [
+      "activate a division",
+      "grant or widen a delegated permission",
+      "set or raise a budget envelope",
+      "change the kill switch, spend caps, executor registry or privacy controls"
+    ]
+  },
+  "corporate_offices": [
+    {
+      "id": "executive",
+      "name": "Executive Office",
+      "source": "migrations/20261112_office_v1.sql",
+      "status": "existing_view"
+    },
+    {
+      "id": "bizdev",
+      "name": "Business Development",
+      "source": "migrations/20261112_office_v1.sql",
+      "status": "existing_view"
+    },
+    {
+      "id": "research",
+      "name": "Research & Intelligence",
+      "source": "migrations/20261112_office_v1.sql",
+      "status": "existing_view"
+    },
+    {
+      "id": "engineering",
+      "name": "Engineering & Technology",
+      "source": "migrations/20261112_office_v1.sql",
+      "status": "existing_view"
+    },
+    {
+      "id": "marketing",
+      "name": "Marketing & Media",
+      "source": "migrations/20261112_office_v1.sql",
+      "status": "existing_view"
+    },
+    {
+      "id": "sales",
+      "name": "Sales & Customer Acquisition",
+      "source": "migrations/20261112_office_v1.sql",
+      "status": "existing_view"
+    },
+    {
+      "id": "finance",
+      "name": "Finance & Treasury",
+      "source": "migrations/20261112_office_v1.sql",
+      "status": "existing_view"
+    },
+    {
+      "id": "operations",
+      "name": "Operations",
+      "source": "migrations/20261112_office_v1.sql",
+      "status": "existing_view"
+    },
+    {
+      "id": "agentmgmt",
+      "name": "Agent Management",
+      "source": "migrations/20261112_office_v1.sql",
+      "status": "existing_view"
+    }
+  ],
+  "divisions": [
+    {
+      "id": "donna",
+      "name": "Donna System",
+      "kind": "division",
+      "status": "dormant",
+      "inferred": false,
+      "evidence": [
+        "scripts/replica/03_funcs.sql venture 'donna'",
+        "CAPABILITY_GAP_ANALYSIS.md section C",
+        "VENTURE_FACTORY.md"
+      ],
+      "existing_refs": {
+        "venture_slug": "donna",
+        "department_slug": null
+      },
+      "charter": {
+        "text": "Sell and deliver the Donna AI automation service to trades businesses. Find prospects from public sources, prepare outreach drafts for the owner, and keep the pipeline and its numbers honest.",
+        "authored_by": "operator_draft",
+        "owner_approved": false
+      },
+      "objectives": [
+        {
+          "id": "o1",
+          "text": "Keep a qualified prospect list with a public source for every entry."
+        },
+        {
+          "id": "o2",
+          "text": "Produce outreach drafts the owner can approve without rewriting."
+        },
+        {
+          "id": "o3",
+          "text": "Report booked calls and closed deals from recorded facts only."
+        }
+      ],
+      "manager": {
+        "role_id": "donna-manager",
+        "title": "Donna division manager",
+        "agent_status": "not_created",
+        "model_tier": "cheap",
+        "can_contact_owner": false,
+        "reports_to": "jarvis",
+        "decision_rights": [
+          "order work inside the division's approved missions",
+          "assign tasks to the division's own agents",
+          "propose missions, org changes and budget requests to Jarvis"
+        ],
+        "must_escalate": [
+          "any spend above the division envelope",
+          "any external message, contract or commitment",
+          "anything touching client personal data",
+          "any request for a new permission"
+        ]
+      },
+      "team": [
+        {
+          "role_id": "donna-researcher",
+          "title": "Prospect researcher",
+          "purpose": "Finds prospects from public pages and records the source.",
+          "seats": 1,
+          "agent_status": "not_created"
+        },
+        {
+          "role_id": "donna-outreach",
+          "title": "Outreach drafter",
+          "purpose": "Writes drafts for owner approval; never sends.",
+          "seats": 1,
+          "agent_status": "not_created"
+        },
+        {
+          "role_id": "donna-auditor",
+          "title": "Auditor",
+          "purpose": "Checks claims against evidence before anything reaches the owner.",
+          "seats": 1,
+          "agent_status": "not_created"
+        }
+      ],
+      "responsibilities": [
+        "Prospect research",
+        "Outreach drafts (owner approves every send)",
+        "Pipeline hygiene and reporting"
+      ],
+      "delegated_permissions": {
+        "default": "deny",
+        "allow": [
+          {
+            "capability": "mission.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "task.create",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.read",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.write",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "kpi.report",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "org.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "research.fetch",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "outbox.draft",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "llm.spend",
+            "scope": "own_division",
+            "status": "dormant"
+          }
+        ]
+      },
+      "budget": {
+        "daily_envelope_cents": 0,
+        "monthly_envelope_cents": 0,
+        "proposed_daily_cents": 0,
+        "spend_path": "spend_gateway_only",
+        "ledger": "existing ledger + llm_calls + spend_reservations (no separate division ledger)"
+      },
+      "kpis": [
+        {
+          "id": "qualified_prospects_7d",
+          "name": "Qualified prospects added",
+          "unit": "count",
+          "direction": "up",
+          "source": "lead_funnel / venture_kpis",
+          "target": null
+        },
+        {
+          "id": "deals_won_cents_30d",
+          "name": "Confirmed won revenue, 30 days",
+          "unit": "cents",
+          "direction": "up",
+          "source": "deals + ledger (confirm_deal_won)",
+          "target": null
+        },
+        {
+          "id": "spend_cents_7d",
+          "name": "Model spend, last 7 days",
+          "unit": "cents",
+          "direction": "down",
+          "source": "llm_calls via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "tasks_done_7d",
+          "name": "Tasks finished, last 7 days",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "cents_per_done_task",
+          "name": "Cost per finished task",
+          "unit": "cents",
+          "direction": "down",
+          "source": "agent_scorecard",
+          "target": null
+        }
+      ],
+      "mission_templates": [
+        {
+          "id": "donna-prospect-batch",
+          "title": "Prospect batch",
+          "objective": "Find a batch of prospects that match the offer, each with a public source.",
+          "success_definition": "Every prospect has a source URL stored as evidence and passes the suppression check.",
+          "required_capabilities": [
+            "mission.propose",
+            "research.fetch",
+            "llm.spend",
+            "task.create"
+          ],
+          "max_budget_cents": 0,
+          "status": "dormant"
+        }
+      ],
+      "isolation": {
+        "reads_other_divisions": false,
+        "client_workspace_access": "none"
+      }
+    },
+    {
+      "id": "ffm",
+      "name": "FF Marketing",
+      "kind": "division",
+      "status": "dormant",
+      "inferred": false,
+      "evidence": [
+        "FFM_OS_OVERVIEW.md",
+        "migrations/20261117_client_workspaces_v1.sql",
+        "migrations/20261118_ffm_onboarding_v1.sql"
+      ],
+      "existing_refs": {
+        "venture_slug": null,
+        "department_slug": null
+      },
+      "charter": {
+        "text": "Run the marketing agency operating system for client workspaces: onboarding, campaign plans, creative drafts and reporting. Dry-run only until the owner activates a workspace. Never receives applications, banking, credit, identity or health data.",
+        "authored_by": "operator_draft",
+        "owner_approved": false
+      },
+      "objectives": [
+        {
+          "id": "o1",
+          "text": "Complete onboarding for each client workspace with owner-supplied inputs."
+        },
+        {
+          "id": "o2",
+          "text": "Prepare campaign and creative drafts for owner approval."
+        },
+        {
+          "id": "o3",
+          "text": "Report funnel and spend per workspace from recorded rows."
+        }
+      ],
+      "manager": {
+        "role_id": "ffm-manager",
+        "title": "FF Marketing division manager",
+        "agent_status": "not_created",
+        "model_tier": "cheap",
+        "can_contact_owner": false,
+        "reports_to": "jarvis",
+        "decision_rights": [
+          "order work inside the division's approved missions",
+          "assign tasks to the division's own agents",
+          "propose missions, org changes and budget requests to Jarvis"
+        ],
+        "must_escalate": [
+          "any spend above the division envelope",
+          "any external message, contract or commitment",
+          "anything touching client personal data",
+          "any request for a new permission"
+        ]
+      },
+      "team": [
+        {
+          "role_id": "ffm-onboarding",
+          "title": "Onboarding coordinator",
+          "purpose": "Tracks required inputs per workspace.",
+          "seats": 1,
+          "agent_status": "not_created"
+        },
+        {
+          "role_id": "ffm-creative",
+          "title": "Creative drafter",
+          "purpose": "Drafts ads and copy for owner approval.",
+          "seats": 1,
+          "agent_status": "not_created"
+        },
+        {
+          "role_id": "ffm-reporting",
+          "title": "Reporting analyst",
+          "purpose": "Builds the weekly report from workspace aggregates.",
+          "seats": 1,
+          "agent_status": "not_created"
+        }
+      ],
+      "responsibilities": [
+        "Client onboarding checklists",
+        "Campaign and creative drafts (owner approves)",
+        "Weekly client reporting from aggregates"
+      ],
+      "delegated_permissions": {
+        "default": "deny",
+        "allow": [
+          {
+            "capability": "mission.propose",
+            "scope": "own_workspaces",
+            "status": "dormant"
+          },
+          {
+            "capability": "task.create",
+            "scope": "own_workspaces",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.read",
+            "scope": "own_workspaces",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.write",
+            "scope": "own_workspaces",
+            "status": "dormant"
+          },
+          {
+            "capability": "kpi.report",
+            "scope": "own_workspaces",
+            "status": "dormant"
+          },
+          {
+            "capability": "org.propose",
+            "scope": "own_workspaces",
+            "status": "dormant"
+          },
+          {
+            "capability": "workspace.read",
+            "scope": "own_workspaces",
+            "status": "dormant"
+          },
+          {
+            "capability": "llm.spend",
+            "scope": "own_workspaces",
+            "status": "dormant"
+          }
+        ]
+      },
+      "budget": {
+        "daily_envelope_cents": 0,
+        "monthly_envelope_cents": 0,
+        "proposed_daily_cents": 0,
+        "spend_path": "spend_gateway_only",
+        "ledger": "existing ledger + llm_calls + spend_reservations (no separate division ledger)"
+      },
+      "kpis": [
+        {
+          "id": "workspaces_ready",
+          "name": "Workspaces that pass readiness",
+          "unit": "count",
+          "direction": "up",
+          "source": "ffm_readiness",
+          "target": null
+        },
+        {
+          "id": "lead_booked_rate",
+          "name": "Lead to booked rate",
+          "unit": "percent",
+          "direction": "up",
+          "source": "ffm_lead_booked_rate",
+          "target": null
+        },
+        {
+          "id": "spend_cents_7d",
+          "name": "Model spend, last 7 days",
+          "unit": "cents",
+          "direction": "down",
+          "source": "llm_calls via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "tasks_done_7d",
+          "name": "Tasks finished, last 7 days",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "cents_per_done_task",
+          "name": "Cost per finished task",
+          "unit": "cents",
+          "direction": "down",
+          "source": "agent_scorecard",
+          "target": null
+        }
+      ],
+      "mission_templates": [
+        {
+          "id": "ffm-weekly-report",
+          "title": "Weekly client report",
+          "objective": "Build the weekly report for one workspace from aggregate figures.",
+          "success_definition": "Report numbers equal ffm_weekly_report output for the same period.",
+          "required_capabilities": [
+            "mission.propose",
+            "workspace.read",
+            "llm.spend"
+          ],
+          "max_budget_cents": 0,
+          "status": "dormant"
+        }
+      ],
+      "isolation": {
+        "reads_other_divisions": false,
+        "client_workspace_access": "own_workspaces_aggregate_only"
+      },
+      "note": "Client personal data stays inside ws_*/ffm_* tables behind their own guarded functions. This division's agents get aggregate reads only."
+    },
+    {
+      "id": "real-estate",
+      "name": "Real Estate",
+      "kind": "division",
+      "status": "dormant",
+      "inferred": false,
+      "evidence": [
+        "scripts/replica/03_funcs.sql venture 'real-estate'",
+        "FENDEZY_CURRENT_STATE_AUDIT.md (wholesale pipeline, hq_wholesale.py bridge dormant)"
+      ],
+      "existing_refs": {
+        "venture_slug": "real-estate",
+        "department_slug": null
+      },
+      "charter": {
+        "text": "Turn the wholesale deal pipeline into reviewed, valued opportunities the owner can act on. The pipeline stays a separate system; this division reads it through the existing bridge once the owner enables it.",
+        "authored_by": "operator_draft",
+        "owner_approved": false
+      },
+      "objectives": [
+        {
+          "id": "o1",
+          "text": "Value pipeline properties with stated sources and confidence."
+        },
+        {
+          "id": "o2",
+          "text": "Surface the few deals worth the owner's time each week."
+        }
+      ],
+      "manager": {
+        "role_id": "real-estate-manager",
+        "title": "Real Estate division manager",
+        "agent_status": "not_created",
+        "model_tier": "cheap",
+        "can_contact_owner": false,
+        "reports_to": "jarvis",
+        "decision_rights": [
+          "order work inside the division's approved missions",
+          "assign tasks to the division's own agents",
+          "propose missions, org changes and budget requests to Jarvis"
+        ],
+        "must_escalate": [
+          "any spend above the division envelope",
+          "any external message, contract or commitment",
+          "anything touching client personal data",
+          "any request for a new permission"
+        ]
+      },
+      "team": [
+        {
+          "role_id": "real-estate-valuation",
+          "title": "Valuation analyst",
+          "purpose": "Values properties from the pipeline with sources.",
+          "seats": 1,
+          "agent_status": "not_created"
+        },
+        {
+          "role_id": "real-estate-auditor",
+          "title": "Auditor",
+          "purpose": "Checks valuations against evidence.",
+          "seats": 1,
+          "agent_status": "not_created"
+        }
+      ],
+      "responsibilities": [
+        "Property valuation",
+        "Deal shortlist for the owner"
+      ],
+      "delegated_permissions": {
+        "default": "deny",
+        "allow": [
+          {
+            "capability": "mission.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "task.create",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.read",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.write",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "kpi.report",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "org.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "research.fetch",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "llm.spend",
+            "scope": "own_division",
+            "status": "dormant"
+          }
+        ]
+      },
+      "budget": {
+        "daily_envelope_cents": 0,
+        "monthly_envelope_cents": 0,
+        "proposed_daily_cents": 0,
+        "spend_path": "spend_gateway_only",
+        "ledger": "existing ledger + llm_calls + spend_reservations (no separate division ledger)"
+      },
+      "kpis": [
+        {
+          "id": "valuations_done_7d",
+          "name": "Valuations finished",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks (valuation tasks)",
+          "target": null
+        },
+        {
+          "id": "deals_surfaced_7d",
+          "name": "Deals surfaced to the owner",
+          "unit": "count",
+          "direction": "up",
+          "source": "owner_messages / deals",
+          "target": null
+        },
+        {
+          "id": "spend_cents_7d",
+          "name": "Model spend, last 7 days",
+          "unit": "cents",
+          "direction": "down",
+          "source": "llm_calls via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "tasks_done_7d",
+          "name": "Tasks finished, last 7 days",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "cents_per_done_task",
+          "name": "Cost per finished task",
+          "unit": "cents",
+          "direction": "down",
+          "source": "agent_scorecard",
+          "target": null
+        }
+      ],
+      "mission_templates": [
+        {
+          "id": "real-estate-valuation-batch",
+          "title": "Valuation batch",
+          "objective": "Value a batch of pipeline properties.",
+          "success_definition": "Each valuation records comparables and a confidence level.",
+          "required_capabilities": [
+            "mission.propose",
+            "research.fetch",
+            "llm.spend"
+          ],
+          "max_budget_cents": 0,
+          "status": "dormant"
+        }
+      ],
+      "isolation": {
+        "reads_other_divisions": false,
+        "client_workspace_access": "none"
+      }
+    },
+    {
+      "id": "day-job-sales",
+      "name": "Day-job Sales",
+      "kind": "division",
+      "status": "dormant",
+      "inferred": false,
+      "evidence": [
+        "scripts/replica/03_funcs.sql venture 'day-job-sales'",
+        "dayjob_days / dayjob_targets tables"
+      ],
+      "existing_refs": {
+        "venture_slug": "day-job-sales",
+        "department_slug": null
+      },
+      "charter": {
+        "text": "Support the owner's daily sales work with a scoreboard and follow-up preparation. Uses only numbers the owner logs.",
+        "authored_by": "operator_draft",
+        "owner_approved": false
+      },
+      "objectives": [
+        {
+          "id": "o1",
+          "text": "Keep the daily scoreboard accurate against targets."
+        },
+        {
+          "id": "o2",
+          "text": "Prepare follow-up reminders from the owner's own notes."
+        }
+      ],
+      "manager": {
+        "role_id": "day-job-sales-manager",
+        "title": "Day-job Sales division manager",
+        "agent_status": "not_created",
+        "model_tier": "cheap",
+        "can_contact_owner": false,
+        "reports_to": "jarvis",
+        "decision_rights": [
+          "order work inside the division's approved missions",
+          "assign tasks to the division's own agents",
+          "propose missions, org changes and budget requests to Jarvis"
+        ],
+        "must_escalate": [
+          "any spend above the division envelope",
+          "any external message, contract or commitment",
+          "anything touching client personal data",
+          "any request for a new permission"
+        ]
+      },
+      "team": [
+        {
+          "role_id": "day-job-sales-analyst",
+          "title": "Scoreboard analyst",
+          "purpose": "Summarises logged activity against targets.",
+          "seats": 1,
+          "agent_status": "not_created"
+        }
+      ],
+      "responsibilities": [
+        "Daily scoreboard",
+        "Follow-up preparation"
+      ],
+      "delegated_permissions": {
+        "default": "deny",
+        "allow": [
+          {
+            "capability": "mission.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "task.create",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.read",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.write",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "kpi.report",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "org.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "llm.spend",
+            "scope": "own_division",
+            "status": "dormant"
+          }
+        ]
+      },
+      "budget": {
+        "daily_envelope_cents": 0,
+        "monthly_envelope_cents": 0,
+        "proposed_daily_cents": 0,
+        "spend_path": "spend_gateway_only",
+        "ledger": "existing ledger + llm_calls + spend_reservations (no separate division ledger)"
+      },
+      "kpis": [
+        {
+          "id": "dials_vs_target",
+          "name": "Dials against daily target",
+          "unit": "percent",
+          "direction": "up",
+          "source": "dayjob_days / dayjob_targets",
+          "target": null
+        },
+        {
+          "id": "paid_deals_week",
+          "name": "Paid deals this week",
+          "unit": "count",
+          "direction": "up",
+          "source": "dayjob_days",
+          "target": null
+        },
+        {
+          "id": "spend_cents_7d",
+          "name": "Model spend, last 7 days",
+          "unit": "cents",
+          "direction": "down",
+          "source": "llm_calls via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "tasks_done_7d",
+          "name": "Tasks finished, last 7 days",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "cents_per_done_task",
+          "name": "Cost per finished task",
+          "unit": "cents",
+          "direction": "down",
+          "source": "agent_scorecard",
+          "target": null
+        }
+      ],
+      "mission_templates": [
+        {
+          "id": "day-job-weekly-review",
+          "title": "Weekly sales review",
+          "objective": "Summarise the week against targets.",
+          "success_definition": "Figures equal the logged dayjob_days rows.",
+          "required_capabilities": [
+            "mission.propose",
+            "llm.spend"
+          ],
+          "max_budget_cents": 0,
+          "status": "dormant"
+        }
+      ],
+      "isolation": {
+        "reads_other_divisions": false,
+        "client_workspace_access": "none"
+      }
+    },
+    {
+      "id": "idea-lab",
+      "name": "Idea Lab / New Ventures",
+      "kind": "division",
+      "status": "dormant",
+      "inferred": false,
+      "evidence": [
+        "scripts/replica/03_funcs.sql venture 'idea-lab'",
+        "VENTURE_FACTORY.md",
+        "ideas table"
+      ],
+      "existing_refs": {
+        "venture_slug": "idea-lab",
+        "department_slug": null
+      },
+      "charter": {
+        "text": "Capture business ideas, score them on speed to cash, cost and effort, and run small validation tests the owner approves. Kills ideas quickly when the stated kill metric is hit.",
+        "authored_by": "operator_draft",
+        "owner_approved": false
+      },
+      "objectives": [
+        {
+          "id": "o1",
+          "text": "Score every captured idea with a demand source."
+        },
+        {
+          "id": "o2",
+          "text": "Run at most the validation tests the owner approved, inside their test budget."
+        }
+      ],
+      "manager": {
+        "role_id": "idea-lab-manager",
+        "title": "Idea Lab division manager",
+        "agent_status": "not_created",
+        "model_tier": "cheap",
+        "can_contact_owner": false,
+        "reports_to": "jarvis",
+        "decision_rights": [
+          "order work inside the division's approved missions",
+          "assign tasks to the division's own agents",
+          "propose missions, org changes and budget requests to Jarvis"
+        ],
+        "must_escalate": [
+          "any spend above the division envelope",
+          "any external message, contract or commitment",
+          "anything touching client personal data",
+          "any request for a new permission"
+        ]
+      },
+      "team": [
+        {
+          "role_id": "idea-lab-researcher",
+          "title": "Idea researcher",
+          "purpose": "Checks demand from public sources.",
+          "seats": 1,
+          "agent_status": "not_created"
+        },
+        {
+          "role_id": "idea-lab-validator",
+          "title": "Validation planner",
+          "purpose": "Designs the smallest test and its kill metric.",
+          "seats": 1,
+          "agent_status": "not_created"
+        }
+      ],
+      "responsibilities": [
+        "Idea intake and scoring",
+        "Validation test plans",
+        "Kill or continue recommendations"
+      ],
+      "delegated_permissions": {
+        "default": "deny",
+        "allow": [
+          {
+            "capability": "mission.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "task.create",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.read",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.write",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "kpi.report",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "org.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "research.fetch",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "llm.spend",
+            "scope": "own_division",
+            "status": "dormant"
+          }
+        ]
+      },
+      "budget": {
+        "daily_envelope_cents": 0,
+        "monthly_envelope_cents": 0,
+        "proposed_daily_cents": 0,
+        "spend_path": "spend_gateway_only",
+        "ledger": "existing ledger + llm_calls + spend_reservations (no separate division ledger)"
+      },
+      "kpis": [
+        {
+          "id": "ideas_scored_7d",
+          "name": "Ideas scored",
+          "unit": "count",
+          "direction": "up",
+          "source": "ideas",
+          "target": null
+        },
+        {
+          "id": "tests_with_verdict_30d",
+          "name": "Validation tests with a verdict",
+          "unit": "count",
+          "direction": "up",
+          "source": "ideas.verdict",
+          "target": null
+        },
+        {
+          "id": "spend_cents_7d",
+          "name": "Model spend, last 7 days",
+          "unit": "cents",
+          "direction": "down",
+          "source": "llm_calls via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "tasks_done_7d",
+          "name": "Tasks finished, last 7 days",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "cents_per_done_task",
+          "name": "Cost per finished task",
+          "unit": "cents",
+          "direction": "down",
+          "source": "agent_scorecard",
+          "target": null
+        }
+      ],
+      "mission_templates": [
+        {
+          "id": "idea-lab-validation",
+          "title": "Idea validation",
+          "objective": "Check demand for one idea and propose the smallest test.",
+          "success_definition": "A verdict with a demand source and a kill metric is recorded.",
+          "required_capabilities": [
+            "mission.propose",
+            "research.fetch",
+            "llm.spend"
+          ],
+          "max_budget_cents": 0,
+          "status": "dormant"
+        }
+      ],
+      "isolation": {
+        "reads_other_divisions": false,
+        "client_workspace_access": "none"
+      }
+    },
+    {
+      "id": "research",
+      "name": "Research & Intelligence",
+      "kind": "division",
+      "status": "dormant",
+      "inferred": true,
+      "evidence": [
+        "scripts/replica/03_funcs.sql department 'research' (shared)",
+        "migrations/20261112_office_v1.sql office function 'research'"
+      ],
+      "existing_refs": {
+        "venture_slug": null,
+        "department_slug": "research"
+      },
+      "charter": {
+        "text": "Answer research questions from the other divisions and from Jarvis with sourced, checkable findings.",
+        "authored_by": "operator_draft",
+        "owner_approved": false
+      },
+      "objectives": [
+        {
+          "id": "o1",
+          "text": "Answer each research request with sources."
+        },
+        {
+          "id": "o2",
+          "text": "Flag findings that could not be verified."
+        }
+      ],
+      "manager": {
+        "role_id": "research-manager",
+        "title": "Research division manager",
+        "agent_status": "not_created",
+        "model_tier": "cheap",
+        "can_contact_owner": false,
+        "reports_to": "jarvis",
+        "decision_rights": [
+          "order work inside the division's approved missions",
+          "assign tasks to the division's own agents",
+          "propose missions, org changes and budget requests to Jarvis"
+        ],
+        "must_escalate": [
+          "any spend above the division envelope",
+          "any external message, contract or commitment",
+          "anything touching client personal data",
+          "any request for a new permission"
+        ]
+      },
+      "team": [
+        {
+          "role_id": "research-analyst",
+          "title": "Research analyst",
+          "purpose": "Finds and summarises public sources.",
+          "seats": 1,
+          "agent_status": "not_created"
+        },
+        {
+          "role_id": "research-verifier",
+          "title": "Verifier",
+          "purpose": "Re-checks claims against the stored evidence.",
+          "seats": 1,
+          "agent_status": "not_created"
+        }
+      ],
+      "responsibilities": [
+        "Sourced research on request",
+        "Verification of other divisions' claims"
+      ],
+      "delegated_permissions": {
+        "default": "deny",
+        "allow": [
+          {
+            "capability": "mission.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "task.create",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.read",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "memory.write",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "kpi.report",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "org.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "research.fetch",
+            "scope": "own_division",
+            "status": "dormant"
+          },
+          {
+            "capability": "llm.spend",
+            "scope": "own_division",
+            "status": "dormant"
+          }
+        ]
+      },
+      "budget": {
+        "daily_envelope_cents": 0,
+        "monthly_envelope_cents": 0,
+        "proposed_daily_cents": 0,
+        "spend_path": "spend_gateway_only",
+        "ledger": "existing ledger + llm_calls + spend_reservations (no separate division ledger)"
+      },
+      "kpis": [
+        {
+          "id": "requests_answered_7d",
+          "name": "Research requests answered",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks",
+          "target": null
+        },
+        {
+          "id": "verified_share",
+          "name": "Share of findings verified",
+          "unit": "percent",
+          "direction": "up",
+          "source": "memory.confidence / evidence_sources",
+          "target": null
+        },
+        {
+          "id": "spend_cents_7d",
+          "name": "Model spend, last 7 days",
+          "unit": "cents",
+          "direction": "down",
+          "source": "llm_calls via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "tasks_done_7d",
+          "name": "Tasks finished, last 7 days",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "cents_per_done_task",
+          "name": "Cost per finished task",
+          "unit": "cents",
+          "direction": "down",
+          "source": "agent_scorecard",
+          "target": null
+        }
+      ],
+      "mission_templates": [
+        {
+          "id": "research-brief",
+          "title": "Research brief",
+          "objective": "Answer one research question.",
+          "success_definition": "Every claim cites a stored evidence source.",
+          "required_capabilities": [
+            "mission.propose",
+            "research.fetch",
+            "llm.spend"
+          ],
+          "max_budget_cents": 0,
+          "status": "dormant"
+        }
+      ],
+      "isolation": {
+        "reads_other_divisions": false,
+        "client_workspace_access": "none"
+      },
+      "note": "Overlaps the corporate office function 'research'. Listed as a division only to reach eight; see OWNER DECISION D1."
+    },
+    {
+      "id": "music",
+      "name": "Music",
+      "kind": "division",
+      "status": "dormant",
+      "inferred": true,
+      "evidence": [
+        "FENDEZY_CURRENT_STATE_AUDIT.md: '6 ventures (4 active, music and soccer parked)'"
+      ],
+      "existing_refs": {
+        "venture_slug": "music",
+        "department_slug": null
+      },
+      "charter": {
+        "text": "Parked. No charter has been written by the owner. This entry reserves the place only.",
+        "authored_by": "operator_draft",
+        "owner_approved": false
+      },
+      "objectives": [
+        {
+          "id": "o1",
+          "text": "None until the owner writes a charter."
+        }
+      ],
+      "manager": {
+        "role_id": "music-manager",
+        "title": "Music division manager",
+        "agent_status": "not_created",
+        "model_tier": "cheap",
+        "can_contact_owner": false,
+        "reports_to": "jarvis",
+        "decision_rights": [
+          "order work inside the division's approved missions",
+          "assign tasks to the division's own agents",
+          "propose missions, org changes and budget requests to Jarvis"
+        ],
+        "must_escalate": [
+          "any spend above the division envelope",
+          "any external message, contract or commitment",
+          "anything touching client personal data",
+          "any request for a new permission"
+        ]
+      },
+      "team": [],
+      "responsibilities": [
+        "None while parked"
+      ],
+      "delegated_permissions": {
+        "default": "deny",
+        "allow": [
+          {
+            "capability": "org.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          }
+        ]
+      },
+      "budget": {
+        "daily_envelope_cents": 0,
+        "monthly_envelope_cents": 0,
+        "proposed_daily_cents": 0,
+        "spend_path": "spend_gateway_only",
+        "ledger": "existing ledger + llm_calls + spend_reservations (no separate division ledger)"
+      },
+      "kpis": [
+        {
+          "id": "spend_cents_7d",
+          "name": "Model spend, last 7 days",
+          "unit": "cents",
+          "direction": "down",
+          "source": "llm_calls via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "tasks_done_7d",
+          "name": "Tasks finished, last 7 days",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "cents_per_done_task",
+          "name": "Cost per finished task",
+          "unit": "cents",
+          "direction": "down",
+          "source": "agent_scorecard",
+          "target": null
+        }
+      ],
+      "mission_templates": [],
+      "isolation": {
+        "reads_other_divisions": false,
+        "client_workspace_access": "none"
+      },
+      "note": "Parked venture. Slug taken from the audit document and NOT verified against the database. See OWNER DECISION D1."
+    },
+    {
+      "id": "soccer",
+      "name": "Soccer",
+      "kind": "division",
+      "status": "dormant",
+      "inferred": true,
+      "evidence": [
+        "FENDEZY_CURRENT_STATE_AUDIT.md: '6 ventures (4 active, music and soccer parked)'"
+      ],
+      "existing_refs": {
+        "venture_slug": "soccer",
+        "department_slug": null
+      },
+      "charter": {
+        "text": "Parked. No charter has been written by the owner. This entry reserves the place only.",
+        "authored_by": "operator_draft",
+        "owner_approved": false
+      },
+      "objectives": [
+        {
+          "id": "o1",
+          "text": "None until the owner writes a charter."
+        }
+      ],
+      "manager": {
+        "role_id": "soccer-manager",
+        "title": "Soccer division manager",
+        "agent_status": "not_created",
+        "model_tier": "cheap",
+        "can_contact_owner": false,
+        "reports_to": "jarvis",
+        "decision_rights": [
+          "order work inside the division's approved missions",
+          "assign tasks to the division's own agents",
+          "propose missions, org changes and budget requests to Jarvis"
+        ],
+        "must_escalate": [
+          "any spend above the division envelope",
+          "any external message, contract or commitment",
+          "anything touching client personal data",
+          "any request for a new permission"
+        ]
+      },
+      "team": [],
+      "responsibilities": [
+        "None while parked"
+      ],
+      "delegated_permissions": {
+        "default": "deny",
+        "allow": [
+          {
+            "capability": "org.propose",
+            "scope": "own_division",
+            "status": "dormant"
+          }
+        ]
+      },
+      "budget": {
+        "daily_envelope_cents": 0,
+        "monthly_envelope_cents": 0,
+        "proposed_daily_cents": 0,
+        "spend_path": "spend_gateway_only",
+        "ledger": "existing ledger + llm_calls + spend_reservations (no separate division ledger)"
+      },
+      "kpis": [
+        {
+          "id": "spend_cents_7d",
+          "name": "Model spend, last 7 days",
+          "unit": "cents",
+          "direction": "down",
+          "source": "llm_calls via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "tasks_done_7d",
+          "name": "Tasks finished, last 7 days",
+          "unit": "count",
+          "direction": "up",
+          "source": "tasks via agent_scorecard",
+          "target": null
+        },
+        {
+          "id": "cents_per_done_task",
+          "name": "Cost per finished task",
+          "unit": "cents",
+          "direction": "down",
+          "source": "agent_scorecard",
+          "target": null
+        }
+      ],
+      "mission_templates": [],
+      "isolation": {
+        "reads_other_divisions": false,
+        "client_workspace_access": "none"
+      },
+      "note": "Parked venture. Slug taken from the audit document and NOT verified against the database. See OWNER DECISION D1."
+    }
+  ]
+}
