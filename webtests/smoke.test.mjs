@@ -39,7 +39,7 @@ test('a signed-in stranger is refused with a visible message and signed out', as
 const EXPECT = {
   chat: /Tell Jarvis what to do/, inbox: /4 waiting on you/, home: /Operating fund[\s\S]*\$123\.45[\s\S]*Follow-ups due[\s\S]*Jane Doe[\s\S]*Donna HVAC[\s\S]*Systems[\s\S]*KILL SWITCH/,
   missions: /Open mission[\s\S]*Idea lab[\s\S]*Garage cleanouts[\s\S]*Cold email test/, agents: /Headquarters[\s\S]*Executive Office[\s\S]*All agents[\s\S]*Jarvis[\s\S]*Proposals and org changes[\s\S]*Hire a closer agent/,
-  hq: /FENDEZY GROUP[\s\S]*MIXED DATA[\s\S]*Group status[\s\S]*LIVE/, money: /Available[\s\S]*\$123\.45[\s\S]*Bank \(source of truth\)[\s\S]*AI spend, last 7 days[\s\S]*Permissions[\s\S]*send_email/, feed: /jarvis · task[\s\S]*Planned the day/,
+  hq: /FENDEZY HQ[\s\S]*Signed in\.[\s\S]*Live controls[\s\S]*LIVE/, money: /Available[\s\S]*\$123\.45[\s\S]*Bank \(source of truth\)[\s\S]*AI spend, last 7 days[\s\S]*Permissions[\s\S]*send_email/, feed: /jarvis · task[\s\S]*Planned the day/,
 };
 for (const k of TABS) {
   test(`tab "${k}" renders from fixture data and is the only visible view`, async () => {
@@ -264,10 +264,10 @@ test('service worker serves from cache when offline, ignores writes and other or
   listeners.install({ waitUntil: (x) => { p = x; } }); await p;
   const respond = async (req) => { let r; listeners.fetch({ request: req, respondWith: (x) => { r = x; } }); return r === undefined ? undefined : await r; };
   // online path is not exercised here; offline (fetch rejects) must fall back to the cache:
-  store.caches.get('hq-v5').set('https://fendezy-hq-app.onrender.com/app.js', 'APPJS');
+  store.caches.get('hq-v6').set('https://fendezy-hq-app.onrender.com/app.js', 'APPJS');
   assert.equal(await respond({ method: 'GET', url: 'https://fendezy-hq-app.onrender.com/app.js' }), 'APPJS');
   assert.equal(await respond({ method: 'POST', url: 'https://fendezy-hq-app.onrender.com/app.js' }), undefined);
   assert.equal(await respond({ method: 'GET', url: 'https://ihxzvpwbqydqtblvazbq.supabase.co/rest/v1/rpc/app_snapshot' }), undefined);
   store.caches.set('hq-v1-old', new Map()); let a; listeners.activate({ waitUntil: (x) => { a = x; } }); await a;
-  assert.deepEqual([...store.caches.keys()], ['hq-v5']);
+  assert.deepEqual([...store.caches.keys()], ['hq-v6']);
 });
