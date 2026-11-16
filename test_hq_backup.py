@@ -236,9 +236,10 @@ class SuppressionSection(unittest.TestCase):
 
     def test_export_goes_through_the_backup_identity_rpc(self):
         """hq_backup reaches the export through _rpc (with PR #16: BACKUP_READER_JWT / backup_reader), never directly with hq._request."""
-        calls = []
+        calls = []; real_rpc = B._rpc
         def rpc(path, body=None, **kw):
-            calls.append(path); return self.export()
+            calls.append(path)
+            return self.export() if path.endswith("/rpc/backup_suppression_export") else real_rpc(path, body, **kw)
         def req(method, path, body=None, prefer=None, timeout=30, exact=False):
             self.assertFalse(path.endswith("/rpc/backup_suppression_export"), "export called with the service key, not through _rpc")
             return fake_request(method, path, body, prefer)
@@ -252,18 +253,21 @@ class SuppressionSection(unittest.TestCase):
         self.assertIn("BACKUP_READER_JWT", str(cm.exception))
 
     def test_stand_in_rpc_never_replaces_an_earlier_definition(self):
-        """After the merge with PR #16 the module holds PR #16's _rpc first; the guarded stand-in must not override it (whatever order the two hunks end up in)."""
+        """After the merge with PR #16 the module holds PR #16's (unguarded, JWT-only) _rpc first; the guarded stand-in must not override it. Holds on both trees."""
         import ast, inspect
         tree = ast.parse(inspect.getsource(B))
         guarded = [n for n in tree.body if isinstance(n, ast.If) and any(isinstance(b, ast.FunctionDef) and b.name == "_rpc" for b in n.body)]
         self.assertEqual(len(guarded), 1)
-        self.assertEqual([n.name for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_rpc"], [], "an unguarded _rpc here would shadow PR #16's")
+        plain = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_rpc"]
+        self.assertTrue(all(n.lineno < guarded[0].lineno for n in plain), "an unguarded _rpc AFTER the stand-in would be shadowed / shadow it")
+        effective = B._rpc.__code__.co_firstlineno
+        if plain:
+            self.assertEqual(effective, plain[0].lineno, "the stand-in replaced PR #16's _rpc")
+        else:
+            self.assertGreater(effective, guarded[0].lineno)
         ns = {"_rpc": "pr16", "hq": None}
         exec(compile(ast.Module(body=guarded, type_ignores=[]), "x", "exec"), ns)
         self.assertEqual(ns["_rpc"], "pr16")
-        ns = {"hq": None}
-        exec(compile(ast.Module(body=guarded, type_ignores=[]), "x", "exec"), ns)
-        self.assertTrue(callable(ns["_rpc"]))
 
     def test_verify_checks_the_suppression_member(self):
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(result=self.export())):
