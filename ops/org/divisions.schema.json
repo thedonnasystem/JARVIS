@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ops/org/divisions.schema.json",
+  "title": "FENDEZY GROUP organization contract (divisions)",
+  "description": "Structure of ops/org/divisions.json. Structural rules live here; the safety rules (all dormant, zero budget, default deny, no self-escalation) are enforced by scripts/org_contract.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "global", "jarvis", "corporate_offices", "divisions"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "contract_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "generated_note": {"type": "string", "maxLength": 300},
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ai_daily_cap_cents", "ai_daily_cap_source", "lifecycle", "default_permission", "activation", "capability_catalog", "never_delegable_prefixes"],
+      "properties": {
+        "ai_daily_cap_cents": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "ai_daily_cap_source": {"type": "string", "maxLength": 300},
+        "lifecycle": {"type": "array", "items": {"enum": ["dormant", "staged", "active"]}, "minItems": 3, "maxItems": 3, "uniqueItems": true},
+        "default_permission": {"const": "deny"},
+        "activation": {"type": "string", "maxLength": 300},
+        "capability_catalog": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "tier", "description"],
+            "properties": {
+              "id": {"$ref": "#/$defs/capability"},
+              "tier": {"enum": ["green", "yellow"]},
+              "description": {"type": "string", "minLength": 10, "maxLength": 300}
+            }
+          }
+        },
+        "never_delegable_prefixes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z_]+\\.[a-z_]*$"}}
+      }
+    },
+    "jarvis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "slug", "only_agent_that_contacts_owner", "may", "may_not"],
+      "properties": {
+        "role": {"type": "string"},
+        "slug": {"const": "jarvis"},
+        "only_agent_that_contacts_owner": {"const": true},
+        "may": {"type": "array", "items": {"type": "string", "maxLength": 200}},
+        "may_not": {"type": "array", "minItems": 1, "items": {"type": "string", "maxLength": 200}}
+      }
+    },
+    "corporate_offices": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "name", "source", "status"],
+        "properties": {
+          "id": {"$ref": "#/$defs/slug"},
+          "name": {"type": "string", "minLength": 2, "maxLength": 80},
+          "source": {"type": "string", "maxLength": 200},
+          "status": {"const": "existing_view"}
+        }
+      }
+    },
+    "divisions": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/division"}}
+  },
+  "$defs": {
+    "slug": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$"},
+    "capability": {"type": "string", "pattern": "^[a-z_]+\\.[a-z_]+$"},
+    "role": {
+      "type": "object", "additionalProperties": false, "required": ["role_id", "title", "purpose", "seats", "agent_status"],
+      "properties": {
+        "role_id": {"$ref": "#/$defs/slug"},
+        "title": {"type": "string", "minLength": 2, "maxLength": 80},
+        "purpose": {"type": "string", "minLength": 5, "maxLength": 300},
+        "seats": {"type": "integer", "minimum": 1, "maximum": 5},
+        "agent_status": {"const": "not_created"}
+      }
+    },
+    "division": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "kind", "status", "inferred", "evidence", "existing_refs", "charter", "objectives", "manager", "team", "responsibilities",
+                   "delegated_permissions", "budget", "kpis", "mission_templates", "isolation"],
+      "properties": {
+        "id": {"$ref": "#/$defs/slug"},
+        "name": {"type": "string", "minLength": 2, "maxLength": 80},
+        "kind": {"const": "division"},
+        "status": {"enum": ["dormant", "staged", "active"]},
+        "inferred": {"type": "boolean"},
+        "note": {"type": "string", "maxLength": 400},
+        "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "maxLength": 300}},
+        "existing_refs": {
+          "type": "object", "additionalProperties": false, "required": ["venture_slug", "department_slug"],
+          "properties": {"venture_slug": {"type": ["string", "null"]}, "department_slug": {"type": ["string", "null"]}}
+        },
+        "charter": {
+          "type": "object", "additionalProperties": false, "required": ["text", "authored_by", "owner_approved"],
+          "properties": {
+            "text": {"type": "string", "minLength": 20, "maxLength": 1200},
+            "authored_by": {"enum": ["operator_draft", "owner"]},
+            "owner_approved": {"type": "boolean"}
+          }
+        },
+        "objectives": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": {"type": "object", "additionalProperties": false, "required": ["id", "text"],
+                    "properties": {"id": {"type": "string", "pattern": "^o[0-9]+$"}, "text": {"type": "string", "minLength": 5, "maxLength": 300}}}
+        },
+        "manager": {
+          "type": "object", "additionalProperties": false,
+          "required": ["role_id", "title", "agent_status", "model_tier", "can_contact_owner", "reports_to", "decision_rights", "must_escalate"],
+          "properties": {
+            "role_id": {"$ref": "#/$defs/slug"},
+            "title": {"type": "string", "minLength": 2, "maxLength": 80},
+            "agent_status": {"const": "not_created"},
+            "model_tier": {"enum": ["cheap", "standard"]},
+            "can_contact_owner": {"type": "boolean"},
+            "reports_to": {"const": "jarvis"},
+            "decision_rights": {"type": "array", "items": {"type": "string", "maxLength": 200}},
+            "must_escalate": {"type": "array", "minItems": 1, "items": {"type": "string", "maxLength": 200}}
+          }
+        },
+        "team": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/role"}},
+        "responsibilities": {"type": "array", "minItems": 1, "items": {"type": "string", "maxLength": 200}},
+        "delegated_permissions": {
+          "type": "object", "additionalProperties": false, "required": ["default", "allow"],
+          "properties": {
+            "default": {"const": "deny"},
+            "allow": {
+              "type": "array", "uniqueItems": true,
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["capability", "scope", "status"],
+                "properties": {
+                  "capability": {"$ref": "#/$defs/capability"},
+                  "scope": {"enum": ["own_division", "own_workspaces"]},
+                  "status": {"enum": ["dormant", "granted", "revoked"]}
+                }
+              }
+            }
+          }
+        },
+        "budget": {
+          "type": "object", "additionalProperties": false,
+          "required": ["daily_envelope_cents", "monthly_envelope_cents", "proposed_daily_cents", "spend_path", "ledger"],
+          "properties": {
+            "daily_envelope_cents": {"type": "integer", "minimum": 0},
+            "monthly_envelope_cents": {"type": "integer", "minimum": 0},
+            "proposed_daily_cents": {"type": "integer", "minimum": 0},
+            "spend_path": {"const": "spend_gateway_only"},
+            "ledger": {"type": "string", "maxLength": 200}
+          }
+        },
+        "kpis": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "name", "unit", "direction", "source", "target"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,39}$"},
+              "name": {"type": "string", "minLength": 3, "maxLength": 80},
+              "unit": {"enum": ["count", "cents", "percent"]},
+              "direction": {"enum": ["up", "down"]},
+              "source": {"type": "string", "minLength": 3, "maxLength": 200},
+              "target": {"type": ["number", "null"]}
+            }
+          }
+        },
+        "mission_templates": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "title", "objective", "success_definition", "required_capabilities", "max_budget_cents", "status"],
+            "properties": {
+              "id": {"$ref": "#/$defs/slug"},
+              "title": {"type": "string", "minLength": 3, "maxLength": 80},
+              "objective": {"type": "string", "minLength": 10, "maxLength": 400},
+              "success_definition": {"type": "string", "minLength": 10, "maxLength": 400},
+              "required_capabilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/capability"}},
+              "max_budget_cents": {"type": "integer", "minimum": 0},
+              "status": {"enum": ["dormant", "active"]}
+            }
+          }
+        },
+        "isolation": {
+          "type": "object", "additionalProperties": false, "required": ["reads_other_divisions", "client_workspace_access"],
+          "properties": {
+            "reads_other_divisions": {"type": "boolean"},
+            "client_workspace_access": {"enum": ["none", "own_workspaces_aggregate_only"]}
+          }
+        }
+      }
+    }
+  }
+}
