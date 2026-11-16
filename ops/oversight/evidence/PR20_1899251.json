@@ -1,0 +1,579 @@
+{
+ "authority": "This result can stop a change (REJECT). It cannot approve one: RECOMMEND_APPROVE is advice to the Owner and to an independent reviewer.",
+ "checks": [
+  {
+   "class": null,
+   "evidence": [
+    "PR #20 head.sha = 189925152c7f380f995ce6526564429c32be8fed",
+    "PR state: open, draft: False"
+   ],
+   "findings": [],
+   "id": "HEAD",
+   "status": "PASS",
+   "title": "Reviewed SHA is the PR's current head"
+  },
+  {
+   "class": null,
+   "evidence": [
+    "unit: success, check-run 133005391097 https://github.com/thedonnasystem/JARVIS/actions/runs/43776984982/job/133005391097",
+    "migrations: success, check-run 133005391245 https://github.com/thedonnasystem/JARVIS/actions/runs/43776984982/job/133005391245",
+    "secret-scan: success, check-run 133005391289 https://github.com/thedonnasystem/JARVIS/actions/runs/43776984982/job/133005391289"
+   ],
+   "findings": [],
+   "id": "CI",
+   "status": "PASS",
+   "title": "CI green on the exact head SHA"
+  },
+  {
+   "class": null,
+   "evidence": [
+    "appcheck: PASS",
+    "backup: PASS",
+    "bundle: PASS",
+    "lint: PASS",
+    "manifest: PASS",
+    "replica: PASS",
+    "scripts-tests: PASS",
+    "unit: PASS",
+    "webjs: PASS",
+    "GATE PASSED: 9 steps passed"
+   ],
+   "findings": [],
+   "id": "GATE-EVIDENCE",
+   "status": "PASS",
+   "title": "Full gate (scripts/gate.sh --strict) ran and passed in CI on this SHA"
+  },
+  {
+   "class": "owner_gate",
+   "evidence": [
+    "diff 11c1e2980632..189925152c7f: 75 file(s), 14350 added line(s), 98 removed line(s)"
+   ],
+   "findings": [
+    {
+     "class": "owner_gate",
+     "file": ".github/workflows/tests.yml",
+     "msg": "CI workflow changed",
+     "rule": "PC-WORKFLOW"
+    },
+    {
+     "class": "owner_gate",
+     "file": "migrations/20261121_consent_evidence_v1.sql",
+     "line": 188,
+     "msg": "permissions model (grant, SECURITY DEFINER, policy, role, default privileges): 22 added line(s)",
+     "rule": "PC-PERM"
+    },
+    {
+     "class": "owner_gate",
+     "file": "migrations/20261121_suppression_integrity_v1.sql",
+     "line": 559,
+     "msg": "dry_run flag / live mode: 2 added line(s)",
+     "rule": "PC-DRYRUN"
+    },
+    {
+     "class": "owner_gate",
+     "file": "migrations/20261121_suppression_integrity_v1.sql",
+     "line": 103,
+     "msg": "permissions model (grant, SECURITY DEFINER, policy, role, default privileges): 62 added line(s)",
+     "rule": "PC-PERM"
+    },
+    {
+     "class": "owner_gate",
+     "file": "scripts/acl_manifest.py",
+     "msg": "a lint / gate / guard tool is added",
+     "rule": "PC-GUARD"
+    },
+    {
+     "class": "owner_gate",
+     "file": "scripts/gate.sh",
+     "msg": "a lint / gate / guard tool is modified",
+     "rule": "PC-GUARD"
+    },
+    {
+     "class": "owner_gate",
+     "file": "test_audit_paths.py",
+     "msg": "2 line(s) removed from a spend / bypass / audit control test",
+     "rule": "PC-TESTS"
+    }
+   ],
+   "id": "PROTECTED",
+   "status": "FAIL",
+   "title": "No protected control is touched or weakened"
+  },
+  {
+   "class": null,
+   "evidence": [
+    "exit 0 (base-ref copy of the tool, sha256 c785feacdd7a50ec)",
+    "lint_migrations: 0 error(s)"
+   ],
+   "findings": [],
+   "id": "LINT",
+   "status": "PASS",
+   "title": "Migrations follow the migration lint"
+  },
+  {
+   "class": null,
+   "evidence": [
+    "exit 0 (base-ref copy of the tool, sha256 5ddd5c69e868b7da)",
+    "bundle current"
+   ],
+   "findings": [],
+   "id": "BUNDLE",
+   "status": "PASS",
+   "title": "dist/APPLY_ALL.sql was regenerated"
+  },
+  {
+   "class": null,
+   "evidence": [
+    "dependency files changed; no new package, image or action"
+   ],
+   "findings": [],
+   "id": "DEPS",
+   "status": "PASS",
+   "title": "New dependencies have a licence / provenance entry and are pinned"
+  },
+  {
+   "class": null,
+   "evidence": [
+    "manifest file(s) on head: ops/ACL_MANIFEST_public.tsv",
+    "CI gate step 'manifest' PASS: function manifest vs live baseline matches ops/EXPECTED_NEW_FUNCTIONS.txt, and ops/ACL_MANIFEST_public.tsv matches the replica ACLs"
+   ],
+   "findings": [],
+   "id": "ACL",
+   "status": "PASS",
+   "title": "ACL manifest matches the database ACLs (no drift)"
+  },
+  {
+   "class": null,
+   "evidence": [],
+   "findings": [
+    {
+     "msg": "no oversight ledger on the base or the head"
+    }
+   ],
+   "id": "LEDGER",
+   "status": "NOT_APPLICABLE",
+   "title": "Oversight ledger is append-only relative to the base"
+  },
+  {
+   "class": null,
+   "evidence": [
+    "labels: none",
+    "base: overnight-build",
+    "title: Consent integrity v3: channel prohibition and restore-closed gate"
+   ],
+   "findings": [],
+   "id": "PRODUCTION",
+   "status": "PASS",
+   "title": "Not a production deploy / production migration (owner-reserved)"
+  },
+  {
+   "class": "reject",
+   "evidence": [
+    "CI ran: [738]",
+    "claimed in PR text: [736]"
+   ],
+   "findings": [
+    {
+     "class": "reject",
+     "msg": "PR text claims [736] tests; CI on this SHA ran [738]. No claim matches."
+    }
+   ],
+   "id": "TEST-CLAIMS",
+   "status": "FAIL",
+   "title": "Claimed test counts match what CI ran"
+  },
+  {
+   "class": null,
+   "evidence": [],
+   "findings": [
+    {
+     "msg": "no review of 189925152c7f is recorded in the ledger. Reviews exist for other heads by this author: 506bdcb2d78a. A new head needs a fresh independent review."
+    }
+   ],
+   "id": "INDEPENDENT-REVIEW",
+   "status": "UNVERIFIED",
+   "title": "Independent review recorded for this exact head (reviewer is not the author)"
+  }
+ ],
+ "commands": [
+  {
+   "argv": [
+    "gh",
+    "api",
+    "-X",
+    "GET",
+    "repos/thedonnasystem/JARVIS/pulls/20"
+   ],
+   "exit": 0,
+   "stdout_bytes": 24695,
+   "stdout_sha256": "1309244387d519369f2a0b3a53f59a59c6afa0f616cb16f796bbd9337dfd13a1"
+  },
+  {
+   "argv": [
+    "gh",
+    "api",
+    "-X",
+    "GET",
+    "repos/thedonnasystem/JARVIS/commits/189925152c7f380f995ce6526564429c32be8fed/check-runs?per_page=100"
+   ],
+   "exit": 0,
+   "stdout_bytes": 10638,
+   "stdout_sha256": "349c3357f9bde5a6ab1671e7b07d3cf2313c57fad954331ad3770bdace1baa30"
+  },
+  {
+   "argv": [
+    "gh",
+    "api",
+    "-X",
+    "GET",
+    "repos/thedonnasystem/JARVIS/actions/jobs/133005391245/logs"
+   ],
+   "exit": 0,
+   "stdout_bytes": 78740,
+   "stdout_sha256": "c7eabbf58b5612002d927053645ed1467e8b096b2f1cd4d094b86a33b82ae5c3"
+  },
+  {
+   "argv": [
+    "gh",
+    "api",
+    "-X",
+    "GET",
+    "repos/thedonnasystem/JARVIS/actions/jobs/133005391097/logs"
+   ],
+   "exit": 0,
+   "stdout_bytes": 45707,
+   "stdout_sha256": "23f8484a3c486f9c465520e6541a2e8c1a68f2380cc984ffa58dc83c32615b51"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "rev-parse",
+    "--verify",
+    "-q",
+    "189925152c7f380f995ce6526564429c32be8fed^{commit}"
+   ],
+   "exit": 0,
+   "stdout_bytes": 41,
+   "stdout_sha256": "7c36fdc341784488cbf04b0e782b0ec004053786e63b18d83f8c42f7fd8359ca"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "rev-parse",
+    "--verify",
+    "-q",
+    "origin/overnight-build^{commit}"
+   ],
+   "exit": 0,
+   "stdout_bytes": 41,
+   "stdout_sha256": "1bdafd4cf1f13dde2141f3ba0f2c31e5ff5c7dd4e77c0213c892827ab188c4c2"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "merge-base",
+    "origin/overnight-build",
+    "189925152c7f380f995ce6526564429c32be8fed"
+   ],
+   "exit": 0,
+   "stdout_bytes": 41,
+   "stdout_sha256": "1bdafd4cf1f13dde2141f3ba0f2c31e5ff5c7dd4e77c0213c892827ab188c4c2"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "diff",
+    "--unified=0",
+    "-M",
+    "--no-color",
+    "11c1e2980632c7206f1de0749506d37a2b5eb65e",
+    "189925152c7f380f995ce6526564429c32be8fed"
+   ],
+   "exit": 0,
+   "stdout_bytes": 927858,
+   "stdout_sha256": "512efa2cc880715cc8239365e544ba53881ac1d69bf11245fafdd1fc9e3a6caf"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "11c1e2980632c7206f1de0749506d37a2b5eb65e:scripts/gate.sh"
+   ],
+   "exit": 0,
+   "stdout_bytes": 7502,
+   "stdout_sha256": "f51168ab28881498026fe003bb7b3106886f07e09ad99989ecff00c842dcda67"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "189925152c7f380f995ce6526564429c32be8fed:scripts/gate.sh"
+   ],
+   "exit": 0,
+   "stdout_bytes": 7650,
+   "stdout_sha256": "98e49a6ed22b0f2d30212080a1c26796dc621e75fa0f348a327d0aa7038942be"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "11c1e2980632c7206f1de0749506d37a2b5eb65e:.github/workflows/tests.yml"
+   ],
+   "exit": 0,
+   "stdout_bytes": 4493,
+   "stdout_sha256": "57979db65a05dd50465dfa89d478b7e68f708a5a551f32b17fdac8b13cd4c929"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "11c1e2980632c7206f1de0749506d37a2b5eb65e:.github/workflows/tests.yml"
+   ],
+   "exit": 0,
+   "stdout_bytes": 4493,
+   "stdout_sha256": "57979db65a05dd50465dfa89d478b7e68f708a5a551f32b17fdac8b13cd4c929"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "189925152c7f380f995ce6526564429c32be8fed:.github/workflows/tests.yml"
+   ],
+   "exit": 0,
+   "stdout_bytes": 5051,
+   "stdout_sha256": "d547e18d29ba93bcac4faffd2e72a4c18d6077c5f2e4ee2987f65be8ead12bc1"
+  },
+  {
+   "argv": [
+    "git",
+    "clone",
+    "-q",
+    "--shared",
+    "--no-checkout",
+    "/home/claude/wt/ovs",
+    "/tmp/oversight_7ej2bkyi/head"
+   ],
+   "exit": 0,
+   "stdout_bytes": 0,
+   "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/tmp/oversight_7ej2bkyi/head",
+    "-c",
+    "advice.detachedHead=false",
+    "checkout",
+    "-q",
+    "--detach",
+    "189925152c7f380f995ce6526564429c32be8fed"
+   ],
+   "exit": 0,
+   "stdout_bytes": 0,
+   "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/tmp/oversight_7ej2bkyi/head",
+    "update-ref",
+    "refs/remotes/origin/overnight-build",
+    "11c1e2980632c7206f1de0749506d37a2b5eb65e"
+   ],
+   "exit": 0,
+   "stdout_bytes": 0,
+   "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "origin/overnight-build:scripts/lint_migrations.py"
+   ],
+   "exit": 0,
+   "stdout_bytes": 12927,
+   "stdout_sha256": "c785feacdd7a50eca99c288d59c49abd761ea1a47175c3b61439abd4abdd68b3"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "189925152c7f380f995ce6526564429c32be8fed:scripts/lint_migrations.py"
+   ],
+   "exit": 0,
+   "stdout_bytes": 12927,
+   "stdout_sha256": "c785feacdd7a50eca99c288d59c49abd761ea1a47175c3b61439abd4abdd68b3"
+  },
+  {
+   "argv": [
+    "/usr/local/bin/python3",
+    "-I",
+    "scripts/lint_migrations.py",
+    "--base",
+    "origin/overnight-build"
+   ],
+   "exit": 0,
+   "stdout_bytes": 28,
+   "stdout_sha256": "38889f6fe993b7fb40507ae181c8009f716ca56b65cf5fd0b9460114f289e553"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "origin/overnight-build:scripts/build_bundle.sh"
+   ],
+   "exit": 0,
+   "stdout_bytes": 702,
+   "stdout_sha256": "5ddd5c69e868b7da7e4162545feab4722789bcad4fc8f690bd0fb322d7233d0e"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "189925152c7f380f995ce6526564429c32be8fed:scripts/build_bundle.sh"
+   ],
+   "exit": 0,
+   "stdout_bytes": 702,
+   "stdout_sha256": "5ddd5c69e868b7da7e4162545feab4722789bcad4fc8f690bd0fb322d7233d0e"
+  },
+  {
+   "argv": [
+    "bash",
+    "scripts/build_bundle.sh",
+    "--check"
+   ],
+   "exit": 0,
+   "stdout_bytes": 15,
+   "stdout_sha256": "c5e0939b57c56f51c8dbc22be8030763ffb5988d0becdc49e31029b01f17a15e"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "11c1e2980632c7206f1de0749506d37a2b5eb65e:.github/workflows/tests.yml"
+   ],
+   "exit": 0,
+   "stdout_bytes": 4493,
+   "stdout_sha256": "57979db65a05dd50465dfa89d478b7e68f708a5a551f32b17fdac8b13cd4c929"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "189925152c7f380f995ce6526564429c32be8fed:.github/workflows/tests.yml"
+   ],
+   "exit": 0,
+   "stdout_bytes": 5051,
+   "stdout_sha256": "d547e18d29ba93bcac4faffd2e72a4c18d6077c5f2e4ee2987f65be8ead12bc1"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "ls-tree",
+    "--name-only",
+    "189925152c7f380f995ce6526564429c32be8fed",
+    "ops/"
+   ],
+   "exit": 0,
+   "stdout_bytes": 833,
+   "stdout_sha256": "dc7b66cf46bdd12e54f9d1adb28decd01369747edbfa6634ea5b0a838b29835b"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "11c1e2980632c7206f1de0749506d37a2b5eb65e:ops/oversight/ledger/reviews.jsonl"
+   ],
+   "exit": 128,
+   "stdout_bytes": 0,
+   "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "argv": [
+    "git",
+    "-C",
+    "/home/claude/wt/ovs",
+    "show",
+    "189925152c7f380f995ce6526564429c32be8fed:ops/oversight/ledger/reviews.jsonl"
+   ],
+   "exit": 128,
+   "stdout_bytes": 0,
+   "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+ ],
+ "counts": {
+  "FAIL": 2,
+  "NOT_APPLICABLE": 1,
+  "PASS": 8,
+  "UNVERIFIED": 1
+ },
+ "engine_sha256": "def9082dfa33643e673980cb2e52223a4933afba31281c5ca828dbe785c95938",
+ "engine_version": "1.0",
+ "generated_at": "2026-11-16T02:13:01Z",
+ "not_inspected": [
+  "code behaviour, logic, design and test quality (this engine is mechanical; a human or agent reviewer must read the change)",
+  "the database: no migration was applied and no ACL was read by this engine",
+  "production (Supabase, Railway, Render): never contacted",
+  "licence texts of dependencies (only the presence of a register entry is checked)"
+ ],
+ "owner_decisions_required": [
+  "3 migration file(s) change: applying them to production is a separate owner release authorization (merging does not apply them)",
+  "PROTECTED: .github/workflows/tests.yml: CI workflow changed",
+  "PROTECTED: migrations/20261121_consent_evidence_v1.sql: permissions model (grant, SECURITY DEFINER, policy, role, default privileges): 22 added line(s)",
+  "PROTECTED: migrations/20261121_suppression_integrity_v1.sql: dry_run flag / live mode: 2 added line(s)",
+  "PROTECTED: migrations/20261121_suppression_integrity_v1.sql: permissions model (grant, SECURITY DEFINER, policy, role, default privileges): 62 added line(s)",
+  "PROTECTED: scripts/acl_manifest.py: a lint / gate / guard tool is added",
+  "PROTECTED: scripts/gate.sh: a lint / gate / guard tool is modified",
+  "PROTECTED: test_audit_paths.py: 2 line(s) removed from a spend / bypass / audit control test"
+ ],
+ "owner_gate_findings": 7,
+ "reject_findings": 1,
+ "schema": "fendezy.oversight.mandatory_checks/1",
+ "subject": {
+  "author": "author-agent:build/consent-integrity-v3",
+  "base_ref": "origin/overnight-build",
+  "base_sha": "11c1e2980632c7206f1de0749506d37a2b5eb65e",
+  "github_author": "thedonnasystem",
+  "head_sha": "189925152c7f380f995ce6526564429c32be8fed",
+  "merge_base": "11c1e2980632c7206f1de0749506d37a2b5eb65e",
+  "pr": 20,
+  "repo": "thedonnasystem/JARVIS"
+ },
+ "verdict": "REJECT"
+}
