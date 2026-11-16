@@ -121,15 +121,11 @@
         conflict: 'The ledger puts 25% into research and systems and holds 15% for a deal; the proposal puts 25% into strategic capital and 15% into innovation and new ventures, so the 25% and 15% buckets change meaning.' }, max_active_revenue_ventures: 3, bank_reconciliation: 'manual',
     },
     bank: { name: 'RBC', status: 'Not connected — manual reconciliation required' },
-    // System status as reported to the builder on this date. NOT read live.
+    // Build/release status as reported on this date. NOT read live. Live controls (kill switch, mode, spend) are shown only from the backend.
     status_as_of: {
       date: '2026-11-16',
       items: [
         ['Production', 'Untouched by this build'],
-        ['Railway bot', 'Running commit ecadb31'],
-        ['Mode', 'Dry-run'],
-        ['Kill switch', 'Off'],
-        ['Executor registry', 'Empty'],
         ['Security PRs #16, #17, #20', 'In final verification'],
         ['Release', 'Awaiting Chairman authorization'],
       ],

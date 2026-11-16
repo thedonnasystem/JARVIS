@@ -7,7 +7,7 @@
 (function (root) {
   const SIM_NOTE = 'SIMULATED. Planned by the offline planner. No agent has run. No research was performed.';
   const CAP_CENTS = 330;
-  const UNASSIGNED = 'Unassigned — awaiting owner';
+  const UNASSIGNED = "Unassigned — awaiting Chairman's appointment.";
 
   // ---------- routing rules (regex fragments matched on word boundaries; a phrase with a space counts double) ----------
   const DIV_RULES = {

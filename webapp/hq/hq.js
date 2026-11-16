@@ -93,7 +93,7 @@
     const counts = {}; st.missions.forEach((m) => { const k = J().missionStatus(m); counts[k] = (counts[k] || 0) + 1; });
     const pend = pendingApprovals();
     return [
-      live() ? livePanel() : panel('Group status', simSrc, dim('Status as of ' + O.status_as_of.date + ', not live.'), ...O.status_as_of.items.slice(0, 4).map(([a, b]) => kv(a, b)), h('div', { class: 'btns' }, btn('Open system health', () => go('health')))),
+      live() ? livePanel() : panel('Build status', 'REPORTED · STATIC', dim('Status as of ' + O.status_as_of.date + ', not live.'), ...O.status_as_of.items.slice(0, 4).map(([a, b]) => kv(a, b)), h('div', { class: 'btns' }, btn('Open system health', () => go('health')))),
       panel('Jarvis', simSrc, dim('Type an objective in plain language. Jarvis plans it, routes it to a division and offices, and lists what needs your approval. Planning is offline: no agent runs.'),
         h('div', { class: 'btns' }, btn('Give Jarvis an objective', () => go('jarvis'), ''))),
       panel('Needs your approval', simSrc, ...(pend.length ? pend.slice(0, 6).map(({ m, a }) => h('button', { class: 'hq-rowbtn', type: 'button', onclick: () => go('missions', { type: 'mission', id: m.id }) }, h('span', {}, a.text), h('span', { class: 'dim' }, m.id))) : [dim('Nothing waiting. Approvals appear here when Jarvis plans a mission.')]),
@@ -261,7 +261,7 @@
       out.push(panel('Agents in the database', 'LIVE', ...(ag.length ? ag.map((a) => h('div', { class: 'hq-sub' }, h('div', { class: 'row' }, h('b', {}, txt(a.title || a.slug, 'agent')), tag(txt(a.status))),
         dim(txt(a.role, 'no role') + ' · spent today ' + usd(a.spent_today) + ' of ' + usd(a.cap_cents)))) : [dim('No agents recorded.')])));
     }
-    out.push(panel('Division workforce', orgSrc(), dim('No agents are assigned to any division. ' + UN + '.')));
+    out.push(panel('Division workforce', orgSrc(), dim('No agents are assigned to any division. ' + UN)));
     out.push(panel('Proposed by the offline planner', simSrc, dim('Roles Jarvis would need. None of these agents exists or has run.'),
       ...(Object.keys(roles).length ? Object.entries(roles).map(([r, ids]) => h('div', { class: 'hq-sub row' }, h('span', {}, r), h('span', { class: 'dim' }, [...ids].join(', ')))) : [dim('None yet.')])));
     return out;
@@ -305,7 +305,7 @@
       const sys = Array.isArray(S.ctx.snap.systems) ? S.ctx.snap.systems : [];
       out.push(panel('Registered systems', 'LIVE', ...(sys.length ? sys.map((x) => kv(txt(x.name, 'system'), txt(x.status))) : [dim('None registered.')])));
     }
-    out.push(panel('System and security status', live() ? 'NOT CONNECTED' : simSrc, dim('Status as of ' + O.status_as_of.date + ', not live.'), ...O.status_as_of.items.map(([a, b]) => kv(a, b))));
+    out.push(panel('Build and release status', 'REPORTED · STATIC', dim('Status as of ' + O.status_as_of.date + ', not live.'), ...O.status_as_of.items.map(([a, b]) => kv(a, b))));
     out.push(panel('Engineering & Reliability', orgSrc(), ...erBody()));
     return out;
   }

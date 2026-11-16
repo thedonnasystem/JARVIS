@@ -42,7 +42,7 @@ for (const k of SCREENS) {
     await createMission(app, OTTAWA);           // so mission-dependent panels are populated too
     await app.click(chip(app, k));
     const panels = app.all('#v-hq .hq-panel'); assert.ok(panels.length > 0);
-    for (const p of panels) { const b = p.querySelector('.hq-badge'); assert.ok(b, 'panel without badge: ' + p.textContent.slice(0, 40)); assert.match(b.textContent, /^(SIMULATED|NOT CONNECTED)$/); }
+    for (const p of panels) { const b = p.querySelector('.hq-badge'); assert.ok(b, 'panel without badge: ' + p.textContent.slice(0, 40)); assert.match(b.textContent, /^(SIMULATED|NOT CONNECTED|REPORTED · STATIC)$/); }
     assert.ok(panels.some((p) => p.querySelector('.hq-badge').textContent === 'SIMULATED'), 'screen has a SIMULATED panel');
     assert.ok(!app.all('#v-hq .hq-badge').some((b) => /LIVE/.test(b.textContent)), 'demo never shows LIVE');
     assert.doesNotMatch(view(app).textContent, /\b(null|undefined|NaN)\b|\[object Object\]/);
@@ -284,7 +284,7 @@ test('finance: reinvestment pool shows the ledger definitions as current and the
 
 test('health: status as of a date, not live, with the known state', async () => {
   const app = await demo(); await app.click(chip(app, 'health'));
-  assert.match(view(app).textContent, /Status as of 2026-11-16, not live\.[\s\S]*Production\s*Untouched[\s\S]*ecadb31[\s\S]*Dry-run[\s\S]*Kill switch\s*Off[\s\S]*Executor registry\s*Empty[\s\S]*#16, #17, #20\s*In final verification[\s\S]*Awaiting Chairman authorization/);
+  assert.match(view(app).textContent, /REPORTED · STATIC[\s\S]*Status as of 2026-11-16, not live\.[\s\S]*Production\s*Untouched[\s\S]*#16, #17, #20\s*In final verification[\s\S]*Awaiting Chairman authorization/); assert.ok(!/Kill switch\s*Off/.test(view(app).textContent), 'no static kill-switch state');
   app.stop();
 });
 
