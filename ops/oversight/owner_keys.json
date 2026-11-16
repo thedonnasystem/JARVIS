@@ -1,0 +1,4 @@
+{
+ "note": "Ed25519 public keys allowed to sign owner_decision entries in ops/oversight/ledger/reviews.jsonl. EMPTY ON PURPOSE: no owner decision can be recorded until the Owner registers a key himself (docs/oversight/RUNBOOK.md section 6, owner decision OD-2). Entry format: {\"key_id\": \"owner-1\", \"ed25519_public_b64\": \"<44 chars>\"} plus, to revoke, \"revoked_after_seq\": <ledger line number>. Never delete a key that signed an entry. Only the Owner may change this file, by committing it himself; the engine counts a key only when it is on overnight-build and treats any change here as owner-only (PC-OWNER-KEYS).",
+ "keys": []
+}

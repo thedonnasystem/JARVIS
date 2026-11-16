@@ -1,0 +1,75 @@
+# PROPOSAL ONLY. To adopt: the Owner (or an authorised release) copies this job into .github/workflows/tests.yml, then marks
+# `oversight-check` as a required status check in branch protection (owner action OA-1) and adds `/docs/oversight/ @thedonnasystem`
+# to .github/CODEOWNERS (OA-2). Changing a workflow or CODEOWNERS is itself a protected change (PC-WORKFLOW / PC-CODEOWNERS).
+# UNTESTED: this job has never run in GitHub Actions. `gh` is preinstalled on ubuntu-latest; GH_TOKEN is the job token.
+#
+# Design notes
+# - Trusted code comes from ONE fixed branch, written here as a literal: overnight-build. The engine, the ledger code, the owner
+#   keys, the ledger of record and the dependency register are all read from ./_trusted (a checkout of that branch). Nothing is
+#   taken from the PR's base ref or base SHA (the author chooses those) and nothing from the PR's own tree is executed: the PR
+#   workspace is only data for `git diff` / `git show`. The engine itself refuses any base but refs/remotes/origin/overnight-build.
+# - The engine only passes its ENGINE check when it is byte-identical to the copy on overnight-build, which is the case here.
+# - Ledger of record = the file on overnight-build. A review of head X cannot be inside commit X, so review and owner-decision
+#   entries have to reach overnight-build by their own commit BEFORE this job can pass for X. Until someone decides how that
+#   commit is made (owner decision OD-8 in the charter), INDEPENDENT-REVIEW stays UNVERIFIED and this job stays red (exit 20).
+# - A PR may also carry ledger lines; the second verify step proves they only EXTEND the trusted ledger (append-only), but the
+#   engine does not count entries that exist only in the PR.
+# - permissions: contents read, checks read, actions read (to read the other jobs' results and logs). No write scope.
+# - `always()`: without it a failed prerequisite makes this job "skipped", which GitHub treats as passing for a required check.
+#   With it the job still runs and the engine reports the failed CI check itself.
+# - Exit 10 (REJECT) and 20 (NEEDS_MORE_WORK) both fail the job; only 0 passes. Any other exit code is an engine error and also fails.
+# - Residual limit, not solvable inside this file: on `pull_request` events GitHub runs the workflow file of the PR's merge
+#   commit, so a PR that edits tests.yml runs its own edited copy of this job. The engine reports that as PC-WORKFLOW, but the
+#   edited job may no longer run the engine. Only branch protection with "Require review from Code Owners" on /.github/ (OA-1,
+#   OA-2, OD-3) closes it. `pull_request_target` would run the base copy, but it is a different trigger with its own risks and
+#   was not chosen here without a test run.
+  oversight-check:
+    needs: [unit, migrations, secret-scan]
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0             # all branches: the engine needs refs/remotes/origin/overnight-build and the PR head as git objects
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: overnight-build       # literal trusted branch, never github.event.pull_request.base.*
+          path: _trusted
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with: { python-version: "3.12" }
+      - run: pip install --require-hashes -r _trusted/requirements/dev.lock
+      - name: The trusted checkout and the workspace agree on what overnight-build is
+        run: test "$(git -C _trusted rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/overnight-build)"
+      - name: Ledger of record verifies (trusted copy, trusted owner keys)
+        run: python3 _trusted/ops/oversight/ledger.py verify --file _trusted/ops/oversight/ledger/reviews.jsonl
+      - name: The PR's ledger verifies and only appends to the ledger of record
+        run: |
+          if [ -f ops/oversight/ledger/reviews.jsonl ]; then
+            python3 _trusted/ops/oversight/ledger.py verify --file ops/oversight/ledger/reviews.jsonl \
+              --base-file _trusted/ops/oversight/ledger/reviews.jsonl
+          else
+            echo "the PR removes the ledger file"; exit 1
+          fi
+      - name: Mandatory checks (read-only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -uo pipefail
+          python3 _trusted/ops/oversight/mandatory_checks.py --repo-dir "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER" --sha "$HEAD_SHA" --author "$PR_AUTHOR" \
+            --ledger _trusted/ops/oversight/ledger/reviews.jsonl --registry _trusted/ops/oversight/dependency_provenance.json \
+            --out "$RUNNER_TEMP/oversight.json" --summary "$RUNNER_TEMP/oversight.md"
+          rc=$?
+          [ -f "$RUNNER_TEMP/oversight.md" ] && cat "$RUNNER_TEMP/oversight.md" >> "$GITHUB_STEP_SUMMARY"
+          exit $rc

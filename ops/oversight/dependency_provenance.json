@@ -1,0 +1,17 @@
+{
+ "note": "Licence / provenance register for direct dependencies. mandatory_checks.py (check DEPS) rejects a NEW direct dependency that has no entry here. Seed entries were IMPORTED from the dependency review named in `source` and were NOT re-verified by the oversight function (no licence text was re-read). Add an entry only after reading the licence file in the published artifact; record where you read it.",
+ "source": {"file": "LICENSING_AND_DEPENDENCY_REVIEW.md (engagement work file, not in this repository)", "sha256": "dcfa382dd846c2e1573c320598540034da42e2c855f7c304fd8cdafefc5128f3", "imported": "2026-11-16", "re_verified": false},
+ "entries": [
+  {"ecosystem": "pypi", "name": "anthropic", "license": "Apache-2.0", "status": "imported"},
+  {"ecosystem": "pypi", "name": "python-telegram-bot", "license": "LGPL-3.0-only", "status": "imported", "note": "weak copyleft; fine as an unmodified library"},
+  {"ecosystem": "pypi", "name": "python-dotenv", "license": "BSD-3-Clause", "status": "imported"},
+  {"ecosystem": "pypi", "name": "claude-agent-sdk", "license": "MIT (wheel); bundles a proprietary `claude` binary under Anthropic terms", "status": "imported", "open_question": "confirm the terms cover the intended use"},
+  {"ecosystem": "pypi", "name": "psycopg2-binary", "license": "LGPL with exceptions", "status": "imported"},
+  {"ecosystem": "pypi", "name": "bitwarden-sdk", "license": "Bitwarden SDK License (PROPRIETARY, internal use only)", "status": "imported", "open_question": "OWNER / COUNSEL: is internal HQ use covered, and what if HQ is offered to clients? Unresolved."},
+  {"ecosystem": "pypi", "name": "pywebpush", "license": "MPL-2.0", "status": "imported", "note": "pulls http-ece, which is sdist-only (setup.py runs at install)"},
+  {"ecosystem": "pypi", "name": "cryptography", "license": "Apache-2.0 OR BSD-3-Clause", "status": "imported"},
+  {"ecosystem": "pypi", "name": "pyyaml", "license": null, "status": "not_reviewed", "note": "dev-only; licence not stated in the imported review, so NOT recorded here. Needs a read of the wheel."},
+  {"ecosystem": "pypi", "name": "pip-audit", "license": null, "status": "not_reviewed", "note": "dev-only; licence not stated in the imported review."},
+  {"ecosystem": "npm", "name": "jsdom", "license": null, "status": "not_reviewed", "note": "dev-only (webtests); licence not stated in the imported review."}
+ ]
+}
