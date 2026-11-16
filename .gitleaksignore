@@ -15,3 +15,6 @@
 5828a5e4f05e5c53c66f9a911e024161d46fd325:sqltests/pending_signoff_check.sql:generic-api-key:8
 # Commit 15a69bc8 (history of open PR #15, build/consent-integrity-v2): guessable phrase passed to ffm_set_key in test F6e to prove it is refused.
 15a69bc8c39a98e3be492f601dd5ca412b1de1fd:sqltests/consent_review_fixes_check.sql:generic-api-key:321
+# Commit 4885f72 (history of open PR #16, build/leak-redaction round 8): synthetic gateway-key fixture 'sb_publishable_abc123'
+# passed to BACKUP_GATEWAY_APIKEY in a unit test that proves the gateway key is ignored for ordinary requests.
+4885f72873e199900407ca7d032d4e19f9422d47:test_hq_backup.py:generic-api-key:323
