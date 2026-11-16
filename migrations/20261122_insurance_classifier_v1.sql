@@ -16,12 +16,16 @@
 --       1. every previous category (SIN, card, account, identity, banking, credit) still blocks on the original text AND on a normalised view AND on two leetspeak views.
 --       2. 'health' and 'income' are the ONLY categories a term can waive: the approved terms are cut out of the folded token stream (whole words, never re-joined),
 --          'your income' is waived only when no currency amount appears, and the detectors run again on what is left.
---       3. INSURANCE CONTEXT = the text (or, in the guards, the row) contains an insurance word (insurance, assurance, policy, underwriting, beneficiary, annuity ...) or an approved
---          product term. In that context the residual may contain ONLY vocabulary words, numbers and simple punctuation. Any other token => 'unknown_word'. Non-Latin scripts,
+--       3. INSURANCE CONTEXT = the WORKSPACE is not of a known non-insurance vertical, or holds an approved product term (ws_insurance_context; the words of the text decide nothing).
+--          In that context the residual may contain ONLY vocabulary words, numbers and simple punctuation. Any other token => 'unknown_word'. Non-Latin scripts,
 --          mixed scripts, '&', '=' and percent-encoding => blocked. Phone, email, postal code, street address and 4+ digit numbers => 'identifier' (whatever the health words).
 --       4. non-insurance text behaves exactly as before (strict screen; a place term only waives its own health-looking name).
---   * ws_guard / ffm_guard (replaced) call the classifier. The waiver applies ONLY on non-person tables (ws_campaigns, ws_ledger, ffm_ad_sets, ffm_creatives, ffm_approvals,
---     ffm_onboarding_items); insurance context is decided per ROW there. Person tables (ws_leads, client_workspaces, ffm_routing_rules, ffm_consent_*) keep the strict behaviour.
+--   * ws_guard / ffm_guard (replaced) call the classifier. Approved-term waivers apply ONLY on non-person tables (ws_campaigns, ws_ledger, ffm_ad_sets, ffm_creatives, ffm_approvals,
+--     ffm_onboarding_items). Person tables (ws_leads, client_workspaces, ffm_routing_rules, ffm_consent_*) keep the old screen as the first test and, in an insurance workspace,
+--     get the insurance screen on top of it (round 4, ws_person_column_check).
+--   * ROUND 4 (independent review RV17-C): money / pay / debt fail closed (ws_financial_hit); a feature phrase can never state a fact about a person (ws_feature_context_ok);
+--     the insurance screen applies to every workspace whose vertical is not exactly 'mortgage' (ws_vertical_insurance: NULL / unknown / misspelled fail closed); person tables as above;
+--     spelled digit groups across columns, vocabulary-word names, form labels and answers, onboarding values and owner validation tightened. See the policy document, section 5a.
 --   * ws_fixed_phrases (round 3): owner-managed en/fr fixed phrases ("contact us", "our team", "notre equipe", "Mon-Fri" ...), cut in pass 1 like an approved term; owner-only, soft removal, PII-free audit, immutable.
 --   * ws_onboarding_value_check / ws_structural_value (round 3): onboarding VALUES are list-screened (no vocabulary test, no waiver); structural columns skip the vocabulary test only when they really are a template title, a plain date or a short token.
 --   * ws_sensitive_hits is NOT changed (other callers, the Python wrapper and ffm_route_preview keep the strict result). Regular expressions and word lists have stated limits: see the policy document.
@@ -310,7 +314,11 @@ begin
     'atteintes', 'enceinte', 'prend', 'pris', 'perdu', 'casse', 'diagnostique', 'refuse', 'refusee', 'accepte', 'approuve', 'approuvee', 'rejete', 'rejetee', 'reclamation', 'reclamations',
     'sinistre', 'sinistres', 'accidente', 'blesse', 'blessee', 'hospitalise', 'income', 'incomes', 'revenu', 'revenus', 'salary', 'wage', 'wages',
     'we', 'us', 'our', 'ours', 'ourselves', 'nous', 'notre', 'nos', 'one', 'ones', 'someone', 'anyone', 'everyone', 'somebody', 'anybody', 'everybody', 'nobody', 'none', 'parents', 'parent', 'children', 'kids',
-    'people', 'couples', 'gens', 'enfants', 'proches', 'family members', 'relatives', 'relative', 'friend', 'friends', 'neighbour', 'neighbours', 'neighbor', 'neighbors', 'colleague', 'colleagues']) then return true; end if;
+    'people', 'couples', 'gens', 'enfants', 'proches', 'family members', 'relatives', 'relative', 'friend', 'friends', 'neighbour', 'neighbours', 'neighbor', 'neighbors', 'colleague', 'colleagues',
+    -- round 4 (S8): age, body measure, habit, pay / debt and applicant words an owner could still add
+    'aged', 'old', 'older', 'elderly', 'yes', 'weight', 'weights', 'weighs', 'height', 'tall', 'lbs', 'lb', 'kg', 'pounds', 'overweight', 'underweight', 'bmi', 'sober', 'sobriety', 'expecting', 'expectant', 'shrink',
+    'therapist', 'therapy', 'owes', 'owe', 'owed', 'owing', 'dui', 'dwi', 'earns', 'earn', 'earned', 'earning', 'earnings', 'figures', 'figure', 'applicant', 'applicants', 'smoke', 'smokes', 'smoked', 'smoking',
+    'vape', 'vapes', 'vaping', 'fume', 'fumer', 'fumes', 'gagne', 'gagnes', 'salaried', 'unemployed', 'jobless', 'bankrupt', 'arrears', 'overdue', 'gender', 'sex', 'sexe', 'race', 'religion', 'ethnicity', 'citizenship', 'ssn', 'nas']) then return true; end if;
   if w ~ '^(diagnos|suffer|claim|underwrit)' then return true; end if;
   if public.ws_name_word_hit(w) then return true; end if;
   if p_health and public.ws_health_word_hit(w) then return true; end if;
@@ -320,9 +328,16 @@ end $$;
 -- 6b. capitalised names. A vocabulary word that is also a given name or surname ("Will", "Page", "Sam", "Summer") is vocabulary when written in lower case, but a CAPITALISED
 --     occurrence is treated as a name and fails closed. p_strict (term management): hard names in any case, soft names whenever capitalised. Text: hard names whenever
 --     capitalised; soft names when capitalised in mid-sentence (not at the start of the text or of a sentence) or when the whole text has no lower-case letter.
+--     Round 4 (S5), text only: any vocabulary word can be a surname ("the Price family", "quote for Tailor", "call Day"), so three POSITIONS fail closed whatever the word is:
+--       * "<word> family" unless the word is a determiner / plain adjective (your, the, every, whole, new ...), and "famille <Capitalised word>";
+--       * "for <word>" / "pour <word>" closing a clause, unless the word is a plural or one of a short list (you, free, less, life, business, home ...);
+--       * a Capitalised word right after for / to / of / from / by / with / call / contact / ask / meet / email / text / tell / see (pour / de / avec / appelez / contactez), unless it is a
+--         place of the catalog, a province, a month, a weekday, a platform or a product-name word (Life, Insurance, Term ...), or the whole text is written In Title Case
+--         (then the two rules above are the only defence: a stated limit).
 create or replace function public.ws_capitalised_name(p_text text, p_strict boolean default false) returns boolean
-language plpgsql immutable set search_path to 'pg_catalog' as $$
-declare hard text[] := array['will', 'may', 'page', 'sam', 'don'];
+language plpgsql stable set search_path to 'pg_catalog' as $$
+declare lt text; caps_mid integer := 0; lower_long integer := 0; bad boolean := false; starts boolean; prevw text := '';
+        hard text[] := array['will', 'may', 'page', 'sam', 'don'];
         soft text[] := array['star', 'stars', 'summer', 'spring', 'winter', 'sun', 'sat', 'wed', 'long', 'young', 'best', 'bill', 'bills', 'mo', 'fall'];
         m text[]; w text; t text; lower_present boolean; toks text[] := '{}'; ntok integer; i integer;
 begin
@@ -350,21 +365,143 @@ begin
     if toks[i] = any (array['will', 'may', 'don', 'sam', 'bill', 'sun', 'sat', 'wed']) and (i = 1 or i = ntok) then return true; end if;     -- (seasons at an edge stay allowed: "Spring promo", "Summer sale")
     if toks[i] = any (array['will', 'may', 'don', 'sam', 'bill', 'page', 'mo', 'sun', 'sat', 'wed', 'summer', 'spring', 'mark', 'rose', 'grace']) and i > 1 and toks[i - 1] = any (array['for', 'to', 'of', 'from', 'beneficiary', 'named', 'by', 'with']) then return true; end if;
   end loop;
+  if p_strict then return false; end if;
+  lt := lower(t);
+  for m in select g from regexp_matches(lt, '(^|[^a-z])([a-z]+) +(family|famille)(?![a-z])', 'g') as r(g) loop
+    if m[2] <> all (array['your', 'the', 'a', 'an', 'every', 'each', 'whole', 'entire', 'new', 'for', 'of', 'to', 'and', 'or', 'with', 'by', 'from', 'as', 'protect', 'protects', 'protecting', 'canadian', 'local', 'growing',
+                          'big', 'small', 'large', 'busy', 'modern', 'working', 'single', 'this', 'that', 'any', 'all', 'no', 'more', 'votre', 'la', 'une', 'chaque', 'toute', 'pour', 'de', 'et', 'protegez', 'en']) then return true; end if;
+  end loop;
+  if t ~ '(^|[^A-Za-z])[Ff][Aa][Mm][Ii][Ll][Ll][Ee] +[A-Z][a-z]' then return true; end if;
+  for m in select g from regexp_matches(lt, '(^|[^a-z])(for|pour) +([a-z]+) *($|[.,;:!?])', 'g') as r(g) loop
+    if m[3] !~ 's$' and m[3] <> all (array['you', 'free', 'less', 'life', 'business', 'home', 'travel', 'work', 'sale', 'today', 'now', 'more', 'all', 'it', 'this', 'that', 'canada', 'ontario', 'quebec', 'alberta', 'manitoba',
+                                          'saskatchewan', 'retirement', 'everything', 'coverage', 'protection', 'insurance', 'security', 'auto', 'car', 'real', 'sure', 'good', 'vous', 'tous', 'toutes', 'moins', 'tout', 'toujours', 'vrai']) then return true; end if;
+  end loop;
+  if lower_present then
+    for m in select g from regexp_matches(t, '(^|[.!?:;][ \t\n]+|["(\n•*-] ?|[^A-Za-z])([A-Za-z]+)', 'g') as r(g) loop
+      starts := m[1] = '' or m[1] ~ '^[.!?:;"(\n•*-]';
+      w := lower(m[2]);
+      if m[2] ~ '^[A-Z]' and not starts then
+        if m[2] ~ '^[A-Z]{2,}$' then prevw := w; continue; end if;
+        caps_mid := caps_mid + 1;
+        if prevw = any (array['for', 'to', 'of', 'from', 'by', 'with', 'call', 'contact', 'ask', 'meet', 'email', 'text', 'tell', 'see', 'pour', 'de', 'avec', 'appelez', 'contactez'])
+           and w <> all (array['canada', 'canadian', 'canadians', 'canadien', 'canadiens', 'canadienne', 'canadiennes', 'ontario', 'quebec', 'alberta', 'british', 'columbia', 'manitoba', 'saskatchewan', 'newfoundland', 'labrador',
+                           'nova', 'scotia', 'brunswick', 'territories', 'january', 'february', 'march', 'april', 'june', 'july', 'august', 'september', 'october', 'november', 'december', 'janvier', 'fevrier', 'mars', 'avril',
+                           'mai', 'juin', 'juillet', 'aout', 'septembre', 'octobre', 'novembre', 'decembre', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'mon', 'tue', 'thu', 'fri',
+                           'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche', 'meta', 'google', 'facebook', 'instagram', 'tiktok', 'linkedin', 'youtube', 'i', 'faq',
+                           'insurance', 'insurances', 'assurance', 'assurances', 'life', 'term', 'whole', 'universal', 'health', 'dental', 'disability', 'critical', 'illness', 'travel', 'home', 'auto', 'car', 'mortgage',
+                           'group', 'benefits', 'coverage', 'protection', 'plan', 'plans', 'policy', 'vie', 'invalidite', 'sante', 'maladie', 'maladies', 'grave', 'graves', 'dentaire', 'voyage', 'collective', 'temporaire', 'permanente',
+                           'habitation', 'hypothecaire', 'accident', 'income', 'medical', 'exam', 'care', 'long', 'final', 'expense', 'key', 'person', 'business', 'pet', 'tenant', 'condo', 'commercial', 'liability', 'cyber'])
+           and not exists (select 1 from public.ws_place_catalog c where w = any (string_to_array(c.name_norm, ' '))) then bad := true; end if;
+      elsif m[2] ~ '^[a-z]' and length(m[2]) >= 4 then lower_long := lower_long + 1;
+      end if;
+      prevw := case when starts and m[1] <> '' then '' else w end;
+    end loop;
+    if bad and not (caps_mid >= 2 and lower_long = 0) then return true; end if;
+  end if;
   return false;
+end $$;
+
+-- 6c. spelled-out number words (en, fr), as one regular-expression alternation. One place, so every rule counts the same words.
+create or replace function public.ws_number_words() returns text
+language sql immutable set search_path to 'pg_catalog' as $$
+  select 'zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|deux|trois|quatre|cinq|sept|huit|neuf|dix|onze|douze|treize|quatorze|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent|cents|mille|milles|millions'::text;
+$$;
+
+-- 6d. FINANCIAL AND APPLICATION DETAIL (review round 4, B1 / S6). Fails closed: in insurance-context text an amount of money is refused unless it is one of two marketing forms:
+--       a PRICE PER PERIOD   "from $18 a month", "only $25/week", "des 25 $ par mois", "$25/month"   (lead word, at most 3 digits, per day / week / month; never per hour or per year)
+--       a COVERAGE CEILING   "up to $500,000", "jusqu'a 1 000 000 $"                              (the words "up to" / "jusqu'a" and a round number of thousands)
+--     Refused whatever the other words are: any other currency amount ("$85,000", "45000 $", "85k", "$30/hour"), a spelled-out magnitude (hundred, thousand, million, mille, cent),
+--     a number word next to a period ("fifty a year", "six monthly"), a spelled-out age ("age forty five"), payment-trouble wording (late on, behind on, arrears, unemployed, bankrupt),
+--     and (p_strict, a single value) a pay / debt word (pay, paid, makes, earns, salary, paycheque, mortgage, loan, debt, tax, cash, rent, job ...) in the same value as ANY amount or number.
+--     Input: a folded view (approved terms already cut out). Never echoes. The joined all-columns scan passes p_strict = false (a product price in one column next to "mortgage" in another is normal ad copy).
+create or replace function public.ws_financial_hit(p_fold text, p_strict boolean default true) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare n text; m text; nw text := '(?:' || public.ws_number_words() || ')';
+        amt text := '(?:\$ ?[0-9]{1,3}(?:[.,][0-9]{2})?|[0-9]{1,3}(?:[.,][0-9]{2})? ?\$)';
+begin
+  n := ' ' || translate(coalesce(p_fold, ''), '€£¥', repeat(chr(36), 3)) || ' ';
+  n := regexp_replace(replace(n, '''', ' '), '[[:space:]]+', ' ', 'g');
+  n := replace(n, ' pour cent', ' %');
+  -- the two allowed forms become placeholders
+  n := regexp_replace(n, '([^a-z0-9$])(from|only|just|at|for|as low as|starting at|starts at|under|less than|about|des|a partir de|pour|seulement|moins de) ' || amt
+                         || ' ?(?:(?:/|per|a|an|par|each|every) ?)?(?:mo|month|mois|week|semaine|day|jour|monthly|weekly|daily)(?![a-z0-9])', '\1 zzprice ', 'g');
+  n := regexp_replace(n, '([^a-z0-9$,.])\$ ?[0-9]{1,3}(?:[.,][0-9]{2})? ?/ ?(?:mo|month|mois)(?![a-z0-9])', '\1 zzprice ', 'g');
+  n := regexp_replace(n, '([^a-z0-9$])(up to|jusqu a|jusqu au) (?:\$ ?[1-9][0-9]{0,2}(?:,000){1,2}|[1-9][0-9]{0,2}(?: 000){1,2} ?\$)(?![0-9k]|[,.][0-9])', '\1 zzcov ', 'g');
+  if n ~ '\$|[0-9] ?(?:dollars?|cad|usd|euros?|bucks|piastres?|grand|k)(?![a-z0-9])' then return true; end if;
+  -- a spelled-out COUNT of things ("over ten thousand families", "plus de mille clients"): the words over / more than, number words, then a plural noun that is not money or time
+  n := regexp_replace(n, '([^a-z])(over|more than|plus de) ' || nw || '(?: ' || nw || ')* (?!dollars|bucks|years|months|weeks|hours|days|piastres|euros|ans|mois|cents)(?=[a-z]+s[^a-z])', '\1\2 zzcount ', 'g');
+  if n ~ '[^a-z](?:hundred|thousand|million|billion|mille|milles|millions|millier|milliers|cent|cents)(?![a-z])' then return true; end if;
+  if n ~ ('[^a-z]' || nw || '(?:[ -]+' || nw || ')*[ -]+(?:(?:a|an|per|par|each|every|de l|l) )?(?:year|yr|month|week|hour|an|annee|mois|semaine|heure)(?![a-z])(?! (?:term|terme|plan|guarantee|garantie|renewable|renouvelable))')
+     or n ~ ('[^a-z]' || nw || ' (?:yearly|monthly|weekly|annually|hourly|biweekly)(?![a-z])') then return true; end if;
+  if n ~ ('[^a-z](?:age|aged|ages|agee|agees)[^a-z0-9]{0,3}(?:de )?' || nw || '(?![a-z])')
+     or n ~ ('[^a-z]' || nw || '(?:[ -]+' || nw || ')?[ -]+(?:years?|yrs?|ans)[ -]+(?:old|olds)(?![a-z])') then return true; end if;
+  if n ~ ('[^a-z](?:(?:months?|weeks?|days?|payments?|mois|semaines?|paiements?) (?:late|behind|overdue|en retard)|late on|behind on|overdue|en retard|past due|arrears|arrerages|'
+          || 'missed (?:[a-z]+ ){0,2}payments?|laid off|out of work|unemployed|sans emploi|chomage|bankrupt[a-z]*|faillite|foreclos[a-z]*|garnish[a-z]*|collections agency)(?![a-z])') then return true; end if;
+  if p_strict and n ~ ('[^a-z](?:pay|pays|paid|paying|payez|paye|payes|payer|make|makes|made|making|earn[a-z]*|gagne[a-z]*|salar[a-z]*|wages?|paycheques?|paychecks?|paystubs?|mortgages?|hypothe[a-z]*|'
+          || 'loans?|prets?|debts?|dettes?|owe[sd]?|owing|doit|tax|taxes|impots?|cash|rent|loyer|job|jobs|emploi|worth|net|gross|brut|hourly|income|incomes|revenus?)(?![a-z])') then
+    m := regexp_replace(n, '([^0-9])24 ?/ ?7([^0-9])', '\1 \2', 'g');
+    m := regexp_replace(m, '([^0-9])(?:19|20)[0-9]{2}([^0-9])', '\1 \2', 'g');
+    m := regexp_replace(m, '[0-9]+ ?-? ?(?:minutes?|mins?|hours?|heures?|days?|jours?|seconds?|secondes?|steps?|etapes?|reasons?|raisons?|stars?|etoiles?|tips?|conseils?)(?![a-z])', ' ', 'g');
+    if m ~ ('zzprice|zzcov|zzcount|%|[0-9]|[^a-z]' || replace(nw, '|one|', '|') || '(?![a-z])') then return true; end if;      -- ("one" alone is a pronoun far more often than a number)
+  end if;
+  return false;
+end $$;
+
+-- 6e. APPROVED FEATURE PHRASES can never state a fact about a person (review round 4, B2). Input: the folded residual, where a feature phrase that names a condition is the token
+--     <marker>c and any other feature phrase ("no medical exam") is <marker>f. Returns false (= refuse) when
+--       * any feature phrase touches (over punctuation only) a second-person, possessive, family, having, negation, affirmation or answer word, or a check mark / star / arrow / thumb
+--         ("sans" / "without" may touch a plain feature such as "examen medical", never a condition-naming one);
+--       * a CONDITION-NAMING phrase stands in a value that is not a plain coverage template: besides product terms and the phrase itself only the words
+--         covers / coverage / protection / against / in case of / and / or / plus / including (fr: couvre / couverture / contre / en cas de / et / ou / y compris) and , . : ; - may appear;
+--       * (p_joined: the all-columns scan of a row) a condition-naming phrase shares the ROW with such a word, a symbol, a digit or a number word in any other column.
+create or replace function public.ws_feature_context_ok(p_r text, p_marker text, p_joined boolean) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare v text := replace(coalesce(p_r, ''), '''', ' '); fc text := p_marker || 'c'; fm text := p_marker || 'f'; mk text; n integer;
+        deny text := '(?:you|your|yours|yourself|u|ur|vous|votre|vos|tu|ton|ta|tes|toi|have|has|had|having|got|avez|avoir|ai|as|family|families|famille|familles|familial|familiaux|no|not|non|none|never|pas|aucun|aucune|'
+                     || 'jamais|yes|oui|yep|yeah|true|false|vrai|faux|zero|nil|free|any|all|some|both|neither|either|first|age|aged|ages|n|y|ok|today|now|current|currently|since|depuis|last|ago|history|historique|antecedents|who|qui|is|are|was|were|est|sont|x)';
+        -- the words that make a statement about someone wherever they stand in the ROW (the generic ones above, such as free / any / today, only count when they touch the phrase)
+        deny_row text := '(?:you|your|yours|yourself|u|ur|vous|votre|vos|tu|ton|ta|tes|toi|have|has|had|having|got|avez|avoir|ai|family|families|famille|familles|familial|familiaux|without|sans|no|not|non|none|never|pas|aucun|aucune|'
+                     || 'jamais|yes|oui|yep|yeah|true|false|vrai|faux|zero|nil|neither|age|aged|ages|n|y|ok|since|depuis|ago|history|historique|antecedents)';
+        decor text := '[✅⭐✔✓★→✨☑✗✘❌❎' || chr(128077) || chr(128078) || ']';
+        tmpl text[] := array['covers', 'cover', 'covered', 'coverage', 'protection', 'protects', 'against', 'and', 'or', 'plus', 'including', 'includes', 'include', 'in', 'case', 'of', 'the', 'a', 'an',
+                             'couvre', 'couvrent', 'couverture', 'contre', 'et', 'ou', 'y', 'compris', 'inclus', 'inclut', 'en', 'cas', 'de', 'd', 'le', 'la', 'les', 'l', 'un', 'une'];
+begin
+  mk := '(?:' || fc || '|' || fm || ')(?![a-z0-9])';
+  if v !~ ('(^|[^a-z0-9])' || mk) then return true; end if;
+  if v ~ ('(^|[^a-z0-9])' || fc || '(?![a-z0-9])[^a-z0-9]*(?:without|sans)(?![a-z0-9])') or v ~ ('(^|[^a-z0-9])(?:without|sans)[^a-z0-9]*' || fc || '(?![a-z0-9])') then return false; end if;
+  if v ~ ('(^|[^a-z0-9])' || mk || '[^a-z0-9✅⭐✔✓★→✨☑✗✘❌❎' || chr(128077) || chr(128078) || ']*(?:' || decor || '|' || deny || '(?![a-z0-9]))')
+     or v ~ ('(?:' || decor || '|(?:^|[^a-z0-9])' || deny || ')[^a-z0-9✅⭐✔✓★→✨☑✗✘❌❎' || chr(128077) || chr(128078) || ']*' || mk) then return false; end if;
+  if v !~ ('(^|[^a-z0-9])' || fc || '(?![a-z0-9])') then return true; end if;
+  if p_joined then
+    return not (v ~ decor or v ~ '[0-9]' or v ~ ('(^|[^a-z0-9])' || deny_row || '(?![a-z0-9])') or v ~ ('(^|[^a-z])(?:' || public.ws_number_words() || ')(?![a-z])'));
+  end if;
+  select count(*) into n from regexp_matches(v, '[a-z0-9]+|[^a-z0-9 ]', 'g') as m(g)
+   where not (m.g[1] = p_marker or m.g[1] = fc or m.g[1] = fm or m.g[1] = any (tmpl) or m.g[1] ~ '^[.,;:-]$');
+  return n = 0;
 end $$;
 
 -- 7. the default-deny vocabulary test. Input: the folded residual (approved terms already cut out and replaced by p_marker, never re-joined). Returns the reason codes
 --    (empty array = every token is vocabulary, an allowed number FORM, or simple punctuation). Never echoes the text.
---    Numbers: a bare number is NOT vocabulary. Only these forms are allowed: an amount of money, a percentage, #N, "in N minutes", N in M, 24/7, N days/hours (a fixed
---    list of marketing numbers), "30 year term", "20 years of experience", an age RANGE ("ages 18 to 65", at least 10 years wide).
---    Spelled-out numbers: a run of 4+ number words fails. A yes/no/none answer straight after an approved term ("cancer: no") fails.
+--    Numbers: a bare number is NOT vocabulary. Only these forms are allowed: an amount of money in one of the two forms of ws_financial_hit, a percentage, #N, "in N minutes", N in M, 24/7, N days/hours (a fixed
+--    list of marketing numbers), "30 year term", "20 years of experience", an age RANGE ("ages 18 to 65", at least 15 years wide).
+--    Spelled-out numbers: 4+ number words anywhere, or 3 in a row ("zero four six"), fail. A yes/no/none answer straight after an approved term ("cancer: no") fails.
+--    Round 4: an application-form shape fails whatever its words are: a one-word label and a colon ("beneficiary: ...", "age: ...", "family: ..."), and a bare answer after a colon,
+--    question mark or dash ("exam: no", "have life insurance: no"). A month and a day is a number form only as a deadline ("before December 31"), never as "policy date march 3".
 create or replace function public.ws_residual_check(p_r text, p_marker text) returns text[]
 language plpgsql stable set search_path to 'pg_catalog' as $$
-declare v text := coalesce(p_r, ''); codes text[] := '{}'; n integer; tmp text; m text[]; hrs boolean; fm text := p_marker || 'f'; pm text := p_marker || 'p';
-        nw text := 'zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|deux|trois|quatre|cinq|sept|huit|neuf|dix|onze|douze|treize|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent|cents|mille|milles|millions';
+declare v text := coalesce(p_r, ''); codes text[] := '{}'; n integer; tmp text; m text[]; hrs boolean; fm text := p_marker || 'f'; pm text := p_marker || 'p'; cm text := p_marker || 'c';
+        nw text := public.ws_number_words();
         neg text := 'no|not|non|oui|yes|pas|none|never|nope';
+        mon text := 'january|february|march|april|june|july|august|september|october|november|december|janvier|fevrier|mars|avril|juin|juillet|aout|septembre|octobre|novembre|decembre|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec';
 begin
   v := translate(translate(v, '«»“”„•·‣', '"""""   '), '€£', chr(36) || chr(36));
+  -- application-form shapes: a one-word field label and a colon / equals sign at the start of the text or of a clause; a bare answer after a colon, question mark or dash
+  if v ~ ('(^|[.;,!?] *)(beneficiary|beneficiaries|beneficiaire|beneficiaires|insurer|insured|assureur|assure|exam|examen|age|ages|family|famille|plan|premium|prime|coverage|couverture|term|terme|policy|police|amount|montant|'
+          || 'pay|mortgage|loan|budget|job|date|renewal|application|payment|paiement|rate|taux|home|car|auto|status|cash|tax|owner|employer|employeur|smoker|height|weight|gender|sex|sexe|dob|income|revenu) *[:=]')
+     or v ~ '[:=?] *(no|non|none|not|never|pas|aucun|aucune|yes|oui|n|y|true|false|zero|nil|nope|ok|n/a|na) *([.,;!)]|$)'
+     or v ~ ' - *(no|non|none|yes|oui|n|y|true|false|zero|nil|nope|ok) *([.,;!)]|$)' then
+    codes := codes || array['unknown_word'];
+  end if;
   -- a short whitelist of purely decorative symbols (check mark, star, sparkles, thumbs up, arrow); every other symbol or emoji is refused
   v := regexp_replace(translate(v, '✅⭐✔✓★→✨', '       '), chr(128077), ' ', 'g');
   -- negated ability and need ("can't work", "can not pay bills", "needs care"): narrative about a person, never marketing. Checked before apostrophes are split off.
@@ -389,14 +526,18 @@ begin
   if v ~ '[0-9]' then
     hrs := v ~ '(^|[^a-z])(hours?|heures?|open|opening|ouverts?|ouverture|monday|friday|lundi|vendredi|weekdays|saturday|samedi)([^a-z]|$)' or position(pm in v) > 0;
     v := regexp_replace(v, '(^|[^0-9])24 ?/ ?7([^0-9]|$)', '\1 zznum \2', 'g');
+    -- (an amount of money that reaches this point is one of the two allowed forms: ws_financial_hit refused every other amount before this function was called)
+    v := regexp_replace(v, '(^|[^0-9,.])[0-9]{1,3}( 000){1,2} ?\$', '\1 zznum ', 'g');
     v := regexp_replace(v, '\$ ?[0-9][0-9,.]*k?', ' zznum ', 'g');
     v := regexp_replace(v, '[0-9][0-9,.]*k? ?\$', ' zznum ', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]{1,3}\+? +(insurers|assureurs|providers|companies|carriers|compagnies|plans|options|quotes|soumissions)([^a-z]|$)', '\1 zznum \2\3', 'g');
     v := regexp_replace(v, '[0-9][0-9,.]* ?%', ' zznum ', 'g');
     v := regexp_replace(v, '#[0-9]+', ' zznum ', 'g');
     v := regexp_replace(v, '(^|[^a-z0-9])(in|within|under|than|en|dans|sous|de) +[0-9]+ ?(minutes?|mins?|hours?|hrs?|heures?|days?|jours?|seconds?|secondes?)([^a-z]|$)', '\1\2 zznum \4', 'g');
     v := regexp_replace(v, '(^|[^a-z0-9])(24|48|72|7|14|15|21|30|60|90|365) ?-? ?(days?|jours?|hours?|heures?|hrs?)([^a-z]|$)', '\1 zznum \4', 'g');
     v := regexp_replace(v, '(^|[^0-9a-z])[0-9]+ in [0-9]+([^0-9a-z]|$)', '\1 zznum \2', 'g');
-    v := regexp_replace(v, '(^|[^a-z])(january|february|march|april|june|july|august|september|october|november|december|janvier|fevrier|mars|avril|juin|juillet|aout|septembre|octobre|novembre|decembre|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec) +([1-9]|[12][0-9]|3[01])([^0-9a-z]|$)', '\1\2 zznum \4', 'g');
+    v := regexp_replace(v, '(^|[^a-z])(before|until|till|by|ends|ending|avant) +(' || mon || ') +([1-9]|[12][0-9]|3[01])([^0-9a-z]|$)', '\1\2 \3 zznum \5', 'g');
+    v := regexp_replace(v, '(^|[^a-z])(avant le|jusqu au|d ici le) +([1-9]|[12][0-9]|3[01]) +(' || mon || ')([^a-z]|$)', '\1\2 zznum \4\5', 'g');
     v := regexp_replace(v, '(^|[^0-9a-z])[0-9]{1,3} ?-? ?(minutes?|mins?|seconds?|secs?|secondes?) ', '\1 zznum ', 'g');
     v := regexp_replace(v, '(^|[^0-9a-z])[0-9]+ ?-? ?(years?|yrs?|ans?|annees?) ?(term|terme|plan|coverage|couverture|renewable|renouvelable|guarantee|garantie|level)([^a-z]|$)', '\1 zznum \3\4', 'g');
     v := regexp_replace(v, '(^|[^0-9a-z])(5|10|15|20|25|30|35|40) ?-? ?(years?|yrs?|ans?) +(' || p_marker || ')([^a-z]|$)', '\1 zznum \4\5', 'g');
@@ -406,7 +547,7 @@ begin
     v := regexp_replace(v, '(^|[^a-z])(over|more than|plus de|plus d|plus que) +([0-9]{1,3}([, ][0-9]{3})+|[0-9]{3,})\+?', '\1\2 zznum ', 'g');
     v := regexp_replace(v, '(^|[^a-z])(since|depuis) +(19|20)[0-9]{2}([^0-9]|$)', '\1\2 zznum \4', 'g');
     for m in select g from regexp_matches(v, '((?:ages?|aged) +([0-9]{1,2}) ?(?:-|to|and|a|et) ?([0-9]{1,2}))', 'g') as r(g) loop
-      if abs(m[3]::integer - m[2]::integer) >= 10 and m[2]::integer >= 18 then v := replace(v, m[1], ' zznum '); end if;
+      if abs(m[3]::integer - m[2]::integer) >= 15 and m[2]::integer >= 18 then v := replace(v, m[1], ' zznum '); end if;
     end loop;
     if hrs then   -- opening hours: "9 to 5", "9am - 5pm", "9h a 17h", only next to an hours word or a fixed phrase such as Mon-Fri
       v := regexp_replace(v, '(^|[^0-9a-z])([0-9]|1[0-9]|2[0-4])(:[0-5][0-9])? ?(am|pm|h)? ?(-|to|a|et|and) ?([0-9]|1[0-9]|2[0-4])(:[0-5][0-9])? ?(am|pm|h)?([^0-9a-z]|$)', '\1 zznum \9', 'g');
@@ -415,11 +556,11 @@ begin
   end if;
   -- spelled-out numbers: four or more number words anywhere in the text (also across punctuation: "nine nine nine, nine nine nine")
   select count(*) into n from regexp_matches(v, '(^|[^a-z])(' || nw || ')(?![a-z])', 'g');
-  if n >= 4 then codes := codes || array['unknown_word']; end if;
+  if n >= 4 or v ~ ('(^|[^a-z])(' || nw || ')([ ,.;:/-]+(' || nw || ')){2}(?![a-z])') then codes := codes || array['unknown_word']; end if;
   -- yes / no / none next to an approved feature phrase, on either side, over any punctuation ("cancer? no", "(no)", "no heart attack")
-  if v ~ (fm || '[^a-z0-9]*(' || neg || ')([^a-z]|$)') or v ~ ('(^|[^a-z])(' || neg || ')[^a-z0-9]*' || fm) then codes := codes || array['unknown_word']; end if;
+  if v ~ ('(' || fm || '|' || cm || ')[^a-z0-9]*(' || neg || ')([^a-z]|$)') or v ~ ('(^|[^a-z])(' || neg || ')[^a-z0-9]*(' || fm || '|' || cm || ')') then codes := codes || array['unknown_word']; end if;
   select count(*) into n from regexp_matches(v, '[a-z0-9]+(?:[.,][0-9]+)*|[^a-z0-9 ]', 'g') as m(g)
-   where not (m.g[1] = p_marker or m.g[1] = fm or m.g[1] = pm
+   where not (m.g[1] = p_marker or m.g[1] = fm or m.g[1] = pm or m.g[1] = cm
               or m.g[1] = 'zznum'
               or m.g[1] ~ '^[.,;:!?"()/%$|#+&@-]$'
               or exists (select 1 from public.ws_marketing_vocab w where w.word = m.g[1] and w.removed_at is null));
@@ -440,39 +581,61 @@ begin
   return false;
 end $$;
 
+-- S3 (review round 4): the insurance screen no longer depends on what a free-text, nullable label happens to say. A workspace gets the insurance screen UNLESS its vertical is exactly
+-- one of the verticals this system knows to be something else (today: 'mortgage', the only other vertical with an onboarding template). NULL, blank, misspelled, unknown, new: insurance
+-- screen (fail closed). A new non-insurance vertical is added here, by a migration, never by naming a workspace.
+create or replace function public.ws_vertical_insurance(p_vertical text) returns boolean
+language sql immutable set search_path to 'pg_catalog' as $$
+  select lower(btrim(coalesce(p_vertical, ''))) <> all (array['mortgage']);
+$$;
+
 create or replace function public.ws_insurance_context(p_text text, p_ws uuid) returns boolean
 language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-declare vert text;
+declare vert text; hit boolean;
 begin
-  -- WORKSPACE level (p_text is not consulted): every free-text column of a non-person row in an insurance workspace, or in a workspace that holds an approved
-  -- product term, is insurance context, whatever the words are. A bare word such as "policy" or "insurance" in another vertical (mortgage) does NOT make it so.
+  -- WORKSPACE level (p_text is not consulted): every free-text column of a row in a workspace whose vertical is not a known non-insurance vertical, or in a workspace that holds
+  -- an approved product term, is insurance context, whatever the words are. A workspace id that does not exist is insurance context too (fail closed).
+  -- No workspace at all (the strict screen of ws_classify_text(text)) is not: that caller asked for the old screen.
   if p_ws is null then return false; end if;
-  select vertical into vert from public.client_workspaces where id = p_ws;
-  if coalesce(vert, '') ~* '(insur|assur)' then return true; end if;
+  select true, vertical into hit, vert from public.client_workspaces where id = p_ws;
+  if hit is not true then return true; end if;
+  if public.ws_vertical_insurance(vert) then return true; end if;
   return exists (select 1 from public.ws_approved_terms where removed_at is null and kind = 'product' and (workspace_id = p_ws or (vert is not null and vertical = vert)));
 end $$;
 
 -- 9. THE classifier core. Never echoes the text. Reasons are fixed codes: the old category names, plus
 --    health:no_approved_term / health:residual / health:personal_context / identifier / insurance_identifier / unknown_word / non_latin_script / mixed_script / encoded_text /
---    approved_product_term / approved_feature / approved_place / insurance_vocabulary.
+--    financial_detail / approved_product_term / approved_feature / approved_place / insurance_vocabulary.
 --    p_row_ctx: the guards pass true for every free-text column of a row when ANY column of that row is insurance-context. p_joined: the all-columns-joined scan (split values):
---    categories, health and identifiers only, no vocabulary test (the columns were each tested on their own).
-create or replace function public.ws_classify_core(p_text text, p_ws uuid, p_row_ctx boolean, p_joined boolean) returns jsonb
+--    categories, health, identifiers, amounts, feature-phrase context and spelled-out digit groups, no vocabulary test (the columns were each tested on their own).
+--    p_person: the row belongs to a PERSON table (leads, routing, consent) of an insurance workspace: same default-deny screen, but no feature-phrase waiver and no 'your income' waiver.
+drop function if exists public.ws_classify_core(text, uuid, boolean, boolean);   -- the 4-argument version of earlier review rounds, if a scratch database has it
+create or replace function public.ws_classify_core(p_text text, p_ws uuid, p_row_ctx boolean, p_joined boolean, p_person boolean default false) returns jsonb
 language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare
-  f text; l1 text; l2 text; r text; r1 text; r2 text; prev text; rx text; tr record; vert text; marker text; before_r text; fx text;
+  f text; l1 text; l2 text; r text; r1 text; r2 text; prev text; rx text; tr record; vert text; marker text; before_r text; fx text; ct text; cf text; mk text;
   cats_s text[] := '{}'; allc text[]; hh text[]; health boolean := false; health0 boolean; inc boolean := false; x text; res text[];
-  n_prod integer := 0; n_place integer := 0; n_feat integer := 0; n_phr integer := 0; ctx boolean := false; cut boolean := false; pass integer; word_ctx boolean; views text[]; ex text[]; nm boolean;
+  n_prod integer := 0; n_place integer := 0; n_feat integer := 0; n_phr integer := 0; ctx boolean := false; cut boolean := false; pass integer; word_ctx boolean; views text[]; ex text[]; nm boolean; is_cond boolean;
+  prodwords text[] := array['health', 'medical', 'dental', 'disability', 'disabilities', 'critical', 'illness', 'illnesses', 'accident', 'accidental', 'dismemberment', 'death', 'sante', 'invalidite', 'maladie', 'maladies', 'grave', 'graves', 'dentaire', 'medicale', 'income', 'revenu', 'revenus'];
 begin
   if p_text is null or btrim(p_text) = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb); end if;
   f := public.ws_fold_text(p_text);
-  l1 := public.ws_leet_text(f, 1);
-  l2 := public.ws_leet_text(f, 2);
+  -- context (waivers and the vocabulary test) is a property of the WORKSPACE (see ws_insurance_context); the guards pass p_row_ctx for a row they already know the answer for
+  word_ctx := p_ws is not null and (coalesce(p_row_ctx, false) or public.ws_insurance_context(p_text, p_ws));
+  -- a COVERAGE CEILING of a round million or more ("up to $1,000,000", "jusqu'a 1 000 000 $") is seven digits, which the old account-number rule refuses. In insurance context
+  -- only, that one form (the words, then 1-3 digits and nothing but groups of 000) is masked for the category scan. It cannot carry an account number: every other digit is a zero.
+  ct := p_text;
+  if word_ctx then
+    ct := regexp_replace(p_text, '(up to|jusqu[''’ ]?[aà]) +(\$ ?[1-9][0-9]{0,2}(,000){2}|[1-9][0-9]{0,2}([ \u00a0\u202f]000){2} ?\$)(?![0-9]|[,.][0-9])', '\1 zzcov ', 'gi');
+  end if;
+  cf := case when ct = p_text then f else public.ws_fold_text(ct) end;
+  l1 := public.ws_leet_text(cf, 1);
+  l2 := public.ws_leet_text(cf, 2);
   -- every previous category, on the original text and on the folded and leetspeak views. Union: a hit in ANY view is a hit.
   -- (identical views are scanned once: the union is the same, the work is not repeated)
-  views := array[p_text];
-  if f <> p_text then views := views || f; end if;
-  if l1 <> f then views := views || l1; end if;
+  views := array[ct];
+  if cf <> ct then views := views || cf; end if;
+  if l1 <> cf then views := views || l1; end if;
   if l2 <> l1 then views := views || l2; end if;
   foreach x in array views loop
     hh := public.ws_sensitive_hits(x);
@@ -480,18 +643,18 @@ begin
     if 'application_or_income' = any(hh) then inc := true; end if;
     cats_s := cats_s || array_remove(array_remove(hh, 'health'), 'application_or_income');
   end loop;
-  ex := array[f];
-  if l1 <> f then ex := ex || l1; end if;
+  ex := array[cf];
+  if l1 <> cf then ex := ex || l1; end if;
   if l2 <> l1 then ex := ex || l2; end if;
   foreach x in array ex loop
     if public.ws_health_extra_hit(x) then health := true; end if;
   end loop;
   -- insurance identifiers tied to a person: "policy number 1234567", "claim no. 998877", "numero de police 123456"
-  if f ~ '(polic[ey]|claim|reclamation|member|membre|certificate|certificat|contrat|contract)[ _.\-]*(no|nr|num|number|numero|nbr|id|#)?[ _.:#\-]*[a-z]{0,4}[ \-]?[0-9]([ \-]?[0-9]){4,}' then
+  if cf ~ '(polic[ey]|claim|reclamation|member|membre|certificate|certificat|contrat|contract)[ _.\-]*(no|nr|num|number|numero|nbr|id|#)?[ _.:#\-]*[a-z]{0,4}[ \-]?[0-9]([ \-]?[0-9]){4,}' then
     cats_s := cats_s || array['insurance_identifier'];
   end if;
   -- date of birth next to a number
-  if f ~ '(^|[^a-z])(born|dob|birthday|birth|naissance|ne le|nee le)[^0-9a-z]{0,15}[0-9]' then cats_s := cats_s || array['identity_document']; end if;
+  if cf ~ '(^|[^a-z])(born|dob|birthday|birth|naissance|ne le|nee le)[^0-9a-z]{0,15}[0-9]' then cats_s := cats_s || array['identity_document']; end if;
   health0 := health;
 
   -- strict screen (no workspace): exactly the previous behaviour
@@ -503,10 +666,8 @@ begin
     return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:no_approved_term'));
   end if;
 
-  -- workspace given (non-person tables). Context: an insurance word anywhere (or the row says so), or an approved product term below.
-  -- context (waivers and the vocabulary test) is a property of the WORKSPACE: insurance vertical, or any approved product term. An insurance WORD in the text changes nothing here
-  -- (a mortgage workspace keeps the previous behaviour; only policy / claim numbers and dates of birth are refused everywhere, see above).
-  word_ctx := p_row_ctx or public.ws_insurance_context(p_text, p_ws);
+  -- workspace given. An insurance WORD in the text changes nothing here (a mortgage workspace keeps the previous behaviour; only policy / claim numbers and dates of birth
+  -- are refused everywhere, see above).
   ctx := word_ctx;
   marker := 'zzqx';
   while position(marker in f) > 0 loop marker := marker || 'x'; end loop;
@@ -530,30 +691,37 @@ begin
   for pass in 1..2 loop
     if pass = 2 then
       ctx := ctx or n_prod > 0;
-      if not ctx then exit; end if;
+      -- PERSON tables (lead notes, routing, consent): a feature phrase is never waived there. "non smokers" in a lead note is a statement about that lead.
+      if not ctx or p_person then exit; end if;
     end if;
     for tr in select term_norm, kind from public.ws_approved_terms
               where removed_at is null and (workspace_id = p_ws or (vert is not null and vertical = vert))
                 and ((pass = 1 and kind in ('product', 'place')) or (pass = 2 and kind = 'feature'))
               order by length(term_norm) desc, term_norm loop
       rx := '(^|[^a-z0-9])' || replace(tr.term_norm, ' ', '[ ,\-]+') || '([^a-z0-9]|$)';
+      if r !~ rx then continue; end if;
+      -- a feature phrase NAMES A CONDITION when one of its words is neither generic vocabulary nor a product-name word ("heart attack, stroke and cancer": yes; "no medical exam": no)
+      is_cond := tr.kind = 'feature' and exists (select 1 from unnest(string_to_array(replace(tr.term_norm, '''', ' '), ' ')) w
+                                                  where w <> '' and w <> all (prodwords) and not exists (select 1 from public.ws_marketing_vocab v where v.word = w and v.removed_at is null));
+      mk := case when tr.kind <> 'feature' then marker when is_cond then marker || 'c' else marker || 'f' end;
       prev := null;
       while r ~ rx and prev is distinct from r loop
         prev := r;
-        r := regexp_replace(r, rx, '\1 ' || case when tr.kind = 'feature' then marker || 'f' else marker end || ' \2', 'g');
+        r := regexp_replace(r, rx, '\1 ' || mk || ' \2', 'g');
         if tr.kind = 'product' then n_prod := n_prod + 1; elsif tr.kind = 'place' then n_place := n_place + 1; else n_feat := n_feat + 1; end if;
       end loop;
     end loop;
   end loop;
   ctx := ctx or n_prod > 0;
-  -- 'your income' is generic marketing; any other 'income' stays the mortgage-income category. Never when a currency amount (other than a product price per period) is present.
-  if ctx then
+  -- 'your income' is generic marketing; any other 'income' stays the mortgage-income category. Never when a currency amount (other than a product price per period) is present,
+  -- and never on a person table.
+  if ctx and not p_person then
     -- a PRICE OF THE PRODUCT ("from $25/month", "dès 25 $ par mois") is not an amount of income; "up to $4,500 a month" next to 'income' is
     fx := regexp_replace(f, '(^|[^a-z])(from|at|only|just|for|des|de|low as|starting|starts) +\$ ?[0-9][0-9,.]*[0-9]? *(/| per | a | par )? *(mo|month|mois|year|an|yr|week|day|jour|semaine|annee)([^a-z]|$)', '\1 \5', 'g');
     fx := regexp_replace(fx, '(^|[^a-z])(from|at|only|just|for|des|de|low as|starting|starts) +[0-9][0-9,.]*[0-9]? ?\$ ?(/| per | a | par )? *(mo|month|mois|year|an|yr|week|day|jour|semaine|annee)([^a-z]|$)', '\1 \5', 'g');
     fx := regexp_replace(fx, '(^|[^0-9])(19|20)[0-9]{2}([^0-9]|$)', '\1 \3', 'g');
     if fx !~ '[$]|[0-9] ?(dollars?|cad|usd|euros?|k)([^a-z]|$)|[0-9]{4,}'
-       and f !~ '(^|[^a-z])(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|deux|trois|quatre|cinq|sept|huit|neuf|dix|onze|douze|treize|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent|cents|mille|milles|millions)([^a-z]|$)' then
+       and f !~ ('(^|[^a-z])(' || public.ws_number_words() || ')([^a-z]|$)') then
       before_r := r;
       r := regexp_replace(r, '(^|[^a-z0-9])((your|votre) +)income(?![a-z0-9])', '\1\2 ' || marker || ' ', 'g');
       r := regexp_replace(r, '(^|[^a-z0-9])((votre|vos) +)revenus?(?![a-z0-9])', '\1\2 ' || marker || ' ', 'g');
@@ -584,12 +752,20 @@ begin
     return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual'));
   end if;
   -- mixed Latin + Cyrillic/Greek letters: an obfuscation signature, never waived (only where a waiver or the vocabulary test applies)
-  if (ctx or (health0 and n_place > 0)) and p_text ~ '[\u0370-\u03ff\u0400-\u052f]' and p_text ~ '[A-Za-z]' then
+  if (ctx or (health0 and n_place > 0)) and p_text ~ '[Ͱ-ϿЀ-ԯ]' and p_text ~ '[A-Za-z]' then
     return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['mixed_script', 'unknown_word']));
   end if;
   if ctx then
+    -- B1: money, pay, debt, spelled-out amounts and ages (fail closed; only a price per period and a coverage ceiling are amounts a marketing text may carry)
+    if public.ws_financial_hit(r, not p_joined) then
+      return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['financial_detail']));
+    end if;
     if public.ws_identifier_hit(r) then
       return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['identifier']));
+    end if;
+    -- B2: an approved feature phrase may only stand where it cannot state a fact about a person (also checked on the joined row: "you have" in one column, the phrase in another)
+    if n_feat > 0 and not public.ws_feature_context_ok(r, marker, p_joined) then
+      return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual'));
     end if;
     if not p_joined then
       res := public.ws_residual_check(r, marker);
@@ -597,6 +773,10 @@ begin
       if cardinality(res) > 0 then
         return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || res));
       end if;
+    elsif (select count(*) from regexp_matches(r, '(^|[^a-z])(' || public.ws_number_words() || ')(?![a-z])', 'g')) >= 4
+          or r ~ ('(^|[^a-z])(' || public.ws_number_words() || ')([ ,.;:/-]+(' || public.ws_number_words() || ')){2}(?![a-z])') then
+      -- S4: spelled-out digit groups split across the columns of one row
+      return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['unknown_word']));
     end if;
     return jsonb_build_object('allowed', true, 'reasons', jsonb_build_array(case when n_prod > 0 then 'approved_product_term' when n_feat > 0 then 'approved_feature' when n_place > 0 then 'approved_place' else 'insurance_vocabulary' end));
   end if;
@@ -614,7 +794,7 @@ end $$;
 -- the public classifier: same two-argument signature as before (hq_workspace.classify_text calls it)
 create or replace function public.ws_classify_text(p_text text, p_ws uuid default null) returns jsonb
 language sql stable security definer set search_path to 'pg_catalog' as $$
-  select public.ws_classify_core(p_text, p_ws, false, false);
+  select public.ws_classify_core(p_text, p_ws, false, false, false);
 $$;
 
 -- 10. owner-only term management. The audit row carries ids, kinds and counts only: never the term text.
@@ -625,7 +805,10 @@ declare v_term text; v_norm text; v_id uuid; v_words integer; v_scope text; n_ac
           'health', 'medical', 'dental', 'disability', 'disabilities', 'critical', 'illness', 'illnesses', 'accident', 'accidental', 'dismemberment', 'death', 'sante', 'invalidite', 'maladie', 'maladies', 'grave', 'graves', 'dentaire', 'medicale', 'income', 'revenu', 'revenus'];
         ptdeny text[] := array['with', 'who', 'whom', 'people', 'persons', 'personnes', 'individuals', 'those', 'patients', 'sufferers', 'survivors', 'victims', 'suffering', 'living', 'having', 'atteint', 'atteinte', 'atteints',
           'atteintes', 'souffrant', 'souffrants', 'ceux', 'celles', 'gens', 'anyone', 'everyone', 'someone', 'women', 'men', 'femmes', 'hommes', 'pregnant', 'enceinte'];
-        hits text[]; ws_words text[];
+        featdeny text[] := array['you', 'your', 'yours', 'yourself', 'vous', 'votre', 'vos', 'tu', 'ton', 'ta', 'tes', 'toi', 'have', 'had', 'got', 'avez', 'avoir', 'family', 'families', 'famille', 'familles', 'without', 'sans', 'free',
+          'age', 'ages', 'aged', 'old', 'yes', 'oui', 'true', 'false', 'any', 'all', 'some', 'never', 'jamais', 'history', 'today', 'now', 'current', 'currently', 'since', 'depuis', 'is', 'are', 'est', 'sont'];
+        negw text[] := array['no', 'not', 'non', 'nor', 'neither', 'none', 'pas', 'ni', 'aucun', 'aucune'];
+        hits text[]; ws_words text[]; names_cond boolean;
 begin
   perform public.ffm_require_owner();
   if (p_ws is null) = (p_vertical is null) then raise exception 'term refused: give exactly one of a workspace or a vertical'; end if;
@@ -680,7 +863,12 @@ begin
                 or public.ws_health_extra_hit(w) or public.ws_condition_hit(w) or 'health' = any(public.ws_sensitive_hits(w))) then
           raise exception 'term refused: a feature phrase may name only recognised coverage subjects and vocabulary words';
         end if;
+        -- round 4 (S8): a feature phrase never addresses, owns, counts or dates anything ("you have ...", "family history of ...", "... free")
+        if w = any (featdeny) then raise exception 'term refused: a feature phrase describes coverage; it cannot contain a second-person, possessive, family, having, affirmation or time word'; end if;
       end loop;
+      -- a NEGATION next to a named condition is a statement about someone ("no <condition>", "non smokers"); a negated plain feature ("no medical exam") is fine
+      names_cond := exists (select 1 from unnest(ws_words) x where x <> '' and x <> all (prodwords) and not exists (select 1 from public.ws_marketing_vocab v where v.word = x and v.removed_at is null));
+      if names_cond and ws_words && negw then raise exception 'term refused: a feature phrase that names a condition cannot be negated (it would state a fact about a person)'; end if;
     end if;
   end if;
   v_scope := case when p_ws is not null then 'workspace/' || p_ws else 'vertical/' || p_vertical end;
@@ -811,7 +999,7 @@ library course courses training workshop workshops event events seminar seminars
 friendly knowledgeable caring honest unbiased objective neutral evening evenings morning mornings noon weekend weekends closed january february march july september october november december cheap cheaper cheapest bundle bundles
 bundled multi countrywide wide stars star reasons reason top plans quotes hours hour opening open
 20s 30s 40s 50s 60s 70s 80s 90s
-acceptance accepting act annuities annuity asked before brokerage builds buying callback cash changes commercial community company condo current cyber date decision equipment expense expenses file final frequently fully getting going growing happens have insured job keeps key know landlord landlords language late legacy liability lock losing love market matters member owned paperless paperwork pet plain proud really say select side soon special started something tenant thank thanks time tools understanding unexpected use watch sale sales prepared prepare overpaying overpay teams team holiday holidays protecting homeowners portable professional consultants consultant works expire expires expiry qualify qualifies qualified payment payments rate rates book books booked schedule schedules meeting meetings consultation consultations
+acceptance accepting act annuities annuity asked before brokerage builds buying callback changes commercial community company condo current cyber date decision equipment expense expenses file final frequently fully getting going growing happens have insured keeps key know landlord landlords language legacy liability lock love market matters member owned paperless paperwork pet plain proud really say select side soon special started something tenant thank thanks time tools understanding unexpected use watch sale sales prepared prepare overpaying overpay teams team holiday holidays protecting homeowners portable professional consultants consultant works expire expires expiry qualify qualifies qualified payment payments rate rates book books booked schedule schedules meeting meetings consultation consultations
 $v$, '[[:space:]]+')) w) s where w <> '' and not exists (select 1 from public.ws_marketing_vocab v where v.lang = 'en' and v.word = s.w);
 insert into public.ws_marketing_vocab (lang, word, created_by)
 select 'fr', w, 'seed' from (select distinct unnest(regexp_split_to_array($v$
@@ -892,13 +1080,15 @@ begin
   if p_col = 'blocked_until' then
     if p_table <> 'ffm_onboarding_items' then return false; end if;
     if lower(v) ~ '^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]* [0-9]{1,2}(, [0-9]{4})?$' then return true; end if;       -- a plain date (ISO dates are refused by the old account-number rule, as before)
-  elsif p_col <> all (array['status', 'stage', 'kind', 'provider', 'template_key', 'approved_by', 'provided_by', 'destination_kind']) then
+  elsif p_col <> all (array['status', 'stage', 'kind', 'provider', 'template_key', 'approved_by', 'provided_by', 'destination_kind', 'channel', 'basis', 'wording_version', 'recorded_by', 'set_by']) then
     return false;
   end if;
-  if p_col = 'approved_by' and v ~* '^[a-z0-9._%+-]{1,60}@[a-z0-9.-]{3,60}\.[a-z]{2,10}$' then v := split_part(v, '@', 1);          -- an actor e-mail: its local part gets the same word checks
+  if p_col = any (array['approved_by', 'recorded_by', 'set_by', 'provided_by']) and v ~* '^[a-z0-9._%+-]{1,60}@[a-z0-9.-]{3,60}\.[a-z]{2,10}$' then v := split_part(v, '@', 1);          -- an actor e-mail: its local part gets the same word checks
   elsif v !~ '^[A-Za-z0-9_:.-]{1,60}$' then return false; end if;
-  foreach w in array regexp_split_to_array(lower(v), '[_:.-]+') loop
-    if length(w) >= 2 and (public.ws_name_word_hit(w) or public.ws_health_word_hit(w)) then return false; end if;
+  -- round 4 (N5): a token is split at separators AND between letters and digits ("age45" -> age, 45); a pay / age / number word makes it free text ("makes_85k", "fifty_thousand")
+  foreach w in array regexp_split_to_array(regexp_replace(lower(v), '([a-z])([0-9])|([0-9])([a-z])', '\1\3_\2\4', 'g'), '[_:.-]+') loop
+    if length(w) >= 2 and w ~ '[a-z]' and (public.ws_name_word_hit(w) or public.ws_health_word_hit(w)) then return false; end if;
+    if w ~ ('^(' || public.ws_number_words() || '|age|aged|ages|dob|born|old|makes|make|earns|earn|pay|paid|pays|salary|income|owes|owe|debt|mortgage|loan|rent|k|yrs|yr|yo)$') then return false; end if;
   end loop;
   return true;
 end $$;
@@ -907,20 +1097,37 @@ end $$;
 --     does not apply; instead: every earlier category and the health screen (no waiver), every word of the value checked against the health / condition / drug / body lists (URL and
 --     e-mail parts included), no narrative or first-person personal context (consent wording may say "I agree"), no person name (except for the compliance contact), and no identifier
 --     (phone, postal code, street address, date, long number), except: e-mail addresses and links are accepted for the business-contact / CRM / booking / brand / sign-off keys, a phone
---     for the compliance contact, and dates / amounts for the deadline, budget and licence keys. Never echoes the value.
+--     for the compliance contact, and dates for the deadline and licence keys. Round 4: third-person and euphemistic wording about one person, an insurer's decision, body measures and
+--     habits are refused; so is every amount of money, pay / debt wording and spelled-out number (ws_financial_hit), except that the monthly budget may be an amount and nothing else.
+--     Still a LIST screen: wording that uses none of the listed words passes (stated limit). Never echoes the value.
 create or replace function public.ws_onboarding_value_check(p_key text, p_value text) returns jsonb
 language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare k text := coalesce(p_key, ''); f text; v text; ident text; w text; res jsonb;
         contact_keys text[] := array['crm_destination', 'booking_link', 'brand_assets', 'compliance_contact', 'ad_review_signoff', 'lead_fields_agreed', 'ad_account_access', 'consent_wording'];
+        name_keys text[] := array['compliance_contact', 'workspace_name'];      -- a person or business NAME is the point of these values (workspace_name: client_workspaces.name, see ws_person_column_check)
         plain_keys text[] := array['launch_deadline', 'monthly_budget', 'licensing_status', 'licence_details'];
 begin
   if p_value is null or btrim(p_value) = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb); end if;
-  res := public.ws_classify_core(p_value, null, false, false);                    -- earlier categories + health, strict (no workspace, no waiver)
+  res := public.ws_classify_core(p_value, null, false, false, false);             -- earlier categories + health, strict (no workspace, no waiver)
   if not (res ->> 'allowed')::boolean then return res; end if;
   f := public.ws_fold_text(p_value);
-  for w in select m[1] from regexp_matches(f, '[a-z]{3,}', 'g') as m loop
-    if public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual')); end if;
+  for w in select m[1] from regexp_matches(f, '[a-z0-9]{3,}', 'g') as m loop        -- (letters and digits: a lab value such as "a1c" is one token)
+    if w ~ '[a-z]' and public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual')); end if;
   end loop;
+  -- round 4 (S7): wording about one person that carries no word of the health lists: third-person pronouns, euphemisms, body measures, habits, an insurer's decision
+  if f ~ '(^|[^a-z])(she|he|her|hers|his|him|elle|lui)([^a-z]|$)'
+     or f ~ ('(^|[^a-z])(expecting|expectant|shrink|therap[a-z]*|sober|sobriety|rehab|detox|opere|operee|operes|operation|hanche|doctor|docteur|weight|weighs|height|lbs|kg|pounds|bmi|dui|dwi|smok[a-z]*|vape|vapes|vaping|'
+             || 'drinks|drinking|drunk|(declined|denied|refused|rejected|postponed|rated|turned down|refuse|refusee|rejete|rejetee) (by|par)|(beneficiary|beneficiaries|beneficiaire|beneficiaires) *(is|are|est|sont|:|=|-))([^a-z]|$)') then
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:personal_context'));
+  end if;
+  -- round 4 (S7 / B1): money, pay, debt, spelled-out amounts and ages. The monthly budget may be an amount, and nothing else.
+  if k = 'monthly_budget' and f ~ '[0-9$]' then
+    if regexp_replace(regexp_replace(f, '\$ ?[0-9][0-9,.]*k?|[0-9][0-9,. ]*k? ?(\$|dollars?|cad)', ' ', 'g'), '(^|[^a-z])(per|a|month|monthly|mo|cad|budget|ad|ads|spend|max|maximum|up|to|about|approx|total|par|mois|mensuel|environ)(?![a-z])', ' ', 'g') ~ '[a-z0-9]' then
+      return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('financial_detail'));
+    end if;
+  elsif public.ws_financial_hit(f, true) then
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('financial_detail'));
+  end if;
   v := f; ident := f;
   if k = any (contact_keys) then
     -- an e-mail address or link is allowed for these keys (not for an identifier check), but its WORDS (local part, host, path) still get the name and health checks above and below
@@ -937,7 +1144,7 @@ begin
   if not (k = any (contact_keys)) and f ~ '(@|https?:|www\.|[a-z0-9-]+\.(com|ca|org|net|io|co|app|info|biz|me)([^a-z]|$))' then      -- an e-mail address or link only where the key takes one
     return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('identifier'));
   end if;
-  if k <> 'compliance_contact' then
+  if not (k = any (name_keys)) then
     for w in select m[1] from regexp_matches(v, '[a-z]{3,}', 'g') as m loop
       if public.ws_name_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word')); end if;
     end loop;
@@ -946,21 +1153,117 @@ begin
   return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb);
 end $$;
 
--- 13. guards, replaced. Same exclusions and messages as before; the classifier decides. Waiver and vocabulary test only on non-person tables.
+-- 9d. PERSON TABLES in an insurance workspace (review round 4, S2): ws_leads, client_workspaces, ffm_routing_rules, ffm_consent_log, ffm_consent_settings. Until round 4 these had the old
+--     deny-list only, so "takes <drug> daily", an age, a date of birth in words, a beneficiary or an insurer's decision was stored in a lead note. Now, column by column:
+--       lead name               a NAME: letters only, at most 5 words, no health / relation / narrative / number / sentence word (ws_person_name_check). Not a vocabulary test: names are not vocabulary.
+--       lead e-mail, phone      an address / a number of that shape: the old screen, plus the health lists on the words of the address. Any other content: the insurance screen.
+--       workspace name          a business name: list screen (ws_onboarding_value_check: health lists, personal wording, amounts, identifiers), no vocabulary test.
+--       destination / evidence  a reference without spaces (e-mail, link, id): list screen. With spaces: the insurance screen.
+--       source                  a tag of one or two plain words that are on no deny list ("web form", "referral"); anything else: the insurance screen.
+--       enum / actor columns    a short token (ws_structural_value): every category, identifiers and amounts; no vocabulary test.
+--       everything else (note, source, rule name ...): the INSURANCE screen (default-deny vocabulary, no feature-phrase waiver).
+--     Returns {"allowed", "reasons", "free"}; free = the value is free text and belongs in the joined insurance scan of the row. Never echoes the value.
+create or replace function public.ws_person_name_check(p_value text) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare f text; w text; n integer := 0; res jsonb;
+begin
+  if p_value is null or btrim(p_value) = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb); end if;
+  res := public.ws_classify_core(p_value, null, false, false, false);
+  if not (res ->> 'allowed')::boolean then return res; end if;
+  f := public.ws_fold_text(p_value);
+  if f !~ '^[a-z][a-z'' .,-]{0,79}$' then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word')); end if;
+  for w in select m[1] from regexp_matches(f, '[a-z]+', 'g') as m loop
+    n := n + 1;
+    if length(w) >= 2 and public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual')); end if;
+    if (public.ws_vocab_denied(w, false) and not public.ws_name_word_hit(w))
+       or w ~ ('^(' || public.ws_number_words() || ')$')
+       or w = any (array['is', 'are', 'the', 'a', 'an', 'for', 'of', 'on', 'in', 'by', 'with', 'to', 'from', 'and', 'or', 'not', 'no', 'at', 'as', 'this', 'that', 'it', 'you', 'your', 'have', 'who', 'whose', 'but', 'if',
+                         'beneficiary', 'beneficiaries', 'beneficiaire', 'insured', 'insurer', 'policy', 'insurance', 'assurance', 'coverage', 'quote', 'plan', 'premium', 'smoker', 'age', 'years', 'year', 'since', 'last',
+                         'daily', 'weekly', 'monthly', 'yearly', 'takes', 'makes', 'needs', 'wants', 'called', 'call', 'interested', 'est', 'sont', 'les', 'un', 'une', 'pour', 'avec', 'sans', 'sur', 'dans', 'par', 'et', 'ou',
+                         'depuis', 'ans', 'annuel', 'vous', 'votre', 'en', 'arret', 'travail', 'opere', 'operee', 'hanche', 'tension', 'elevee', 'recently', 'currently', 'formerly', 'widowed', 'separated', 'single',
+                         'retired', 'unemployed', 'family', 'famille', 'probate', 'debt', 'debts', 'custody', 'visa', 'prison', 'jail', 'divorce', 'funeral', 'lawsuit', 'gambling', 'arrears', 'bankrupt', 'immigrant', 'refugee',
+                         'felony', 'estate', 'foreclosure', 'bereaved', 'arrest', 'arrested', 'newborn', 'fiance', 'fiancee', 'boyfriend', 'girlfriend', 'hubby', 'wifey', 'daddy', 'mommy', 'mummy', 'mama', 'papa', 'granny',
+                         'grannie', 'nana', 'nonna', 'oncle', 'tante', 'mamie', 'papi', 'cousine', 'neveu', 'bro', 'sis']) then
+      return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word'));
+    end if;
+  end loop;
+  if n > 5 then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word')); end if;
+  return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb);
+end $$;
+
+create or replace function public.ws_person_column_check(p_table text, p_col text, p_value text, p_ws uuid) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare v text := btrim(coalesce(p_value, '')); res jsonb; w text; nofree jsonb := jsonb_build_object('free', false);
+begin
+  if v = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb, 'free', false); end if;
+  res := public.ws_classify_core(p_value, null, false, false, false);            -- the old screen first, always: nothing it refused is ever accepted here
+  if not (res ->> 'allowed')::boolean then return res || nofree; end if;
+  if p_table = 'ws_leads' and p_col = 'name' then return public.ws_person_name_check(p_value) || nofree; end if;
+  if p_table = 'ws_leads' and p_col = 'email' and v ~* '^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{3,80}\.[a-z]{2,10}$' then
+    for w in select m[1] from regexp_matches(public.ws_fold_text(v), '[a-z]{3,}', 'g') as m loop
+      if public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual'), 'free', false); end if;
+    end loop;
+    return res || nofree;
+  end if;
+  if p_table = 'ws_leads' and p_col = 'phone' and v ~ '^[+]?[0-9() .x-]{7,25}$' then return res || nofree; end if;
+  if p_table = 'client_workspaces' then
+    if p_col = 'name' then return public.ws_onboarding_value_check('workspace_name', p_value) || nofree; end if;
+    if p_col = any (array['slug', 'vertical']) and v ~ '^[A-Za-z0-9 _-]{1,60}$' then
+      for w in select m[1] from regexp_matches(public.ws_fold_text(v), '[a-z]{3,}', 'g') as m loop
+        if public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual'), 'free', false); end if;
+      end loop;
+      return res || nofree;
+    end if;
+  end if;
+  if ((p_table = 'ffm_routing_rules' and p_col = 'destination_ref') or (p_table = 'ffm_consent_log' and p_col = 'evidence_ref')) and v !~ '[[:space:]]' then
+    -- a reference id ("form-submission-1001", "crm-main"): letters and separators, then at most ONE group of up to 6 digits; its words get the name / health / pay / number checks
+    -- an e-mail address or a link: list screen (its words get the name and health checks). Anything else without spaces must be such a reference id, or it is refused.
+    if v ~ '[@/]' then return public.ws_onboarding_value_check('crm_destination', p_value) || nofree; end if;
+    if v ~ '^[A-Za-z][A-Za-z_:.-]{0,50}[0-9]{0,6}[A-Za-z]{0,3}$' and public.ws_structural_value(p_table, 'kind', v) then return res || nofree; end if;
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word'), 'free', false);
+  end if;
+  -- a lead / consent SOURCE tag ("web form", "referral", "meta_ad"): one or two plain words, each of them clear of every deny list (people, narrative, health, names, numbers, pay / debt).
+  -- Not a vocabulary test (a tag is not marketing copy); anything longer is free text and gets the insurance screen below.
+  if p_col = 'source' and public.ws_fold_text(v) ~ '^[a-z]{3,20}([ _-][a-z]{2,20})?$' then
+    for w in select m[1] from regexp_matches(public.ws_fold_text(v), '[a-z]+', 'g') as m loop
+      if public.ws_vocab_denied(w, true) or w ~ ('^(' || public.ws_number_words() || '|age|ages|dob|makes|make|pay|paid|pays|salary|owes|debt|mortgage|loan|rent|smoker|non|no|not|yes|ex|former|single|retired|pregnant|expecting|late|behind)$') then
+        return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word'), 'free', false);
+      end if;
+    end loop;
+    return res || nofree;
+  end if;
+  if public.ws_structural_value(p_table, p_col, v) then
+    if v ~* '^[a-z0-9._%+-]{1,60}@[a-z0-9.-]{3,60}\.[a-z]{2,10}$' then return res || nofree; end if;       -- an actor e-mail (its words were checked by ws_structural_value)
+    return public.ws_classify_core(p_value, p_ws, true, true, true) || nofree;
+  end if;
+  -- free text: the insurance screen. A source tag such as "meta_ad" is read as its words.
+  return public.ws_classify_core(case when p_col = 'source' then translate(p_value, '_', ' ') else p_value end, p_ws, true, false, true) || jsonb_build_object('free', true);
+end $$;
+
+-- 13. guards, replaced. Same exclusions and messages as before; the classifier decides. Approved-term waivers only on non-person tables; in an insurance workspace the person
+--     tables get the insurance screen too (round 4, S2: ws_person_column_check). A workspace of a known non-insurance vertical (mortgage) behaves exactly as before on every table.
 --     "Structural" columns (enums, template keys, actor tags) are exempt from the vocabulary test only: every category and the health screen still apply to them.
 create or replace function public.ws_guard() returns trigger
 language plpgsql set search_path to 'pg_catalog' as $$
-declare k text; v text; t text; e record; res jsonb; allv text := ''; j jsonb := to_jsonb(new); v_ws uuid; row_ctx boolean := false; n_vals integer := 0;
+declare k text; v text; t text; e record; res jsonb; allv text := ''; freev text := ''; j jsonb := to_jsonb(new); v_ws uuid; c_ws uuid; ctx boolean := false; person boolean; n_vals integer := 0; n_free integer := 0;
 begin
-  v_ws := case when tg_table_name = any (array['ws_campaigns', 'ws_ledger']) then nullif(j ->> 'workspace_id', '')::uuid else null end;
+  person := tg_table_name <> all (array['ws_campaigns', 'ws_ledger']);
+  -- insurance screen: decided by the workspace (for a workspace row: by its own vertical). Fails closed, see ws_insurance_context.
+  if tg_table_name = 'client_workspaces' then
+    v_ws := nullif(j ->> 'id', '')::uuid;
+    ctx := public.ws_vertical_insurance(j ->> 'vertical');
+  else
+    v_ws := nullif(j ->> 'workspace_id', '')::uuid;
+    ctx := v_ws is not null and public.ws_insurance_context(null, v_ws);
+  end if;
+  c_ws := case when person then null else v_ws end;        -- person tables: the old strict screen (no waiver) stays the first test for every value
   -- a value split across columns (name / phone / note) is caught by also scanning every scanned column joined together (only when there is more than one value to join)
   for e in select key, value from jsonb_each(j - array['id', 'workspace_id', 'campaign_id', 'created_at', 'status', 'stage', 'amount_cents', 'monthly_budget_cents']) loop
     v := e.value #>> '{}';
     if v is not null and btrim(v) <> '' and jsonb_typeof(e.value) <> 'boolean' then allv := allv || ' ' || v; n_vals := n_vals + 1; end if;
   end loop;
-  if v_ws is not null then row_ctx := public.ws_insurance_context(allv, v_ws); end if;
   if n_vals > 1 then
-    res := public.ws_classify_core(allv, v_ws, row_ctx, true);
+    res := public.ws_classify_core(allv, c_ws, ctx and not person, true, false);
     if not (res ->> 'allowed')::boolean then
       raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
     end if;
@@ -968,37 +1271,55 @@ begin
   for e in select key, value from jsonb_each(j - array['id', 'workspace_id', 'campaign_id', 'created_at', 'status', 'stage', 'amount_cents', 'monthly_budget_cents']) loop
     v := e.value #>> '{}'; t := jsonb_typeof(e.value);
     continue when v is null or btrim(v) = '' or t = 'boolean';
-    -- numbers and other non-text values: every category still applies, the vocabulary test does not (a number column is not wording)
-    res := public.ws_classify_core(v, v_ws, row_ctx, t <> 'string');
+    if person and ctx and t = 'string' then
+      -- S2: a person table of an insurance workspace gets the insurance screen, column by column (ws_person_column_check)
+      res := public.ws_person_column_check(tg_table_name, e.key, v, v_ws);
+      if (res ->> 'free')::boolean then freev := freev || ' ' || v; n_free := n_free + 1; end if;
+    else
+      -- numbers and other non-text values: every category still applies, the vocabulary test does not (a number column is not wording)
+      res := public.ws_classify_core(v, c_ws, ctx and not person, t <> 'string', false);
+    end if;
     if not (res ->> 'allowed')::boolean then
       raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, e.key, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ')
         using errcode = 'P0001';
     end if;
   end loop;
+  if n_free > 1 then
+    res := public.ws_classify_core(freev, v_ws, true, true, true);      -- the free-text columns of a person row, joined (insurance screen)
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
+  end if;
   return new;
 end $$;
 
 create or replace function public.ffm_guard() returns trigger
 language plpgsql set search_path to 'pg_catalog' as $$
-declare k text; v text; res jsonb; allv text := ''; j jsonb := to_jsonb(new); v_ws uuid; row_ctx boolean := false; structural boolean; n_vals integer := 0;
+declare k text; v text; res jsonb; allv text := ''; freev text := ''; j jsonb := to_jsonb(new); v_ws uuid; c_ws uuid; ctx boolean := false; person boolean; structural boolean; n_vals integer := 0; n_free integer := 0;
 begin
-  v_ws := case when tg_table_name = any (array['ffm_ad_sets', 'ffm_creatives', 'ffm_approvals', 'ffm_onboarding_items']) then nullif(j ->> 'workspace_id', '')::uuid else null end;
-  if v_ws is not null then row_ctx := public.ws_insurance_context(null, v_ws); end if;
+  person := tg_table_name <> all (array['ffm_ad_sets', 'ffm_creatives', 'ffm_approvals', 'ffm_onboarding_items']);
+  v_ws := nullif(j ->> 'workspace_id', '')::uuid;
+  ctx := v_ws is not null and public.ws_insurance_context(null, v_ws);
+  c_ws := case when person then null else v_ws end;        -- person tables: the old strict screen (no waiver) stays the first test for every value
   for k, v in select e.key, e.value #>> '{}' from jsonb_each(j) e
               where jsonb_typeof(e.value) = 'string'
                 and not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = e.key and a.attnum > 0 and not a.attisdropped
                                   and a.atttypid in ('uuid'::regtype, 'timestamptz'::regtype)) loop
     continue when btrim(v) = '';
-    if row_ctx and tg_table_name = 'ffm_onboarding_items' and k = 'value_text' then
+    if ctx and tg_table_name = 'ffm_onboarding_items' and k = 'value_text' then
       res := public.ws_onboarding_value_check(j ->> 'template_key', v);       -- onboarding values are business contacts and wording, not marketing copy (see ws_onboarding_value_check)
       if not (res ->> 'allowed')::boolean then
         raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
       end if;
       continue;                                                                -- already screened as a whole: not joined with the other columns (an e-mail / link here is legitimate)
+    elsif person and ctx then
+      -- S2: a person table (routing, consent) of an insurance workspace gets the insurance screen, column by column (ws_person_column_check)
+      res := public.ws_person_column_check(tg_table_name, k, v, v_ws);
+      if (res ->> 'free')::boolean then freev := freev || ' ' || v; n_free := n_free + 1; end if;
     else
       -- a structural column (enum, template key, actor tag, template title, date) skips only the vocabulary test, and only when the value really looks like one
       structural := public.ws_structural_value(tg_table_name, k, v);
-      res := public.ws_classify_core(v, v_ws, row_ctx, structural);
+      res := public.ws_classify_core(v, c_ws, ctx and not person, structural, false);
     end if;
     if not (res ->> 'allowed')::boolean then
       raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
@@ -1006,7 +1327,13 @@ begin
     allv := allv || ' ' || v; n_vals := n_vals + 1;
   end loop;
   if n_vals > 1 then
-    res := public.ws_classify_core(allv, v_ws, row_ctx, true);   -- a value split across columns
+    res := public.ws_classify_core(allv, c_ws, ctx and not person, true, false);   -- a value split across columns
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
+  end if;
+  if n_free > 1 then
+    res := public.ws_classify_core(freev, v_ws, true, true, true);      -- the free-text columns of a person row, joined (insurance screen)
     if not (res ->> 'allowed')::boolean then
       raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
     end if;
@@ -1028,7 +1355,7 @@ revoke all on function public.ws_residual_check(text, text) from public, anon, a
 revoke all on function public.ws_capitalised_name(text, boolean) from public, anon, authenticated;
 revoke all on function public.ws_text_insurance_word(text, text, text) from public, anon, authenticated;
 revoke all on function public.ws_insurance_context(text, uuid) from public, anon, authenticated;
-revoke all on function public.ws_classify_core(text, uuid, boolean, boolean) from public, anon, authenticated;
+revoke all on function public.ws_classify_core(text, uuid, boolean, boolean, boolean) from public, anon, authenticated;
 revoke all on function public.ws_classify_text(text, uuid) from public, anon, authenticated;
 revoke all on function public.ws_add_approved_term(uuid, text, text, text, boolean) from public, anon, authenticated;
 revoke all on function public.ws_remove_approved_term(uuid) from public, anon, authenticated;
@@ -1043,6 +1370,12 @@ revoke all on function public.ws_add_fixed_phrase(text, text) from public, anon,
 revoke all on function public.ws_remove_fixed_phrase(uuid) from public, anon, authenticated;
 revoke all on function public.ws_structural_value(text, text, text) from public, anon, authenticated;
 revoke all on function public.ws_onboarding_value_check(text, text) from public, anon, authenticated;
+revoke all on function public.ws_number_words() from public, anon, authenticated;
+revoke all on function public.ws_financial_hit(text, boolean) from public, anon, authenticated;
+revoke all on function public.ws_feature_context_ok(text, text, boolean) from public, anon, authenticated;
+revoke all on function public.ws_vertical_insurance(text) from public, anon, authenticated;
+revoke all on function public.ws_person_name_check(text) from public, anon, authenticated;
+revoke all on function public.ws_person_column_check(text, text, text, uuid) from public, anon, authenticated;
 grant execute on function public.ws_terms_immutable() to service_role;
 grant execute on function public.ws_place_catalog_immutable() to service_role;
 grant execute on function public.ws_fold_text(text) to service_role;
@@ -1056,7 +1389,7 @@ grant execute on function public.ws_residual_check(text, text) to service_role;
 grant execute on function public.ws_capitalised_name(text, boolean) to service_role;
 grant execute on function public.ws_text_insurance_word(text, text, text) to service_role;
 grant execute on function public.ws_insurance_context(text, uuid) to service_role;
-grant execute on function public.ws_classify_core(text, uuid, boolean, boolean) to service_role;
+grant execute on function public.ws_classify_core(text, uuid, boolean, boolean, boolean) to service_role;
 grant execute on function public.ws_classify_text(text, uuid) to service_role;
 grant execute on function public.ws_add_approved_term(uuid, text, text, text, boolean) to service_role;
 grant execute on function public.ws_remove_approved_term(uuid) to service_role;
@@ -1071,3 +1404,9 @@ grant execute on function public.ws_add_fixed_phrase(text, text) to service_role
 grant execute on function public.ws_remove_fixed_phrase(uuid) to service_role;
 grant execute on function public.ws_structural_value(text, text, text) to service_role;
 grant execute on function public.ws_onboarding_value_check(text, text) to service_role;
+grant execute on function public.ws_number_words() to service_role;
+grant execute on function public.ws_financial_hit(text, boolean) to service_role;
+grant execute on function public.ws_feature_context_ok(text, text, boolean) to service_role;
+grant execute on function public.ws_vertical_insurance(text) to service_role;
+grant execute on function public.ws_person_name_check(text) to service_role;
+grant execute on function public.ws_person_column_check(text, text, text, uuid) to service_role;

@@ -66,7 +66,13 @@ drop function if exists public.ws_remove_approved_term(uuid);
 drop function if exists public.ws_add_approved_term(uuid, text, text, text, boolean);
 drop function if exists public.ws_add_approved_term(uuid, text, text, text);   -- the pre-review 4-argument version, if a scratch database ever had it
 drop function if exists public.ws_classify_text(text, uuid);
-drop function if exists public.ws_classify_core(text, uuid, boolean, boolean);
+drop function if exists public.ws_person_column_check(text, text, text, uuid);
+drop function if exists public.ws_person_name_check(text);
+drop function if exists public.ws_classify_core(text, uuid, boolean, boolean, boolean);
+drop function if exists public.ws_classify_core(text, uuid, boolean, boolean);   -- the 4-argument version of earlier review rounds, if a scratch database ever had it
+drop function if exists public.ws_feature_context_ok(text, text, boolean);
+drop function if exists public.ws_financial_hit(text, boolean);
+drop function if exists public.ws_vertical_insurance(text);
 drop function if exists public.ws_insurance_context(text, uuid);
 drop function if exists public.ws_text_insurance_word(text, text, text);
 drop function if exists public.ws_residual_check(text, text);

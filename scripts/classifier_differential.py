@@ -40,7 +40,7 @@ ONBOARD_KEYS = ["crm_destination", "booking_link", "brand_assets", "compliance_c
                 "service_geography", "launch_deadline", "monthly_budget"]
 ONBOARD_OK = ["HubSpot, leads@acme.ca", "HubSpot", "https://cal.com/acme/intro", "I agree to be contacted by Acme", "Jane Doe, compliance officer", "Meta Business Manager access granted", "Ontario and Quebec"]
 STRUCT_COLS = ["title", "blocked_until", "provided_by"]
-CODES = re.compile(r"^(sin_like_number|card_like_number|account_like_number|identity_document|banking|credit|application_or_income|health(:[a-z_]+)?|insurance_identifier|identifier|unknown_word|non_latin_script|mixed_script|encoded_text|"
+CODES = re.compile(r"^(sin_like_number|card_like_number|account_like_number|identity_document|banking|credit|application_or_income|health(:[a-z_]+)?|insurance_identifier|identifier|financial_detail|unknown_word|non_latin_script|mixed_script|encoded_text|"
                    r"approved_product_term|approved_feature|approved_place|insurance_vocabulary)$")
 
 HEALTH = ["diabetes", "cancer", "diagnosed", "prescribed", "surgery", "my doctor", "heart attack", "medication", "tumour", "hospital", "chemo", "depression", "pregnant", "disability", "illness",

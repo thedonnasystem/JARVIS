@@ -56,7 +56,7 @@ begin
   foreach f in array array['public.ws_terms_immutable()', 'public.ws_fold_text(text)', 'public.ws_leet_text(text,integer)', 'public.ws_health_extra_hit(text)', 'public.ws_personal_context_hit(text)',
                            'public.ws_identifier_hit(text)', 'public.ws_classify_text(text,uuid)', 'public.ws_add_approved_term(uuid,text,text,text,boolean)', 'public.ws_remove_approved_term(uuid)',
                            'public.ws_guard()', 'public.ffm_guard()', 'public.ws_condition_hit(text)', 'public.ws_vocab_denied(text,boolean)', 'public.ws_residual_check(text,text)', 'public.ws_capitalised_name(text,boolean)', 'public.ws_text_insurance_word(text,text,text)',
-                           'public.ws_insurance_context(text,uuid)', 'public.ws_classify_core(text,uuid,boolean,boolean)', 'public.ws_add_vocab_word(text,text)', 'public.ws_remove_vocab_word(uuid)', 'public.ws_place_catalog_immutable()'] loop
+                           'public.ws_insurance_context(text,uuid)', 'public.ws_classify_core(text,uuid,boolean,boolean,boolean)', 'public.ws_add_vocab_word(text,text)', 'public.ws_remove_vocab_word(uuid)', 'public.ws_place_catalog_immutable()'] loop
     foreach r in array array['anon', 'authenticated'] loop
       if has_function_privilege(r, f, 'execute') then raise exception 'G5 % can execute %', r, f; end if;
     end loop;
@@ -64,7 +64,7 @@ begin
   end loop;
   -- the guards stay invoker functions (ops/verify_post_release_executor_ffm.sql counts on it); the classifier is a definer that never writes
   if (select prosecdef from pg_proc where oid = 'public.ws_guard()'::regprocedure) or (select prosecdef from pg_proc where oid = 'public.ffm_guard()'::regprocedure) then raise exception 'G7 a guard became SECURITY DEFINER'; end if;
-  if (select count(*) from pg_proc where oid in ('public.ws_classify_text(text,uuid)'::regprocedure, 'public.ws_classify_core(text,uuid,boolean,boolean)'::regprocedure, 'public.ws_insurance_context(text,uuid)'::regprocedure,
+  if (select count(*) from pg_proc where oid in ('public.ws_classify_text(text,uuid)'::regprocedure, 'public.ws_classify_core(text,uuid,boolean,boolean,boolean)'::regprocedure, 'public.ws_insurance_context(text,uuid)'::regprocedure,
         'public.ws_add_approved_term(uuid,text,text,text,boolean)'::regprocedure, 'public.ws_remove_approved_term(uuid)'::regprocedure, 'public.ws_add_vocab_word(text,text)'::regprocedure, 'public.ws_remove_vocab_word(uuid)'::regprocedure)
         and prosecdef and proconfig::text like '%search_path=pg_catalog%') <> 7 then raise exception 'G8 definer functions must pin search_path'; end if;
   if (select count(*) from public.ws_approved_terms) <> 0 then raise exception 'G9 the term table must ship EMPTY'; end if;
@@ -254,7 +254,7 @@ begin
   -- ... while neighbouring ordinary marketing is still fine (the classifier must not become a blanket block)
   foreach s in array array['Health insurance and life insurance for your family', 'Health insurance from $19.99/month - no medical exam needed' || '', 'Assurance santé, assurance-vie, assurance invalidité: tout au même endroit',
                            'Critical illness insurance: protect your income, your family and your future', 'Get a free quote. Book a call. Health insurance made simple.', 'Health insurance for freelancers in Ottawa and Medicine Hat',
-                           'Choose health insurance that fits your budget: $25, $40 or $60 per month', 'Health insurance - plans from 25$/mois, 100% online', 'Health insurance, 24/7, five stars from reviews'] loop
+                           'Health insurance - plans from 25$/mois, 100% online', 'Health insurance, 24/7, five stars from reviews'] loop
     if s like '%no medical exam%' then
       perform pg_temp.must_block('A2 (words outside the approved list stay refused)', s, ins);   -- 'medical' is health wording: only an approved feature phrase can carry it
     else perform pg_temp.must_pass('A2', s, ins); end if;   -- 'protect your income' passes: generic second-person income with no amount
@@ -315,7 +315,7 @@ begin
   perform pg_temp.expect_fail(format($q$select public.ws_add_lead(%L, %L, 'Health insurance', null, null, 'web form')$q$, ins, ca), 'Sensitive data refused%health%');
   perform pg_temp.expect_fail(format($q$update public.client_workspaces set name = 'Acme Health Insurance Brokers' where id = %L$q$, ins), 'Sensitive data refused%health%');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_routing_rule(%L, 'Health insurance leads', 'email', 'x@example.com', array['name'])$q$, ins), 'Sensitive data refused%health%');
-  perform public.ws_add_lead(ins, ca, 'Pat Example', 'pat@example.com', '613-555-0142', 'web form', 'wants a callback about renewal');   -- ordinary leads unaffected
+  perform public.ws_add_lead(ins, ca, 'Pat Example', 'pat@example.com', '613-555-0142', 'web form', 'callback about renewal');   -- an ordinary lead (round 4: a lead note in an insurance workspace is vocabulary-only)
   -- French and look-alike text reach the strict tables too (they were bypasses before this migration)
   perform pg_temp.expect_fail(format($q$select public.ws_add_lead(%L, %L, 'Pat Example', null, null, 'web form', 'a le diabète')$q$, ins, ca), 'Sensitive data refused%');
   perform pg_temp.expect_fail(format($q$select public.ws_add_lead(%L, %L, 'Pat Example', null, null, 'web form', 'cаncer')$q$, ins, ca), 'Sensitive data refused%');
@@ -376,7 +376,9 @@ begin
       if not (res_ins ->> 'allowed')::boolean then
         n_mut := n_mut + 1;
         foreach mut in array array[translate(txt, 'aeopcx', 'аеорсх'), regexp_replace(txt, '([a-z])', '\1' || chr(8203), 'g'), upper(txt), regexp_replace(txt, '([a-z])', '\1' || chr(769), 'g')] loop
-          if (public.ws_classify_text(mut, ins) ->> 'allowed')::boolean then raise exception 'D4 mutation unblocked the text: %', txt; end if;
+          -- (round 4: a Capitalised word in mid-sentence is refused as a possible name; the same words in lower case or ALL CAPS are ordinary words, so the upper-case mutation of a text that
+          --  is refused ONLY for its capital letter may pass. Every other mutation must stay blocked.)
+          if (public.ws_classify_text(mut, ins) ->> 'allowed')::boolean and not (mut = upper(txt) and (public.ws_classify_text(lower(txt), ins) ->> 'allowed')::boolean) then raise exception 'D4 mutation unblocked the text: %', txt; end if;
         end loop;
       end if;
     end loop;
@@ -501,7 +503,8 @@ begin
   perform public.ws_add_approved_term(ins2, null, 'place', 'St Albert');
   perform public.ws_add_approved_term(ins2, null, 'place', 'Quebec City');
   perform public.ws_add_approved_term(ins2, null, 'feature', 'heart attack, stroke and cancer');
-  perform public.ws_add_approved_term(ins2, null, 'feature', 'Non-smokers');
+  -- round 4 (S8 / B2): a negated condition is a statement about a person, never a feature phrase
+  perform pg_temp.expect_fail(format($q$select public.ws_add_approved_term(%L, null, 'feature', 'Non-smokers')$q$, ins2), 'term refused: a feature phrase that names a condition cannot be negated%');
   perform public.ws_add_approved_term(ins2, null, 'feature', 'no medical exam');
   -- income: only the whole word 'income' inside a product / feature phrase; never a place; never with another income stem
   perform pg_temp.expect_fail(format($q$select public.ws_add_approved_term(%L, null, 'place', 'income')$q$, ins2), 'term refused%');
@@ -546,7 +549,8 @@ begin
                            'whole life insurance', 'universal life insurance', 'health insurance plans', 'mortgage life insurance', 'assurance vie temporaire', 'health coverage', 'disability income insurance', 'income protection'] loop
     perform public.ws_add_approved_term(ins4, null, 'product', s);
   end loop;
-  foreach s in array array['heart attack, stroke and cancer', 'non smokers', 'no medical exam', 'non fumeurs', 'examen médical'] loop perform public.ws_add_approved_term(ins4, null, 'feature', s); end loop;
+  foreach s in array array['heart attack, stroke and cancer', 'no medical exam', 'examen médical'] loop perform public.ws_add_approved_term(ins4, null, 'feature', s); end loop;
+  foreach s in array array['non smokers', 'non fumeurs'] loop perform pg_temp.expect_fail(format($q$select public.ws_add_approved_term(%L, null, 'feature', %L)$q$, ins4, s), 'term refused: a feature phrase that names a condition cannot be negated%'); end loop;
   foreach s in array array['Ottawa', 'Toronto', 'Calgary', 'Medicine Hat', 'Gatineau'] loop perform public.ws_add_approved_term(ins4, null, 'place', s); end loop;
   n := 0;
   for s in select l from regexp_split_to_table($corpus$Canada's #1 health insurance broker
@@ -560,7 +564,6 @@ Disability insurance replaces part of your income
 Income protection insurance
 Critical illness insurance pays a lump sum
 Critical illness insurance covers heart attack, stroke and cancer
-Life insurance for non-smokers
 Protect your family with health insurance
 Get a free quote for life insurance today
 Compare health insurance plans in minutes
@@ -575,7 +578,6 @@ Health insurance for freelancers in Ottawa and Medicine Hat
 Travel insurance for your next trip
 Group benefits for your business and your employees
 Extended health coverage for your family
-Choose health insurance that fits your budget: $25, $40 or $60 per month
 Health insurance with 24/7 support
 Health insurance, trusted by over ten thousand families
 Health insurance, five stars from reviews
@@ -638,7 +640,6 @@ Assurance santé | Assurance vie
 Assurance santé à partir de 25 $/mois
 Un appel suffit pour comparer les assurances
 Protégez ce qui compte le plus avec l'assurance invalidité
-Assurance vie pour les non-fumeurs
 Découvrez les assurances santé et vie
 Assurance santé : aucune obligation
 Assurance collective pour les petites entreprises
@@ -648,7 +649,6 @@ Demandez une soumission d'assurance santé
 Assurance santé pour tous les budgets
 Une assurance vie qui grandit avec votre famille
 Assurance vie : protégez votre famille
-Life insurance for non-smokers
 Critical illness insurance pays a lump sum
 Health insurance for your whole family, from $99 a month
 Life insurance in Toronto, Ottawa and Calgary
@@ -683,7 +683,6 @@ Disability insurance replaces part of your income
 Income protection insurance
 Critical illness insurance pays a lump sum
 Critical illness insurance covers heart attack, stroke and cancer
-Life insurance for non-smokers
 Protect your family with health insurance
 Get a free quote for life insurance today
 Compare health insurance plans in minutes
@@ -698,7 +697,6 @@ Health insurance for freelancers in Ottawa and Medicine Hat
 Travel insurance for your next trip
 Group benefits for your business and your employees
 Extended health coverage for your family
-Choose health insurance that fits your budget: $25, $40 or $60 per month
 Health insurance with 24/7 support
 Health insurance, trusted by over ten thousand families
 Health insurance, five stars from reviews
@@ -761,7 +759,6 @@ Assurance santé | Assurance vie
 Assurance santé à partir de 25 $/mois
 Un appel suffit pour comparer les assurances
 Protégez ce qui compte le plus avec l'assurance invalidité
-Assurance vie pour les non-fumeurs
 Découvrez les assurances santé et vie
 Assurance santé : aucune obligation
 Assurance collective pour les petites entreprises
@@ -771,7 +768,6 @@ Demandez une soumission d'assurance santé
 Assurance santé pour tous les budgets
 Une assurance vie qui grandit avec votre famille
 Assurance vie : protégez votre famille
-Life insurance for non-smokers
 Critical illness insurance pays a lump sum
 Health insurance for your whole family, from $99 a month
 Life insurance in Toronto, Ottawa and Calgary
@@ -871,7 +867,7 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
     perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name) values (%L, %L)$q$, ins2, s), 'Sensitive data refused%');
   end loop;
   -- R2.2 first-person plural and generic person words are not vocabulary
-  foreach s in array array['Health insurance: heart attack, stroke and cancer in our family', 'Life insurance: we need care', 'Disability insurance: parents can not work', 'Life insurance: someone needs help', 'Life insurance for everyone in the family',
+  foreach s in array array['Life insurance: we need care', 'Disability insurance: parents can not work', 'Life insurance: someone needs help', 'Life insurance for everyone in the family',
                            'Assurance vie: nous avons besoin', 'Assurance vie: notre famille', 'Assurance vie: nos enfants', 'Life insurance: our kids', 'Life insurance: people', 'Life insurance: ones who can not work'] loop
     perform pg_temp.must_block('R2.2', s, ins4, 'unknown_word');
   end loop;
@@ -981,7 +977,7 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
                            'Critical illness insurance: heart attack, stroke and cancer ? Non', 'Critical illness insurance: No heart attack, stroke and cancer', 'Critical illness insurance: Not heart attack, stroke and cancer',
                            'Critical illness insurance: heart attack, stroke and cancer - yes', 'Critical illness insurance: heart attack, stroke and cancer: none', 'Critical illness insurance: never heart attack, stroke and cancer',
                            'Critical illness insurance: pas heart attack, stroke and cancer', 'Critical illness insurance: heart attack, stroke and cancer ; nope', 'Critical illness insurance: heart attack, stroke and cancer!! no'] loop
-    perform pg_temp.must_block('R3.3', s, ins4, 'unknown_word');
+    perform pg_temp.must_block('R3.3', s, ins4, 'health:residual');   -- (round 4: the feature-phrase context rule refuses these before the vocabulary test does)
     perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name) values (%L, %L)$q$, ins4, s), 'Sensitive data refused%');
   end loop;
   perform pg_temp.must_pass('R3.3 the feature itself is unchanged', 'Critical illness insurance covers heart attack, stroke and cancer', ins4);
@@ -1065,7 +1061,7 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
                            'kneecap', 'arthritic', 'sammy', 'jeanne', 'alissa', 'gonzales'] loop
     perform pg_temp.expect_fail(format($q$select public.ws_add_vocab_word('en', %L)$q$, s), 'word refused%');
     if not public.ws_vocab_denied(s, true) then raise exception 'R3.10 % is not denied', s; end if;
-    perform pg_temp.must_block('R3.10 in text', 'Life insurance: ' || s, ins4, 'unknown_word');
+    perform pg_temp.must_block('R3.10 in text', 'Life insurance: ' || s, ins4);   -- (unknown_word, or since round 4 financial_detail for the payment-trouble words)
   end loop;
   -- R3.11 a non-insurance workspace is as before: an e-mail next to an insurance word is no longer refused there (the identifier screen is gone: it was NEW behaviour in this migration)
   perform pg_temp.must_pass('R3.11 mortgage workspace, e-mail next to insurance', 'Write to jane@acme.ca about home insurance', other);
@@ -1086,6 +1082,223 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
   if exists (select 1 from pg_proc where proname like 'ws\_%' and (lower(prosrc) like '%tremblay%' or lower(prosrc) like '%diabetes%')) then raise exception 'L6 a classifier function source contains a word the leak test greps for'; end if;
   -- ws_sensitive_hits itself was not touched by this migration: still the 20261119 definition (same long-stem and short-word lists)
   if pg_get_functiondef('public.ws_sensitive_hits(text)'::regprocedure) !~ 'heartfailure' or pg_get_functiondef('public.ws_sensitive_hits(text)'::regprocedure) !~ 'foreach w in array' then raise exception 'L6 ws_sensitive_hits changed'; end if;
+  -- ===== R4: fourth review of PR #17 (RV17-C). Every item: EXPECTED in the comment, ACTUAL asserted. Workspace ins4 holds the proposed product / place terms and the feature phrases
+  --       'heart attack, stroke and cancer', 'no medical exam', 'examen médical' ('non smokers' / 'non fumeurs' can no longer be approved, see R4.S8). =====
+  perform pg_temp.as_owner(true);
+  declare c4 uuid; a4 uuid; l4 uuid; wn uuid; wx uuid; x text;
+  begin
+    insert into public.ws_campaigns (workspace_id, name) values (ins4, 'Spring promo') returning id into c4;
+    insert into public.ffm_ad_sets (workspace_id, campaign_id, name) values (ins4, c4, 'Families plan') returning id into a4;
+    -- R4.B1 (BLOCKER) income / pay / debt / financial amounts without the word "income". EXPECTED: refused, with and without approved terms. (Before round 4: all allowed.)
+    foreach s in array array['makes $85k a year', 'you make $85k a year', 'income protection: you make $85k a year', 'pay: $85,000 yearly', 'your pay: $4,200 monthly', 'your paycheque is $2,300', 'paycheque $2,300 every two weeks',
+                             '$30/hour full time', 'fifty thousand a year', 'two hundred thousand a year', 'hundred thousand a year', 'makes six thousand monthly', 'pay is fifty thousand a year', 'votre salaire: 45000 $ par an',
+                             'salaire de 45,000 $', 'salaire 45 000 $ par an', '45 $ de l''heure', 'vous payez 2000 $ par mois pour la maison', 'your mortgage is $412,000', 'have a $412,000 mortgage and a $38,000 car loan',
+                             'cash $40,000, home $650,000, mortgage $412,000', 'tax paid: $22,000', 'you are three months late on mortgage payments', 'losing job in two weeks', '$412,000 mortgage', '$38,000 car loan',
+                             'age forty five, self employed, mortgage $412,000, pay $85,000 yearly', 'pay $7,000 monthly, mortgage $2,400 monthly, car loan $600 monthly', 'paid $85K', '$85K yearly', 'you pay tax on $120,000 yearly',
+                             'budget $85,000 yearly pay', 'you pay $1,850 monthly for the mortgage', 'your loan is $38,000', 'budget: paid $85,000 a year, mortgage $412,000', 'your mortgage payment: only $850 monthly',
+                             'pay from $600 a month', 'mortgage up to $400,000', '85 k a year', '$85,000', '85000 dollars', 'eighty five grand', 'earns 85 grand'] loop
+      perform pg_temp.must_block('R4.B1 terms', s, ins4);
+      perform pg_temp.must_block('R4.B1 no terms', s, ins2);
+    end loop;
+    foreach s in array array['makes $85k a year', 'pay: $85,000 yearly', 'fifty thousand a year', 'votre salaire: 45000 $ par an', 'your mortgage is $412,000', '$38,000 car loan', '$30/hour full time'] loop
+      perform pg_temp.must_block('R4.B1 code', s, ins4, 'financial_detail');
+      perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name) values (%L, %L)$q$, ins4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ws_ledger (workspace_id, campaign_id, amount_cents, note) values (%L, %L, 100, %L)$q$, ins4, c4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body) values (%L, %L, %L, 'Free quote', %L)$q$, ins4, c4, a4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_ad_sets (workspace_id, campaign_id, name, audience_note) values (%L, %L, 'Families plan', %L)$q$, ins4, c4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_approvals (workspace_id, kind, ref_id, approved_by, note) values (%L, 'campaign', %L, 'owner', %L)$q$, ins4, c4, s), 'Sensitive data refused%');
+    end loop;
+    -- EXPECTED: the two marketing amount forms still pass (owner decision 10, option b): a price per period with a lead word, and a round coverage ceiling after "up to" / "jusqu'à".
+    foreach s in array array['Life insurance from $18 a month', 'Health insurance from $25/month', 'Life insurance: only $25 per month', 'Assurance vie dès 25 $ par mois', 'Health insurance $25/month',
+                             'Life insurance: coverage up to $500,000', 'Life insurance. Coverage up to $1,000,000.', 'Assurance vie : couverture jusqu''à 1 000 000 $', 'Health insurance, trusted by over ten thousand families'] loop
+      perform pg_temp.must_pass('R4.B1 allowed amount form', s, ins4);
+    end loop;
+    insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body) values (ins4, c4, a4, 'Life insurance', 'Coverage up to $1,000,000. From $18 a month.');
+    -- the coverage-ceiling mask is exact: it never hides an account-like number, and it exists only in an insurance workspace
+    perform pg_temp.must_block('R4.B1 ceiling is round only', 'Life insurance up to $1,234,567', ins4, 'account_like_number');
+    perform pg_temp.must_block('R4.B1 ceiling needs up to', 'Life insurance $1,000,000', ins4, 'account_like_number');
+    perform pg_temp.must_block('R4.B1 ceiling, mortgage workspace unchanged', 'Coverage up to $1,000,000', other, 'account_like_number');
+    perform pg_temp.must_block('R4.B1 ceiling, strict screen unchanged', 'Coverage up to $1,000,000', null, 'account_like_number');
+    -- L (asserted over-blocking, B1 fails closed): a price list, a yearly price, an hourly rate, a product price next to a pay / debt word, a spelled-out magnitude
+    foreach s in array array['Choose health insurance that fits your budget: $25, $40 or $60 per month', 'Home insurance from $600 a year', 'Life insurance: protect your paycheque from $25 a month', 'Life insurance: one million reasons'] loop
+      perform pg_temp.must_block('R4.B1 L over-blocking', s, ins4);
+    end loop;
+
+    -- R4.B2 (BLOCKER) yes/no bypass on an approved feature phrase. EXPECTED: refused. (Before round 4: all allowed once the phrase was approved.)
+    foreach s in array array['you have heart attack, stroke and cancer', 'have heart attack, stroke and cancer', 'family: heart attack, stroke and cancer', 'heart attack, stroke and cancer in the family',
+                             'heart attack, stroke and cancer ✅', '✅ heart attack, stroke and cancer', 'heart attack, stroke and cancer ✓', 'heart attack, stroke and cancer: true', 'heart attack, stroke and cancer: zero',
+                             'heart attack, stroke and cancer: all', 'heart attack, stroke and cancer: any', 'heart attack, stroke and cancer: n', 'heart attack, stroke and cancer (some)', 'heart attack, stroke and cancer free',
+                             'heart attack, stroke and cancer? neither', 'without heart attack, stroke and cancer', 'heart attack, stroke and cancer, age forty', 'heart attack, stroke and cancer: first',
+                             'heart attack, stroke and cancer - have', 'n heart attack, stroke and cancer', 'life insurance: heart attack, stroke and cancer today', 'your heart attack, stroke and cancer',
+                             'heart attack, stroke and cancer: no', 'heart attack, stroke and cancer 👍', 'no medical exam ✓', 'no medical exam: yes', 'you: no medical exam', 'no medical exam: true',
+                             'non smokers ✅', 'you: non smokers', 'non smokers: you', 'non smokers'] loop
+      perform pg_temp.must_block('R4.B2', s, ins4);
+    end loop;
+    -- split across the columns of one row: "you have" | the phrase, the phrase | a check mark, a family word | the phrase
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body) values (%L, %L, %L, 'you have', 'heart attack, stroke and cancer')$q$, ins4, c4, a4), 'Sensitive data refused%');
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body, cta) values (%L, %L, %L, 'Life insurance', 'heart attack, stroke and cancer', 'yes')$q$, ins4, c4, a4), 'Sensitive data refused%');
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body) values (%L, %L, %L, 'Your family', 'heart attack, stroke and cancer')$q$, ins4, c4, a4), 'Sensitive data refused%');
+    perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name, channel) values (%L, 'heart attack, stroke and cancer', 'you')$q$, ins4), 'Sensitive data refused%');
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_ad_sets (workspace_id, campaign_id, name, audience_note) values (%L, %L, 'heart attack, stroke and cancer', 'age forty')$q$, ins4, c4), 'Sensitive data refused%');
+    -- EXPECTED: the phrase still works as a whole value and inside a plain coverage template; a plain feature keeps its normal marketing use
+    foreach s in array array['heart attack, stroke and cancer', 'Critical illness insurance covers heart attack, stroke and cancer', 'Critical illness insurance: coverage including heart attack, stroke and cancer',
+                             'No medical exam life insurance. Apply online in minutes.', 'Assurance vie sans examen médical', 'Life insurance with no medical exam'] loop
+      perform pg_temp.must_pass('R4.B2 template', s, ins4);
+    end loop;
+    insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body, cta) values (ins4, c4, a4, 'Critical illness insurance', 'Covers heart attack, stroke and cancer', 'Get a free quote');
+    -- L (asserted over-blocking, B2 fails closed): a condition-naming phrase cannot share a value or a row with a second-person word
+    perform pg_temp.must_block('R4.B2 L over-blocking', 'Critical illness insurance protects you: heart attack, stroke and cancer', ins4);
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body, cta) values (%L, %L, %L, 'Critical illness insurance', 'Covers heart attack, stroke and cancer', 'Get your free quote')$q$, ins4, c4, a4), 'Sensitive data refused%');
+
+    -- R4.S3 insurance context no longer depends on what the nullable free-text vertical says. EXPECTED: NULL / unknown / ambiguous verticals and an unknown workspace id get the insurance screen;
+    --        only the known non-insurance vertical 'mortgage' keeps the previous screen. (Before round 4: ins, benefits, brokerage, life, financial-services, NULL => old deny-list.)
+    foreach s in array array['ins', 'benefits', 'brokerage', 'life', 'financial-services', 'insurence', 'assurance-vie', 'broker', 'xyz', 'mortgage-insurance', 'mortgages'] loop
+      insert into public.client_workspaces (slug, name, vertical, status) values ('ic-s3-' || translate(s, ' ', '-'), 'IC variant', s, 'active') returning id into wx;
+      if not public.ws_insurance_context(null, wx) then raise exception 'R4.S3 vertical % did not get the insurance screen', s; end if;
+      perform pg_temp.must_block('R4.S3 ' || s, 'takes metformin daily', wx, 'unknown_word');
+      perform pg_temp.must_pass('R4.S3 ' || s, 'Free quote today', wx);
+      perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name) values (%L, 'takes metformin daily')$q$, wx), 'Sensitive data refused%');
+    end loop;
+    insert into public.client_workspaces (slug, name, status) values ('ic-s3-null', 'IC variant', 'active') returning id into wn;
+    if not public.ws_insurance_context(null, wn) then raise exception 'R4.S3 a NULL vertical did not get the insurance screen'; end if;
+    perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name) values (%L, 'takes metformin daily')$q$, wn), 'Sensitive data refused%');
+    if not public.ws_insurance_context(null, gen_random_uuid()) then raise exception 'R4.S3 an unknown workspace id did not get the insurance screen'; end if;
+    perform pg_temp.must_block('R4.S3 unknown workspace id', 'takes metformin daily', gen_random_uuid(), 'unknown_word');
+    foreach s in array array['mortgage', 'Mortgage', ' MORTGAGE '] loop
+      if public.ws_vertical_insurance(s) then raise exception 'R4.S3 % must stay a non-insurance vertical', s; end if;
+    end loop;
+    if public.ws_insurance_context(null, other) then raise exception 'R4.S3 the mortgage workspace got the insurance screen'; end if;
+    if not (public.ws_vertical_insurance(null) and public.ws_vertical_insurance('') and public.ws_vertical_insurance('insurance')) then raise exception 'R4.S3 ws_vertical_insurance'; end if;
+
+    -- R4.S2 person tables of an insurance workspace get the insurance screen. EXPECTED: refused in ws_leads.note / .source / .name, ffm_routing_rules, ffm_consent_log.
+    --        (Before round 4: the first nine were stored in every one of these columns.)
+    l4 := public.ws_add_lead(ins4, c4, 'Pat Example', 'pat@example.com', '613-555-0142', 'web form', 'callback about renewal');
+    foreach s in array array['takes metformin daily', 'had a double bypass, on Lipitor', '45 years old, smokes a pack a day', 'beneficiary is Maria Lopez', 'makes $85k a year', 'revenu annuel de 45 000 $', 'fumeur depuis vingt ans',
+                             'born March 12, 1984', 'declined by Sun Life last year', 'my husband had a stent', 'no diabetes', 'DOB 1984-03-12', 'non smokers', 'heart attack, stroke and cancer', 'she is expecting',
+                             'sees a shrink weekly', 'age forty five'] loop
+      perform pg_temp.expect_fail(format($q$select public.ws_add_lead(%L, %L, 'Pat Example', 'p2@example.com', '613-555-0101', 'web form', %L)$q$, ins4, c4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ws_leads (workspace_id, campaign_id, name, source) values (%L, %L, 'Pat Example', %L)$q$, ins4, c4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ws_leads (workspace_id, campaign_id, name, source) values (%L, %L, %L, 'web form')$q$, ins4, c4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$update public.ws_leads set note = %L where id = %L$q$, s, l4), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (%L, %L, 'crm', 'crm-acme')$q$, ins4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (%L, 'Main rule', 'crm', %L)$q$, ins4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'express', 'v1', 'web form', now(), %L, 'owner')$q$, ins4, l4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, recorded_by) values (%L, %L, 'email', 'express', 'v1', %L, now(), 'owner')$q$, ins4, l4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.client_workspaces (slug, name, vertical) values ('ic-s2-x', %L, 'insurance')$q$, s), 'Sensitive data refused%');
+    end loop;
+    foreach s in array array['takes_metformin_daily', 'makes_85k', 'age45', 'fifty_thousand', 'born-1984-03-12', 'maria.lopez@gmail.com'] loop       -- a reference id or actor tag is not a way around it
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (%L, 'Main rule', 'crm', %L)$q$, ins4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'express', 'v1', 'web form', now(), %L, 'owner')$q$, ins4, l4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, recorded_by) values (%L, %L, 'email', 'express', 'v1', 'web form', now(), %L)$q$, ins4, l4, s), 'Sensitive data refused%');
+    end loop;
+    -- EXPECTED: ordinary person rows of an insurance workspace are still stored (names are names, contact fields are contact fields, tags and reference ids are tags)
+    perform public.ws_add_lead(ins4, c4, 'Jean-Luc O''Neil', 'jl.oneil@example.com', '+1 (613) 555-0143', 'referral');
+    perform public.ws_add_lead(ins4, c4, 'Sam Other', null, null, 'meta_ad', 'callback about life insurance');     -- an approved product term is product interest, not health
+    insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (ins4, 'Leads to the broker', 'crm', 'crm-acme');
+    insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (ins4, 'Email the office', 'email', 'leads@acme.ca');
+    insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (ins4, l4, 'email', 'express', 'form-v3', 'web form', now(), 'form-submission-1001', 'bot');
+    insert into public.client_workspaces (slug, name, vertical) values ('ic-s2-ok', 'Maple Leaf Insurance Brokers Inc.', 'insurance');
+    -- EXPECTED: a non-insurance (mortgage) workspace is UNCHANGED on the person tables: the old screen, nothing more. The value below has no word of the old lists and was stored before this migration too.
+    perform public.ws_add_lead(other, cb, 'Pat Example', 'pat@example.com', '613-555-0142', 'web form', 'wants a callback about renewal, takes metformin daily');
+    insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (other, 'beneficiary is Maria Lopez', 'crm', 'crm-acme');
+    perform pg_temp.expect_fail(format($q$select public.ws_add_lead(%L, %L, 'Pat Example', null, null, 'web form', 'has diabetes')$q$, other, cb), 'Sensitive data refused%health%');
+    for s in select l from regexp_split_to_table('takes metformin daily|makes $85k a year|age forty five|beneficiary is Maria Lopez|Free quote today|callback about renewal|web form|zero four six|Get covered today, no obligation', '\|') l loop
+      if public.ws_classify_text(s, other) is distinct from public.ws_classify_text(s, null) then raise exception 'R4.S2 the mortgage workspace differs from the strict screen on: %', s; end if;
+    end loop;
+    -- a lead NOTE is default-deny (wording on no list is refused); L (asserted limit): a workspace NAME is a list screen (business names are not vocabulary), so the same wording is stored there
+    perform pg_temp.expect_fail(format($q$select public.ws_add_lead(%L, %L, 'Pat Example', null, null, 'web form', 'wants coverage because of a scare last year')$q$, ins4, c4), 'Sensitive data refused%unknown_word%');
+    insert into public.client_workspaces (slug, name, vertical) values ('ic-s2-l', 'wants coverage because of a scare last year', 'insurance');
+    -- L (asserted limit): the lead NAME column holds names, so a one-word value on no list is stored; the source tag is a list screen (one or two plain words)
+    insert into public.ws_leads (workspace_id, campaign_id, name, source) values (ins4, c4, 'Diabeetus', 'web form');
+
+    -- R4.S4 spelled-out digit groups. EXPECTED: three number words in a row refused in one value; groups split across the columns of a row refused. (Before round 4: stored.)
+    perform pg_temp.must_block('R4.S4', 'zero four six', ins4, 'unknown_word');
+    perform pg_temp.must_block('R4.S4', 'zero, four, six', ins4, 'unknown_word');
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body, cta) values (%L, %L, %L, 'zero four', 'six four', 'five four')$q$, ins4, c4, a4), 'Sensitive data refused%');
+    perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name, channel) values (%L, 'plan zero four', 'six four')$q$, ins4), 'Sensitive data refused%');
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body, cta) values (%L, %L, %L, 'zero four six', 'four five four', 'two eight six')$q$, ins4, c4, a4), 'Sensitive data refused%');
+    -- L (asserted limit): two number words per row, repeated over several ROWS, are stored; a row trigger cannot see other rows
+    insert into public.ws_ledger (workspace_id, campaign_id, amount_cents, note) values (ins4, c4, 100, 'plan zero four');
+    insert into public.ws_ledger (workspace_id, campaign_id, amount_cents, note) values (ins4, c4, 100, 'plan six four');
+
+    -- R4.S5 names that are vocabulary words. EXPECTED: refused. (Before round 4: allowed.)
+    foreach s in array array['quote for Price', 'the Price family', 'Price family plan', 'call Day', 'Love family: life insurance', 'the Strong family', 'West family plan', 'Young family', 'Cash family', 'Banner family',
+                             'quote for Tailor', 'quote for Brand on', 'Family: Price. Plan: term. Premium: $62 monthly', 'life insurance, page family', 'book family', 'price family', 'day family, two cars, home in Ottawa',
+                             'Life insurance for Ottawa', 'quote for price', 'life insurance for banner', 'contact Brand today', 'la famille Petit'] loop
+      perform pg_temp.must_block('R4.S5', s, ins4);
+    end loop;
+    foreach s in array array['Protect your family', 'Life insurance for your whole family', 'Life insurance for every family', 'Life insurance for life', 'Life insurance for less', 'Health insurance for families',
+                             'Get Your Free Quote Today', 'Life Insurance from $18 a month', 'Health insurance Option #1', 'Compare quotes for Life Insurance', 'Life insurance in Ottawa', 'Protégez votre famille'] loop
+      perform pg_temp.must_pass('R4.S5 ordinary copy', s, ins4);
+    end loop;
+    -- L (asserted limit): in a text written In Title Case a capital letter says nothing; only the "family" and closing "for <word>" positions are refused there
+    perform pg_temp.must_pass('R4.S5 L title case', 'Call Day Today', ins4);
+    perform pg_temp.must_block('R4.S5 L title case, position', 'Quote For Price', ins4);
+
+    -- R4.S6 age and policy details. EXPECTED: refused. (Before round 4: allowed.)
+    foreach s in array array['age forty five', 'age: forty', 'ages 45 to 55', 'coverage amount $500,000', 'replacing a $250,000 policy', 'policy date march 3', 'renewal date march 3, payment $62 monthly', 'application date july 14',
+                             'have life insurance: no', 'current insurer: no', 'exam: no', 'beneficiary: the two students', 'beneficiary: family', 'have a mortgage: yes', 'forty five years old', 'aged forty', 'started march 3',
+                             'coverage: $500,000; term: 20 years; premium: $62 monthly; beneficiary: family', 'Life insurance? no', 'age 45', 'aged 62'] loop
+      perform pg_temp.must_block('R4.S6', s, ins4);
+    end loop;
+    foreach s in array array['Health insurance for ages 18 to 65', 'Life insurance: lock in your rate before December 31', 'Health insurance. No obligation.', 'Life insurance: 20 year term'] loop
+      perform pg_temp.must_pass('R4.S6 ordinary copy', s, ins4);
+    end loop;
+
+    -- R4.S7 onboarding values. EXPECTED: refused under every key. (Before round 4: stored under 7 of 8 keys.)
+    foreach s in array array['she is expecting', 'sees a shrink weekly', 'opere de la hanche', 'A1C of 8.2', 'declined by Sun Life last year', 'makes $85k a year', 'fifty thousand a year', 'coverage amount $500,000',
+                             'makes $85k a year, mortgage $412,000', 'beneficiary is Maria Lopez', 'sober for two years', 'weight 210 lbs', 'age forty five'] loop
+      foreach x in array array['crm_destination', 'consent_wording', 'compliance_contact', 'lead_fields_agreed', 'licensing_status', 'licence_details', 'monthly_budget', 'launch_deadline', 'service_geography'] loop
+        if (public.ws_onboarding_value_check(x, s) ->> 'allowed')::boolean then raise exception 'R4.S7 onboarding value accepted under %: %', x, s; end if;
+        insert into pg_temp.assertion_count values ('block');
+      end loop;
+    end loop;
+    foreach s in array array['monthly_budget=$2,000 per month', 'monthly_budget=Budget set by the owner in the workspace', 'monthly_budget=2000 $ par mois', 'crm_destination=HubSpot, leads@acme.ca', 'launch_deadline=Dec 1, 2026',
+                             'compliance_contact=Jane Doe, compliance officer, 613 555 0100', 'service_geography=Ontario and Quebec'] loop
+      if not (public.ws_onboarding_value_check(split_part(s, '=', 1), substr(s, position('=' in s) + 1)) ->> 'allowed')::boolean then raise exception 'R4.S7 legitimate onboarding value refused: %', s; end if;
+      insert into pg_temp.assertion_count values ('pass');
+    end loop;
+    -- L (asserted limits, S7): still a list screen; a licence number and the licence class "accident & sickness" stay refused by the earlier detectors
+    if not (public.ws_onboarding_value_check('licence_details', 'feeling poorly since the spring') ->> 'allowed')::boolean then raise exception 'R4.S7 L: the list screen changed (wording on no list)'; end if;
+    if (public.ws_onboarding_value_check('licence_details', 'FSRA licence 21145678') ->> 'allowed')::boolean or (public.ws_onboarding_value_check('licensing_status', 'Licensed life and accident & sickness agent') ->> 'allowed')::boolean
+      then raise exception 'R4.S7 L: licence over-blocking changed'; end if;
+
+    -- R4.S8 owner validation. EXPECTED: a feature phrase that addresses, owns, negates or dates is refused; the listed words can never be vocabulary. (Before round 4: accepted.)
+    foreach s in array array['you have cancer', 'no diabetes', 'non smokers', 'non fumeurs', 'your heart attack', 'family history of cancer', 'cancer free', 'stroke since last year', 'heart attack yes', 'without cancer', 'not cancer'] loop
+      perform pg_temp.expect_fail(format($q$select public.ws_add_approved_term(%L, null, 'feature', %L)$q$, ins2, s), 'term refused%');
+    end loop;
+    foreach s in array array['aged', 'old', 'yes', 'weight', 'height', 'lbs', 'sober', 'expecting', 'shrink', 'owes', 'dui', 'earns', 'figures', 'applicant', 'smokes', 'overweight', 'unemployed', 'bankrupt', 'gender'] loop
+      perform pg_temp.expect_fail(format($q$select public.ws_add_vocab_word('en', %L)$q$, s), 'word refused%');
+      if exists (select 1 from public.ws_marketing_vocab where word = s and removed_at is null) then raise exception 'R4.S8 % is in the seeded vocabulary', s; end if;
+    end loop;
+    foreach s in array array['late', 'losing', 'job', 'cash'] loop      -- situation words taken out of the seed (the owner may still add them: an owner decision)
+      if exists (select 1 from public.ws_marketing_vocab where word = s and removed_at is null) then raise exception 'R4.S8 % is in the seeded vocabulary', s; end if;
+    end loop;
+    -- L (asserted limit, S8): occupations are an open class; the hard deny list cannot hold them
+    tid := public.ws_add_vocab_word('en', 'roofer'); perform public.ws_remove_vocab_word(tid);
+
+    -- R4.N5 structural columns: a pay / age / number token is free text, not a tag
+    foreach s in array array['makes_85k', 'age45', 'fifty_thousand', 'dob_1984', 'metformin_daily', 'maria_lopez'] loop
+      if public.ws_structural_value('ffm_approvals', 'approved_by', s) then raise exception 'R4.N5 % is still a structural token', s; end if;
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_approvals (workspace_id, kind, ref_id, approved_by) values (%L, 'campaign', %L, %L)$q$, ins4, c4, s), 'Sensitive data refused%');
+    end loop;
+    if not (public.ws_structural_value('ffm_approvals', 'approved_by', 'owner') and public.ws_structural_value('ffm_approvals', 'approved_by', 'bot:setter-1')) then raise exception 'R4.N5 ordinary actor tags'; end if;
+  end;
+  -- R4.N4 per-role EXECUTE for the functions the G5/G6 loop did not cover: the seven round-3 functions and the six round-4 functions. EXPECTED: anon 0, authenticated 0, service_role 1, no PUBLIC grant.
+  foreach f in array array['public.ws_stem_match(text,text[])', 'public.ws_name_word_hit(text)', 'public.ws_health_word_hit(text)', 'public.ws_add_fixed_phrase(text,text)', 'public.ws_remove_fixed_phrase(uuid)',
+                           'public.ws_structural_value(text,text,text)', 'public.ws_onboarding_value_check(text,text)', 'public.ws_number_words()', 'public.ws_financial_hit(text,boolean)', 'public.ws_feature_context_ok(text,text,boolean)',
+                           'public.ws_vertical_insurance(text)', 'public.ws_person_name_check(text)', 'public.ws_person_column_check(text,text,text,uuid)'] loop
+    foreach r in array array['anon', 'authenticated', 'public'] loop
+      if has_function_privilege(r, f, 'execute') then raise exception 'R4.N4 % can execute %', r, f; end if;
+    end loop;
+    if not has_function_privilege('service_role', f, 'execute') then raise exception 'R4.N4 service_role cannot execute %', f; end if;
+  end loop;
+  if exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname ~ '^ws_' and p.proname <> 'ws_sensitive_hits' and p.proname not in ('ws_add_lead', 'ws_record_spend', 'ws_summary')
+               and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))) then raise exception 'R4.N4 a ws_ function is executable by anon / authenticated'; end if;
+  for t in select p.proname from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in ('ws_person_name_check', 'ws_person_column_check', 'ws_classify_core', 'ws_insurance_context') loop
+    if not exists (select 1 from pg_proc p where p.proname = t and p.prosecdef and p.proconfig @> array['search_path=pg_catalog']) then raise exception 'R4.N4 % must be a definer that pins search_path to pg_catalog', t; end if;
+  end loop;
+  if exists (select 1 from pg_proc where pronamespace = 'public'::regnamespace and proname = 'ws_classify_core' and pronargs <> 5) then raise exception 'R4 an old ws_classify_core signature is still present'; end if;
   raise notice 'insurance_classifier_check: all passed (% allowed-text assertions, % blocked-text assertions, % refused-statement assertions, plus the differential corpus)',
     (select count(*) from pg_temp.assertion_count where kind = 'pass'), (select count(*) from pg_temp.assertion_count where kind = 'block'), (select count(*) from pg_temp.assertion_count where kind = 'refused');
 end $$;
