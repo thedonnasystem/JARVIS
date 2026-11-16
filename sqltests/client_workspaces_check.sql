@@ -68,7 +68,7 @@ begin
   end loop;
   begin perform public.ws_add_lead(a, ca, '123', '456', '789', 'x'); raise exception 'W24 digits split across columns accepted';
   exception when raise_exception then if sqlerrm like 'W24%' then raise; end if; end;
-  begin insert into public.client_workspaces (slug, name) values ('123456789', 'Digits'); raise exception 'W25 digit slug accepted';
+  begin insert into public.client_workspaces (slug, name, vertical) values ('123456789', 'Digits', 'mortgage'); raise exception 'W25 digit slug accepted';
   exception when raise_exception then if sqlerrm like 'W25%' then raise; end if; end;
   if public.ws_sensitive_hits('Call 613-555-0142 or (613) 555 0142 about a renewal in March') <> '{}' then raise exception 'W26 false positive on phones'; end if;
   foreach f in array array['client_workspaces', 'ws_campaigns', 'ws_leads', 'ws_ledger'] loop

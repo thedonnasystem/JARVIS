@@ -26,6 +26,9 @@
 --   * ROUND 4 (independent review RV17-C): money / pay / debt fail closed (ws_financial_hit); a feature phrase can never state a fact about a person (ws_feature_context_ok);
 --     the insurance screen applies to every workspace whose vertical is not exactly 'mortgage' (ws_vertical_insurance: NULL / unknown / misspelled fail closed); person tables as above;
 --     spelled digit groups across columns, vocabulary-word names, form labels and answers, onboarding values and owner validation tightened. See the policy document, section 5a.
+--   * ROUND 5 (independent review RV17-D, integration S7): a consent withdrawal / erasure is never refused for wording in any column of any workspace (fixed tags instead, ffm_guard);
+--     PR #20's machine consent columns are accepted exactly; money next to a period word, "over N", a ceiling followed by anything, benefit / savings / receive words, payment trouble,
+--     spelled-out and paired ages and split amounts fail closed (ws_financial_hit); actor tags, routing rule names and the vertical normalisation tightened / documented.
 --   * ws_fixed_phrases (round 3): owner-managed en/fr fixed phrases ("contact us", "our team", "notre equipe", "Mon-Fri" ...), cut in pass 1 like an approved term; owner-only, soft removal, PII-free audit, immutable.
 --   * ws_onboarding_value_check / ws_structural_value (round 3): onboarding VALUES are list-screened (no vocabulary test, no waiver); structural columns skip the vocabulary test only when they really are a template title, a plain date or a short token.
 --   * ws_sensitive_hits is NOT changed (other callers, the Python wrapper and ffm_route_preview keep the strict result). Regular expressions and word lists have stated limits: see the policy document.
@@ -1129,9 +1132,10 @@ begin
   -- round 5 (S6): an ACTOR tag names who acted, nothing else: a word of a short fixed list of insurer-decision, care, pregnancy, status and claim words makes it free text
   -- (and, below, for every structural column: a run of number words such as "fortyfive") ("insurer_declined", "needs_daily_care", "expecting_wk20"). (Not the whole vocabulary hard-deny list: it holds 'client' and 'test', real actor tags.)
   if p_col = any (array['approved_by', 'recorded_by', 'set_by', 'provided_by']) then
+    if v !~ '[A-Za-z]' then return false; end if;                                                           -- a bare number ("45") is not an actor
     foreach w in array regexp_split_to_array(regexp_replace(lower(v), '([a-z])([0-9])|([0-9])([a-z])', '\1\3_\2\4', 'g'), '[_:.+-]+') loop
       if w = any (array['needs', 'need', 'needed', 'care', 'declined', 'decline', 'denied', 'refused', 'expecting', 'pregnant', 'wk', 'weeks', 'week', 'insurer', 'insured', 'claim', 'claims',
-                        'sick', 'ill', 'daily', 'smoker', 'smokes', 'widow', 'widowed', 'divorced', 'retired', 'unemployed', 'disabled', 'senior', 'junior']) then return false; end if;
+                        'sick', 'ill', 'daily', 'smoker', 'smokes', 'widow', 'widowed', 'divorced', 'retired', 'unemployed', 'disabled', 'senior', 'junior', 'm', 'mm', 'mil', 'b', 'bn']) then return false; end if;
     end loop;
   end if;
   -- round 4 (N5): a token is split at separators AND between letters and digits ("age45" -> age, 45); a pay / age / number word makes it free text ("makes_85k", "fifty_thousand")
@@ -1256,7 +1260,8 @@ begin
     return res || nofree;
   end if;
   if p_table = 'ws_leads' and p_col = 'name' then return public.ws_person_name_check(p_value) || nofree; end if;
-  if p_table = 'ws_leads' and p_col = 'email' and v ~* '^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{3,80}\.[a-z]{2,10}$' then
+  -- (round 5, integration: the import shapes normalize_addr accepts, '<a@b.ca>' and a trailing dot, are e-mail addresses too)
+  if p_table = 'ws_leads' and p_col = 'email' and v ~* '^<?[a-z0-9._%+-]{1,64}@[a-z0-9.-]{3,80}\.[a-z]{2,10}\.?>?$' then
     for w in select m[1] from regexp_matches(public.ws_fold_text(v), '[a-z]{3,}', 'g') as m loop
       if public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual'), 'free', false); end if;
     end loop;

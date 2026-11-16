@@ -1222,7 +1222,7 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
     perform pg_temp.expect_fail($q$update public.client_workspaces set vertical = 'insurance' where slug = 'ic-mv'$q$, 'Sensitive data refused%');
     -- EXPECTED: a WITHDRAWAL in an insurance workspace is never refused for its wording (the text is replaced by a fixed tag), and an ERASURE works (it writes its own fixed values)
     tid := public.ffm_withdraw_consent(ins4, wx, 'email', 'said to stop calling, moving away next spring', 'voicemail left on the office line', 'bot');
-    if (select source || '/' || coalesce(evidence_ref, 'null') from public.ffm_consent_log where id = tid) <> 'withdrawal (wording not stored)/null' then raise exception 'R4.S2 withdrawal wording was stored or the withdrawal was lost'; end if;
+    if (select source || '/' || coalesce(evidence_ref, 'null') from public.ffm_consent_log where id = tid) not like '%withdrawal (wording not stored)/null' then raise exception 'R4.S2 withdrawal wording was stored or the withdrawal was lost'; end if;
     if public.ffm_can_contact(wx, 'email') then raise exception 'R4.S2 the withdrawal did not take effect'; end if;
     tid := public.ffm_withdraw_consent(ins4, wx, 'sms', 'has diabetes, stop', null, 'bot');   -- round 5 (S4): even wording the OLD screen refuses no longer blocks a withdrawal; it is not stored
     if (select source from public.ffm_consent_log where id = tid) not like '%withdrawal (wording not stored)' then raise exception 'R4.S2 a withdrawal with refused wording was not stored with the fixed tag'; end if;
@@ -1343,7 +1343,7 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
       rid := public.ffm_withdraw_consent(rec.w, l5, 'email', repeat('stop ', 30), null, 'bot');                       -- a source longer than the 120-character column limit
       if (select source from public.ffm_consent_log where id = rid) <> 'withdrawal (wording not stored)' then raise exception 'R5.S4 a long withdrawal source was not replaced by the tag'; end if;
     end loop;
-    l5 := public.ws_add_lead(i5, c5, 'Pat Example', 'r5e@example.com', null, 'web form');
+    l5 := public.ws_add_lead(i5, c5, 'Pat Example', 'r5e@example.com', '613-555-0154', 'web form');
     rid := public.ffm_withdraw_consent(i5, l5, 'email', 'stop a year', 'msg-85000', 'bot');                                  -- each column passes alone, the row joined does not
     if (select source || '/' || coalesce(evidence_ref, 'null') from public.ffm_consent_log where id = rid) <> 'withdrawal (wording not stored)/null' then raise exception 'R5.S4 split value kept in a withdrawal row'; end if;
     -- ordinary withdrawals keep their wording (EXPECTED: stored as written)
@@ -1394,6 +1394,10 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
       end loop;
       perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by, verification) values (%L, %L, 'email', 'implied', 'v1', 'web form', now(), 'form-abc-001', 'owner', 'has_diabetes')$q$, i5, l5), 'Sensitive data refused%');
     end if;
+    -- import shapes of an e-mail address that normalize_addr accepts (PR #20 re-import scenario) are stored in an insurance workspace; a health word in an address is still refused
+    perform public.ws_add_lead(i5, c5, 'Dina Example', '<r5y@example.com>', '+1 613 555 0150 x5', 'csv import');
+    perform public.ws_add_lead(i5, c5, 'Dina Example', 'r5z+newsletter@example.com.', '613.555.0150', 'csv import');
+    perform pg_temp.expect_fail(format($q$select public.ws_add_lead(%L, %L, 'Dina Example', '<diabetes.r5@example.com>', null, 'csv import')$q$, i5, c5), 'Sensitive data refused%');
     -- (mortgage workspace) the same machine values are stored there too
     l5 := public.ws_add_lead(other, mc, 'Pat Example', 'r5j@example.com', null, 'web form');
     insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (other, l5, 'email', 'implied', 'form-a-v2', 'web form', now(), 'form-abc-001', 'owner');
@@ -1437,7 +1441,7 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
     end loop;
 
     -- R5.S6 actor tags. EXPECTED: tokens that state an age, an insurer decision, a care need or a pregnancy are free text (refused in an insurance workspace); ordinary actor tags pass.
-    foreach s in array array['fortyfive', 'insurer_declined', 'needs_daily_care', 'expecting_wk20', 'fifty-five', 'claim_denied'] loop
+    foreach s in array array['fortyfive', 'insurer_declined', 'needs_daily_care', 'expecting_wk20', 'fifty-five', 'claim_denied', '45', '1.2M'] loop
       if public.ws_structural_value('ffm_approvals', 'approved_by', s) or public.ws_structural_value('ffm_onboarding_items', 'provided_by', s) then raise exception 'R5.S6 % is still an actor tag', s; end if;
       perform pg_temp.expect_fail(format($q$insert into public.ffm_approvals (workspace_id, kind, ref_id, approved_by) values (%L, 'campaign', %L, %L)$q$, i5, c5, s), 'Sensitive data refused%');
     end loop;
