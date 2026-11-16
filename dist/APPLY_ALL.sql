@@ -5667,8 +5667,12 @@ begin
 end $$;
 
 -- 7. the backup export: keyed hashes only, safe for the encrypted off-site file ------------------------------------------------------------------------------------------
+-- search_path is pg_catalog (every reference below is schema-qualified): PR #16's rule for SECURITY DEFINER backup_* functions (its sqltest M17).
+-- CROSS-PR DEPENDENCY (PR #16 leak redaction, round 8): PR #16's post-lockdown file treats every public backup_* function as backup-identity only (revokes service_role, injects
+-- backup_assert_reader()). PR #16 round 8 adds THIS function, by this exact name, to its backup_reader allow-list (13 functions). Do not rename it. Before PR #16 lands, the grant
+-- below (service_role) is how hq_backup reaches it; after PR #16, hq_backup._rpc calls it as backup_reader (BACKUP_READER_JWT) and service_role can no longer execute it.
 create or replace function public.backup_suppression_export() returns jsonb
-language plpgsql stable security definer set search_path to 'public' as $$
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare d jsonb; macs jsonb;
 begin
   if not exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key') then
@@ -6102,7 +6106,7 @@ grant execute on function public.ffm_outreach_gate_open() to service_role;
 grant execute on function public.ffm_outreach_gate_status() to service_role;
 grant execute on function public.ffm_close_outreach_gate(text, text) to service_role;
 grant execute on function public.ffm_suppression_digest() to service_role;
-grant execute on function public.backup_suppression_export() to service_role;
+grant execute on function public.backup_suppression_export() to service_role;   -- until PR #16's post-lockdown file moves it to backup_reader (see section 7)
 grant execute on function public.ffm_stage_suppression_checkpoint(jsonb) to service_role;
 grant execute on function public.ffm_import_suppression_hashes() to service_role;
 grant execute on function public.ffm_verify_suppression(text) to service_role;

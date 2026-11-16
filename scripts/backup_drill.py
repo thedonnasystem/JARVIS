@@ -362,7 +362,9 @@ def v3_restore_closed_checks(DST_, cur, sql, owner, work):
             prov3 = f"drill_prov3_{sfx}"
             try:
                 oc = psycopg2.connect(_admin_url(other, "postgres")); oc.autocommit = True; occ = oc.cursor()
-                for r in ("anon", "authenticated", "service_role"):
+                # every cluster-level role the dump carries GRANTs to must exist on the second server BEFORE the restore (ops/OWNER_RESTORE_RUNBOOK.md, "Before a pg_restore into
+                # a new server"): the Supabase API roles, and PR #16's backup identity backup_reader (created by 20261121_postlock_backup_identity_v1; harmless before PR #16 lands)
+                for r in ("anon", "authenticated", "service_role", "backup_reader"):
                     occ.execute(f"do $$ begin create role {r} nologin; exception when duplicate_object then null; end $$")
                 occ.execute(f'drop database if exists "{prov3}"'); occ.execute(f'create database "{prov3}"'); oc.close()
                 prov_names.append((prov3, _admin_url(other, "postgres")))

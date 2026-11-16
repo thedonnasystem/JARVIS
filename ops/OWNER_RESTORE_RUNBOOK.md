@@ -4,6 +4,17 @@ Applies to: a provider point-in-time recovery, a Supabase backup restore, a `pg_
 
 **The order is enforced by the database and the sender. Doing a step out of order does not break anything; it is refused.**
 
+## Before a `pg_restore` / `psql` reload into a NEW server or project (prerequisite)
+Roles belong to the server, not to the database, so a dump does not create them; it only carries GRANTs to them. Create every role the dump grants to BEFORE restoring, or the restore stops with `role "..." does not exist`:
+```
+do $$ begin create role anon nologin; exception when duplicate_object then null; end $$;            -- Supabase projects already have these three
+do $$ begin create role authenticated nologin; exception when duplicate_object then null; end $$;
+do $$ begin create role service_role nologin; exception when duplicate_object then null; end $$;
+do $$ begin create role backup_reader nologin noinherit nobypassrls nocreatedb nocreaterole noreplication; exception when duplicate_object then null; end $$;   -- the backup identity (PR #16)
+grant backup_reader to authenticator;   -- only on Supabase/PostgREST (as in migration 20261121_postlock_backup_identity_v1), so BACKUP_READER_JWT can switch to it
+```
+`backup_reader` is the backup identity added by the leak-redaction change; creating it on a database that does not have that change yet is harmless (it holds nothing). The restore drill does the same (`scripts/backup_drill.py`, check V9, restore into another cluster). A restore into the SAME project keeps the roles and needs none of this.
+
 | # | Who / where | Action | Why it is first |
 |---|---|---|---|
 | 0 | you | Do nothing else. Do not re-enable anything. | The gate closes itself (stale attestation within 15 minutes, other cluster or timeline at once, the sender's mark if it sees it). |

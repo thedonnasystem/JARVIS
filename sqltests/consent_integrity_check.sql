@@ -90,7 +90,12 @@ begin
     foreach f in array array['anon', 'authenticated'] loop
       if has_function_privilege(f, x.oid, 'execute') then raise exception 'G6 % can execute %', f, x.sig; end if;
     end loop;
-    if not has_function_privilege('service_role', x.oid, 'execute') then raise exception 'G7 service_role cannot execute %', x.sig; end if;
+    if x.sig = 'backup_suppression_export()' and to_regprocedure('public.backup_assert_reader()') is not null then
+      -- G7b with PR #16 (leak redaction) applied, the export belongs to the backup identity ONLY: backup_reader may execute it (PR #16 round 8 allow-list), the bot's service role may not
+      if not has_function_privilege('backup_reader', x.oid, 'execute') then raise exception 'G7b backup_reader cannot execute % (PR #16 must list it in its backup_reader allow-list)', x.sig; end if;
+      if has_function_privilege('service_role', x.oid, 'execute') then raise exception 'G7c service_role can still execute % after PR #16', x.sig; end if;
+      if (select array_to_string(proconfig, ',') from pg_proc where oid = x.oid) is distinct from 'search_path=pg_catalog' then raise exception 'G7d % search_path is not pg_catalog', x.sig; end if;
+    elsif not has_function_privilege('service_role', x.oid, 'execute') then raise exception 'G7 service_role cannot execute %', x.sig; end if;
   end loop;
   -- the bot cannot write the secrets, captures, hashes or the gate directly, and cannot read the keys
   if pg_temp.svc($q$select value from public.ffm_secrets limit 1$q$) not like 'ERR:permission denied%' then raise exception 'G9 bot can read keys'; end if;
@@ -327,8 +332,19 @@ begin
   if (e ->> 'count')::int <> jsonb_array_length(e -> 'macs') or (e ->> 'hash') <> encode(sha256(convert_to((select string_agg((mx ->> 0) || ':' || (mx ->> 1), E'\n' order by ((mx ->> 0) || ':' || (mx ->> 1)) collate "C") from jsonb_array_elements(e -> 'macs') mx), 'UTF8')), 'hex') then raise exception 'G22 export count/hash'; end if;
   if (e -> 'macs') @> jsonb_build_array(jsonb_build_array('email', public.ffm_hmac_sha256(K2, public.ffm_sup_message('email', 'dan@example.com')))) is not true or (e -> 'macs') @> jsonb_build_array(jsonb_build_array('phone', public.ffm_hmac_sha256(K2, public.ffm_sup_message('phone', '+16135550101')))) is not true then raise exception 'G23 expected keyed hashes missing'; end if;
   if (e ->> 'key_check') <> public.ffm_hmac_sha256(K2, 'key|v1|' || public.ffm_lp('suppression_hmac_key')) then raise exception 'G24 key check'; end if;
-  -- G25 the bot may fetch the export (needed by the backup job) but nothing that would let it open the gate
-  if pg_temp.svc($q$select (public.backup_suppression_export() ->> 'count')$q$) not like 'OK:%' then raise exception 'G25 bot cannot export'; end if;
+  -- G25 who may fetch the export (the backup job's identity) - and nobody may run anything that would open the gate.
+  --   With PR #16 (leak redaction) applied: ONLY backup_reader (hq_backup._rpc with BACKUP_READER_JWT); the bot's service role is refused. Without PR #16: the service role (the only backup identity there is).
+  if (select array_to_string(proconfig, ',') from pg_proc where oid = 'public.backup_suppression_export()'::regprocedure) is distinct from 'search_path=pg_catalog' then raise exception 'G25a export search_path is not pg_catalog'; end if;
+  if to_regprocedure('public.backup_assert_reader()') is not null then
+    if pg_temp.svc($q$select (public.backup_suppression_export() ->> 'count')$q$) not like 'ERR:permission denied%' then raise exception 'G25 the bot can export; after PR #16 only backup_reader may'; end if;
+    set local role backup_reader;
+    begin
+      t := (public.backup_suppression_export() ->> 'count');
+    exception when others then reset role; raise exception 'G25b backup_reader cannot export: %', sqlerrm;
+    end;
+    reset role;
+    if t is null or t::int < 4 then raise exception 'G25c backup_reader export count %', t; end if;
+  elsif pg_temp.svc($q$select (public.backup_suppression_export() ->> 'count')$q$) not like 'OK:%' then raise exception 'G25 bot cannot export'; end if;
   foreach t in array array['select public.ffm_verify_suppression(''bot'')::text', 'select public.ffm_import_suppression_hashes()::text', 'select public.ffm_stage_suppression_checkpoint(''{}''::jsonb)::text'] loop
     if pg_temp.svc(t) not like 'ERR:owner approval required%' then raise exception 'G26 bot ran an owner-only gate function: %', t; end if;
   end loop;
