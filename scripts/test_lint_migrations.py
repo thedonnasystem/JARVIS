@@ -303,6 +303,86 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class PostlockR7(unittest.TestCase):
+    """Round 8 (lint item 8). Each case is a postlock file that passed the lint before R7 (verified by the independent review) and must fail now; the last cases prove the rule still lets a restricting file through."""
+    F = "20261123_postlock_zz_v1.sql"
+    GUARD = ("create or replace function public.backup_assert_reader() returns void language plpgsql as $$ begin null; end $$;\n"
+             "revoke all on function public.backup_assert_reader() from public, anon, authenticated;\n")
+
+    def errs(self, sql, name=None, pins=None):
+        return L.check_postlock(name or self.F, sql, pins)
+
+    def assertR7(self, sql, needle):
+        e = self.errs(sql)
+        self.assertTrue(any(x.startswith("R7") and needle in x for x in e), (sql, e))
+
+    def test_grants_to_api_roles_fail_on_any_object(self):
+        for sql in ("grant execute on function public.f() to service_role;", "grant execute on function public.f() to anon with grant option;", "grant execute on routine public.f() to authenticated;",
+                    "grant execute on all routines in schema public to service_role;", "grant select on public.leads to anon;", "grant all on all tables in schema public to service_role, backup_reader;",
+                    "grant usage on schema public to PUBLIC;", "grant backup_reader to anon;", 'grant select on public.t to "service_role";', "grant select (value) on public.ffm_redaction_keys to service_role;",
+                    "GRANT\n  EXECUTE ON FUNCTION public.f()\n  TO\n  authenticated;"):
+            with self.subTest(sql):
+                self.assertR7(sql, "may only restrict")
+
+    def test_grant_inside_a_do_block_or_a_string_is_read(self):
+        self.assertR7("do $$ begin execute 'grant execute on function public.f() to service_role'; end $$;", "may only restrict")
+        self.assertR7("do $x$ begin grant select on public.leads to anon; end $x$;", "may only restrict")
+        self.assertR7("do $$ begin execute format('grant execute on function %s to %s', 'public.f()', 'anon'); end $$;", "cannot read")
+        self.assertR7("do $$ declare r text := 'anon'; begin execute 'grant select on public.leads to ' || r; end $$;", "cannot read")
+
+    def test_grant_option_default_privileges_and_policies_fail(self):
+        self.assertR7("grant execute on function public.f() to backup_reader with grant option;", "with grant / admin option")
+        self.assertR7("grant backup_reader to authenticator with admin option;", "with grant / admin option")
+        self.assertR7("alter default privileges in schema public grant execute on functions to backup_reader;", "alter default privileges")
+        self.assertR7("create policy p on public.leads for select to anon using (true);", "create policy")
+        self.assertR7("create policy p on public.leads to backup_reader, service_role using (true);", "create policy")
+
+    def test_switching_controls_off_fails(self):
+        self.assertR7("drop event trigger ffm_backup_acl_sweep;", "drops event trigger")
+        self.assertR7("drop event trigger if exists ffm_backup_acl_sweep;", "drops event trigger")
+        self.assertR7("alter event trigger ffm_backup_acl_sweep disable;", "alter event trigger")
+        self.assertR7("alter function public.backup_snapshot(text[]) security invoker;", "security invoker / definer")
+        self.assertR7("alter function public.backup_snapshot(text[]) owner to service_role;", "owner to")
+        self.assertR7("alter table public.ffm_redaction_keys disable trigger keys_append_only;", "disable trigger")
+        self.assertR7("alter table public.ffm_redaction_keys disable row level security;", "disable trigger")
+        self.assertR7("set session_replication_role = replica;", "session_replication_role")
+
+    def test_replacing_the_guard_fails_unless_pinned(self):
+        self.assertR7(self.GUARD, "backup_assert_reader")
+        pin = L.guard_pin(L.GUARD_DEF.search(L.strip_comments(self.GUARD)).group(0))
+        self.assertEqual(self.errs(self.GUARD, pins={self.F: pin}), [])
+        self.assertTrue(self.errs(self.GUARD.replace("null;", "return;"), pins={self.F: pin}))                 # an edited guard no longer matches its pin
+        self.assertTrue(self.errs(self.GUARD, name="20261124_postlock_other_v1.sql", pins={self.F: pin}))       # the pin is per file
+
+    def test_a_comment_is_not_a_statement_and_a_restricting_file_passes(self):
+        ok = ("-- grant execute on function public.f() to service_role;  (history, not a statement)\n/* drop event trigger x; */\n"
+              "revoke all on function public.f() from public, anon, authenticated, service_role;\ngrant execute on function public.f() to backup_reader;\n"
+              "grant backup_reader to authenticator;\ngrant usage on schema public to backup_reader;\n"
+              "do $$ begin if exists (select 1 from pg_event_trigger where evtname = 'zz') then drop event trigger zz; end if; create event trigger zz on ddl_command_end execute function public.f(); end $$;\n"
+              "do $$ begin execute format('grant execute on routine %s to backup_reader', 'public.f()'); raise notice 'could not grant backup_reader to authenticator (%)', sqlerrm; end $$;\n")
+        self.assertEqual(self.errs(ok), [])
+
+    def test_the_repository_postlock_files_pass_and_their_guards_are_pinned(self):
+        mdir = os.path.join(L.ROOT, "migrations")
+        files = [f for f in sorted(os.listdir(mdir)) if L.POSTLOCK_RE.match(f)]
+        self.assertGreaterEqual(len(files), 2)
+        for f in files:
+            with open(os.path.join(mdir, f)) as fh:
+                self.assertEqual(L.check_postlock(f, fh.read()), [], f)
+        self.assertEqual(sorted(L.GUARD_PINS), files)
+
+    def test_r7_runs_as_part_of_the_lint_for_postlock_files_only(self):
+        bad = "grant execute on function public.f() to service_role;\n"
+        r = base_repo({self.F: bad, "20261114_infra_gate_v1.sql": bad}, ["20261114_infra_gate_v1.sql"])
+        try:
+            r.set_order(["20261112_old_v1.sql", "20261114_infra_gate_v1.sql", "20261112_lockdown_v1.sql", self.F])
+            errs = run(r)
+            self.assertTrue(any(e.startswith("R7") and self.F in e for e in errs), errs)
+            self.assertFalse(any(e.startswith("R7") and "infra_gate" in e for e in errs), errs)     # an ordinary migration may grant to service_role (the lockdown runs after it)
+        finally:
+            r.cleanup()
+
+
 class SplitArgsDefaults(unittest.TestCase):
     def test_commas_inside_array_and_string_defaults_are_one_argument(self):
         import lint_migrations as L

@@ -209,12 +209,15 @@ language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
 declare c text; n int; fresh boolean;
 begin
   foreach c in array tg_argv loop
+    -- round 8 (N3): a source column that was renamed or dropped must not make every later insert fail; the epoch moves (so a running export is discarded) and backup_redaction_context() refuses the next backup with the reason
+    if not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = c and a.attnum > 0 and not a.attisdropped) then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
     execute format('select count(*) from (select distinct %1$I::text from new_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2 limit 201) q', c) into n;
     continue when n = 0;
     if n > 200 then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
-    -- a value is NEW when the table holds no more rows with it than this statement inserted
-    execute format('select exists (select 1 from (select distinct %1$I::text v from new_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2) q
-                     where (select count(*) from %2$s t where t.%1$I::text = q.v) <= (select count(*) from new_rows r where r.%1$I::text = q.v))', c, tg_relid::regclass) into fresh;
+    -- a value is NEW when the table holds no more rows with it than this statement inserted. Round 8 (S5): the inserted rows are grouped ONCE, and the table is asked for at most (inserted + 1) rows of each
+    -- value through the hash index on the source column (redaction_src_*_idx, below), so the cost is bounded by the statement (at most 200 index probes), not by the size of the table.
+    execute format('select exists (select 1 from (select %1$I::text v, count(*) c from new_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2 group by 1) q
+                     where (select count(*) from (select 1 from %2$s t where t.%1$I = q.v limit q.c + 1) z) <= q.c)', c, tg_relid::regclass) into fresh;
     if fresh then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
   end loop;
   return null;
@@ -225,12 +228,13 @@ language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
 declare c text; n int; gone boolean;
 begin
   foreach c in array tg_argv loop
+    if not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = c and a.attnum > 0 and not a.attisdropped) then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
     execute format('select count(*) from (select distinct %1$I::text from old_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2 limit 201) q', c) into n;
     continue when n = 0;
     if n > 200 then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
     -- a value is GONE when no row of the table holds it any more
     execute format('select exists (select 1 from (select distinct %1$I::text v from old_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2) q
-                     where not exists (select 1 from %2$s t where t.%1$I::text = q.v))', c, tg_relid::regclass) into gone;
+                     where not exists (select 1 from %2$s t where t.%1$I = q.v))', c, tg_relid::regclass) into gone;
     if gone then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
   end loop;
   return null;
@@ -255,6 +259,18 @@ begin
   return null;
 end $$;
 revoke all on function public.redaction_epoch_bump_upd() from public, anon, authenticated, service_role;
+-- Round 8 (S5): one HASH index per redaction-source column, for the "is this value new / gone" probes of the two triggers above. Hash, not btree: equality is all that is asked, and a hash index has no
+-- row-size limit (a 3 kB name cannot make an insert fail). Measured on the scratch machine with 100,000 leads and 100,000 outbox rows (scripts/perf_epoch_triggers.sh): a 150-row insert went from seconds
+-- (one sequential scan of the table per distinct value) to tens of milliseconds. Built with a plain CREATE INDEX: on a large live table this blocks writes for the build, so apply in a quiet minute.
+do $$
+declare t record;
+begin
+  for t in select s.table_name, s.column_name from public.redaction_sources() s
+            where to_regclass('public.' || s.table_name) is not null and exists (select 1 from pg_attribute a join pg_type ty on ty.oid = a.atttypid where a.attrelid = to_regclass('public.' || s.table_name) and a.attname = s.column_name
+                                                                             and a.attnum > 0 and not a.attisdropped and ty.typname in ('text', 'varchar', 'bpchar')) loop
+    execute format('create index if not exists %I on public.%I using hash (%I)', left('redaction_src_' || t.table_name || '_' || t.column_name || '_idx', 63), t.table_name, t.column_name);
+  end loop;
+end $$;
 do $$
 declare t record;
 begin

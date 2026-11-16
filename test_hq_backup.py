@@ -7,7 +7,17 @@ from cryptography.fernet import Fernet
 
 import hq_backup as B
 B._NO_SLEEP = True
-os.environ["BACKUP_READER_JWT"] = "test.reader.jwt"      # the backup refuses to run without it (no service-key fallback); tests that clear the environment set it again
+
+
+def unsigned_jwt(**claims):
+    """A JWT-shaped token for tests (the database, not this code, verifies signatures)."""
+    import base64
+    enc = lambda o: base64.urlsafe_b64encode(json.dumps(o).encode()).rstrip(b"=").decode()
+    return f"{enc({'alg': 'HS256', 'typ': 'JWT'})}.{enc(claims)}.c2ln"
+
+
+READER_JWT = unsigned_jwt(role="backup_reader", exp=4102444800)      # the year 2100
+os.environ["BACKUP_READER_JWT"] = READER_JWT      # the backup refuses to run without it (no service-key fallback); tests that clear the environment set it again
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts", "replica"))
 from fake_b2 import FakeB2  # noqa: E402
@@ -68,7 +78,7 @@ class FakeStore:
 
 
 def b2_env(fake, auth="keyW:secretW"):
-    return {"BACKUP_KEY": KEY, "BACKUP_PUT_URL": f"b2://{fake.bucket_id}/hq", "BACKUP_AUTH": auth, "BACKUP_READER_JWT": "test.reader.jwt"}
+    return {"BACKUP_KEY": KEY, "BACKUP_PUT_URL": f"b2://{fake.bucket_id}/hq", "BACKUP_AUTH": auth, "BACKUP_READER_JWT": READER_JWT}
 
 
 def b2_patches(fake):
@@ -261,6 +271,138 @@ class BackupIdentity(unittest.TestCase):
         finally:
             B.hq.AUTH_OVERRIDE.reset(tok)
         self.assertEqual(sent["authorization"], "Bearer reader.jwt.token"); self.assertNotIn("service-key-value", json.dumps(sent))
+
+    # ---- round 8 (S6): the apikey header. UNVERIFIED against a real Supabase gateway; these tests pin what is SENT.
+    def _send(self, env, service_key="service-key-value"):
+        sent = {}
+        class R:
+            def read(self): return b"{}"
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        def fake_open(req, timeout=0):
+            sent.update({k.lower(): v for k, v in req.header_items()}); return R()
+        with mock.patch.dict(os.environ, env), mock.patch("urllib.request.urlopen", fake_open), mock.patch.object(B.hq, "HQ_SUPABASE_URL", "https://x.example"), \
+                mock.patch.object(B.hq, "HQ_SUPABASE_SERVICE_KEY", service_key):
+            os.environ.pop("HQ_SUPABASE_SERVICE_KEY", None)
+            if "BACKUP_GATEWAY_APIKEY" not in env:
+                os.environ.pop("BACKUP_GATEWAY_APIKEY", None)
+            B._rpc("/rest/v1/rpc/backup_epoch", {})
+        return sent
+
+    def test_with_a_gateway_key_apikey_is_the_gateway_key_and_authorization_is_the_reader_token(self):
+        """Expected (Supabase form): apikey = project anon / publishable key, Authorization = Bearer <reader JWT>, service key nowhere."""
+        for gw in ("sb_publishable_abc123", unsigned_jwt(role="anon", exp=4102444800)):
+            sent = self._send({"BACKUP_READER_JWT": READER_JWT, "BACKUP_GATEWAY_APIKEY": gw})
+            self.assertEqual(sent["apikey"], gw); self.assertEqual(sent["authorization"], "Bearer " + READER_JWT)
+            self.assertNotIn("service-key-value", json.dumps(sent))
+        self.assertIsNone(B.hq.APIKEY_OVERRIDE.get()); self.assertIsNone(B.hq.AUTH_OVERRIDE.get())      # both reset: the next request is an ordinary service-key request
+
+    def test_without_a_gateway_key_the_reader_token_is_sent_in_both_headers(self):
+        sent = self._send({"BACKUP_READER_JWT": READER_JWT})
+        self.assertEqual((sent["apikey"], sent["authorization"]), (READER_JWT, "Bearer " + READER_JWT)); self.assertNotIn("service-key-value", json.dumps(sent))
+
+    def test_a_service_or_secret_key_as_gateway_key_is_refused_and_nothing_is_sent(self):
+        for gw in ("service-key-value", "sb_secret_abc", unsigned_jwt(role="service_role", exp=4102444800), unsigned_jwt(role="backup_reader", exp=4102444800)):
+            with self.subTest(gw[:12]):
+                sent = []
+                with mock.patch.dict(os.environ, {"BACKUP_READER_JWT": READER_JWT, "BACKUP_GATEWAY_APIKEY": gw}), mock.patch("hq._request", side_effect=lambda *a, **k: sent.append(a) or {}), \
+                        mock.patch.object(B.hq, "HQ_SUPABASE_SERVICE_KEY", "service-key-value"):
+                    os.environ.pop("HQ_SUPABASE_SERVICE_KEY", None)
+                    with self.assertRaises(B.BackupError) as cm:
+                        B._rpc("/rest/v1/rpc/backup_epoch", {})
+                self.assertEqual(sent, []); self.assertIn("BACKUP_GATEWAY_APIKEY", str(cm.exception)); self.assertNotIn(gw, str(cm.exception))
+
+    def test_ordinary_requests_are_unchanged_and_ignore_the_gateway_key(self):
+        sent = {}
+        class R:
+            def read(self): return b"{}"
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        def fake_open(req, timeout=0):
+            sent.update({k.lower(): v for k, v in req.header_items()}); return R()
+        with mock.patch.dict(os.environ, {"BACKUP_GATEWAY_APIKEY": "sb_publishable_abc123"}), mock.patch("urllib.request.urlopen", fake_open), mock.patch.object(B.hq, "HQ_SUPABASE_URL", "https://x.example"), \
+                mock.patch.object(B.hq, "HQ_SUPABASE_SERVICE_KEY", "service-key-value"):
+            B.hq._request("GET", "/rest/v1/tasks?select=id")
+        self.assertEqual((sent["apikey"], sent["authorization"]), ("service-key-value", "Bearer service-key-value"))
+
+    def test_reader_token_state_matches_the_preflight_rules(self):
+        """N1: NaN / Infinity / 1e400 exp, a future nbf and duplicate claims are not accepted."""
+        import base64, time
+        now = time.time()
+        raw = lambda payload: "e30." + base64.urlsafe_b64encode(payload.encode()).rstrip(b"=").decode() + ".c2ln"
+        cases = [(unsigned_jwt(role="backup_reader", exp=now + 3600), "ok"), ("", "unset"), ("abc", "malformed"), (unsigned_jwt(role="service_role", exp=now + 3600), "wrongrole"),
+                 (unsigned_jwt(role="backup_reader"), "noexp"), (unsigned_jwt(role="backup_reader", exp="9999999999"), "noexp"), (unsigned_jwt(role="backup_reader", exp=True), "noexp"),
+                 (unsigned_jwt(role="backup_reader", exp=now - 5), "expired"), (unsigned_jwt(role="backup_reader", exp=now + 3600, nbf=now + 3600), "notyet"),
+                 (unsigned_jwt(role="backup_reader", exp=now + 3600, nbf=now - 10), "ok"), (unsigned_jwt(role="backup_reader", exp=now + 3600, nbf="soon"), "malformed"),
+                 (raw('{"role": "backup_reader", "exp": NaN}'), "malformed"), (raw('{"role": "backup_reader", "exp": Infinity}'), "malformed"), (raw('{"role": "backup_reader", "exp": 1e400}'), "noexp"),
+                 (raw('{"role": "service_role", "role": "backup_reader", "exp": 4102444800}'), "malformed"), (raw('{"role": "backup_reader", "role": "service_role", "exp": 4102444800}'), "malformed")]
+        for tok, want in cases:
+            with self.subTest(want=want, tok=tok[-24:]):
+                self.assertEqual(B.reader_token_state(tok), want)
+
+    def test_preflight_names_the_identity_token_instead_of_database_not_reachable(self):
+        """N2. Expected without the token: an explicit FAIL line for BACKUP_READER_JWT and NO request to the database."""
+        sent = []
+        with mock.patch.dict(os.environ, {"BACKUP_KEY": KEY, "BACKUP_PUT_URL": "https://store.example.com/b/{name}", "BACKUP_AUTH": "Bearer x"}, clear=True), mock.patch("hq._request", side_effect=lambda *a, **k: sent.append(a) or {}):
+            res = B.preflight()
+        line = next(r for r in res if "BACKUP_READER_JWT" in r["check"])
+        self.assertEqual(line["status"], "fail"); self.assertIn("not set", line["detail"]); self.assertEqual(sent, [])
+        self.assertFalse([r for r in res if "Database reachable" in r["check"]])
+        self.assertEqual(next(r for r in res if "BACKUP_GATEWAY_APIKEY" in r["check"])["status"], "warn")
+
+    def test_an_interrupted_run_leaves_an_audit_row_and_still_raises(self):
+        """N9. Expected: KeyboardInterrupt during the dump is re-raised, a backup_failed row says 'interrupted', nothing is uploaded, and the run lock is free again."""
+        posts, puts = [], []
+        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if method == "POST" and path.endswith("/audit_log"):
+                posts.append(body)
+            return None
+        with mock.patch.dict(os.environ, {**ENV, "BACKUP_READER_JWT": READER_JWT}), mock.patch("hq._request", side_effect=req), mock.patch.object(B, "dump", side_effect=KeyboardInterrupt()), \
+                mock.patch.object(B, "put_files", side_effect=lambda f: puts.append(f)):
+            with self.assertRaises(KeyboardInterrupt):
+                B.run(force=True)
+        self.assertEqual([(b["action"], b["detail"]["error"]) for b in posts], [("backup_failed", "interrupted: KeyboardInterrupt")]); self.assertEqual(puts, [])
+        self.assertTrue(B._RUN_LOCK.acquire(blocking=False)); B._RUN_LOCK.release()
+
+    # ---- round 8, integration rehearsal items
+    def test_paging_is_chosen_by_row_count_as_well_as_by_estimated_seconds(self):
+        """B1. Expected: over SNAPSHOT_MAX_ROWS exported rows the export is paged even when the time estimate is tiny (one statement holds the whole export in memory: about 3 kB per row)."""
+        self.assertFalse(B.needs_paging(None)); self.assertFalse(B.needs_paging({"est_seconds": 1.0}))
+        self.assertFalse(B.needs_paging({"est_seconds": 1.0, "rows_total": B.SNAPSHOT_MAX_ROWS}))
+        self.assertTrue(B.needs_paging({"est_seconds": 0.0, "rows_total": B.SNAPSHOT_MAX_ROWS + 1}))
+        self.assertTrue(B.needs_paging({"est_seconds": B.SNAPSHOT_BUDGET_S + 1, "rows_total": 10}))
+        self.assertFalse(B.needs_paging({"est_seconds": 1.0, "rows_total": "many"}))
+
+    def test_suppression_export_is_required_once_the_consent_tables_exist(self):
+        """S1. Expected: refused / failed / not installed / not even asked for = the run FAILS when ffm_suppression_hashes is in the database; without the consent tables, or when the export
+        itself says the owner has not set the suppression key, the run goes on. Actual before: `included: false` in the manifest and the backup was uploaded without the opt-out list."""
+        consent = [["ffm_suppression_hashes", "client_pii"], ["leads", "client_pii"]]
+        ok = lambda m: B.require_suppression_export(m)
+        ok({"excluded": [["leads", "client_pii"]]})                                                              # no consent tables: nothing to require
+        ok({"excluded": consent, "suppression": {"included": True, "count": 16}})
+        ok({"excluded": consent, "suppression": {"included": False, "reason": "no suppression key set"}})         # the function's own, explicit answer
+        for sup in (None, {"included": False, "reason": "backup_suppression_export() failed (HTTP 403)"}, {"included": False, "reason": "backup_suppression_export() failed (HTTP 401)"},
+                    {"included": False, "reason": "backup_suppression_export() not installed"}, {"included": False, "reason": "backup_suppression_export() failed (TimeoutError)"}, {"included": False}):
+            with self.subTest(sup=sup):
+                m = {"excluded": consent}
+                if sup is not None:
+                    m["suppression"] = sup
+                with self.assertRaises(B.BackupError) as cm:
+                    ok(m)
+                self.assertIn("opt-out list", str(cm.exception))
+
+    def test_a_run_whose_suppression_export_was_refused_fails_and_uploads_nothing(self):
+        posts, puts = [], []
+        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if method == "POST" and path.endswith("/audit_log"):
+                posts.append(body)
+            return None
+        manifest = {"consistency": {"consistent": True}, "excluded": [["ffm_suppression_hashes", "client_pii"]], "suppression": {"included": False, "reason": "backup_suppression_export() failed (HTTP 403)"}}
+        with mock.patch.dict(os.environ, {**ENV, "BACKUP_READER_JWT": READER_JWT}), mock.patch("hq._request", side_effect=req), mock.patch.object(B, "dump", return_value=(b"x", manifest)), \
+                mock.patch.object(B, "put_files", side_effect=lambda f: puts.append(f)), mock.patch.object(B, "_recent_failures", return_value=[1]):
+            r = B.run(force=True)
+        self.assertFalse(r["ok"]); self.assertIn("opt-out list", r["reason"]); self.assertEqual(puts, [])
+        self.assertEqual([b["action"] for b in posts], ["backup_failed"])
 
     def test_without_the_token_nothing_is_sent_and_the_service_key_is_never_substituted(self):
         sent = []

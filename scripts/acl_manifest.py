@@ -35,7 +35,7 @@ FUNCS = {   # name -> why it is safe for service_role to hold execute (the lockd
 
 
 READER = {"backup_schema", "backup_export_policy", "backup_snapshot", "backup_snapshot_page", "backup_table_digest", "backup_snapshot_cost", "backup_redaction_meta", "backup_epoch",
-          "backup_deny_prepare", "backup_deny_release", "backup_redaction_status", "redaction_denylist_status"}      # the ONLY functions backup_reader may execute (migration 20261121_postlock_backup_identity_v1)
+          "backup_deny_prepare", "backup_deny_release", "backup_redaction_status", "redaction_denylist_status", "backup_suppression_export"}      # the ONLY functions backup_reader may execute (migration 20261121_postlock_backup_identity_v1)
 
 
 def psql(url, sql):
@@ -49,7 +49,10 @@ def build(url):
     """EVERY function, table, view and sequence in schema public, one row each (the effective ACL per role, from has_*_privilege). Sorted, so any drift is a one-line diff."""
     rows = []
     tpriv = "array['select','insert','update','delete','truncate','references','trigger']"
-    cols = ", ".join(f"coalesce((select string_agg(p, ',' order by p) from unnest({tpriv}) p where has_table_privilege('{r}', c.oid, p)), '-')" for r in ("anon", "authenticated", "service_role", "backup_reader"))
+    # table-level privileges, then (round 8, S4) COLUMN-level ones the table-level answer does not show: `grant select (value) on t to r` appears as `col:select`
+    cpriv = "array['select','insert','update','references']"
+    cols = ", ".join(f"coalesce(nullif(concat_ws(',', (select string_agg(p, ',' order by p) from unnest({tpriv}) p where has_table_privilege('{r}', c.oid, p)), "
+                     f"(select string_agg('col:' || p, ',' order by p) from unnest({cpriv}) p where not has_table_privilege('{r}', c.oid, p) and has_any_column_privilege('{r}', c.oid, p))), ''), '-')" for r in ("anon", "authenticated", "service_role", "backup_reader"))
     out = psql(url, f"select case c.relkind when 'v' then 'view' when 'm' then 'view' else 'table' end, c.relname, {cols}, 'rls=' || c.relrowsecurity::text from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v', 'm') and not exists (select 1 from pg_depend d where d.objid = c.oid and d.deptype = 'e') order by 1, 2")
     for line in out.strip("\n").splitlines():
         kind, name, a, b, c, d, rls = line.split("\t")
@@ -61,12 +64,17 @@ def build(url):
         name, a, b, c, d = line.split("\t")
         rows.append(("sequence", name, a, b, c, "", "", d))
     out = psql(url, "select p.oid::regprocedure::text, p.proname, p.prosecdef::text, (p.prorettype = 'trigger'::regtype)::text, has_function_privilege('anon', p.oid, 'execute')::text, has_function_privilege('authenticated', p.oid, 'execute')::text, has_function_privilege('service_role', p.oid, 'execute')::text, has_function_privilege('backup_reader', p.oid, 'execute')::text "
-                     "from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p') and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e') order by 1")
+                     "from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p', 'a') and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e') order by 1")
     for line in out.strip("\n").splitlines():
         sig, fn, secdef, trig, an, au, sr, br = line.split("\t")
         note = FUNCS.get(fn) or ("backup identity: backup_reader only" if fn in READER else "internal: owner only" if (re.match(r"(backup_|redaction_)", fn) or fn == "agent_runs_scrub") and trig != "true" else
                                  "trigger function: cannot be called directly" if trig == "true" else "")
         rows.append(("function", sig, "execute" if an == "true" else "-", "execute" if au == "true" else "-", "execute" if sr == "true" else "-", "security_definer" if secdef == "true" else "invoker", note, "execute" if br == "true" else "-"))
+    # the event trigger that sweeps the backup / redaction objects back to owner-only (round 8, S4): ONE row, so a dropped or disabled trigger is a manifest difference and an assertion failure below
+    if psql(url, "select to_regprocedure('public.backup_acl_event()') is not null").strip() == "t":
+        ev = psql(url, "select coalesce((select case when evtenabled in ('O', 'A') then 'enabled' else 'DISABLED' end || '|' || evtfoid::regproc::text || '|' || evtevent || '|' || coalesce(array_length(evttags, 1), 0) from pg_event_trigger where evtname = 'ffm_backup_acl_sweep'), 'MISSING|||0')").strip()
+        state, fn, event, tags = ev.split("|")
+        rows.append(("event_trigger", "ffm_backup_acl_sweep", "-", "-", "-", state, f"{event} -> {fn} ({tags} command tags): keeps backup_* / redaction_* / ffm_redaction_* owner-only after later DDL", "-"))
     rows.sort()
     hdr = "kind\tname\tanon\tauthenticated\tservice_role\tsecurity\tnote\tbackup_reader"
     return hdr + "\n" + "\n".join("\t".join(r) for r in rows) + "\n"
@@ -98,6 +106,18 @@ def main():
             bk.append(f"{k} {name}: backup_reader holds a table/sequence privilege (it needs none)")
         if base.startswith("ffm_redaction_") and (an, au, sr) != ("-", "-", "-"):
             bk.append(f"{k} {name}: an API role holds a privilege on a key / deny-list / cache / epoch object ({an}/{au}/{sr})")
+    # every object the database's own catalogue calls internal (procedures, aggregates, views over the key tables in any schema included): no API role, and backup_reader only on the reader list
+    if psql(a.url, "select to_regprocedure('public.backup_acl_catalogue()') is not null").strip() == "t":
+        q = ("select c.kind || ' ' || c.name || ': ' || w.r || ' holds a privilege' from public.backup_acl_catalogue() c cross join (values ('anon'), ('authenticated'), ('service_role'), ('backup_reader')) w (r) where "
+             "case c.kind when 'function' then has_function_privilege(w.r, c.name::regprocedure, 'execute') and not (w.r = 'backup_reader' and c.holder = 'backup_reader') "
+             "when 'sequence' then has_sequence_privilege(w.r, c.name::regclass, 'usage,select,update') "
+             "else has_table_privilege(w.r, c.name::regclass, 'select,insert,update,delete,truncate,references,trigger') or has_any_column_privilege(w.r, c.name::regclass, 'select,insert,update,references') end order by 1")
+        bk += [l for l in psql(a.url, q).strip("\n").splitlines() if l]
+    ev = [r for r in rows if r[0] == "event_trigger"]
+    if ev and ev[0][5] != "enabled":
+        bk.append(f"event trigger ffm_backup_acl_sweep is {ev[0][5]}: new backup_* / redaction_* objects and later grants are NOT swept. BLOCKING before activation: have the platform admin run the create event trigger statement in migrations/20261122_postlock_backup_identity_v2.sql")
+    elif ev and "public.backup_acl_event" not in ev[0][6] and "backup_acl_event" not in ev[0][6]:
+        bk.append("event trigger ffm_backup_acl_sweep does not call public.backup_acl_event()")
     if bk:
         sys.exit("backup identity catalogue violated:\n" + "\n".join(bk))
     if a.write:

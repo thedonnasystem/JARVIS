@@ -52,6 +52,7 @@ PAGE = 1000
 MAX_ROWS_PER_TABLE = 500_000
 PAGE_REDACT = 200              # rows per backup_snapshot_page() call (each page scans and redacts its own rows)
 SNAPSHOT_BUDGET_S = 40         # above this estimated cost one backup_snapshot() statement is too risky (statement_timeout) and the export is paged
+SNAPSHOT_MAX_ROWS = 50000      # ... and above this many exported rows one statement costs too much MEMORY in the database (about 3 kB per row, measured: 100,000 rows = 430 MB, 1.39 million = 4.8 GB and a killed backend): paged
 
 B2_AUTH_URL = "https://api.backblazeb2.com/b2api/v4/b2_authorize_account"
 B2_HOST_SUFFIXES = (".backblazeb2.com", ".backblaze.com")   # every URL B2 hands back (api, upload pods) must be https on a Backblaze domain, or we refuse to send data to it
@@ -76,18 +77,82 @@ def _fernet():
 
 
 BACKUP_READER_ENV = "BACKUP_READER_JWT"      # a JWT with role = backup_reader (the narrow database identity that alone may run the backup functions); OWNER DECISION, see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md rule 12
+# Round 8 (S6). The `apikey` header of a backup call. On a Supabase-hosted project the API gateway validates `apikey` against the PROJECT's API keys before PostgREST runs, so the reader JWT there is
+# expected to be refused (401) and the backup could never run. The usual form is: apikey = the project's anon / publishable key (public by design), Authorization = Bearer <reader JWT>.
+# Unset: the reader JWT is sent as apikey too (correct for a plain PostgREST without a gateway). NEVER the service key, and never a secret key: both are refused here.
+# UNVERIFIED against a real Supabase project (no production access from the build environment): the first activation step is one /backup check with this variable set.
+BACKUP_GATEWAY_ENV = "BACKUP_GATEWAY_APIKEY"
+
+
+def jwt_claims(token: str) -> dict | None:
+    """The claims of a JWT WITHOUT verifying it (the database verifies the signature); None when it is not a decodable JWT. Rejects NaN / Infinity and duplicate keys."""
+    import base64
+
+    def strict(pairs):
+        keys = [k for k, _ in pairs]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate key")
+        return dict(pairs)
+
+    def bad(_):
+        raise ValueError("not a number")
+    try:
+        parts = (token or "").strip().split(".")
+        if len(parts) != 3 or not all(parts):
+            return None
+        claims = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)), object_pairs_hook=strict, parse_constant=bad)
+        return claims if isinstance(claims, dict) else None
+    except Exception:
+        return None
+
+
+def reader_token_state(token: str, now: float | None = None) -> str:
+    """ok | unset | malformed | wrongrole | noexp | expired | notyet. The same rules as ops/backup_activation_preflight.sh (unit-tested against each other)."""
+    import math
+    import time
+    if not (token or "").strip():
+        return "unset"
+    c = jwt_claims(token)
+    if c is None:
+        return "malformed"
+    if c.get("role") != "backup_reader":
+        return "wrongrole"
+    exp, nbf, now = c.get("exp"), c.get("nbf"), time.time() if now is None else now
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)) or not math.isfinite(exp):
+        return "noexp"
+    if exp <= now:
+        return "expired"
+    if nbf is not None and (isinstance(nbf, bool) or not isinstance(nbf, (int, float)) or not math.isfinite(nbf)):
+        return "malformed"
+    if nbf is not None and nbf > now + 60:
+        return "notyet"
+    return "ok"
+
+
+def gateway_key() -> str | None:
+    """The key for the `apikey` header of backup calls, or None (send the reader JWT there). Refuses anything that is, or looks like, a privileged key."""
+    k = os.environ.get(BACKUP_GATEWAY_ENV, "").strip()
+    if not k:
+        return None
+    svc = (os.environ.get("HQ_SUPABASE_SERVICE_KEY") or getattr(hq, "HQ_SUPABASE_SERVICE_KEY", "") or "").strip()
+    role = (jwt_claims(k) or {}).get("role")
+    if (svc and k == svc) or k.startswith("sb_secret_") or role not in (None, "anon"):
+        raise BackupError(f"{BACKUP_GATEWAY_ENV} must be the project's anon / publishable key: a service or secret key is refused for backup calls")
+    return k
 
 
 def _rpc(path: str, body: dict | None = None, **kw):
     """Call a backup function as the backup identity. BACKUP_READER_JWT is the ONLY credential these calls may use: without it the call is refused here (nothing is sent, and the service key is never
-    substituted), so a backup run records the failure instead of reading with a broader key."""
+    substituted), so a backup run records the failure instead of reading with a broader key. The `apikey` header carries BACKUP_GATEWAY_APIKEY (the public gateway key) when set, else the same JWT."""
     tok = os.environ.get(BACKUP_READER_ENV, "").strip()
     if not tok:
         raise BackupError(f"{BACKUP_READER_ENV} is not set: the backup runs only as the backup_reader identity and never falls back to the service key (see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md rule 12)")
-    reset = hq.AUTH_OVERRIDE.set(tok)
+    gw = gateway_key()
+    reset, reset_gw = hq.AUTH_OVERRIDE.set(tok), hq.APIKEY_OVERRIDE.set(gw)
     try:
         return hq._request("POST", path, body, **kw)
     finally:
+        hq.APIKEY_OVERRIDE.reset(reset_gw)
         hq.AUTH_OVERRIDE.reset(reset)
 
 
@@ -418,13 +483,41 @@ def _try_snapshot() -> tuple[dict | None, str]:
     return snap, ""
 
 
+def needs_paging(cost: dict | None) -> bool:
+    """One statement or pages? Paged when the estimated time OR the number of exported rows is over its limit (time: statement timeout; rows: the single statement holds the whole export in memory)."""
+    if not cost:
+        return False
+    rows = cost.get("rows_total")
+    return bool(cost["est_seconds"] > SNAPSHOT_BUDGET_S or (isinstance(rows, (int, float)) and not isinstance(rows, bool) and rows > SNAPSHOT_MAX_ROWS))
+
+
+CONSENT_MARKER_TABLE = "ffm_suppression_hashes"      # created by the consent-integrity migration (PR #20) together with public.backup_suppression_export()
+
+
+def require_suppression_export(manifest: dict) -> None:
+    """Round 8 (integration rehearsal S1). Once the consent-integrity tables exist in the database, the off-site file MUST carry the keyed-hash opt-out list: a backup written without it cannot be
+    checked after a restore. The export function is named backup_*, so after the post-lockdown migration only backup_reader may call it; a call that is refused, fails, or a build that does not ask
+    for it at all used to produce a backup that merely said `included: false`. Now the run fails. Two cases are NOT failures: the consent tables are not installed (nothing to export), and the function
+    itself answers that the owner has not set the suppression key yet (its own, explicit reason)."""
+    if not any(isinstance(e, (list, tuple)) and e and e[0] == CONSENT_MARKER_TABLE for e in manifest.get("excluded") or []):
+        return
+    sup = manifest.get("suppression")
+    if not isinstance(sup, dict):
+        raise BackupError("the consent tables are installed but this build wrote no suppression section: the opt-out list would be missing from the backup")
+    if sup.get("included") is True:
+        return
+    reason = str(sup.get("reason") or "")
+    if "not installed" in reason or "failed (" in reason or not reason:
+        raise BackupError("the suppression list could not be exported (" + (reason[:120] or "no reason given") + "): refusing to write a backup without the opt-out list")
+
+
 def dump() -> tuple[bytes, dict]:
     """Returns (plain tar.gz bytes, manifest). Raises if any table cannot be read completely."""
     manifest = {"format": FORMAT, "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "engine_build": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("GIT_COMMIT") or "unknown")[:40],
                 "skipped": sorted(SKIP), "tables": {}, "schema": None}
     cost = _snapshot_cost()
-    paged = bool(cost and cost["est_seconds"] > SNAPSHOT_BUDGET_S)
+    paged = needs_paging(cost)
     if paged:
         schema = get_schema()
         pol = get_policy()
@@ -632,11 +725,26 @@ def preflight() -> list[dict]:
             add("Backblaze accepts the application key", "fail", str(e))
         except Exception as e:
             add("Backblaze accepts the application key", "fail", type(e).__name__)
+    # the backup identity (round 8, N2): said explicitly, so a missing token is not reported as "database not reachable"
+    state = reader_token_state(env.get(BACKUP_READER_ENV, ""))
+    add(f"{BACKUP_READER_ENV} is a backup_reader token that has not expired", "pass" if state == "ok" else "fail",
+        {"ok": "", "unset": "not set: the backup refuses to run (it never falls back to the service key)", "malformed": "not a decodable JWT", "wrongrole": "the role claim is not backup_reader",
+         "noexp": "no usable exp claim: a never-expiring token is refused", "expired": "expired: mint a new one", "notyet": "not valid yet (nbf is in the future)"}[state])
+    try:
+        gw = gateway_key()
+        add(f"{BACKUP_GATEWAY_ENV} (apikey header for the API gateway)", "pass" if gw else "warn",
+            "" if gw else "not set: the reader token is sent as apikey too. A Supabase-hosted project needs the project's anon / publishable key here (unverified against a real project)")
+    except BackupError as e:
+        add(f"{BACKUP_GATEWAY_ENV} (apikey header for the API gateway)", "fail", str(e))
+    if state != "ok":
+        return out
     try:
         sch = get_schema()
         add("Database schema snapshot function (backup_schema) installed", "pass" if sch else "warn", "" if sch else "not installed; backups would be data-only")
+    except BackupError as e:
+        add("Database reachable as the backup identity", "fail", str(e)[:160])
     except Exception as e:
-        add("Database reachable", "fail", type(e).__name__)
+        add("Database reachable as the backup identity", "fail", type(e).__name__ + (" (HTTP 401 / 403 here usually means the gateway refused the apikey or the token: see " + BACKUP_GATEWAY_ENV + ")" if type(e).__name__ == "HTTPError" else ""))
     return out
 
 
@@ -810,6 +918,7 @@ def run(force: bool = False) -> dict:
         try:
             blob, manifest = dump()
             _require_verified_consistency(manifest)
+            require_suppression_export(manifest)
             enc = encrypt(blob)
             problems = verify(enc, manifest)
             if problems:
@@ -829,6 +938,12 @@ def run(force: bool = False) -> dict:
             if first_today:
                 _tell_owner(f"Backup failed: {out['reason']}. Your data is safe in the database. I retry automatically (at most {MAX_FAILURES_PER_DAY} tries tonight) and will not repeat this message today.")
             return out
+        except BaseException as e:      # round 8 (N9): the process is being stopped (KeyboardInterrupt, SystemExit, a cancelled task): leave an audit row, best effort, and let the interruption through
+            try:
+                _audit("backup_failed", {"error": "interrupted: " + type(e).__name__})
+            except BaseException:
+                pass
+            raise
         # The file is safely off-site and verified. Nothing after this point may turn it into a "failure".
         detail = {"file": name, "bytes": len(enc), "sha256": digest, "rows": manifest["total_rows"], "tables": len(manifest["tables"]),
                   "complete": manifest["complete"], "consistent": manifest["consistency"]["consistent"], "format": FORMAT, "target": put["target"],

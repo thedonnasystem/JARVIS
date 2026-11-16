@@ -273,14 +273,18 @@ def main():
         ddl = psycopg2.connect(SRC); ddl.autocommit = True
         ddl.cursor().execute("create table if not exists public.drill_pair_a (id int primary key); create table if not exists public.drill_pair_b (id int primary key); truncate public.drill_pair_a, public.drill_pair_b")
         stop = threading.Event(); wrote = {"n": 0}
+        # BOUNDED (round 8, integration rehearsal B1): on a fast-commit cluster (fsync off) the unthrottled writer reached 1.39 million pairs and the single-statement snapshot of those rows was
+        # killed for memory. The proof needs writes that overlap snapshots, not volume: at most WRITER_MAX_PAIRS pairs per phase, about 1,000 a second.
+        WRITER_MAX_PAIRS = 20000
         def writer():
             w = psycopg2.connect(SRC)
             i = 0
-            while not stop.is_set():
+            while not stop.is_set() and i < WRITER_MAX_PAIRS:
                 i += 1
                 with w.cursor() as wc:
                     wc.execute("insert into public.drill_pair_a values (%s)", (i,)); wc.execute("insert into public.drill_pair_b values (%s)", (i,))
                 w.commit(); wrote["n"] = i
+                time.sleep(0.001)
             w.close()
         th = threading.Thread(target=writer); th.start()
         bad, taken = 0, 0

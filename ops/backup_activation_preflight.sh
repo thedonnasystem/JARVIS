@@ -110,35 +110,81 @@ fi
 # BACKUP_READER_JWT is the ONLY credential the backup may use (hq_backup refuses to run without it and never falls back to the service key). Decoded here WITHOUT a network call and without printing it:
 # the role claim must be exactly backup_reader and exp must be in the future. A missing, malformed, expired or wrong-role token is a FAIL under --require-pii-exclusion (a WARN otherwise): the nightly backup would refuse.
 jwt_state="$(BJ="${BACKUP_READER_JWT:-}" python3 - <<'PY' 2>/dev/null || echo "undecodable"
-import base64, json, os, sys, time
+import base64, json, math, os, sys, time
 t = os.environ.get("BJ", "").strip()
 if not t:
     print("unset"); sys.exit(0)
+def strict(pairs):                       # a JSON object with the same key twice is refused: which `role` wins depends on the parser
+    keys = [k for k, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate key")
+    return dict(pairs)
+def no_const(_):                         # NaN / Infinity / -Infinity are not JSON
+    raise ValueError("not a number")
 try:
     p = t.split(".")
     if len(p) != 3 or not all(p):
         print("malformed"); sys.exit(0)
     pad = lambda x: x + "=" * (-len(x) % 4)
-    claims = json.loads(base64.urlsafe_b64decode(pad(p[1])))
-    json.loads(base64.urlsafe_b64decode(pad(p[0])))
+    claims = json.loads(base64.urlsafe_b64decode(pad(p[1])), object_pairs_hook=strict, parse_constant=no_const)
+    json.loads(base64.urlsafe_b64decode(pad(p[0])), object_pairs_hook=strict, parse_constant=no_const)
 except Exception:
     print("malformed"); sys.exit(0)
 role = claims.get("role") if isinstance(claims, dict) else None
 exp = claims.get("exp") if isinstance(claims, dict) else None
+nbf = claims.get("nbf") if isinstance(claims, dict) else None
 if role != "backup_reader":
     print("wrongrole"); sys.exit(0)
-if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+if isinstance(exp, bool) or not isinstance(exp, (int, float)) or not math.isfinite(exp):      # 1e400 parses to infinity: not an expiry
     print("noexp"); sys.exit(0)
-print("expired" if exp <= time.time() else "ok")
+if exp <= time.time():
+    print("expired"); sys.exit(0)
+if nbf is not None and (isinstance(nbf, bool) or not isinstance(nbf, (int, float)) or not math.isfinite(nbf)):
+    print("malformed"); sys.exit(0)
+print("notyet" if nbf is not None and nbf > time.time() + 60 else "ok")
 PY
 )"
 case "$jwt_state" in
-  ok) ok "BACKUP_READER_JWT decodes, role = backup_reader, exp is in the future (signature is checked by the database when the backup runs; the backup uses no other credential)";;
+  ok) ok "BACKUP_READER_JWT decodes, role = backup_reader, exp is in the future, nbf (if any) has passed (signature is checked by the database when the backup runs; the backup uses no other credential)";;
   unset) pii_flag "BACKUP_READER_JWT is not set: the backup refuses to run without it (it never falls back to the service key). Owner decision: see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md rule 12";;
   wrongrole) pii_flag "BACKUP_READER_JWT does not carry role = backup_reader (a token for any other role, service_role included, must not be used for the backup)";;
   expired) pii_flag "BACKUP_READER_JWT has expired (exp is in the past): mint a new one";;
-  noexp) pii_flag "BACKUP_READER_JWT has no exp claim: a never-expiring backup token is refused, mint one with an expiry";;
-  *) pii_flag "BACKUP_READER_JWT is not a decodable JWT (expected three base64url parts with a JSON payload)";;
+  notyet) pii_flag "BACKUP_READER_JWT is not valid yet (nbf is in the future): the database would refuse it tonight";;
+  noexp) pii_flag "BACKUP_READER_JWT has no usable exp claim (missing, not a number, or not finite): a never-expiring backup token is refused, mint one with an expiry";;
+  *) pii_flag "BACKUP_READER_JWT is not a decodable JWT (expected three base64url parts with a JSON payload, no duplicate claims, no NaN / Infinity)";;
 esac
+# BACKUP_GATEWAY_APIKEY (round 8, S6): the `apikey` header of the backup's calls. A Supabase gateway checks apikey against the PROJECT's API keys, so the reader JWT there is expected to be refused; the value
+# to set is the project's anon / publishable key (public by design). Never the service / secret key. Only shape and role are checked, the value is never printed.
+gw_state="$(GK="${BACKUP_GATEWAY_APIKEY:-}" SK="${HQ_SUPABASE_SERVICE_KEY:-}" python3 - <<'PY' 2>/dev/null || echo "unset"
+import base64, json, os
+k, svc = os.environ.get("GK", "").strip(), os.environ.get("SK", "").strip()
+if not k:
+    print("unset"); raise SystemExit
+role = None
+try:
+    p = k.split(".")
+    if len(p) == 3 and all(p):
+        role = json.loads(base64.urlsafe_b64decode(p[1] + "=" * (-len(p[1]) % 4))).get("role")
+except Exception:
+    role = None
+print("secret" if (svc and k == svc) or k.startswith("sb_secret_") or role not in (None, "anon") else "ok")
+PY
+)"
+case "$gw_state" in
+  ok) ok "BACKUP_GATEWAY_APIKEY is set and is not a service / secret key (sent as the apikey header; the reader token stays in Authorization). UNVERIFIED against the real gateway until the first /backup check";;
+  secret) bad "BACKUP_GATEWAY_APIKEY is a service / secret key or a non-anon token: the backup refuses it. Use the project's anon / publishable key";;
+  *) warn "BACKUP_GATEWAY_APIKEY is not set: the reader token is sent as the apikey header too. A Supabase-hosted project is expected to refuse that (HTTP 401): set it to the project's anon / publishable key";;
+esac
+# the event trigger that keeps the backup / redaction objects owner-only after later DDL (round 8, S4). The migration only WARNS when the platform does not let it create one; this is where that becomes
+# visible: a missing or disabled trigger is a BLOCKING OWNER ACTION before the backup is activated.
+if [ -n "$dburl" ] && command -v psql >/dev/null 2>&1; then
+  ev="$(psql "$dburl" -Atqc "select coalesce((select (evtenabled in ('O','A'))::text || ' ' || (evtfoid = to_regprocedure('public.backup_acl_event()'))::text from pg_event_trigger where evtname = 'ffm_backup_acl_sweep'), 'absent')" 2>/dev/null)"
+  case "$ev" in
+    "true true") ok "event trigger ffm_backup_acl_sweep is present and enabled (new backup_* / redaction_* objects and later grants are swept back to owner-only)";;
+    absent) pii_flag "BLOCKING OWNER ACTION: event trigger ffm_backup_acl_sweep is MISSING (the migration could not create it, or it was dropped). Ask the platform admin to run the create event trigger statement at the end of migrations/20261122_postlock_backup_identity_v2.sql - DO NOT ACTIVATE until this passes";;
+    "") pii_flag "event trigger check could not run (database not reachable)";;
+    *) pii_flag "BLOCKING OWNER ACTION: event trigger ffm_backup_acl_sweep is DISABLED or does not call backup_acl_event() (enabled / calls the sweep = $ev) - DO NOT ACTIVATE until this passes";;
+  esac
+else pii_flag "event trigger ffm_backup_acl_sweep: cannot check (set PII_CHECK_DB_URL, psql needed)"; fi
 echo; echo "Result: $fails FAIL, $warns WARN."; echo "Not checked here (check by eye): bucket is Private; lifecycle rule set; BACKUP_KEY stored in 2 places; migration 20261113_backup_schema_v1.sql applied (the Telegram /backup check shows it)."
 [ "$fails" = 0 ]

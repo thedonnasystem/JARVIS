@@ -4987,6 +4987,191 @@ language sql immutable parallel safe set search_path to 'pg_catalog' as $$
                'erased','redacted','unknown','anonymous','none','null']   -- operating vocabulary: a lead called "Setter" must not blank the word everywhere (the full name is still redacted as a phrase)
 $$;
 
+-- Round 8 (S2): ORDINARY WORDS that have the shape of a glued short name (up to 3 letters + a 3-4 letter string + s / es / ish / z / ss): 'today', 'monday', 'custom', 'prices', 'working', 'start', 'token',
+-- 'across', 'times', 'thanks', 'summary', 'kitchen'. The short-name rule (backup_ctx_build: short_re) never fires on a word of this list, so a lead called Day, Tom, King, Rice, Art, Ken or Chen no longer
+-- costs the owner his own prose. How the list was made (not a gate step, nothing is fetched at run time): every lower-case word form of 4-10 letters that occurs at least 25 times in about 185 MB of
+-- English technical / business text on the build machine (system documentation, this repository's own documents), that the en_US spelling dictionary accepts (directly or as a simple inflection) and
+-- that has the shape above; plus weekdays, months and a short hand list. Proper names are not in it ('khans', 'jkhan', 'lees', 'wongs', 'foxes' are NOT ordinary here and stay redacted).
+-- A word that is missing from the list costs one word ('[redacted:name]' in place), never a field.
+create or replace function public.backup_ordinary_words() returns text[]
+language sql immutable parallel safe set search_path to 'pg_catalog' as $$
+  select regexp_split_to_array(btrim('
+abandon abbrev ability able abort aborted aborts about above abseil absence absent absorb abuse accel accent accents accept accepts access accesses accomplish accord account accounts acct
+achieve acme acorn acquire acquires across acted acting action actions activates active actor actors acts actual acute acyclic adapt adapted adapter adapters added adding address addresses
+adds adjust admin admins admits adobe adopt adopted adopts advance advances advice advised affect affects affirms afford after again against againsts agency agent agents ages agree agreed
+agrees ahead aims airbag airflow alarm alert alerts algebra alias aliased aliases align aligned aligns alike allow allowed allows almost alone along alpha alphas alpine already also alter
+altered alters alum alumni always amazon amber ambient amend amended amer amnesty among amount amounts analog analysis analyst analyze anatomy anchor anchors ancient android angle angular
+animate anna annex annual anon another answer answers anti anybody anyhow anymore anyone anyway anyways apache apart appeal appear appears append appends apple applies apply approve approves
+apps april apron arch arches archil archive archives archs area areas arena aria arise arising armor arms arose around arrange array arrays arrive arrived arrives arrow arrows article
+articles arts asian aside asked asking asks asleep aspect aspects assert asserts assess asset assets assign assigns assist assume assumed assumes atlas atom atomic atomics atoms attach
+attaches attack attacks attempt attempts attendees attrib attribs audio audit audited auditor auditors audits august auth authed author authors auto avatar avatars average avoid avoided
+avoids await awaited awaits award awards aware awareness away awful axes axis azimuth azure babel bacher back backed backer backing backlog backs backup backups badge badges badly bail
+bailey bailout bake baked balance balances ball band bands bank banking banner bans bare baron barrel barrier bars base based baselines bases bash basic basics basis batch batched batches
+batman battery bear bearer bearing beast beat beats became because become becomes bedrock been beep before began begin begins behalf behave behaves behind being believe believes bell belong
+belongs below belt bench benefit benefits benny berg berlin berry beside besides bespoke best beta betas better between beware beyond bias bigger biggest bilboed bill billed billing billion
+bills binaries binary bind binding bindings binds biome bionic bisect bison bitmap bitmaps bits black blah blank blanked blanket blanks blast blazing bleed bless blessed blind blindly blip
+bloat blob blobs block blocked blocker blockers blocks blog blow blue blur blurb board boards bodies body bogus bold bolt bonding bone bonus book booked booking books boolean booleans boom
+boost boot booted booting boots border borders born borrow boss both bother bottom bottoms bounce bound bounded bounds boxes brace braces bracket brackets brad brain branch branches brand
+brands brandy brave bravo breach break breaker breaks breathe breeze brick bricks bridge bridges brief briefly briefs bright bring brings broad broader broke broken broker broth brought
+brown browse browser browsers brush brute bubble bubbles bucket buckets budget budgets buff buffer buffers buggy bugs build builder builders builds built builtin builtins bulk bullet bullets
+bump bumped bumping bumps bunch bundle bundled bundler bundles bunk burden buried burke burn burner burns burst busboy business buster busy button buttons buyer buyers buys bypass bypasses
+byte bytes cable cache cached caches caching cadence call called caller callers calling calls came camera canary cancel cancels cancer candor candy canned cannot canon canvas capable capital
+capitals capped caps caption captions captive capture captures caramel card cards care careful caret cargo carl carp carrier carries carry cart carve cascade cascades case cased cases cash
+casing cast casting casts casual catalog catalogs catch catches caught cause caused causes causing caution caveat caveats cease cedar cedilla ceil ceiling ceilings cell cells celt cent
+center central centrum cents century cert certain certs cesar chad chain chained chains chalk chalker chance change changed changes channel channels chaos chapter char charge charged charges
+charlie chars chart charter charts chase chat chats cheap cheaper cheat check checked checker checkers checks cherry chevron child chill chip chips choice choices choke chomp choose chooser
+chooses chop chore chorus chose chosen chrome chunk chunked chunks churn cipher ciphers circle circuit circuits cisco cite cited cites citizen city claim claimed claims clamp clamped clang
+clap clarify clarity clash class classes classic classics clause clauses clean cleaned cleaner cleanly cleans cleanup cleanups clear cleared clearer clearly clears clef clement clerk clever
+click clicked clicks client clients climax clip clipped clips clobber clock clocks clone cloned clones cloning close closed closely closer closes closest closing closure closures cloud cluck
+cluster clusters clutter coach coarse coast cocoa code coded coder coders codes codex coding coerce coerced coexist coff coffee cogent cohort cold collapses collate collect collects collide
+collides collins colon colons color colored colors cols column columns comb combine combines combo come comes coming comma command commands commas comment comments commit commits common
+commons comms comp compact companies company compare compares compete compile compiles completes complex complies comply compose composes compress comps compute computes concept concepts
+concern concerns concise confirm confirms confuse conn connect connects conns cons consent consist consists constr consult consume consumes cont contact contacts contain contains content
+contents continues contrib control controls convert converts convex convey cook cookie cookies cooks cool cooper cope copies copilot copy copying core cores corner corp corpus correct
+corrects corrupt cors cortex cosine cost costa costly costs could council counsel count counted counter counters countries country counts couple coupled course court courts cover covered
+covers crafted crane crash crashed crashes crate crates cray crazy create created creates creator cred credit credits creep crimson critic croak cross crosses crow crown cruiser crumb crumbs
+crypt cube cubic cues cups curated cure curl curly current curses cursor cursors curve curves custom customs cutoff cuts cutting cyan cycle cycles cyclic daemon daemons daily damage damaged
+damages dame dance danger dark darker dart dash dashed dashes data databases dataset datasets date dated dates daycare days dead deadlines deal dealing dealings deals death debit debt decay
+decide decided decides decimal decimals deck decl declare declares decline decls decrypt decrypts deem deemed deep deeper deeply defect defects defend defense defer define defined definer
+defines deflate defs degrees delay delayed delays delegates delete deleted deletes deli deliver delivers dell deller delta deltas demand demands demo demos demote demoted denial denied
+denies denom dense densify density deny depart depend depends deploy deploys deps depth derived derives design designs desired desk desktop despite dest destroy destroys detach detaches
+detect detects develop diag diagram diagrams dial dialect dialects dialer dialog dialogs dials dickey dict dicts died dieresis dies dieter diff diffed differ differs diffing diffs digest
+digests digit digital digits dilemma dims direct dirk dirs dirty disable disables disc discord discuss disk disks dismay dispose disputes dist ditto dive diverge divide divided divider
+dividers divides divisor dock docker docs doctor dodge does doing doit dollar dollars domain domains dominates done donna door doors dora dormant dots dotted double doubled doubles doubt
+down doxy draft drafted drafter drafts drag drain drained drains draw drawer drawing drawn draws dream drew drift drifted drifts drill drive driven driver drivers drives driving drizzle drop
+dropped drops dross dual duck dumb dummies dummy dump dumped dumper dumping dumps dunno duplex durable during dutch duty dying dynamic each eager early earn earned earns earth ease easily
+easing east eastern easy echo echoed echoes echoing eclipse eddy edge edges edit edited editing edition editor editors edits effect effects effort efforts eggs egress eight either eject
+elapsed elect elem element elements elite elixir ellipsis else email emails embed embeds emerald emerged emit emits emitted emitter emoji emotive emphasis employees empties empty emulate
+enable enabled enables encode encoded encoder encoders encodes encrypt encrypts encs ended ending endings endless endorse ends energy enforce enforces engine engines english enhance enjoy
+enough enqueue enrich enroll ensure ensures enter entered enters entire entities entity entries entropy entry environ epic epics epoch epochs epsilon equal equally equals equiv erase erased
+erasure errata error errored errors escalates escape escaped escapes establish estate estimates euro evaluates even evening event evented events ever every evicts evil evolve exact exactly
+examine example examples exceed exceeds excel except excerpt excess exchanges exclude excludes exec execute executes exempt exercises exhibit exist existed exists exit exited exiting exits
+exodus exotic expand expands expat expect expects expense expenses expert expire expired expires expiry explain explains exploit explore expo export exports expose exposed exposes express
+extend extends extent extern extra extract extracts extras extreme exts eyeball eyebrow eyes fable facade face facet facets facing fact factor factories factors factory facts factual fade
+fades fail failed failing fails failure failures fair fairly fake faker fall fallen falling falls false families family fancy fans fashion fast faster fastest fatal fault favor favorites
+feat feature features federal fedora feed feeding feeds feel feels fees fell fence fenced fences fest fetch fetched fetcher fetches fewer fiber field fields fifth fifty fight figure figures
+file filed filenames files fill filled filler filling fills films filter filters final finale finally finance find finder finding findings finds fine finer finish finishes finite fire fired
+fireflies fires firing first fish fitness fits five fixed fixer fixers fixes fixing fixture fixtures flag flagged flags flake flakes flakiness flaky flash flask flat flatten flatter flavor
+flaw fleet flex flight flip flipped flips float floats flock floor floored flow flowing flows fluke flush flushed flushes flux focal focus focused focuses fold folded folder folders folding
+folds follow follows font fonts foobar foot footer footnotes forbid forbids force forced forces forcing fords foreign forever forge forged forgery forget forgets forgot fork forked forking
+forks form formal format formats formed former forms formula formulas forty forward forwards found founder foundry four fourth frag fragile frame framed framer frames framing frank free
+freed freedom freeing freely frees freeze freezes french fresh freshly freshness friday friend friends from front frow frozen fuchsia full fullest fully functor fund funding funds funnel
+funny further fuse fused fusion future futures fuzz fuzzer fuzzing fuzzy gadget gain gained gains galaxy gallery gallium game games gaming gamma gang gapped gaps garage garbage garbled gate
+gated gates gateway gateways gather gating gave gawk gear gemma general generates generic generous genes genuine german gets getter getters getting ghazi ghost gigabytes gilles gist give
+given gives giving glance glass glasser glen gles glib glob global globals globe globs glow glue glyph glyphs gnat gnome goal goals goes going gold golden gone good goodbye goods google
+goose gorse gotcha gotchas govern governs grab grace grade graded grader grades grading graft graham grain grained grammar grammars grant granted grantee grants graph graphic graphics graphs
+gratis grave gray great greater greedy green greet grep greps grew grey grid grids grok groovy gross grosser ground group grouped groups grow growing grows growth grub grunt gtest guard
+guarded guards guess guessed guesses guest guests guide guided guides guile gulp gust gutter gyre habit hack hacked hacking hacks haiku half halls halt halts halves hamburg hand handed
+handful handing handle handled handler handlers handles handoff handoffs hands handy hang hanging hangs happen happens happy hard harden harder harmful harmless harness harnesses hash hashed
+hashes hashing hatch hatchet have haven having hazard head headed header headers heading headings headless heads heal health healthy heap heard heart heather heavily heavy hedge height
+heights heirs held hello helm help helped helper helpers helpful helps hence henning henry herbs here hereby herein hereof hero hexagon hiccup hidden hide hides hiding high higher highest
+highly hills himself hint hints hire hirsute history hits hitting hive hling hobby hoist hoisted hold holder holders holding holds hole holes home homed homes honest honor honored honors
+hood hook hooks hope hops horizon horn host hosted hostile hosting hosts hotkey hour hourly hours house houses hover however hubs huge human humans hundred hundreds hung hunk hunks hunt
+husband hushed husky hybrid hygiene hyper hyphen hyphens iceberg icon icons idea ideal ideally ideas idiom idle idling ignore ignored ignores illegal image images imagine imaging impact
+impish implied implies imply import imports impose imposed impress improve improves inbound inbox inboxes incl include includes incr indeed index indexed indexer indexes indian indicates
+indices indigo inert inexact infer inflate info infos infra infringes ingest ingress inherit inherits init initial initials inject injects inline inlined inlines inner insert inserts inside
+insight insights inspect inspects inst install installs instances instant instead instr intact integer integers intel intend intends intent inter interim intro ints invalid invent inverse
+invert invite invited invites invoke invoked invoker invokes involve involves ioctl ioctls iota iris iron ironed island isolate issue issued issuer issues issuing ital italic item items iter
+iterables iterate iterates itself jack jade jail jammy jane janitor january japan jars java javas jean jeans jest jimmy jitter jobs joey johannes john join joined joining joins joint jordan
+josh journal judge judged judges judging july jump jumps june junior junk just justify kaber kaiser karma kava kebab keep keeping keeps kept kern kernel kernels keyed keyring keyrings keys
+keyword keywords khan kick kicker kickoff kids kill killed killing kills kilobytes kind kindly kinds kinetic king kings kitchen knob knobs knot know knowing known knows kukri kyle label
+labeled labels labs lack lacks ladder lake lamb lambda lance land landed landing lands lane lanes lang languages laptop large largely larger largest last lasting late latency latent later
+latest latex latten latter launch launches laws lawsuit lawyer layer layered layers layout layouts lazily lazy lead leader leading leads leaf leak leakage leaked leaking leaks lean leap
+learn learned learns lease least leave leaves leaving lecture ledger left legacy legal legally legend legible legs length lengths less lesser lesson lessons lets letter letters letting level
+levels lever lexer lexical lexicon liable libero libraries library libs license licensees licenses lies life lifetimes lift lifted lifting lifts light lighter like likely lime limit limited
+limiter limits line lineage linear liner lines linger link linkage linked linker linking links lint linter linting list listed listen listens listing listings lists lite literal literals
+litmus little live lived lives living lizard llama ller load loaded loader loaders loading loads lobby local locale localed locales locally locals locate located locator lock locked locking
+locks lockups logged logger loggers logging logic logical login logins logo logos logout logs lone long longer longest longs look looked looking looks lookup lookups loom loop looping loops
+loose loosely lord lore lose loser loses losing loss losses lost lots loud loudly louis loup love lower lowered lowest lows lucent lucky lulu lunar lying lynx mach machine machines macro
+macron macros made madness magic mail mailbox mailboxes mailed mailing main mainly major majors make maker makes making manage managed manager managers manages mandate mandates mangle
+mangled manner mans mantic manual manuals many mapped mapper mapping mappings maps marc marcel march margin margins maria mark marked marker markers market markets marking marks markup
+marquess marshal mart martin mask masked masking masks massive master match matched matcher matchers matches mate matrix matter matters mature maven maxim maximal maximum maya maybe mean
+meaning meanings means meant meas measure measures media median medical medium meet meeting meets mega megabytes member members memo memories memory mendes mental mention mentions menu menus
+mere merely merge merged merger merges merging mermaid mesa meson mess message messages meta meter metered method methods metric metrics micro middle might migrate migrates mike miles miller
+million milo mime mimic mind mine mini minify minimal minimum minimums minor minors mint minted minting mints minus minute minutes mirror mirrors misc miss missed misses missing mission
+missions mistake mistakes mistral mitigates mixed mixer mixes mixing mobile mocha mock mocked mocking mocks modal modals mode model modeled models modern modes modifies modify mods modular
+module modules modulo modulus mold moment monad monday money monitor monitors mono montero month monthly months moon moot mora moral more morning morph most mostly motion moulin mount
+mounted mounts mouse move moved moves moving much mulley multi music musical must mutate mutates mute muted mutual myself naive name named namely names naming nanoid narrow narrows nations
+native natural nature navigates near nearest nearly need needed needing needs negate negated negatives neither nelson neon nerd ness nest nested nesting nests nets nettle network networks
+neutral never newer newest newline newlines newly news newt next nice nicely nicer niche nick nicks niggler night nightly nine ninja nits noble nobody node nodes noel noer noise noisy nonce
+none nonzero nope norm normal north notable notably note noted notepad notes notest nothing notice noticed notices notifies notify noting notion noun nowadays nowhere nudge nudges null nulls
+number numbers numeric numerous obey object objects oblique observe observes obtain obtains obvious occur occurs octal octet octets october offer offered offers office offline offload offs
+offset offsets often okay older oldest omega omit omits omitted onboard once ones ongoing online onlines only onto onward onwards oops opacity opaque opcode opcodes open opened opener
+opening opens opera operand operands operate operates opinion opinions opposed opted optimal option options opts opus oracle orange orch order ordered orders ordinal orgs orig origin origins
+orphan orphans other others otto ought ours ourselves outage outages outbox outcome outcomes outer outline outlines outlive outlives outlook output outputs outs outside outward oven over
+overall overdue overlap overlaps overlay overlays overly overrides overrun overt owed owned owner owners owning owns pacific pack package packages packed packet packets packing packs padded
+padding page paged pager pagers pages paging paid pain paint painted paints pair paired pairing pairs pale palette pandas pane panel panels panes panic paper para paras pardon parent parents
+parity park parked parks parkway parquet parse parsed parser parses parsing part partial parties partly partner partners parts party pascal pass passage passed passes passing passive past
+paste pasted pastes pasting patch patched patches patent patents path paths pattern patterns pause paused pauses pausing payee paying payload payloads payment payments payoff payout payouts
+pays peak pearl peek peer peers penalties penalty pencil pend pending people percent perfect perform performs perhaps period periods perky perm permit permits perms permute persist persists
+person persona personas persons pertain peter petter phantom phase phased phases phasing phated phil phoenix phone phones phrase phrases pick picked picker pickers picking pickle pickler
+picks pickup picture piece pieces pile pill pills pilot ping pings pink pinned pinning pins pinyin pioneers pipe piped pipelines pipes piping pitched pitches pitfalls pivot pixel pixels pkgs
+place placed places placing plain plainly plan plane planes planned planner plans plasma play player plays please plenty plot plots plucky plug plugin plugins plumb plural plus pocket pods
+point pointed pointer pointers points poison polar polars policies policy polish polite poll polled poller polling polls pollute polygon poms pong pool pooled pools poor popover popovers
+popped poppler pops popular populates popup popups port portal portals ported porters porting portion portions ports positives post posted posting posts posture power powered powers
+practices pray precede precedes precise pred predate predates pref prefect prefer prefers prefix prefixes prefs prelude premise premium prep prepare prepares prepend prepends present
+presents preserves preset presets press pressed pretend pretest pretty prevent prevents preview previews previous price priced prices pricing primary prime print printed printer printers
+prints prior prism priv privacy private probe probed probes probing problem problems probs proceed proceeds process processes prod produce produces product products prof profit profits prog
+program programs progress progs project projects promise promises promote promotes prompt prompts proof prop proper props pros prose protect protects prov prove proved proven proves provide
+provides proving prow proxies proxy prune pruned prunes pruning pseudo public publish publishes pull pulled pulling pulls pulse pure purely purge purged purple purpose purposes pursue push
+pushed pushes pushing puts putting python qualify quality quant quarter queries query queue queued queues queuing quick quickly quiet quietly quilt quirk quirks quit quite quot quota quote
+quoted quotes quoting race races racing radians radii radio radius radix rail rails railway rainer raise raised raises raising rand random range ranges rank ranked ranking ranks rapid rare
+rarely raster rate rated rater raters rates rather rating ratings ratio ratios rays reach reached reaches react reader readers readiness reading readout ready real reality really realm reap
+reaped reaper reason reasons rebuild rebuilds receipt receipts receive receives recency recent recipe recipes reclaim reclaims recon record records recreates rect redact redacts redo redraw
+reduce reduced reduces redwood reel refer refers refine refined reflect reflects reflex refresh refreshes refs refund refusal refusals regard regards regex regexes regexp region regions
+regress regular reject rejects relate related relax relaxed relay relayed relays release releases relies rels rely relying remain remains remark remarks remedy remnant remote remotes removal
+removals removed rename renamed renames render renders renew renewal renewals renewed renews reopen reopens repair repairs repeat repeats replica replicas reply report reports repro require
+requires rescue resend reserve reserves resides resolve resolves respect respects respond responds responses rest restart restarts restore restores result results resume resumed resumes
+retain retains rethink retrieves reveal reveals reverse reverses revert reverts revise revised revoke revoked revokes rewind rewrite rewrites rhino rhythm ribbon rice rich richer rick ride
+rides riff right rights ring rings risk risks risky roam robin robots robs robust rocket roebuck roger role roles roll rolled rolling rolls roman room rooms root rooted rootless roots rose
+roses roster rosters rotate rotated rotates rough roughly round rounded rounds route routed router routers routes routine routines routing rows royalties royalty rubric ruby ruff rule rules
+runaway runnables runner runners running runs runtime runtimes rushing rust rusty safari safe safely safer safety said sake salary sale sales salsa salt samba same sample sampled sampler
+samples sandbox sandboxes sandy sane sanity sans satisfies satisfy saturates sauce save saved saves saving savings saxes saying says scalar scalars scale scaled scales scaling scan scanned
+scanner scans scatter scene scenes sched schedules schema schemas scheme schemes scholar science scope scoped scopes scoping score scored scorer scores scoring scrape scraper scratch screen
+screens scrip script scripts scroll scrolls scrub scrubs scudo sealed seam seamless seams search searches seat seated seats second seconds secret secrets secs section sections secure sedan
+seed seeded seeder seeding seeds seeing seek seeking seem seems seen sees segment segments select selects self sell selling semi send sender senders sending sends sense sensing sensors sent
+sentences sentry separates sept sequences sequin serge serial series serif serious serve served server servers serves service services serving servo session sessions sets setter setters
+setting settings settle settled settles setup setups seven several severe shader shadow shadows shall shallow shams shape shaped shapes shard shards share shared shares sharing sharp shay
+shebang shebangs sheet sheets shell shells shield shields shift shifted shifts shim shimmer shims ship shipped ships shores short shorten shorter shot shots should show showed showing shown
+shows shrink shrinks shut sibling siblings side sidebar sidecar sides sigil sigma sign signal signals signed signer signes signing signs silence silent silicon silk silly silva similar
+simple simpler simply simulates since single sink sinks siren site sitemap sites sits sitter sitting sixth size sized sizes sizing sizzle skate sketch skill skills skim skin skip skipped
+skips slack slam slang slanted slash slashes slate slave sleep sleeps slice sliced slices slicing slide slider slides slight slim slop slot slots slow slower slowest slowly slug slugs slurp
+small smaller smart smith smoke smooth snap snappy snaps snazzy sniff sniffer snippet snippets snooze soap social society sock socket sockets socks soft solar sold sole solely solid solo
+solve solved solves some somehow someone sometimes sonnet soon sooner sorry sort sorted sorting sorts sought soul sound sounds soup source sourced sources south space spaced spaces spacing
+spam span spans spare spark sparse spawn spawned spawns speak speaker speaks spec special specifies specify specs speech speed speeds speedup spell spelled spend spends spent sphinx spike
+spikes spill spin spine spinner spirit splay splice split splits sponsor sponsors spoof spot spotted spray spread spreads spring sprint sprite spurious square squash squid stab stable stack
+stacked stacks staff stage staged stages stagger staging stale staleness stall stalled stalls stamp stamped stamps stand standby stands stanza stanzas star starred stars start started
+starter starts startup stash stat state stated stateless states static stating station stats status statuses statute stay stayed staying stays stdio steady steer steered steers stein stem
+stent step stepper steps ster steward stick sticky still stock stolen stone stony stop stopped stops storage store stored stores stories storing story strand strange stray stream streams
+street stress stretch strict string strings strip stripe stripes strips stroke strong stub stubbed stubs stuck studied studio study stuff style styled styles styling subclass subject
+subjects submit submits subpart subparts subs subset subtle subtly subtype succeed succeeds success such suck suffix suffixes sugar suggest suggests suit suite suites summaries summary
+summed summer sums sunday sundry super supplies supply support supports suppose suppress sure surface surfaces surplus survey survive survives suspect suspend suspends svelte swagger swain
+swallow swallows swap swapped swaps swarm swarms swash swatches sweep sweeps swept swift swig swill swipe switch switches symbol symbols symptom sync synced syncing syncs synonym synonyms
+synopsis syntax system systems tabbed table tables tablet tabs tabular tackle tagged tagging tags tail taint tainted take taken takes taking talk talking talks tall tamper tang tangent tango
+tape tarball tarballs target targets tart task tasks taste taxi teach teaches teal team teammates teams tear tearing tears teaser tech tell telling tells telnet temp templates tempo tenant
+tenants tender tenders tensor term terms terra terse test testbed tested tester testers testing tests text texts textual texture than thank thanks that their theirs them theme themed themes
+theming then theory there thereby therein thereof these theta they thin thing things thingy think thinks third this those though thought thoughts thread threads threat three throb through
+throw thrown throws thru thrust thumb thus tick ticked ticket tickets ticks tidy tied tier tiers ties tiff tight tighten tightens tighter tightly tilde tile tiles till time timed timely
+timeout timeouts timer timers times timezones timing timings timothy tinted tiny tips title titled titles toast toasts today tofu toggle toggled toggles token tokens told tolerates tone
+tones tonight tony took tool toolbar toolbox tooling toolkit tools topic topics topmost torch torn tort total totally totals touch touched touches tough tour tout toward towards trace traced
+tracer traces tracing track tracked tracker trackers tracks trade trades traffic trail trailer trailers trained trait traits trans transp trap trapped traps trash trashed travel travels tray
+treat treated treats treaty tree trees trend trends triage triages trial trick tricks tricky tried tries trig trigger triggers trim trimmed trims trio trip triple triples trips trivial trod
+trouble trow trucks true truly truncates trunk truss trust trusted trustees trusts truth truths trying tuesday tune tuned tuning tunnel tunnels tuple tuples turbo turn turned turner turning
+turns turtle tweak tweaks twenty twice twin twins twitter type typed typefaces types typical typing typings typo typos uglify ugly ultra unary unblock unblocks unbound unclear undo unfair
+unicorn uniform unify union unions unique united unity unknown unknowns unless unlike unlink unload unlock unlocks unpack unread unsafe unset unstick until unusual update updated updates
+upfront upgrade upgrades upload uploads upon upper upstart urgency urgent usable usage usages used useful useless user usernames users uses using usual usually utilities utility utilize
+vacuum vagrant vague valid validates validly vals value valued values valve variables variant variants varies variety various vars vary varying vault vector vectors vendor vendors venture
+ventures venue verb verbose verbs verdict verdicts verifies verify verity versa version versions versus vertex very veto viable vibe vice victim victor video videos view viewed viewer
+viewers viewing views violate violates violet virtual visible visibly vision visit visited visitor visitors visual visuals voice void volume volumes vote vows voyage wait waited waiter
+waiters waiting waits waive waived waiver waives wake wakely wakes walk walked walker walking walks wall wallet wallets walls want wanted wants wards wares warm warn warned warning warnings
+warns warrants wart waste wasted watch watched watcher watches water wave ways weak weaken weaker weather website websites wedge week weekday weekly weeks weight weights weird welcome well
+went were west western what wheel wheels when whence where whereas wherein whether which while whine whisper white whoever whole whom whose wide widely widen widened widens wider widget
+widgets width widths wiki wild will willing wills window windows winner winning wins wipe wiped wire wired wires wiring wise wish with within without wizard wizards wolf woods word wording
+words work worked worker workers working works world wormer worry worse worst worth would wrap wrapped wrapper wrappers wraps wrench write writer writers writes writing written wrong wrongly
+wrote xref xterm yang yarn yeah year years yellow yield yielded yields york young younger your yours zero zeroed zeroes zeros zinc zips zombie zone zones zoom
+'), '\s+')
+$$;
+
 create or replace function public.backup_re_escape(p text) returns text
 language sql immutable parallel safe set search_path to 'pg_catalog' as $$ select regexp_replace(p, '([\\^$.|?*+()\[\]{}])', '\\\1', 'g') $$;
 
@@ -5009,20 +5194,42 @@ end $$;
 -- assembles the context object from the term arrays (live names, plus names the deny-list adds)
 create or replace function public.backup_ctx_build(p_phrases text[], p_parts text[], p_squashed text[], p_phones text[], p_base jsonb default '{}'::jsonb) returns jsonb
 language plpgsql immutable set search_path to 'pg_catalog' as $$
-declare alts text[]; nre text; sq text[]; ph text[]; sh text[];
+declare alts text[]; nre text; sq text[]; ph text[]; sh text[]; shalt text; glue text; spaced text; ord text[]; shre text := ''; shcre text := ''; cap text[];
+  pre constant text := '(?:[a-z]{1,3}|miss|prof|mister|madam|mlle|[0-9]{1,8})';
+  suf text;
 begin
   alts := array(select distinct x from unnest(coalesce(p_phrases, '{}') || coalesce(p_parts, '{}')) x where x <> '');
-  -- round 7 (E1b): a 3-4 letter name token (Khan, Shah, Lee, Fox, Wong) cannot be matched as a substring of the squashed text (it sits inside ordinary words), so it is matched as a WHOLE WORD that carries at most
-  -- a 3-letter prefix and a plural / family / digit suffix (never the bare word: name_re redacts that in place): 'khans', 'jkhan', 'mrfox', 'khan2024', 'Shah123', 'LeeFamily'. A 2-letter token stays an accepted residual (documented).
+  -- round 7 (E1b): a 3-4 letter name token (Khan, Shah, Lee, Fox, Wong) cannot be matched as a substring of the squashed text (it sits inside ordinary words), so it is matched as a WHOLE WORD (never the bare
+  -- word: name_re redacts that in place). Round 8 (S2 / S3) made the rule both narrower and wider:
+  --   the word = [up to 3 letters | miss | prof | mister | madam | mlle | digits] + token + [s | es | ish | z | ss | jr | sr | family | fam | co | inc | ltd | llc | corp | an operating word of 4+ letters] + [digits]
+  --              'khans', 'jkhan', 'mrfox', 'missfox', 'profkhan', 'khan2024', 'Shah123', 'LeeFamily', 'khanfamily2024', 'KhanRoofing', 'khanjr', 'khanz', 'shahco', 'wonginc'
+  --   or the token letter-spaced / dotted / dashed: 'k h a n', 'K.H.A.N', 'k-h-a-n'
+  --   but NEVER a word of backup_ordinary_words() ('today', 'monday', 'custom', 'prices', 'working', 'start', 'token', 'across', 'times'): ordinary prose is left alone,
+  --   unless that word is Capitalised in the middle of a sentence ('call the Kings tomorrow'): short_cap_re, below.
+  -- A match is redacted IN PLACE (the word becomes '[redacted:name]'); it no longer blanks the field. A 2-letter token, a 4+ letter arbitrary prefix ('xxxxkhan') and an arbitrary suffix stay accepted residuals (documented).
   sh := array(select distinct x from unnest(coalesce(p_parts, '{}') || array(select jsonb_array_elements_text(coalesce(p_base -> 'short_tokens', '[]'::jsonb)))) x where x ~ '^[a-z]{3,4}$');
   if cardinality(alts) > 0 then
     nre := '(?<![a-z0-9])(?:' || array_to_string(array(select x from unnest(alts) x order by length(x) desc, x), '|') || ')(?![a-z0-9])';
   else nre := ''; end if;
   sq := array(select distinct x from unnest(coalesce(p_squashed, '{}')) x where length(x) >= 5 and x ~ '^[a-z0-9]+$');
   ph := array(select distinct x from unnest(coalesce(p_phones, '{}')) x where length(x) >= 7 and x ~ '^[0-9]+$');
+  if cardinality(sh) > 0 then
+    shalt := array_to_string(array(select x from unnest(sh) x order by length(x) desc, x), '|');
+    suf := '(?:s|es|ish|z|ss|jr|sr|family|fam|co|inc|ltd|llc|corp|' || array_to_string(array(select x from unnest(public.backup_stopwords()) x where x ~ '^[a-z]{4,}$' order by length(x) desc, x), '|') || ')';
+    glue := pre || '?(?:' || shalt || ')' || suf || '?[0-9]{0,8}';
+    spaced := array_to_string(array(select array_to_string(regexp_split_to_array(x, ''), '[ ._-]{1,2}') from unnest(sh) x order by length(x) desc, x), '|');
+    -- the ordinary words that this very pattern would match (few per token), the bare tokens (name_re's job) and the words of the redaction markers are excluded by ONE look-ahead
+    ord := array(select w from unnest(public.backup_ordinary_words()) w where w ~ ('^(?:' || glue || ')$'));
+    shre := '(?<![a-z0-9])(?!(?:' || array_to_string(array['redacted', 'name', 'uncertain', shalt] || ord, '|') || ')(?![a-z0-9]))(?:' || glue || '|' || spaced || ')(?![a-z0-9])';
+    -- an ordinary word of that shape is still a NAME when it is written Capitalised in the middle of a sentence ('call the Kings tomorrow', 'quote for the Days'): CASE-SENSITIVE pattern, the word must follow
+    -- a lower-case letter or a comma and one space. Weekdays and months are always capitalised and stay exempt; a sentence-initial, lower-case or ALL-CAPS ordinary word is not touched (documented residual).
+    cap := array(select initcap(w) from unnest(ord) w where w not in ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'january', 'february', 'march', 'april', 'june', 'july',
+                                                                      'august', 'september', 'october', 'november', 'december'));
+    if cardinality(cap) > 0 then shcre := '(?<=[a-z,] )(?:' || array_to_string(cap, '|') || ')(?![A-Za-z0-9])'; end if;
+  end if;
   return coalesce(p_base, '{}'::jsonb) || jsonb_build_object('v', 2, 'phrases', to_jsonb(coalesce(p_phrases, '{}')), 'parts', to_jsonb(coalesce(p_parts, '{}')), 'name_re', nre,
            'squashed', to_jsonb(sq), 'sq_re', case when cardinality(sq) > 0 then '(?:' || array_to_string(sq, '|') || ')' else '' end,
-           'short_re', case when cardinality(sh) > 0 then '(?<![a-z0-9])(?:[a-z]{1,3}(?:' || array_to_string(sh, '|') || ')(?:s|es|ish|family|fam|[0-9]{1,8})?|(?:' || array_to_string(sh, '|') || ')(?:s|es|ish|family|fam|[0-9]{1,8}))(?![a-z0-9])' else '' end, 'phones', to_jsonb(ph), 'n_terms', cardinality(alts));
+           'short_re', shre, 'short_cap_re', shcre, 'phones', to_jsonb(ph), 'n_terms', cardinality(alts));
 end $$;
 
 -- adds what the deny-list scan found (plaintext terms that occur in the data) to a context
@@ -5045,7 +5252,7 @@ begin
       sq := sq || array_to_string(tok, '');
     end if;
   end loop;
-  return public.backup_ctx_build(ph, pa, sq, pn, p_ctx - 'phrases' - 'parts' - 'name_re' - 'squashed' - 'sq_re' - 'short_re' - 'phones' - 'n_terms');
+  return public.backup_ctx_build(ph, pa, sq, pn, p_ctx - 'phrases' - 'parts' - 'name_re' - 'squashed' - 'sq_re' - 'short_re' - 'short_cap_re' - 'phones' - 'n_terms');
 end $$;
 
 -- fast, exact twin of ws_sensitive_hits() for the NON-digit categories (the redactor ignores the three digit-shaped ones). Same normalisation, same stems; the per-word health loop is ONE alternation.
@@ -5095,13 +5302,16 @@ declare
   src text; tbl text; col text; kind text; v text; f text; tok text[]; w text; d text; pads text; deny boolean := false; fast boolean := false;
   stop text[] := public.backup_stopwords();
   phrases text[] := '{}'; parts text[] := '{}'; squashed text[] := '{}'; phones text[] := '{}';
-  live jsonb := '[]'::jsonb; a int; b int; ent_s2 text; ent_t text[]; ent_p text[]; ent_s text; ent_ss text[];
+  live jsonb := '[]'::jsonb; a int; b int; ent_s2 text; ent_t text[]; ent_p text[]; ent_s text; ent_ss text[]; sk text[] := array['jarvis', 'owner', 'system', 'migration']; sk1 text[];
 begin
   foreach src in array array['leads.name:n', 'leads.phone:c', 'leads.email:e', 'setters.name:n', 'setters.contact:c', 'ws_leads.name:n', 'ws_leads.phone:c', 'ws_leads.email:e',
                               'client_workspaces.name:n', 'setter_events.client:n', 'contact_suppressions.address:e', 'outbox.to_ref:c'] loop
     tbl := split_part(split_part(src, ':', 1), '.', 1); col := split_part(split_part(src, ':', 1), '.', 2); kind := split_part(src, ':', 2);
     continue when to_regclass('public.' || tbl) is null;
-    continue when not exists (select 1 from pg_attribute a where a.attrelid = to_regclass('public.' || tbl) and a.attname = col and a.attnum > 0 and not a.attisdropped);
+    -- round 8 (N3): a source column that is gone (renamed / dropped by a later change) used to be skipped silently, so its names stopped being redacted. Fail closed: no context, no backup, and the reason is said.
+    if not exists (select 1 from pg_attribute a where a.attrelid = to_regclass('public.' || tbl) and a.attname = col and a.attnum > 0 and not a.attisdropped) then
+      raise exception 'backup refused: redaction source column %.% does not exist any more (renamed or dropped?). Update redaction_sources() and backup_redaction_context() in a migration first.', tbl, col;
+    end if;
     for v in execute format('select distinct %I::text from public.%I where %I is not null', col, tbl, col) loop
       f := lower(public.backup_fold_text(btrim(v)));
       continue when length(f) < 2;
@@ -5138,7 +5348,17 @@ begin
     if pads is not null then execute 'select exists (select 1 from public.ffm_redaction_denylist)' into deny; end if;
   end if;
   begin fast := md5(pg_get_functiondef(to_regprocedure('public.ws_sensitive_hits(text)'))) = any (public.backup_detector_pins()); exception when others then fast := false; end;
-  return public.backup_ctx_build(phrases, parts, squashed, phones, jsonb_build_object('deny', deny, 'scanned', false, 'fast_detector', fast, 'live', live));
+  -- S1: the system's OWN slugs (agents and departments that belong to no venture, and ventures that were seeded by a migration, not proposed through create_venture, with their departments and agents):
+  -- the code looks these up by literal ('jarvis', 'idea-lab'), so the slug redactor leaves the exact value alone even when a client happens to carry the same word as a name.
+  if to_regclass('public.agents') is not null and to_regclass('public.departments') is not null and to_regclass('public.ventures') is not null then
+    begin
+      execute 'select array(select lower(slug) from public.agents a where a.venture_id is null or a.venture_id in (select id from public.ventures where proposed_by is null)
+                            union select lower(slug) from public.departments d where d.venture_id is null or d.venture_id in (select id from public.ventures where proposed_by is null)
+                            union select lower(slug) from public.ventures where proposed_by is null)' into sk1;
+      sk := sk || coalesce(sk1, '{}');
+    exception when undefined_column then null; end;
+  end if;
+  return public.backup_ctx_build(phrases, parts, squashed, phones, jsonb_build_object('deny', deny, 'scanned', false, 'fast_detector', fast, 'live', live, 'slug_keep', to_jsonb(sk)));
 end $$;
 
 -- the context a snapshot hands to every row: only the live names that OCCUR in the exported text (found by the keyed-hash scan, which also covers live names because the triggers keep the
@@ -5148,7 +5368,7 @@ create or replace function public.backup_ctx_hot(p_ctx jsonb, p_found jsonb) ret
 language plpgsql immutable set search_path to 'pg_catalog' as $$
 declare e jsonb; ph text[] := '{}'; sq text[] := '{}'; names text[]; chains text[]; keep boolean; base jsonb; shortt text[] := '{}';
 begin
-  base := p_ctx - 'live' - 'phrases' - 'parts' - 'name_re' - 'squashed' - 'sq_re' - 'short_re' - 'phones' - 'n_terms';
+  base := p_ctx - 'live' - 'phrases' - 'parts' - 'name_re' - 'squashed' - 'sq_re' - 'short_re' - 'short_cap_re' - 'phones' - 'n_terms';
   if coalesce(p_ctx ->> 'deny', 'false') <> 'true' or p_found is null then return p_ctx || jsonb_build_object('alts_full', coalesce(substring(p_ctx ->> 'name_re' from '^\(\?<!\[a-z0-9\]\)\(\?:(.*)\)\(\?!\[a-z0-9\]\)$'), '')); end if;
   names := array(select jsonb_array_elements_text(p_found -> 'names')); chains := array(select jsonb_array_elements_text(p_found -> 'chains'));
   for e in select * from jsonb_array_elements(p_ctx -> 'live') loop
@@ -5313,12 +5533,12 @@ declare r record; raw text; res jsonb; n text[] := '{}'; f text[] := '{}'; e tex
 begin
   if coalesce(p_ctx ->> 'deny', 'false') <> 'true' then return null; end if;
   begin pads := public.redaction_pads(); exception when insufficient_privilege then return null; end; if pads is null then return null; end if;      -- SECURITY INVOKER (see backup_deny_terms): a caller without the key gets nothing
-  for r in select * from public.backup_effective_spec(p_exported) where mode in ('strict', 'light') and (p_only is null or table_name = p_only) loop
+  for r in select * from public.backup_effective_spec(p_exported) where mode in ('strict', 'light', 'slug') and (p_only is null or table_name = p_only) loop
     raw := case r.kind when 'json' then format('regexp_replace(t.%I::text, ''\\.'', '' '', ''g'')', r.column_name)
                        when 'array' then format('array_to_string(t.%I::text[], '' '')', r.column_name)
                        else format('t.%I::text', r.column_name) end;
-    res := public.backup_deny_run(format('select lower(case when (octet_length(z.e) <> length(z.e) or strpos(z.e, ''%%'') > 0 or strpos(z.e, ''&'') > 0 or strpos(z.e, ''\'') > 0) then public.backup_normalise(z.e) else z.e end) as s from (select %s as e from %s t where t.%I is not null) z',
-                                         raw, case when p_only is null then format('public.%I', r.table_name) else format('(select * from public.%I t order by %s offset %s limit %s)', r.table_name, public.backup_pk_order(r.table_name), p_off, p_lim) end, r.column_name), pads);
+    res := public.backup_deny_run(format('select lower(case when (octet_length(z.e) <> length(z.e) or strpos(z.e, ''%%'') > 0 or strpos(z.e, ''&'') > 0 or strpos(z.e, ''\'') > 0) then public.backup_normalise(z.e) else z.e end) as s from (select %s %s as e from %s t where t.%I is not null) z',
+                                         case when r.mode = 'slug' then 'distinct' else '' end, raw, case when p_only is null then format('public.%I', r.table_name) else format('(select * from public.%I t order by %s offset %s limit %s)', r.table_name, public.backup_pk_order(r.table_name), p_off, p_lim) end, r.column_name), pads);
     n := n || array(select jsonb_array_elements_text(res -> 'names')); f := f || array(select jsonb_array_elements_text(res -> 'chains'));
     e := e || array(select jsonb_array_elements_text(res -> 'emails')); p := p || array(select jsonb_array_elements_text(res -> 'phones'));
   end loop;
@@ -5460,11 +5680,12 @@ begin
     for i in reverse cardinality(prot)..1 loop
       r := replace(r, chr(57343 + i), prot[i]);
     end loop;
-    -- a known name that survives only glued to other characters (jname, name2024), as a plural (the Names) or letter-spaced: the whole field is blanked, in LIGHT columns too (round 6: LIGHT is no
-    -- longer a guarantee-free zone; bounded over-blanking of configuration text that merely contains a known name is accepted)
+    -- a known name of 5+ letters that survives only glued to other characters (jname, name2024), as a plural (the Names) or letter-spaced: the whole field is blanked, in LIGHT columns too (round 6: LIGHT is no
+    -- longer a guarantee-free zone; bounded over-blanking of configuration text that merely contains a known name is accepted). A 3-4 letter name is handled by the next line, in place.
     if kc is not null and r = t1 then sq := kc; else sq := lower(regexp_replace(r, '[^a-zA-Z0-9]', '', 'g')); end if;
     if sqre <> '' and sq ~ sqre then return u; end if;
-    if shre <> '' and lower(t1) ~ shre then return u; end if;                -- E1b: a 3-4 letter known name glued / pluralised / digit-suffixed as one word ('khans', 'jkhan', 'khan2024')
+    if shre <> '' and r ~* shre then r := regexp_replace(r, shre, '[redacted:name]', 'gi'); end if;
+    if coalesce(ctx ->> 'short_cap_re', '') <> '' and r ~ (ctx ->> 'short_cap_re') then r := regexp_replace(r, ctx ->> 'short_cap_re', '[redacted:name]', 'g'); end if;      -- 'the Kings': an ordinary word, Capitalised mid-sentence       -- E1b / S2: a 3-4 letter known name glued / pluralised / digit-suffixed / letter-spaced as one word ('khans', 'jkhan', 'khan2024', 'k h a n'): that WORD is redacted in place
     if is_strict then
       if length(sq) >= 7 and jsonb_array_length(coalesce(ctx -> 'phones', '[]'::jsonb)) > 0 then
         dg := regexp_replace(r, '[^0-9]', '', 'g');
@@ -5520,7 +5741,7 @@ begin
     nre := coalesce(p_ctx ->> 'name_re', ''); sqre := coalesce(p_ctx ->> 'sq_re', ''); shre := coalesce(p_ctx ->> 'short_re', '');
     if p !~ '(?:[0-9][^0-9A-Za-z]*){7}' and p !~ '@|[A-Za-z0-9+/_-]{16}|https?:|www\.|[\[({<][ \t]*(?:at|arobase)|[ \t](?:at|arobase)[ \t]+[a-z0-9-]+(?:[ \t]+(?:dot|point)[ \t]|\.[a-z]{2})' 
        and p !~* '(?:(?:zero|oh|one|two|three|four|five|six|seven|eight|nine|un|deux|trois|quatre|cinq|sept|huit|neuf|[0-9])[ \t,.\-]+){5}'
-       and (nre = '' or p !~* nre) and (shre = '' or p !~* shre) then
+       and (nre = '' or p !~* nre) and (shre = '' or p !~* shre) and (coalesce(p_ctx ->> 'short_cap_re', '') = '' or p !~ (p_ctx ->> 'short_cap_re')) then
       if sqre <> '' and (lower(regexp_replace(p, '[^a-zA-Z0-9]', '', 'g')) ~ sqre or lower(regexp_replace(translate(p, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', rot26), '[^a-zA-Z0-9]', '', 'g')) ~ sqre) then
         return public.backup_redact_text_full(p, p_ctx, p_max, p_mode);
       end if;
@@ -5574,10 +5795,62 @@ language sql stable set search_path to 'pg_catalog' as $$
   select case when a is null then null else coalesce((select jsonb_agg(public.backup_redact_text(x, p_ctx, p_max, p_mode) order by o) from unnest(a) with ordinality z (x, o)), '[]'::jsonb) end
 $$;
 
+-- Round 8 (S1): IDENTIFIER columns (slugs, agent / actor / target references, dedupe keys) used to be KEEP, i.e. exported untouched. A venture slug is derived from an LLM-written venture NAME
+-- (hq_ventures.slugify), and create_venture copies it to departments.slug, agents.slug ('<slug>-manager'), agents.department_slug, ventures.manager_agent and audit_log.target: a known client name
+-- left in six columns. Mode 'slug' closes that without breaking a restore:
+--   * a known name that occurs as a WORD of the identifier ('khanzada-roofing', 'ventures/khanzada-roofing', 'activate_venture:khanzada-roofing') is replaced by a PSEUDONYM: 'n' + 10 hex of
+--     HMAC-SHA256(deny-list key, 'slug:' + name). Same name -> same pseudonym in every column and row of the export, so equality joins (agents.department_slug = departments.slug), prefixes and
+--     unique indexes survive; different names -> different pseudonyms, so a unique index cannot collide on restore. The key never leaves the database, so the pseudonym cannot be reversed off-site.
+--   * a 3-4 letter name glued into a word (short_re) pseudonymises that word the same way; a 5+ letter name that is only present glued / squashed ('khanzadaroofing') pseudonymises the WHOLE value ('r' + 16 hex).
+--   * the exact slugs of the system's own agents and departments (no venture: 'jarvis', 'idea-lab', 'cfo' ...) are never touched: a restore must still find them (context key slug_keep).
+-- Nothing else is changed in these columns: an identifier that holds no known name is exported as it is.
+create or replace function public.backup_redact_slug(p text, p_ctx jsonb) returns text
+language plpgsql stable set search_path to 'pg_catalog' as $$
+declare nre text; sqre text; shre text; f text; r text; m text; pads text; whole boolean := false;
+begin
+  if p is null or p = '' or p_ctx is null then return p; end if;
+  nre := coalesce(p_ctx ->> 'name_re', ''); sqre := coalesce(p_ctx ->> 'sq_re', ''); shre := coalesce(p_ctx ->> 'short_re', '');
+  if nre = '' and sqre = '' and shre = '' then return p; end if;
+  if octet_length(p) = length(p) and strpos(p, '%') = 0 and strpos(p, '&') = 0 and strpos(p, '\') = 0 then f := p; else f := public.backup_normalise(p); end if;
+  if (nre = '' or f !~* nre) and (shre = '' or f !~* shre) and (sqre = '' or lower(regexp_replace(f, '[^a-zA-Z0-9]', '', 'g')) !~ sqre) then return p; end if;
+  if (p_ctx -> 'slug_keep') ? lower(p) then return p; end if;                         -- a system slug, exactly
+  begin pads := public.redaction_pads(); exception when others then pads := null; end;
+  r := f; whole := (f <> p);                                                            -- an identifier that needed folding / unescaping to show the name is replaced whole
+  if not whole and nre <> '' then
+    for m in select distinct lower(x[1]) from regexp_matches(r, nre, 'gi') x order by 1 loop
+      r := regexp_replace(r, '(?<![a-z0-9])' || public.backup_re_escape(m) || '(?![a-z0-9])', 'n' || substr(public.backup_slug_h(pads, m), 1, 10), 'gi');
+    end loop;
+  end if;
+  if not whole and shre <> '' then
+    for m in select distinct lower(x[1]) from regexp_matches(r, shre, 'gi') x order by 1 loop
+      r := regexp_replace(r, '(?<![a-z0-9])' || public.backup_re_escape(m) || '(?![a-z0-9])', 'n' || substr(public.backup_slug_h(pads, m), 1, 10), 'gi');
+    end loop;
+  end if;
+  if whole or (sqre <> '' and lower(regexp_replace(r, '[^a-zA-Z0-9]', '', 'g')) ~ sqre) or (nre <> '' and r ~* nre) or (shre <> '' and r ~* shre) then
+    return 'r' || substr(public.backup_slug_h(pads, lower(f)), 1, 16);
+  end if;
+  return r;
+exception when others then
+  return 'r' || substr(encode(sha256(convert_to('slug:' || coalesce(p, ''), 'UTF8')), 'hex'), 1, 16);        -- any failure: never the raw value
+end $$;
+
+-- keyed when the deny-list key is readable (always, inside the snapshot); a plain SHA-256 otherwise (a database without the deny-list migration)
+create or replace function public.backup_slug_h(p_pads text, p_val text) returns text
+language sql immutable set search_path to 'pg_catalog' as $$
+  select case when p_pads is null then encode(sha256(convert_to('slug:' || p_val, 'UTF8')), 'hex')
+              else encode(sha256(decode(split_part(p_pads, ':', 2), 'hex') || sha256(decode(split_part(p_pads, ':', 1), 'hex') || convert_to('slug:' || p_val, 'UTF8'))), 'hex') end
+$$;
+
+create or replace function public.backup_redact_slug_array(a text[], p_ctx jsonb) returns jsonb
+language sql stable set search_path to 'pg_catalog' as $$
+  select case when a is null then null else coalesce((select jsonb_agg(public.backup_redact_slug(x, p_ctx) order by o) from unnest(a) with ordinality z (x, o)), '[]'::jsonb) end
+$$;
+
 -- THE reviewed classification of EVERY text-like column (text, varchar, json, jsonb, text[]) of every exported table. One line of reason each.
 --   strict  fail closed: the field becomes '[redacted:uncertain]' when it cannot be vouched for (the leak paths: names, payers, owner text, agent output)
 --   light   patterns and known names only; a field is never blanked for its topic
---   keep    identifier / status / code / hash / the owner's own setting: not free text, never altered (an altered slug or status would break foreign keys and restores)
+--   keep    status / code / hash / the owner's own setting: not free text, never altered
+--   slug    identifier that can carry a venture / department / agent slug or a reference built from one: unchanged unless it holds a KNOWN client name, which becomes a keyed pseudonym (see backup_redact_slug; round 8, S1)
 --   blank   not exported at all: the value is replaced by an empty string (NOT NULL columns stay valid)
 -- A column that is NOT in this list is treated as STRICT by backup_snapshot() and reported under redaction.unclassified_columns; sqltests/leak_redaction_check.sql (section F) FAILS when one exists,
 -- so adding a text column to an exported table cannot silently leak and cannot go unreviewed.
@@ -5587,11 +5860,11 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('account_requests', 'account_login', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('account_requests', 'needs', 'array', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('account_requests', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
-    ('account_requests', 'requested_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('account_requests', 'requested_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('account_requests', 'signup_url', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('account_requests', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('account_requests', 'vendor', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
-    ('accounts_registry', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('accounts_registry', 'created_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('accounts_registry', 'login_email', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('accounts_registry', 'notes', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('accounts_registry', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
@@ -5599,53 +5872,53 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('accounts_registry', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('accounts_registry', 'vault_ref', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('action_log', 'action', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('action_log', 'actor', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('action_log', 'actor', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('action_log', 'decision', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('action_log', 'detail', 'json', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('action_log', 'evidence', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('action_log', 'reason', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('action_log', 'ref', 'text', 'keep', null, 'unique key or system reference (table/id, dedupe key, url key): altering it could collide on restore or break lookups; written by code, not typed text'),
+    ('action_log', 'ref', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('action_log', 'result', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('action_log', 'tier', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('action_policy', 'action', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('action_policy', 'description', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('action_policy', 'tier', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('action_policy', 'updated_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('action_policy', 'updated_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('agent_runs', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('agent_runs', 'summary', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('agents', 'charter', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
-    ('agents', 'department_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('agents', 'department_slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('agents', 'metric', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
     ('agents', 'model_tier', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('agents', 'office_function', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('agents', 'role', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('agents', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('agents', 'slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('agents', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('agents', 'title', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
-    ('alert_state', 'key', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('alert_state', 'key', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('app_owners', 'email', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('approval_requests', 'action', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('approval_requests', 'actor', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('approval_requests', 'actor', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('approval_requests', 'recommendation', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('approval_requests', 'ref', 'text', 'keep', null, 'unique key or system reference (table/id, dedupe key, url key): altering it could collide on restore or break lookups; written by code, not typed text'),
+    ('approval_requests', 'ref', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('approval_requests', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('audit_log', 'action', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('audit_log', 'actor', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('audit_log', 'actor', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('audit_log', 'detail', 'json', 'strict', 500, 'free text copied from owner/agent actions (reason, notes)'),
-    ('audit_log', 'target', 'text', 'keep', null, 'unique key or system reference (table/id, dedupe key, url key): altering it could collide on restore or break lookups; written by code, not typed text'),
+    ('audit_log', 'target', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('bank_accounts', 'currency', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('bank_accounts', 'institution', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('bank_accounts', 'label', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('bank_accounts', 'last4', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('bank_balances', 'entered_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('bank_balances', 'entered_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('bank_balances', 'source', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('bank_transactions', 'dedupe_key', 'text', 'keep', null, 'unique key or system reference (table/id, dedupe key, url key): altering it could collide on restore or break lookups; written by code, not typed text'),
+    ('bank_transactions', 'dedupe_key', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('bank_transactions', 'description', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('bank_transactions', 'note', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('bank_transactions', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('build_requests', 'approved_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('build_requests', 'qa_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('build_requests', 'requested_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('build_requests', 'approved_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
+    ('build_requests', 'qa_agent', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
+    ('build_requests', 'requested_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('build_requests', 'risk', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('build_requests', 'rollback_plan', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('build_requests', 'spec', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
@@ -5653,19 +5926,19 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('build_requests', 'test_result', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('build_requests', 'title', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('capital_policy', 'last_mode', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('capital_policy', 'updated_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('capital_policy', 'updated_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('company_profile', 'brand', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('company_profile', 'mailing_address', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('company_profile', 'reply_email', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('company_profile', 'sender_name', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('company_profile', 'venture_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('company_profile', 'venture_slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('departments', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('departments', 'name', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
-    ('departments', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('departments', 'slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('departments', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('escalations', 'department_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('escalations', 'department_slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('escalations', 'evidence', 'json', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('escalations', 'from_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('escalations', 'from_agent', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('escalations', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('escalations', 'resolution', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('escalations', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5674,23 +5947,23 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('evidence_sources', 'content_type', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('evidence_sources', 'final_url', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('evidence_sources', 'flags', 'json', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('evidence_sources', 'host_norm', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('evidence_sources', 'host_norm', 'text', 'slug', null, 'host name of a fetched page (can be a client''s own domain): a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('evidence_sources', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('evidence_sources', 'text', 'text', 'blank', null, 'public web page bodies (up to 40k chars each): bulk third-party text, rebuildable by re-fetching; not copied off-site (exported as an empty string; sha256 and url stay)'),
     ('evidence_sources', 'title', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('evidence_sources', 'url', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('executor_registry', 'allowed_agents', 'array', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('executor_registry', 'allowed_agents', 'array', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('executor_registry', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('executor_registry', 'note', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('executor_registry', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('executor_runs', 'agent_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('executor_registry', 'slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
+    ('executor_runs', 'agent_slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('executor_runs', 'executor', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('executor_runs', 'purpose', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('executor_runs', 'refusal_reason', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('executor_runs', 'result_sha256', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('executor_runs', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('handbook', 'content', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('human_handoffs', 'requested_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('human_handoffs', 'requested_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('human_handoffs', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('human_handoffs', 'task', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('human_handoffs', 'url', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
@@ -5704,27 +5977,27 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('ideas', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ideas', 'verdict', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('integration_status', 'detail', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
-    ('integration_status', 'key', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('integration_status', 'key', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('ledger', 'currency', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ledger', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ledger', 'note', 'text', 'strict', 500, 'free text; names of payers/payees and setters'),
     ('ledger', 'original_currency', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ledger', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('llm_calls', 'agent_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('llm_calls', 'agent_slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('llm_calls', 'model', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('llm_calls', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('llm_calls', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('memory', 'agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('memory', 'agent', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('memory', 'confidence', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('memory', 'content', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('memory', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('memory', 'source', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('mission_outcomes', 'verdict', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('missions', 'checkpoint', 'json', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('missions', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('missions', 'created_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('missions', 'evidence', 'json', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('missions', 'next_action', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('missions', 'objective', 'text', 'strict', 4000, 'owner-typed mission text'),
+    ('missions', 'objective', 'text', 'blank', null, 'written by an LLM tool too (hq_start_venture copies the venture description, which is blank in ventures, into the objective): free text is not exported (round 8, N4)'),
     ('missions', 'owner_decision', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('missions', 'plan', 'json', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('missions', 'result', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
@@ -5743,7 +6016,7 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('org_changes', 'disagrees_with_owner', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('org_changes', 'gain', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('org_changes', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('org_changes', 'proposed_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('org_changes', 'proposed_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('org_changes', 'risk', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('org_changes', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('org_changes', 'target', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
@@ -5752,24 +6025,24 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('owner_messages', 'body', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('owner_messages', 'channel', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('owner_messages', 'decision', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('owner_messages', 'from_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('owner_messages', 'from_agent', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('owner_messages', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('owner_messages', 'options', 'json', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('owner_messages', 'ref_table', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('owner_messages', 'ref_table', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('payment_instructions', 'payee', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('payment_instructions', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('payment_instructions', 'receipt_ref', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
-    ('payment_instructions', 'requested_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('payment_instructions', 'requested_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('payment_instructions', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('predictions', 'action_ref', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('predictions', 'agent_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('predictions', 'agent_slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('predictions', 'expected', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('predictions', 'outcome', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('reconciliation_flags', 'check_name', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('reconciliation_flags', 'detail', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('reconciliation_flags', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('spend_reservations', 'action', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('spend_reservations', 'actor', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('spend_reservations', 'actor', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('spend_reservations', 'alternatives', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('spend_reservations', 'expected_benefit', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('spend_reservations', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
@@ -5784,13 +6057,13 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('systems', 'name', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('systems', 'notes', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('systems', 'repo', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('systems', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('systems', 'slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('systems', 'url', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('systems', 'venture_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('systems', 'venture_slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('systems', 'warmup_local_times', 'array', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('tasks', 'assigned_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('tasks', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('tasks', 'dedupe_key', 'text', 'keep', null, 'unique key or system reference (table/id, dedupe key, url key): altering it could collide on restore or break lookups; written by code, not typed text'),
+    ('tasks', 'assigned_agent', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
+    ('tasks', 'created_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
+    ('tasks', 'dedupe_key', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('tasks', 'detail', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('tasks', 'mission_role', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('tasks', 'result', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
@@ -5799,11 +6072,11 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('tool_registry', 'currency', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('tool_registry', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('tool_registry', 'notes', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
-    ('tool_registry', 'owner_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('tool_registry', 'owner_agent', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('tool_registry', 'purpose', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
-    ('tool_registry', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('tool_registry', 'slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('tool_registry', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('venture_assets', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('venture_assets', 'created_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('venture_assets', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_assets', 'name', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('venture_assets', 'notes', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
@@ -5811,27 +6084,27 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('venture_assets', 'url', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('venture_config', 'call_to_action', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
     ('venture_config', 'offer', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
-    ('venture_config', 'updated_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('venture_goals', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('venture_config', 'updated_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
+    ('venture_goals', 'created_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('venture_goals', 'metric', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
     ('venture_goals', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_goals', 'unit', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
-    ('venture_procedures', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('venture_procedures', 'owner_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('venture_procedures', 'created_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
+    ('venture_procedures', 'owner_agent', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('venture_procedures', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_procedures', 'steps', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
-    ('venture_procedures', 'title', 'text', 'keep', null, 'unique key or system reference (table/id, dedupe key, url key): altering it could collide on restore or break lookups; written by code, not typed text'),
+    ('venture_procedures', 'title', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('ventures', 'description', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
     ('ventures', 'gate_criteria', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('ventures', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('ventures', 'manager_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('ventures', 'manager_agent', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('ventures', 'name', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
     ('ventures', 'primary_metric', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
-    ('ventures', 'proposed_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('ventures', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('ventures', 'proposed_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
+    ('ventures', 'slug', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('ventures', 'stage', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ventures', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('waterfall_policy', 'updated_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
+    ('waterfall_policy', 'updated_by', 'text', 'slug', null, 'identifier that can carry a venture / agent slug: a known client name inside it is exported as a keyed pseudonym (round 8, S1)'),
     ('web_messages', 'body', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
     ('web_messages', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('web_messages', 'payload', 'json', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
@@ -5847,6 +6120,8 @@ begin
   for s in select * from public.backup_redaction_spec() x where x.table_name = p_table and x.mode <> 'keep' loop
     continue when not (v ? s.column_name) or jsonb_typeof(v -> s.column_name) = 'null';
     if s.mode = 'blank' then v := jsonb_set(v, array[s.column_name], case when s.kind in ('json', 'array') then 'null'::jsonb else to_jsonb(''::text) end);
+    elsif s.mode = 'slug' and s.kind = 'array' then v := jsonb_set(v, array[s.column_name], public.backup_redact_slug_array(array(select jsonb_array_elements_text(v -> s.column_name)), p_ctx));
+    elsif s.mode = 'slug' then v := jsonb_set(v, array[s.column_name], to_jsonb(public.backup_redact_slug(v ->> s.column_name, p_ctx)));
     elsif s.kind = 'json' then v := jsonb_set(v, array[s.column_name], public.backup_redact_json(v -> s.column_name, p_ctx, coalesce(s.max_len, 500), s.mode));
     elsif s.kind = 'array' then v := jsonb_set(v, array[s.column_name], public.backup_redact_array(array(select jsonb_array_elements_text(v -> s.column_name)), p_ctx, s.max_len, s.mode));
     else v := jsonb_set(v, array[s.column_name], to_jsonb(public.backup_redact_text(v ->> s.column_name, p_ctx, s.max_len, s.mode)));
@@ -5864,6 +6139,8 @@ begin
               else 'to_jsonb(t) || jsonb_build_object(' || string_agg(format('%L, %s', es.column_name,
                      case when es.mode = 'blank' and es.kind in ('json', 'array') then 'null::jsonb'
                           when es.mode = 'blank' then format('case when t.%I is null then null::text else ''''::text end', es.column_name)
+                          when es.mode = 'slug' and es.kind = 'array' then format('public.backup_redact_slug_array(t.%I::text[], $1)', es.column_name)
+                          when es.mode = 'slug' then format('public.backup_redact_slug(t.%I::text, $1)', es.column_name)
                           when es.kind = 'json' then format('public.backup_redact_json(t.%I::jsonb, $1, %s, %L)', es.column_name, coalesce(es.max_len, 500), es.mode)
                           when es.kind = 'array' then format('public.backup_redact_array(t.%I::text[], $1, %s, %L)', es.column_name, coalesce(es.max_len, 2000), es.mode)
                           else format('public.backup_redact_text(t.%I::text, $1, %s, %L)', es.column_name, coalesce(es.max_len::text, 'null'), es.mode) end), ', ') filter (where es.mode <> 'keep') || ')' end
@@ -5982,13 +6259,14 @@ begin
   -- which is exactly what the redaction context reads. Rows that add or remove no distinct value (a drafted outbox email to a known address) do not move it.
   for t in select s.table_name, s.column_name from public.redaction_sources() s where to_regclass('public.' || s.table_name) is not null
             and exists (select 1 from pg_attribute a where a.attrelid = to_regclass('public.' || s.table_name) and a.attname = s.column_name and a.attnum > 0 and not a.attisdropped) order by 1, 2 loop
-    execute format('select md5(coalesce(string_agg(v, chr(31) order by v), '''')) from (select distinct %I::text v from public.%I where %I is not null) q', t.column_name, t.table_name, t.column_name) into n;
+    execute format('select md5(coalesce(jsonb_agg(v order by v)::text, '''')) from (select distinct %I::text v from public.%I where %I is not null) q', t.column_name, t.table_name, t.column_name) into n;
     rws := rws || jsonb_build_object(t.table_name || '.' || t.column_name, n);
   end loop;
   return jsonb_build_object(
     'seq', (select case when is_called then last_value else 0 end from public.ffm_redaction_epoch_seq),
     'sources', rws,
     'denylist_rows', (select count(*) from public.ffm_redaction_denylist),
+    'key', (select md5(coalesce(string_agg(k.name || '|' || k.created_at::text, ',' order by k.name), '')) from public.ffm_redaction_keys k),     -- N6: WHICH key row is there (name + creation time, never the value): a replaced key changes every pseudonym and every deny-list answer
     'policy', md5(public.backup_export_policy()::text || '|' || coalesce((select string_agg(x::text, '|' order by x::text) from public.backup_effective_spec(public.backup_export_policy() -> 'exported') x), '')),
     -- EVERY function the export path can execute, derived from the catalog by name (not a hand list): the backup_* and redaction_* families, the detector twin and the writer trigger. A migration applied mid-export changes this.
     'code', md5(coalesce((select string_agg(p.oid::regprocedure::text || md5(pg_get_functiondef(p.oid) || '|' || pg_get_userbyid(p.proowner) || '|' || coalesce(p.proacl::text, '') || '|' || coalesce(obj_description(p.oid, 'pg_proc'), '')), ',' order by p.oid::regprocedure::text) from pg_proc p
@@ -6032,7 +6310,7 @@ end $$;
 -- i.e. about 1.3 ms per strict/light field plus 1.3 us per character; the estimate over-counts cheap fields on purpose (a high estimate only means the export is paged sooner).
 create or replace function public.backup_snapshot_cost() returns jsonb
 language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-declare pol jsonb := public.backup_export_policy(); e record; chars bigint; strict_chars bigint := 0; light_chars bigint := 0; rows bigint := 0; n bigint; expr text;
+declare pol jsonb := public.backup_export_policy(); e record; chars bigint; strict_chars bigint := 0; light_chars bigint := 0; rows bigint := 0; n bigint; expr text; total bigint := 0;
 begin
   for e in select * from public.backup_effective_spec(pol -> 'exported') where mode in ('strict', 'light') loop
     expr := case e.kind when 'array' then format('array_to_string(t.%I::text[], '' '')', e.column_name) else format('t.%I::text', e.column_name) end;
@@ -6040,7 +6318,14 @@ begin
     if e.mode = 'strict' then strict_chars := strict_chars + chars; else light_chars := light_chars + chars; end if;
     rows := rows + n;
   end loop;
-  return jsonb_build_object('strict_chars', strict_chars, 'light_chars', light_chars, 'field_count', rows,
+  -- round 8 (integration rehearsal B1): MEMORY. One backup_snapshot() statement builds the whole export as a single jsonb value; measured on the scratch machine it costs about 3 kB of backend memory per
+  -- exported row whatever the row holds (0 extra rows: 127 MB peak, 100,000: 429 MB, 300,000: 960 MB; the rehearsal's 1.39 million two-column rows needed 4.8 GB and the backend was killed).
+  -- rows_total lets hq_backup.py choose the paged export (200 rows per call, flat memory) by ROW COUNT as well as by estimated seconds.
+  for e in select x as t from jsonb_array_elements_text(pol -> 'exported') x where x not in ('push_config', 'push_subscriptions') loop
+    execute format('select count(*) from public.%I', e.t) into n;
+    total := total + n;
+  end loop;
+  return jsonb_build_object('strict_chars', strict_chars, 'light_chars', light_chars, 'field_count', rows, 'rows_total', total,
                             'est_seconds', round((strict_chars * 0.0000013 + light_chars * 0.00000035 + rows * 0.0012)::numeric, 1));
 end $$;
 
@@ -6050,6 +6335,10 @@ revoke all on function public.backup_fold_text(text) from public, anon, authenti
 revoke all on function public.backup_unescape_text(text) from public, anon, authenticated;
 revoke all on function public.backup_normalise(text) from public, anon, authenticated;
 revoke all on function public.backup_stopwords() from public, anon, authenticated;
+revoke all on function public.backup_ordinary_words() from public, anon, authenticated;
+revoke all on function public.backup_redact_slug(text, jsonb) from public, anon, authenticated;
+revoke all on function public.backup_slug_h(text, text) from public, anon, authenticated;
+revoke all on function public.backup_redact_slug_array(text[], jsonb) from public, anon, authenticated;
 revoke all on function public.backup_re_escape(text) from public, anon, authenticated;
 revoke all on function public.backup_windows(text) from public, anon, authenticated;
 revoke all on function public.backup_ctx_build(text[], text[], text[], text[], jsonb) from public, anon, authenticated;
@@ -6322,12 +6611,15 @@ language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
 declare c text; n int; fresh boolean;
 begin
   foreach c in array tg_argv loop
+    -- round 8 (N3): a source column that was renamed or dropped must not make every later insert fail; the epoch moves (so a running export is discarded) and backup_redaction_context() refuses the next backup with the reason
+    if not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = c and a.attnum > 0 and not a.attisdropped) then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
     execute format('select count(*) from (select distinct %1$I::text from new_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2 limit 201) q', c) into n;
     continue when n = 0;
     if n > 200 then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
-    -- a value is NEW when the table holds no more rows with it than this statement inserted
-    execute format('select exists (select 1 from (select distinct %1$I::text v from new_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2) q
-                     where (select count(*) from %2$s t where t.%1$I::text = q.v) <= (select count(*) from new_rows r where r.%1$I::text = q.v))', c, tg_relid::regclass) into fresh;
+    -- a value is NEW when the table holds no more rows with it than this statement inserted. Round 8 (S5): the inserted rows are grouped ONCE, and the table is asked for at most (inserted + 1) rows of each
+    -- value through the hash index on the source column (redaction_src_*_idx, below), so the cost is bounded by the statement (at most 200 index probes), not by the size of the table.
+    execute format('select exists (select 1 from (select %1$I::text v, count(*) c from new_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2 group by 1) q
+                     where (select count(*) from (select 1 from %2$s t where t.%1$I = q.v limit q.c + 1) z) <= q.c)', c, tg_relid::regclass) into fresh;
     if fresh then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
   end loop;
   return null;
@@ -6338,12 +6630,13 @@ language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
 declare c text; n int; gone boolean;
 begin
   foreach c in array tg_argv loop
+    if not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = c and a.attnum > 0 and not a.attisdropped) then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
     execute format('select count(*) from (select distinct %1$I::text from old_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2 limit 201) q', c) into n;
     continue when n = 0;
     if n > 200 then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
     -- a value is GONE when no row of the table holds it any more
     execute format('select exists (select 1 from (select distinct %1$I::text v from old_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2) q
-                     where not exists (select 1 from %2$s t where t.%1$I::text = q.v))', c, tg_relid::regclass) into gone;
+                     where not exists (select 1 from %2$s t where t.%1$I = q.v))', c, tg_relid::regclass) into gone;
     if gone then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
   end loop;
   return null;
@@ -6368,6 +6661,18 @@ begin
   return null;
 end $$;
 revoke all on function public.redaction_epoch_bump_upd() from public, anon, authenticated, service_role;
+-- Round 8 (S5): one HASH index per redaction-source column, for the "is this value new / gone" probes of the two triggers above. Hash, not btree: equality is all that is asked, and a hash index has no
+-- row-size limit (a 3 kB name cannot make an insert fail). Measured on the scratch machine with 100,000 leads and 100,000 outbox rows (scripts/perf_epoch_triggers.sh): a 150-row insert went from seconds
+-- (one sequential scan of the table per distinct value) to tens of milliseconds. Built with a plain CREATE INDEX: on a large live table this blocks writes for the build, so apply in a quiet minute.
+do $$
+declare t record;
+begin
+  for t in select s.table_name, s.column_name from public.redaction_sources() s
+            where to_regclass('public.' || s.table_name) is not null and exists (select 1 from pg_attribute a join pg_type ty on ty.oid = a.atttypid where a.attrelid = to_regclass('public.' || s.table_name) and a.attname = s.column_name
+                                                                             and a.attnum > 0 and not a.attisdropped and ty.typname in ('text', 'varchar', 'bpchar')) loop
+    execute format('create index if not exists %I on public.%I using hash (%I)', left('redaction_src_' || t.table_name || '_' || t.column_name || '_idx', 63), t.table_name, t.column_name);
+  end loop;
+end $$;
 do $$
 declare t record;
 begin
@@ -6562,6 +6867,31 @@ end $$;
 drop trigger if exists agent_runs_scrub on public.agent_runs;
 create trigger agent_runs_scrub before insert or update of summary on public.agent_runs for each row execute function public.agent_runs_scrub();
 
+-- Round 8 (S1, write path): a venture SLUG is built from the venture NAME, which an LLM tool writes (hq_ventures.slugify), and create_venture() copies the slug into departments, agents and the audit trail.
+-- A slug that contains a word the deny-list knows as a client / contact name token of 5+ letters is refused here, before any of those copies exist; hq_ventures.start() then retries once with a neutral slug
+-- ('venture-<8 hex>'). The name itself stays where it belongs (ventures.name: exported under strict redaction). Shorter tokens and names learned later are covered at export time (mode 'slug':
+-- keyed pseudonym). The message never repeats the name. Only the slug is checked, only when it is set or changed.
+create or replace function public.redaction_venture_slug_guard() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+declare pads text; w text; stop text[];
+begin
+  if NEW.slug is null or (TG_OP = 'UPDATE' and NEW.slug is not distinct from OLD.slug) then return NEW; end if;
+  if to_regprocedure('public.redaction_pads()') is null or to_regclass('public.ffm_redaction_denylist') is null then return NEW; end if;
+  pads := public.redaction_pads();
+  if pads is null then return NEW; end if;
+  stop := public.backup_stopwords();
+  foreach w in array regexp_split_to_array(lower(public.backup_fold_text(NEW.slug)), '[^a-z0-9]+') loop
+    continue when length(w) < 5 or w = any (stop) or w ~ '^[0-9]+$';
+    if exists (select 1 from public.ffm_redaction_denylist d where d.kind = 'n' and d.h = public.redaction_h(pads, 'n', w)) then
+      raise exception 'venture slug contains a known client or contact name: use a neutral slug (the name stays in the venture name)' using errcode = '23514', hint = 'neutral_slug';
+    end if;
+  end loop;
+  return NEW;
+end $$;
+drop trigger if exists redaction_venture_slug_guard on public.ventures;
+create trigger redaction_venture_slug_guard before insert or update of slug on public.ventures for each row execute function public.redaction_venture_slug_guard();
+revoke all on function public.redaction_venture_slug_guard() from public, anon, authenticated, service_role;
+
 -- what the backup preflight checks: both the export redaction and the source fixes are installed AND are the definitions in force
 create or replace function public.backup_redaction_status() returns jsonb
 language sql stable security definer set search_path to 'pg_catalog' as $$
@@ -6654,16 +6984,28 @@ revoke all on function public.backup_assert_reader() from service_role;
 
 -- The single catalogue of owner-only / backup-identity objects. The RULE is the catalogue: every public function whose name starts with backup_ or redaction_ (plus agent_runs_scrub) and every
 -- public relation whose name starts with ffm_redaction_ is internal; the reader list below is the only exception. A new helper that follows the naming rule is covered without editing this file.
+-- Round 8 (integration rehearsal S1): public.backup_suppression_export() (consent-integrity migration, PR #20; it does not exist on this branch alone) is on the reader list: 13 functions once it is
+-- installed. It returns the opt-out list as KEYED HASHES for the off-site file. Without this entry the naming rule made it owner-only and the backup silently lost the list.
+-- Round 8 (S4): the catalogue also lists PROCEDURES and AGGREGATES of the two name families (kind 'function': one GRANT / REVOKE ... ON ROUTINE covers all three), every VIEW and MATERIALIZED VIEW named
+-- ffm_redaction_* and every view / materialized view, in ANY schema, that reads a ffm_redaction_* relation directly or through other views (a view runs with its owner's rights, so `select * from
+-- some_view` would hand the key to whoever may read the view). Names are quoted (a mixed-case name used to break the regclass cast).
 create or replace function public.backup_acl_catalogue() returns table (kind text, name text, holder text, guarded boolean)
 language sql stable security invoker set search_path to 'pg_catalog' as $$
+  with recursive rel as (
+    select c.oid from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'S', 'v', 'm') and c.relname like 'ffm\_redaction\_%'
+    union
+    select rw.ev_class from rel join pg_depend d on d.refobjid = rel.oid and d.refclassid = 'pg_class'::regclass and d.classid = 'pg_rewrite'::regclass
+                         join pg_rewrite rw on rw.oid = d.objid where rw.ev_class <> rel.oid
+  )
   select 'function'::text, p.oid::regprocedure::text,
-         case when p.proname in ('backup_schema', 'backup_export_policy', 'backup_snapshot', 'backup_snapshot_page', 'backup_table_digest', 'backup_snapshot_cost', 'backup_redaction_meta',
-                                 'backup_epoch', 'backup_deny_prepare', 'backup_deny_release', 'backup_redaction_status', 'redaction_denylist_status') then 'backup_reader' else 'owner only' end,
-         pg_get_functiondef(p.oid) like '%perform public.backup_assert_reader()%'
-    from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind = 'f' and (p.proname ~ '^(backup_|redaction_)' or p.proname = 'agent_runs_scrub')
+         case when p.prokind = 'f' and p.proname in ('backup_schema', 'backup_export_policy', 'backup_snapshot', 'backup_snapshot_page', 'backup_table_digest', 'backup_snapshot_cost', 'backup_redaction_meta',
+                                 'backup_epoch', 'backup_deny_prepare', 'backup_deny_release', 'backup_redaction_status', 'redaction_denylist_status',
+                                 'backup_suppression_export') then 'backup_reader' else 'owner only' end,
+         case when p.prokind = 'f' then pg_get_functiondef(p.oid) like '%perform public.backup_assert_reader()%' else false end
+    from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p', 'a') and (p.proname ~ '^(backup_|redaction_)' or p.proname = 'agent_runs_scrub')
   union all
-  select case c.relkind when 'S' then 'sequence' else 'table' end, 'public.' || c.relname, 'owner only', false
-    from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'S') and c.relname like 'ffm\_redaction\_%'
+  select case c.relkind when 'S' then 'sequence' when 'v' then 'view' when 'm' then 'view' else 'table' end, quote_ident(n.nspname) || '.' || quote_ident(c.relname), 'owner only', false
+    from rel join pg_class c on c.oid = rel.oid join pg_namespace n on n.oid = c.relnamespace
   order by 1, 2
 $$;
 revoke all on function public.backup_acl_catalogue() from public, anon, authenticated;
@@ -6704,10 +7046,10 @@ do $$
 declare r record;
 begin
   for r in select p.oid::regprocedure::text as sig, c.holder from public.backup_acl_catalogue() c join pg_proc p on p.oid = c.name::regprocedure where c.kind = 'function' loop
-    execute format('revoke all on function %s from public, anon, authenticated, service_role, backup_reader', r.sig);
+    execute format('revoke all on routine %s from public, anon, authenticated, service_role, backup_reader', r.sig);
     if r.holder = 'backup_reader' then execute format('grant execute on function %s to backup_reader', r.sig); end if;
   end loop;
-  for r in select c.kind, c.name from public.backup_acl_catalogue() c where c.kind in ('table', 'sequence') loop
+  for r in select c.kind, c.name from public.backup_acl_catalogue() c where c.kind in ('table', 'sequence', 'view') loop
     if r.kind = 'sequence' then execute format('revoke all on sequence %s from public, anon, authenticated, service_role, backup_reader', r.name);
     else execute format('revoke all on table %s from public, anon, authenticated, service_role, backup_reader', r.name); end if;
   end loop;
@@ -6716,6 +7058,10 @@ end $$;
 alter function public.backup_schema() set search_path to 'pg_catalog';
 alter function public.backup_classification() set search_path to 'pg_catalog';
 alter function public.backup_pii_column_exceptions() set search_path to 'pg_catalog';
+-- the consent PR's export (when installed) is a definer function of the backup_ family with `search_path = public`; its body is schema-qualified, so it gets the same treatment as the three above
+do $$ begin
+  if to_regprocedure('public.backup_suppression_export()') is not null then alter function public.backup_suppression_export() set search_path to 'pg_catalog'; end if;
+end $$;
 -- future helpers created after this file still get the lockdown's default grant to service_role; R4 forces a revoke after each new function, and the ACL manifest check fails the gate on any drift
 
 -- ===== 20261122_postlock_backup_identity_v2.sql =====
@@ -6729,6 +7075,14 @@ alter function public.backup_pii_column_exceptions() set search_path to 'pg_cata
 --     ALTER DEFAULT PRIVILEGES cannot be limited by name pattern, so it is not used; the event trigger is the control.
 -- D3  the same sweep revokes table / sequence privileges on ffm_redaction_* after any blanket grant (the lockdown's default privileges grant every new table to service_role).
 -- The event trigger and its functions are owner-only: service_role cannot drop, disable or replace them (tested in sqltests/backup_identity_check.sql).
+-- Round 8 (S4):
+--   * the sweep also covers PROCEDURES and AGGREGATES named backup_* / redaction_*, VIEWS and MATERIALIZED VIEWS over the key / deny-list / cache tables (any schema, through other views too) and
+--     COLUMN-level grants on those tables (`grant select (value) on ffm_redaction_keys to ...`); the event trigger also fires on the statements that create or alter them.
+--   * the "already sweeping" marker can no longer be forged. It used to be `set ffm.acl_sweep = '1'`, which any session could set to switch the sweep off. It is now a value derived from the deny-list key
+--     (which only the owner can read), this transaction and this backend: a session that sets the setting to anything else is ignored, and the sweep runs.
+--   * presence is CHECKED: public.backup_acl_event_status() says whether the event trigger exists, is enabled and still calls backup_acl_event(); scripts/acl_manifest.py (a gate step) carries that as a
+--     manifest row and FAILS when it is missing or disabled, and ops/backup_activation_preflight.sh reports it as a BLOCKING OWNER ACTION. A project where the migration owner may not create event triggers
+--     still gets the WARNING below; the activation checks are what stop it from going unnoticed.
 
 create or replace function public.backup_assert_reader() returns void
 language plpgsql stable security invoker set search_path to 'pg_catalog' as $$
@@ -6744,32 +7098,41 @@ end $$;
 revoke all on function public.backup_assert_reader() from public, anon, authenticated;
 revoke all on function public.backup_assert_reader() from service_role;
 
--- one sweep: every internal object back to the catalogue's rule. Cheap (about 70 objects) and idempotent; it only issues a REVOKE / GRANT when a privilege is actually wrong.
+-- one sweep: every internal object back to the catalogue's rule. Cheap (about 75 objects) and idempotent; it only issues a REVOKE / GRANT when a privilege is actually wrong.
 create or replace function public.backup_acl_sweep() returns integer
 language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
-declare r record; who text; n integer := 0; api text[];
+declare r record; who text; n integer := 0; api text[]; mark text := coalesce(current_setting('ffm.acl_sweep', true), ''); k text; tok text; rdr boolean; tp constant text := 'select,insert,update,delete,truncate,references,trigger';
 begin
-  if current_setting('ffm.acl_sweep', true) = '1' then return 0; end if;                 -- our own REVOKEs fire the event trigger again: once is enough
-  perform set_config('ffm.acl_sweep', '1', true);
+  -- Our own REVOKEs fire the event trigger again: once is enough. The marker is honoured only when it is the keyed value of THIS transaction and backend, which nobody but the owner can compute:
+  -- sha256 over the deny-list key (owner-only table), the transaction id and the backend pid. It is computed here, inline: there is no function that returns it.
+  select value into k from public.ffm_redaction_keys where name = 'denylist_hmac';
+  if k is null then            -- no key row (never the case after 20261120_redaction_denylist_v1): make one, exactly as redaction_capture() does
+    insert into public.ffm_redaction_keys (name, value) select 'denylist_hmac', replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '') where not exists (select 1 from public.ffm_redaction_keys where name = 'denylist_hmac');
+    select value into k from public.ffm_redaction_keys where name = 'denylist_hmac';
+  end if;
+  tok := encode(sha256(convert_to('acl-sweep|' || k || '|' || txid_current()::text || '|' || pg_backend_pid()::text, 'UTF8')), 'hex');
+  if mark = tok then return 0; end if;
+  perform set_config('ffm.acl_sweep', tok, true);
+  rdr := exists (select 1 from pg_roles where rolname = 'backup_reader');
   api := array(select x from unnest(array['public', 'anon', 'authenticated', 'service_role']) x where x = 'public' or exists (select 1 from pg_roles where rolname = x));
   for r in select c.kind, c.name, c.holder from public.backup_acl_catalogue() c loop
     if r.kind = 'function' then
       foreach who in array api loop
         if has_function_privilege(who, r.name::regprocedure, 'execute') then
-          execute format('revoke all on function %s from %s', r.name::regprocedure, case when who = 'public' then 'public' else quote_ident(who) end); n := n + 1;
+          execute format('revoke all on routine %s from %s', r.name::regprocedure, case when who = 'public' then 'public' else quote_ident(who) end); n := n + 1;
         end if;
       end loop;
-      if r.holder = 'backup_reader' and exists (select 1 from pg_roles where rolname = 'backup_reader') then
-        if not has_function_privilege('backup_reader', r.name::regprocedure, 'execute') then execute format('grant execute on function %s to backup_reader', r.name::regprocedure); n := n + 1; end if;
-      elsif exists (select 1 from pg_roles where rolname = 'backup_reader') and has_function_privilege('backup_reader', r.name::regprocedure, 'execute') then
-        execute format('revoke all on function %s from backup_reader', r.name::regprocedure); n := n + 1;
+      if r.holder = 'backup_reader' and rdr then
+        if not has_function_privilege('backup_reader', r.name::regprocedure, 'execute') then execute format('grant execute on routine %s to backup_reader', r.name::regprocedure); n := n + 1; end if;
+      elsif rdr and has_function_privilege('backup_reader', r.name::regprocedure, 'execute') then
+        execute format('revoke all on routine %s from backup_reader', r.name::regprocedure); n := n + 1;
       end if;
     else
-      foreach who in array api || case when exists (select 1 from pg_roles where rolname = 'backup_reader') then array['backup_reader'] else '{}'::text[] end loop
+      foreach who in array api || case when rdr then array['backup_reader'] else '{}'::text[] end loop
         if r.kind = 'sequence' then
           if has_sequence_privilege(who, r.name::regclass, 'usage,select,update') then execute format('revoke all on sequence %s from %s', r.name::regclass, case when who = 'public' then 'public' else quote_ident(who) end); n := n + 1; end if;
-        elsif has_table_privilege(who, r.name::regclass, 'select,insert,update,delete,truncate,references,trigger') then
-          execute format('revoke all on table %s from %s', r.name::regclass, case when who = 'public' then 'public' else quote_ident(who) end); n := n + 1;
+        elsif has_table_privilege(who, r.name::regclass, tp) or has_any_column_privilege(who, r.name::regclass, 'select,insert,update,references') then      -- table-level OR any single column
+          execute format('revoke all on table %s from %s', r.name::regclass, case when who = 'public' then 'public' else quote_ident(who) end); n := n + 1;     -- REVOKE ... ON TABLE also removes the column privileges
         end if;
       end loop;
     end if;
@@ -6783,20 +7146,38 @@ revoke all on function public.backup_acl_sweep() from service_role;
 create or replace function public.backup_acl_event() returns event_trigger
 language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
 begin
+  -- a statement that only touched temporary objects (create temp table ...) cannot change an internal object's ACL: skip the sweep (it used to cost every such statement about 2 ms)
+  if exists (select 1 from pg_event_trigger_ddl_commands()) and not exists (select 1 from pg_event_trigger_ddl_commands() c where coalesce(c.schema_name, '') !~ '^pg_temp') then return; end if;
   perform public.backup_acl_sweep();
 end $$;
 revoke all on function public.backup_acl_event() from public, anon, authenticated;
 revoke all on function public.backup_acl_event() from service_role;
 
+-- is the control in place? Read by scripts/acl_manifest.py and ops/backup_activation_preflight.sh (facts from the catalog, nothing a caller can set).
+create or replace function public.backup_acl_event_status() returns jsonb
+language sql stable security invoker set search_path to 'pg_catalog' as $$
+  select jsonb_build_object(
+    'present', exists (select 1 from pg_event_trigger where evtname = 'ffm_backup_acl_sweep'),
+    'enabled', coalesce((select evtenabled in ('O', 'A') from pg_event_trigger where evtname = 'ffm_backup_acl_sweep'), false),
+    'calls_sweep', coalesce((select evtfoid = to_regprocedure('public.backup_acl_event()') and evtevent = 'ddl_command_end' from pg_event_trigger where evtname = 'ffm_backup_acl_sweep'), false),
+    'tags', coalesce((select array_length(evttags, 1) from pg_event_trigger where evtname = 'ffm_backup_acl_sweep'), 0),
+    'ok', coalesce((select evtenabled in ('O', 'A') and evtfoid = to_regprocedure('public.backup_acl_event()') and evtevent = 'ddl_command_end' and array_length(evttags, 1) >= 22
+                      from pg_event_trigger where evtname = 'ffm_backup_acl_sweep'), false))
+$$;
+revoke all on function public.backup_acl_event_status() from public, anon, authenticated;
+revoke all on function public.backup_acl_event_status() from service_role;
+
 -- bring everything to the rule now, then install the event trigger. Creating an event trigger needs superuser (a hosted project may not allow it to the migration owner): then the migration says so
--- loudly and scripts/acl_manifest.py --check (a gate step) plus the guard remain the controls; the owner can have the trigger created by the platform admin role.
+-- loudly and succeeds, and the two activation checks FAIL until the platform admin has created it: scripts/acl_manifest.py --check ("event trigger ffm_backup_acl_sweep is missing or disabled") and
+-- ops/backup_activation_preflight.sh ("BLOCKING OWNER ACTION"). The guard (backup_assert_reader) remains the control for the reader functions in the meantime.
 select public.backup_acl_sweep();
 do $$
 begin
   if exists (select 1 from pg_event_trigger where evtname = 'ffm_backup_acl_sweep') then drop event trigger ffm_backup_acl_sweep; end if;
   create event trigger ffm_backup_acl_sweep on ddl_command_end
-    when tag in ('CREATE FUNCTION', 'ALTER FUNCTION', 'CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO', 'ALTER TABLE', 'CREATE SEQUENCE', 'ALTER SEQUENCE', 'GRANT', 'REVOKE', 'ALTER DEFAULT PRIVILEGES', 'CREATE EXTENSION')
+    when tag in ('CREATE FUNCTION', 'ALTER FUNCTION', 'CREATE PROCEDURE', 'ALTER PROCEDURE', 'ALTER ROUTINE', 'CREATE AGGREGATE', 'ALTER AGGREGATE', 'CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO', 'ALTER TABLE',
+                 'CREATE VIEW', 'ALTER VIEW', 'CREATE MATERIALIZED VIEW', 'ALTER MATERIALIZED VIEW', 'CREATE SEQUENCE', 'ALTER SEQUENCE', 'GRANT', 'REVOKE', 'ALTER DEFAULT PRIVILEGES', 'CREATE EXTENSION', 'CREATE SCHEMA')
     execute function public.backup_acl_event();
 exception when insufficient_privilege then
-  raise warning 'could not create event trigger ffm_backup_acl_sweep (%): ask the platform admin to run the create event trigger statement in 20261122_postlock_backup_identity_v2.sql; until then new backup_* / redaction_* objects need a manual revoke (scripts/acl_manifest.py --check catches drift)', sqlerrm;
+  raise warning 'could not create event trigger ffm_backup_acl_sweep (%): BLOCKING OWNER ACTION before the backup is activated: ask the platform admin to run the create event trigger statement in 20261122_postlock_backup_identity_v2.sql. Until then new backup_* / redaction_* objects need a manual revoke, and scripts/acl_manifest.py --check and ops/backup_activation_preflight.sh FAIL on purpose', sqlerrm;
 end $$;

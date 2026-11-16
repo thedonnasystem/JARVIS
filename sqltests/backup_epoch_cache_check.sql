@@ -123,7 +123,15 @@ begin
      where c.table_schema = 'public' and c.table_name not in (select jsonb_array_elements_text(public.backup_export_policy() -> 'exported'))
        and c.data_type in ('text', 'character varying', 'jsonb') and c.column_name ~ '(^|_)(name|email|phone|contact|to_ref|address|client|payee|tel|mobile|cell)($|_)'
        and not exists (select 1 from public.redaction_sources() s where s.table_name = c.table_name and s.column_name = c.column_name)
-       and (c.table_name || '.' || c.column_name) not in ('ffm_ad_sets.name', 'ffm_routing_rules.name', 'ws_campaigns.name', 'ffm_redaction_keys.name');   -- reviewed: campaign / ad set / rule / key LABELS set by the workspace operator, not a person's identifier
+       and (c.table_name || '.' || c.column_name) not in ('ffm_ad_sets.name', 'ffm_routing_rules.name', 'ws_campaigns.name', 'ffm_redaction_keys.name',   -- reviewed: campaign / ad set / rule / key LABELS set by the workspace operator, not a person's identifier
+           -- round 8 (integration rehearsal S3), columns of tables that other open PRs add (consent integrity #20, insurance classifier #17); listed here so the three merge without a red test:
+           'ffm_secrets.name',                 -- the LABEL of a secret (which key it is), never a person
+           'ffm_consent_captures.contact_mac', -- a keyed hash (MAC) of the contact, not the contact
+           'ws_place_catalog.name_norm', 'ws_place_catalog.display_name',   -- PLACE names (towns, regions) of the insurance catalogue, not people
+           -- OWNER DECISION (policy rule 15, OWNER_DECISIONS G8): opted-out phone numbers in PLAIN TEXT. Deliberately NOT a redaction source: a source's values are hashed into the deny-list and read by
+           -- the redaction context on every backup, which would spread a number whose owner asked not to be contacted into more places; and the capture triggers are attached before this table
+           -- exists. Consequence: a number that exists ONLY here is removed from exported text by the generic phone patterns, not by known-number matching (a 7-digit local form in a LIGHT column can pass).
+           'ffm_phone_suppressions.phone');
     if offenders is not null then raise exception 'B30 name-like columns that are neither redaction sources nor reviewed: %', offenders; end if;
   end;
 
@@ -191,5 +199,62 @@ begin
   if n <> 20 then raise exception 'C13 run ids repeat'; end if;
   raise notice 'EPOCH / CACHE CHECKS PASSED';
 end $$;
+-- ===== Round 8: S5 (write-path cost), N3 (renamed source column), N5 / N6 (epoch digest)
+do $$
+declare bad text; v uuid; e0 jsonb; e1 jsonb; plan text; ok boolean := false;
+begin
+  select id into v from public.ventures order by slug limit 1;
+  -- S5 expected: every redaction-source column has its hash index, and the "is this value new" probe uses it (no sequential scan of the source table)
+  select string_agg(s.table_name || '.' || s.column_name, ', ') into bad from public.redaction_sources() s
+   where to_regclass('public.' || s.table_name) is not null
+     and not exists (select 1 from pg_index i join pg_class ic on ic.oid = i.indexrelid join pg_am am on am.oid = ic.relam join pg_attribute a on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
+                      where i.indrelid = to_regclass('public.' || s.table_name) and am.amname = 'hash' and a.attname = s.column_name and i.indnatts = 1);
+  if bad is not null then raise exception 'S5 redaction-source columns without a hash index: %', bad; end if;
+  set local enable_seqscan = off;
+  for plan in explain select 1 from public.leads t where t.name = 'x' limit 2 loop if plan ~ 'redaction_src_leads_name_idx' then ok := true; end if; end loop;
+  reset enable_seqscan;
+  if not ok then raise exception 'S5 the equality probe on leads.name cannot use the hash index'; end if;
+  -- a value longer than a btree row may hold must still insert (why the index is a hash index)
+  insert into public.leads (venture_id, name, status) values (v, repeat('Zzlongname ', 400), 'new');
+  -- N5 expected: the source digest tells {"a<US>b"} from {"a","b"} (it used to join the values with chr(31))
+  e0 := public.backup_epoch();
+  set local session_replication_role = replica;
+  insert into public.setter_events (setter_id, kind, client) select id, 'booked', 'zzn5a' || chr(31) || 'zzn5b' from public.setters limit 1;
+  e0 := public.backup_epoch();
+  delete from public.setter_events where client = 'zzn5a' || chr(31) || 'zzn5b';
+  insert into public.setter_events (setter_id, kind, client) select id, 'booked', x from public.setters, unnest(array['zzn5a', 'zzn5b']) x where setters.id = (select id from public.setters order by id limit 1);
+  e1 := public.backup_epoch();
+  reset session_replication_role;
+  if exists (select 1 from public.setters) and (e0 -> 'sources' ->> 'setter_events.client') = (e1 -> 'sources' ->> 'setter_events.client') then raise exception 'N5 the source digest cannot tell one value with a separator from two values'; end if;
+  -- N6 expected: the epoch names the key row (creation time, never the value)
+  if (public.backup_epoch() ->> 'key') is null or (public.backup_epoch())::text ~ (select value from public.ffm_redaction_keys limit 1) then raise exception 'N6 the epoch must carry the key row marker and never the key'; end if;
+  -- N3 expected: after a source column is renamed, inserts still work, the epoch moves, and the next backup is REFUSED with the reason (it used to fail every insert and skip the column silently)
+  e0 := public.backup_epoch();
+  alter table public.leads rename column name to zz_renamed_name;
+  begin
+    insert into public.leads (venture_id, zz_renamed_name, status) values (v, 'Zzafter Rename', 'new');
+  exception when others then raise exception 'N3 an insert into a table whose source column was renamed failed: %', sqlerrm; end;
+  if (public.backup_epoch() ->> 'seq') = (e0 ->> 'seq') then raise exception 'N3 the epoch did not move after a write to a table with a missing source column'; end if;
+  begin
+    perform public.backup_redaction_context();
+    raise exception 'N3 the context was built although leads.name is gone (its names would no longer be redacted)';
+  exception when raise_exception then
+    if sqlerrm !~ 'redaction source column leads.name does not exist' then raise; end if;
+  end;
+  begin
+    perform public.backup_snapshot();
+    raise exception 'N3 a snapshot was produced although a redaction source column is gone';
+  exception when raise_exception then
+    if sqlerrm !~ 'redaction source column' then raise; end if;
+  end;
+  alter table public.leads rename column zz_renamed_name to name;
+  perform public.backup_redaction_context();
+  -- B1 expected: the cost function reports how many rows one statement would hold (hq_backup pages above its row limit)
+  if (public.backup_snapshot_cost() ->> 'rows_total')::bigint is distinct from (select sum((public.backup_table_digest(x) ->> 'rows')::bigint) from jsonb_array_elements_text(public.backup_export_policy() -> 'exported') x where x not in ('push_config', 'push_subscriptions')) then
+    raise exception 'B1 backup_snapshot_cost().rows_total is not the number of exported rows: %', public.backup_snapshot_cost();
+  end if;
+  raise notice 'ROUND 8 EPOCH CHECKS PASSED';
+end $$;
+
 rollback;
 select 'backup_epoch_cache_check_ok';

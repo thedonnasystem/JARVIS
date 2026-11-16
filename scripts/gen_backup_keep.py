@@ -6,7 +6,7 @@ import os, re, sys
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 SQL = os.path.join(ROOT, "migrations", "20261120_backup_redact_leak_paths_v1.sql")
 OUT = os.path.join(ROOT, "hq_backup_keep.py")
-ROW = re.compile(r"^\s*\('([a-z0-9_]+)', '([a-z0-9_]+)', '(text|json|array)', '(strict|light|keep|blank)', (?:null|\d+), '", re.M)
+ROW = re.compile(r"^\s*\('([a-z0-9_]+)', '([a-z0-9_]+)', '(text|json|array)', '(strict|light|keep|blank|slug)', (?:null|\d+), '", re.M)
 
 
 def spec():

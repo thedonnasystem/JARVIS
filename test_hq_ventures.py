@@ -36,6 +36,30 @@ class T(unittest.TestCase):
         with mock.patch.object(hq, "_request", Rec(fail="create_venture")):
             self.assertIn("error", V.start("Real Venture", "A long enough description of the idea"))
 
+    def test_start_retries_with_a_neutral_slug_when_the_database_refuses_a_client_name_in_the_slug(self):
+        """Round 8 (S1). Expected: the name-derived slug is refused by the database, the retry uses 'venture-<8 hex>', and the mission text and the card carry the neutral slug only."""
+        import io, json, urllib.error
+        calls = []
+
+        def req(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body))
+            if path.endswith("create_venture") and body["p_slug"] == "khanzada-roofing":
+                raise urllib.error.HTTPError(path, 400, "Bad Request", {}, io.BytesIO(json.dumps({"code": "23514", "message": V.NAME_IN_SLUG + ": use a neutral slug", "hint": "neutral_slug"}).encode()))
+        with mock.patch.object(hq, "_request", req), mock.patch.object(V.hq_missions, "create_mission", return_value={"id": "m", "title": "t"}) as cm:
+            out = V.start("Khanzada Roofing", "Roofing repairs for homeowners in Ottawa, flat price per job")
+        self.assertRegex(out["slug"], r"^venture-[0-9a-f]{8}$")
+        slugs = [b["p_slug"] for m, p, b in calls if p.endswith("create_venture")]
+        self.assertEqual(slugs, ["khanzada-roofing", out["slug"]])
+        self.assertIn(f"({out['slug']})", cm.call_args[0][0]); self.assertNotIn("khanzada-roofing", cm.call_args[0][0])
+        card = [b for m, p, b in calls if p.endswith("owner_messages")][0]
+        self.assertEqual(card["ref_table"], "activate_venture:" + out["slug"])
+
+    def test_start_does_not_retry_on_any_other_database_error(self):
+        r = Rec(fail="create_venture")
+        with mock.patch.object(hq, "_request", r):
+            self.assertIn("error", V.start("Real Venture", "A long enough description of the idea"))
+        self.assertEqual(len([c for c in r.calls if c[1].endswith("create_venture")]), 1)
+
     def test_approving_the_card_activates_as_owner(self):
         calls = []
 

@@ -161,6 +161,31 @@ end $$;
 drop trigger if exists agent_runs_scrub on public.agent_runs;
 create trigger agent_runs_scrub before insert or update of summary on public.agent_runs for each row execute function public.agent_runs_scrub();
 
+-- Round 8 (S1, write path): a venture SLUG is built from the venture NAME, which an LLM tool writes (hq_ventures.slugify), and create_venture() copies the slug into departments, agents and the audit trail.
+-- A slug that contains a word the deny-list knows as a client / contact name token of 5+ letters is refused here, before any of those copies exist; hq_ventures.start() then retries once with a neutral slug
+-- ('venture-<8 hex>'). The name itself stays where it belongs (ventures.name: exported under strict redaction). Shorter tokens and names learned later are covered at export time (mode 'slug':
+-- keyed pseudonym). The message never repeats the name. Only the slug is checked, only when it is set or changed.
+create or replace function public.redaction_venture_slug_guard() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+declare pads text; w text; stop text[];
+begin
+  if NEW.slug is null or (TG_OP = 'UPDATE' and NEW.slug is not distinct from OLD.slug) then return NEW; end if;
+  if to_regprocedure('public.redaction_pads()') is null or to_regclass('public.ffm_redaction_denylist') is null then return NEW; end if;
+  pads := public.redaction_pads();
+  if pads is null then return NEW; end if;
+  stop := public.backup_stopwords();
+  foreach w in array regexp_split_to_array(lower(public.backup_fold_text(NEW.slug)), '[^a-z0-9]+') loop
+    continue when length(w) < 5 or w = any (stop) or w ~ '^[0-9]+$';
+    if exists (select 1 from public.ffm_redaction_denylist d where d.kind = 'n' and d.h = public.redaction_h(pads, 'n', w)) then
+      raise exception 'venture slug contains a known client or contact name: use a neutral slug (the name stays in the venture name)' using errcode = '23514', hint = 'neutral_slug';
+    end if;
+  end loop;
+  return NEW;
+end $$;
+drop trigger if exists redaction_venture_slug_guard on public.ventures;
+create trigger redaction_venture_slug_guard before insert or update of slug on public.ventures for each row execute function public.redaction_venture_slug_guard();
+revoke all on function public.redaction_venture_slug_guard() from public, anon, authenticated, service_role;
+
 -- what the backup preflight checks: both the export redaction and the source fixes are installed AND are the definitions in force
 create or replace function public.backup_redaction_status() returns jsonb
 language sql stable security definer set search_path to 'pg_catalog' as $$

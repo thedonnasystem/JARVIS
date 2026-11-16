@@ -85,7 +85,7 @@ begin
   select string_agg(c.relname, ', ') into bad from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'v')
     and exists (select 1 from unnest(array['select','insert','update','delete','truncate','references','trigger']) p where has_table_privilege('backup_reader', c.oid, p));
   if bad is not null then raise exception 'D2 backup_reader holds table privileges (it needs none, the reader functions are security definer): %', bad; end if;
-  if (select count(*) from public.backup_acl_catalogue() where kind = 'function' and holder = 'backup_reader') <> 12 then raise exception 'D2 the reader list is not the expected 12 functions'; end if;
+  if (select count(*) from public.backup_acl_catalogue() where kind = 'function' and holder = 'backup_reader') <> 12 + (to_regprocedure('public.backup_suppression_export()') is not null)::int then raise exception 'D2 the reader list is not the expected 12 functions (13 once the consent migration adds backup_suppression_export)'; end if;
   -- the role itself: no login, no password, no bypass
   if exists (select 1 from pg_roles where rolname = 'backup_reader' and (rolcanlogin or rolbypassrls or rolsuper or rolcreaterole or rolcreatedb)) then raise exception 'D2 backup_reader has login / bypassrls / superuser / create attributes'; end if;
   if exists (select 1 from pg_authid where rolname = 'backup_reader' and rolpassword is not null) then raise exception 'D2 backup_reader has a password'; end if;
@@ -224,6 +224,94 @@ begin
     if not pg_temp.refused('backup_reader', r.sql) then raise exception 'D5 backup_reader could do: %', r.sql; end if;
   end loop;
   if not pg_temp.refused('backup_reader', 'select count(*) from public.tasks') then raise exception 'D5 backup_reader can read a table directly'; end if;
+end $$;
+
+-- ===== Round 8 (S4): sweep completeness, the unforgeable marker, and detection of a missing / disabled event trigger. Each case: EXPECTED = no API role holds the privilege at the end of the statement.
+do $$ begin if not (public.backup_acl_event_status() ->> 'ok')::boolean then raise exception 'S4 premise: the event trigger is not reported as in place: %', public.backup_acl_event_status(); end if; end $$;
+create procedure public.backup_zz_proc() language sql as 'select 1';
+create aggregate public.backup_zz_agg(integer) (sfunc = int4pl, stype = integer);
+create view public.zz_keys_view as select * from public.ffm_redaction_keys;
+create view public.zz_keys_view2 as select value from public.zz_keys_view;
+create materialized view public.ffm_redaction_zzmv as select * from public.ffm_redaction_keys;
+create schema zz_other; grant usage on schema zz_other to service_role, anon, authenticated;
+create view zz_other.keys_elsewhere as select d.h from public.ffm_redaction_denylist d; grant select on zz_other.keys_elsewhere to service_role, anon;
+grant select on public.zz_keys_view, public.zz_keys_view2, public.ffm_redaction_zzmv to service_role, anon, authenticated;
+create table public."ffm_redaction_ZZupper" (x integer);                                    -- N7: a mixed-case name used to make the sweep fail on its regclass cast
+grant select (value) on public.ffm_redaction_keys to service_role;                           -- column-level grant
+grant update (found) on public.ffm_redaction_found to anon;
+do $$
+declare ro text; bad text;
+begin
+  foreach ro in array array['service_role', 'anon', 'authenticated'] loop
+    if has_function_privilege(ro, 'public.backup_zz_proc()', 'execute') then raise exception 'S4a % may call a new backup_* PROCEDURE', ro; end if;
+    if has_function_privilege(ro, 'public.backup_zz_agg(integer)', 'execute') then raise exception 'S4b % may call a new backup_* AGGREGATE', ro; end if;
+    select string_agg(v, ', ') into bad from unnest(array['public.zz_keys_view', 'public.zz_keys_view2', 'public.ffm_redaction_zzmv', 'zz_other.keys_elsewhere', 'public."ffm_redaction_ZZupper"']) v where has_table_privilege(ro, v, 'select');
+    if bad is not null then raise exception 'S4c % can read a view / materialized view / table over the key tables: %', ro, bad; end if;
+    if has_any_column_privilege(ro, 'public.ffm_redaction_keys', 'select') or has_any_column_privilege(ro, 'public.ffm_redaction_found', 'update') then raise exception 'S4d % kept a COLUMN-level grant on a key table', ro; end if;
+    if not pg_temp.refused(ro, 'select value from public.zz_keys_view') then raise exception 'S4c % read the key through a view', ro; end if;
+  end loop;
+  if (select count(*) from public.backup_acl_catalogue() c where c.name in ('public.backup_zz_proc()', 'public.backup_zz_agg(integer)', 'public.zz_keys_view', 'public.zz_keys_view2', 'public.ffm_redaction_zzmv', 'zz_other.keys_elsewhere', 'public."ffm_redaction_ZZupper"')) <> 7 then
+    raise exception 'S4 the catalogue does not list all seven new objects: %', (select string_agg(c.name, ', ') from public.backup_acl_catalogue() c where c.name ~* 'zz');
+  end if;
+end $$;
+-- the marker cannot be forged: with the OLD marker value set in the session, a blanket grant is still swept in the same statement
+set local ffm.acl_sweep = '1';
+grant select on public.ffm_redaction_keys to anon; grant execute on function public.redaction_pads() to anon;
+do $$ begin
+  if has_table_privilege('anon', 'public.ffm_redaction_keys', 'select') or has_function_privilege('anon', 'public.redaction_pads()', 'execute') then raise exception 'S4e setting ffm.acl_sweep switched the sweep off'; end if;
+end $$;
+set local ffm.acl_sweep = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+grant select on public.ffm_redaction_denylist to service_role;
+do $$ begin if has_table_privilege('service_role', 'public.ffm_redaction_denylist', 'select') then raise exception 'S4e a guessed marker switched the sweep off'; end if; end $$;
+set local ffm.acl_sweep = '';
+-- nobody but the owner can call the sweep; the marker is computed inline (no function returns it)
+do $$
+declare ro text;
+begin
+  foreach ro in array array['service_role', 'anon', 'authenticated', 'backup_reader'] loop
+    if not pg_temp.refused(ro, 'select public.backup_acl_sweep()') then raise exception 'S4f % can call the sweep', ro; end if;
+  end loop;
+end $$;
+-- a statement on temporary objects only does not error and does not need the sweep (N8)
+create temporary table zz_tmp_only (x integer); drop table zz_tmp_only;
+-- detection: a disabled or dropped trigger is REPORTED (the manifest check and the preflight read this; scripts/replica/acl_detect_check.sh proves both fail)
+alter event trigger ffm_backup_acl_sweep disable;
+do $$ begin if (public.backup_acl_event_status() ->> 'ok')::boolean or (public.backup_acl_event_status() ->> 'enabled')::boolean then raise exception 'S4g a DISABLED event trigger is reported as fine'; end if; end $$;
+drop event trigger ffm_backup_acl_sweep;
+do $$ begin if (public.backup_acl_event_status() ->> 'ok')::boolean or (public.backup_acl_event_status() ->> 'present')::boolean then raise exception 'S4g a MISSING event trigger is reported as fine'; end if; end $$;
+-- the hosted case: a role that is not a superuser cannot create the event trigger, and the error class is the one the migration turns into its WARNING (insufficient_privilege)
+do $$
+begin
+  set local role zz_custom;
+  begin
+    execute 'create event trigger zz_not_allowed on ddl_command_end execute function public.backup_acl_event()';
+    reset role; raise exception 'S4h a non-superuser created an event trigger';
+  exception when insufficient_privilege then reset role;
+  end;
+end $$;
+
+-- ===== Round 8 (integration rehearsal S1): the consent PR's backup_suppression_export() must be reachable by backup_reader, and only by it. The function does not exist on this branch, so a stand-in
+-- with the same name, signature and attributes (plpgsql, security definer, search_path public: PR #20 head 1899251) is created and the two post-lockdown files are applied again, as a release would.
+select to_regprocedure('public.backup_suppression_export()') is null as need_standin \gset
+\if :need_standin
+create function public.backup_suppression_export() returns jsonb language plpgsql stable security definer set search_path to 'public' as $b$ begin return jsonb_build_object('ok', true, 'count', 0); end $b$;
+grant execute on function public.backup_suppression_export() to service_role;
+\endif
+\ir ../migrations/20261121_postlock_backup_identity_v1.sql
+\ir ../migrations/20261122_postlock_backup_identity_v2.sql
+do $$
+declare ro text;
+begin
+  if (select count(*) from public.backup_acl_catalogue() where kind = 'function' and holder = 'backup_reader') <> 13 then raise exception 'S1x expected 13 reader functions with the suppression export installed'; end if;
+  if not has_function_privilege('backup_reader', 'public.backup_suppression_export()', 'execute') then raise exception 'S1x backup_reader cannot execute backup_suppression_export()'; end if;
+  foreach ro in array array['service_role', 'anon', 'authenticated'] loop
+    if has_function_privilege(ro, 'public.backup_suppression_export()', 'execute') then raise exception 'S1x % can execute backup_suppression_export()', ro; end if;
+  end loop;
+  if not (select guarded from public.backup_acl_catalogue() where name = 'public.backup_suppression_export()') then raise exception 'S1x the export did not get the reader guard'; end if;
+  if not exists (select 1 from pg_proc p where p.oid = 'public.backup_suppression_export()'::regprocedure and p.proconfig @> array['search_path=pg_catalog']) then raise exception 'S1x the export keeps a search_path with public in it'; end if;
+  set local role backup_reader;
+  if (public.backup_suppression_export() ->> 'ok') is distinct from 'true' then reset role; raise exception 'S1x backup_reader could not run the export'; end if;
+  reset role;
 end $$;
 
 rollback;

@@ -9,8 +9,8 @@ declare
     'human_handoffs.task','human_handoffs.url','human_handoffs.why_human','ideas.demand_source','ideas.description','ideas.kill_metric','ideas.result','ideas.revisit_trigger','memory.content','memory.source','missions.checkpoint',
     'missions.evidence','missions.next_action','missions.owner_decision','missions.plan','missions.result','missions.risks','missions.success_definition','missions.verdict_reason','owner_messages.answer','owner_messages.body',
     'owner_messages.options','payment_instructions.payee','predictions.action_ref','predictions.expected','predictions.outcome','reconciliation_flags.detail','tasks.detail','tasks.result','tasks.title','web_messages.body','web_messages.payload',
-    'agents.charter','agents.metric','ventures.description','ventures.primary_metric','venture_goals.metric'];
-  want_strict text[] := array['agents.title', 'audit_log.detail', 'departments.name', 'ledger.note', 'missions.objective', 'missions.title', 'venture_config.call_to_action', 'venture_config.offer', 'venture_goals.unit', 'ventures.name'];
+    'agents.charter','agents.metric','ventures.description','ventures.primary_metric','venture_goals.metric','missions.objective'];
+  want_strict text[] := array['agents.title', 'audit_log.detail', 'departments.name', 'ledger.note', 'missions.title', 'venture_config.call_to_action', 'venture_config.offer', 'venture_goals.unit', 'ventures.name'];
   got text[]; v uuid; ag text; agid uuid; snap jsonb; pg jsonb; rec record; cn text; n int; txt text; mid uuid; i int;
 begin
   select id into v from public.ventures order by slug limit 1; select slug, id into ag, agid from public.agents order by slug limit 1;
@@ -82,6 +82,104 @@ begin
   if lower((public.backup_snapshot() -> 'data' -> 'handbook')::text || (public.backup_snapshot() -> 'data' -> 'ledger')::text) ~ '(khan|shah123|jfox)' then raise exception 'E12d a short glued known name reached the single-statement export (LIGHT or STRICT column)'; end if;
   pg := public.backup_snapshot_page('handbook', 0, 100); if lower((pg -> 'rows')::text) ~ 'khan' then raise exception 'E12e a short glued known name reached the paged export (LIGHT)'; end if;
   pg := public.backup_snapshot_page('ledger', 0, 100); if lower((pg -> 'rows')::text) ~ '(shah123|jfox)' then raise exception 'E12f a short glued known name reached the paged export (STRICT)'; end if;
+  -- ===== Round 8 =====
+  -- S2 (over-blanking): with 19 ordinary short names on file, ordinary prose is exported UNCHANGED in LIGHT and STRICT (it used to be blanked whole: 'cus'+'tom', 'to'+'day', 'p'+'rice'+'s', 'wor'+'king').
+  --    The real forms of the same names are still removed, IN PLACE: the rest of the field survives. S3: the forms the round-7 rule missed.
+  insert into public.leads (venture_id, name, email, status)
+  select v, z.nm, 's2' || z.o || '@example.test', 'new' from unnest(array['Ann Day', 'Art Ross', 'Tim Rice', 'Ken Long', 'Sam King', 'Ray Ward', 'Dan Hart', 'Sue Low', 'Mary Chen', 'Ted Hank', 'Ron Bell', 'Kay Hall', 'Joy Park',
+                                                                    'Eric Lane', 'Pete Ford', 'Ruth Wood', 'Pam Hill', 'Andy Cook', 'Mark Bill']) with ordinality z (nm, o);
+  declare ctx3 jsonb := public.backup_redaction_context(); w3 text; m3 text; o3 text; nmark int := 0;
+    prose text[] := array['Custom offers: start with part one, making sure the token is working. Forward the award list.',
+                          'Today and Monday the prices changed several times across all plans; thanks for the summary of the kitchen chart.',
+                          'Start a paid subscription', 'Allow follow up emails below the primary issue; okay to enjoy the generic sales array.',
+                          'The handy system tokens are stolen unless rules, files and bills are tracked; remarks welcome.'];
+    forms text[] := array['k h a n', 'K.H.A.N', 'k-h-a-n called', 'khanfamily2024', 'KhanRoofing', 'khanroofing', 'missfox', 'profkhan', 'khanjr', 'khanz', 'khanss', 'shahco', 'wonginc', 'DrKing asked', 'jking', 'JKing', 'kingfamily',
+                          'King2024', 'the Kings2 file', 'mrday', 'd a y', 'MsHart', 'chenco', 'lowinc', 'the Khans', 'khan2024', 'jkhan', 'Shah123', 'fox2024', 'Lees', 'LeeFamily', 'Wongs', 'jfox', 'mrfox'];
+  begin
+    foreach m3 in array array['light', 'strict'] loop
+      foreach w3 in array prose loop
+        o3 := public.backup_redact_text(w3, ctx3, 500, m3);
+        nmark := nmark + (select count(*) from regexp_matches(o3, '\[redacted', 'g'));
+        if o3 <> w3 then raise exception 'S2 % ordinary prose was changed. expected: %  actual: %', m3, w3, o3; end if;
+      end loop;
+      foreach w3 in array forms loop
+        o3 := public.backup_redact_text(w3, ctx3, 500, m3);
+        if o3 ~* '(khan|shah|lee|fox|wong|king|day|hart|chen|low)' or o3 ~* 'k.h.a.n|d.a.y' then raise exception 'S3 % let % through: %', m3, w3, o3; end if;
+        if o3 = '[redacted:uncertain]' then raise exception 'S2 % a short-name form blanked the whole field instead of the word: %', m3, w3; end if;
+      end loop;
+      -- in place: the words around the name survive
+      o3 := public.backup_redact_text('Quote for the Khans is ready, jking will call on Monday', ctx3, 500, m3);
+      if o3 <> 'Quote for the [redacted:name] is ready, [redacted:name] will call on Monday' then raise exception 'S2 % expected in-place redaction, got: %', m3, o3; end if;
+    end loop;
+    if nmark <> 0 then raise exception 'S2 % redaction markers in ordinary prose (expected 0)', nmark; end if;
+    -- documented accepted residuals (policy rule 15): a 4+ letter arbitrary prefix, an arbitrary non-business suffix, and the PLURAL of a name that is an ordinary word when it is lower-case, sentence-initial or ALL CAPS
+    -- an ordinary word that is a client's name + s, Capitalised in the middle of a sentence, is a name: redacted in place. Weekdays stay.
+    foreach m3 in array array['light', 'strict'] loop
+      o3 := public.backup_redact_text('Please call the Kings tomorrow, then the Days, on Monday', ctx3, 500, m3);
+      if o3 <> 'Please call the [redacted:name] tomorrow, then the [redacted:name], on Monday' then raise exception 'S3 % a Capitalised mid-sentence plural of a known name. expected in-place redaction, actual: %', m3, o3; end if;
+    end loop;
+    foreach w3 in array array['xxxxkhan', 'khanabc', 'kings', 'days', 'Kings of the road', 'KINGS'] loop
+      if public.backup_redact_text(w3, ctx3, 500, 'strict') <> w3 then raise exception 'S3 the documented residual list is out of date: % is now redacted (update the policy)', w3; end if;
+    end loop;
+  end;
+  -- S2 through the real export: a handbook and a ledger note of ordinary prose survive whole; a policy description is not lost
+  insert into public.handbook (version, content, active) values ((select coalesce(max(version), 0) + 1 from public.handbook), 'Custom offers: start with part one, making sure the token is working. Forward the award list.', false);
+  snap := public.backup_snapshot();
+  if not exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'handbook') h where h ->> 'content' = 'Custom offers: start with part one, making sure the token is working. Forward the award list.') then
+    raise exception 'S2 the handbook prose did not survive the export: %', (select jsonb_agg(h ->> 'content') from jsonb_array_elements(snap -> 'data' -> 'handbook') h where h ->> 'content' ~ 'offers|redacted');
+  end if;
+  if exists (select 1 from public.action_policy p join jsonb_array_elements(snap -> 'data' -> 'action_policy') e on e ->> 'action' = p.action where e ->> 'description' is distinct from p.description) then
+    raise exception 'S2 an action_policy description was changed by the export: %', (select jsonb_agg(e ->> 'description') from public.action_policy p join jsonb_array_elements(snap -> 'data' -> 'action_policy') e on e ->> 'action' = p.action where e ->> 'description' is distinct from p.description);
+  end if;
+
+  -- S1 a KNOWN client name must not leave through an identifier. Venture created the way hq_start_venture does it (create_venture copies the slug to departments, agents, the manager and the audit trail).
+  reset session_replication_role;
+  insert into public.leads (venture_id, name, email, status) values (v, 'Imran Khanzada', 's1@example.test', 'new');
+  begin
+    perform public.create_venture('khanzada-roofing', 'Khanzada Roofing', 'revenue', 'revenue', 0, 'Roofing for the Khanzada family', 'jarvis');
+    raise exception 'S1w the write path accepted a slug that carries a known client name';
+  exception when check_violation then
+    if sqlerrm ~* 'khanzada' then raise exception 'S1w the refusal repeats the name: %', sqlerrm; end if;
+  end;
+  -- names learned AFTER the venture exists, short names and glued names are the export's job: create the ventures with the guard off, as if the leads had come later
+  alter table public.ventures disable trigger redaction_venture_slug_guard;
+  perform public.create_venture('khanzada-roofing', 'Khanzada Roofing', 'revenue', 'revenue', 0, 'Roofing for the Khanzada family', 'jarvis');
+  perform public.create_venture('foxroofing', 'Fox Roofing', 'revenue', 'revenue', 0, 'Roofing for the Fox family', 'jarvis');
+  perform public.create_venture('khanzadaplumbing', 'Khanzadaplumbing', 'revenue', 'revenue', 0, 'Plumbing for the same family', 'jarvis');
+  alter table public.ventures enable trigger redaction_venture_slug_guard;
+  insert into public.owner_messages (from_agent, kind, channel, needs_decision, ref_table, body) values ('jarvis', 'proposal', 'telegram', true, 'activate_venture:khanzada-roofing', 'x');
+  insert into public.tasks (assigned_agent, title, status, created_by, dedupe_key) values ('khanzada-roofing-manager', 't', 'todo', 'khanzada-roofing-manager', 'plan:khanzada-roofing:1');
+  insert into public.leads (venture_id, name, email, status) values (v, 'Donna Jarvis', 's1b@example.test', 'new');        -- a client who shares a word with the system's own slugs
+  snap := public.backup_snapshot();
+  select string_agg(k, ', ') into txt from jsonb_each(snap -> 'data') e (k, val) where val::text ~* 'khanzada|fox';
+  if txt is not null then raise exception 'S1 a known client name reached the export. expected: none. actual: in table(s) %', txt; end if;
+  for rec in select t.k from (values ('ventures'), ('departments'), ('agents'), ('audit_log'), ('owner_messages'), ('tasks')) t (k) loop
+    pg := public.backup_snapshot_page(rec.k, 0, 5000);
+    if (pg -> 'rows')::text ~* 'khanzada|fox' then raise exception 'S1 a known client name reached the PAGED export of %', rec.k; end if;
+  end loop;
+  -- the pseudonym is the same everywhere, so the references still join, and distinct slugs stay distinct (unique indexes survive a restore)
+  select e ->> 'slug' into txt from jsonb_array_elements(snap -> 'data' -> 'ventures') e where e ->> 'manager_agent' ~ '^n[0-9a-f]{10}-roofing-manager$';
+  if txt is null or txt !~ '^n[0-9a-f]{10}-roofing$' then raise exception 'S1 expected a pseudonymous slug of the form n<10 hex>-roofing, got %', txt; end if;
+  if not exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'departments') e where e ->> 'slug' = txt)
+     or not exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'agents') e where e ->> 'slug' = txt || '-manager' and e ->> 'department_slug' = txt)
+     or not exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'audit_log') e where e ->> 'target' = 'ventures/' || txt)
+     or not exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'owner_messages') e where e ->> 'ref_table' = 'activate_venture:' || txt)
+     or not exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'tasks') e where e ->> 'assigned_agent' = txt || '-manager' and e ->> 'dedupe_key' = 'plan:' || txt || ':1') then
+    raise exception 'S1 the pseudonym is not consistent across ventures / departments / agents / audit_log / owner_messages / tasks (slug %)', txt;
+  end if;
+  if (select count(distinct e ->> 'slug') from jsonb_array_elements(snap -> 'data' -> 'ventures') e) <> (select count(*) from public.ventures) then raise exception 'S1 two venture slugs collapsed into one (a restore would hit the unique index)'; end if;
+  if (select count(distinct e ->> 'slug') from jsonb_array_elements(snap -> 'data' -> 'agents') e) <> (select count(*) from public.agents) then raise exception 'S1 two agent slugs collapsed into one'; end if;
+  if not exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'ventures') e where e ->> 'slug' ~ '^r[0-9a-f]{16}$') then raise exception 'S1 the glued slug (khanzadaplumbing) was not replaced whole'; end if;
+  -- the system's own slugs are untouched although a client is called Donna Jarvis
+  if not exists (select 1 from jsonb_array_elements(snap -> 'data' -> 'agents') e where e ->> 'slug' = 'jarvis') or (select count(*) from jsonb_array_elements(snap -> 'data' -> 'ventures') e where e ->> 'slug' = 'donna') <> (select count(*) from public.ventures where slug = 'donna') then
+    raise exception 'S1 a system slug (jarvis / donna) was pseudonymised: a restore could not find it';
+  end if;
+  -- same input, same pseudonym, on a second export (keyed, deterministic)
+  if (select e ->> 'slug' from jsonb_array_elements(public.backup_snapshot() -> 'data' -> 'ventures') e where e ->> 'manager_agent' ~ '^n[0-9a-f]{10}-roofing-manager$') is distinct from txt then raise exception 'S1 the pseudonym changed between two exports'; end if;
+  -- N4: the venture description is blank in ventures AND in the mission objective that hq_ventures.start copies it into
+  insert into public.missions (title, objective, status, created_by) values ('Validate venture: Zzobj', 'Venture ''Zzobj'' (zzobj): cleaning for Mrs Quillfeatherstone of Ottawa', 'captured', 'jarvis');
+  if (public.backup_snapshot() -> 'data' -> 'missions')::text ~* 'quillfeatherstone' then raise exception 'N4 the venture description left through missions.objective'; end if;
+
   alter table public.ideas add column zz_new_note text;
   if not exists (select 1 from public.backup_effective_spec(public.backup_export_policy() -> 'exported') where table_name = 'ideas' and column_name = 'zz_new_note' and mode = 'strict' and not classified) then raise exception 'E9 an unclassified column is not strict'; end if;
   alter table public.ideas drop column zz_new_note;

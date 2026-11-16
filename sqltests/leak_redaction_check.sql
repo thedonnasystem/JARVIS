@@ -154,7 +154,7 @@ begin
     ('K1', 'do_not_contact', '{}', array['do_not_contact'], 'same'), ('K2', 'received', '{}', array['received'], 'same'), ('K3', 'unsubscribe_reply', '{}', array['unsubscribe_reply'], 'same'),
     ('K4', 'deal 3f2a1b4c-1111-4222-8333-444455556666: owner confirmed win', '{}', array['deal 3f2a1b4c-1111-4222-8333-444455556666: owner confirmed win'], 'same'),
     ('K5', 'Setter payout (close): setter 3f2a1b4c-1111-4222-8333-444455556666', '{}', array['Setter payout (close): setter 3f2a1b4c-1111-4222-8333-444455556666'], 'same'),
-    ('K6', 'Verified 3 suppliers; margin 12%; total $1,250.00; see https://acmeplumbing.ca/about', '{}', array['Verified 3 suppliers; margin 12%; total $1,250.00; see https://acmeplumbing.ca/about'], 'same'),
+    ('K6', 'Verified 3 suppliers; margin 12%; total $1,250.00; see https://zenithplumbing.ca/about', '{}', array['Verified 3 suppliers; margin 12%; total $1,250.00; see https://zenithplumbing.ca/about'], 'same'),
     ('K7', '2026-11-15T10:30:00Z', '{}', array['2026-11-15T10:30:00Z'], 'same'), ('K8', 'Résumé des tâches: 3 terminées, 2 en cours, 40 000 $ prévus', '{}', array['Résumé des tâches: 3 terminées, 2 en cours, 40 000 $ prévus'], 'same'),
     ('K9', 'cap $3.30 per day; 12 of 40 done; status=blocked; 5 retries', '{}', array['cap $3.30 per day; 12 of 40 done; status=blocked; 5 retries'], 'same'),
     ('K10', 'Spent 33 cents of 330 cents on 2026-11-15 (3f2a1b4c-1111-4222-8333-444455556666)', '{}', array['Spent 33 cents of 330 cents on 2026-11-15 (3f2a1b4c-1111-4222-8333-444455556666)'], 'same'),
@@ -194,7 +194,7 @@ begin
   -- a name typed in a lead reply reappears in a task prompt (detail), a researcher result, an escalation, an audit row of another writer, a ledger note written by something else, an agent run
   insert into public.tasks (venture_id, assigned_agent, created_by, title, detail, status, priority, result) values
     (v, ag, 'system', 'Follow up with Jean Tremblay', 'Prompt: reply from Jean Tremblay: "call me 613-555-0142". Email jean.tremblay@tremblay-plomberie.ca', 'done', 2,
-     E'Researched Jean Tremblay (Tremblay Plomberie).\nPublished email: jean.tremblay@tremblay-plomberie.ca\nPhone: (613) 555-0142\nLinkedIn: https://www.linkedin.com/in/jean-tremblay-1234\nOutreach draft: Bonjour Jean, appelez-moi.\nFound 3 prospects, 2 verified; see https://acmeplumbing.ca/about'),
+     E'Researched Jean Tremblay (Tremblay Plomberie).\nPublished email: jean.tremblay@tremblay-plomberie.ca\nPhone: (613) 555-0142\nLinkedIn: https://www.linkedin.com/in/jean-tremblay-1234\nOutreach draft: Bonjour Jean, appelez-moi.\nFound 3 prospects, 2 verified; see https://zenithplumbing.ca/about'),
     (v, ag, 'system', 'Check Odalys', null, 'done', 2, 'Odalys Quenneville <odalys.q@quenneville-co.example> 819-555-0123, Quillfeather Bakery, Wexcombe Holdings'),
     (v, ag, 'system', 'blocked one', null, 'blocked', 2, E'Patient notes: diabetes. Contact Jean Tremblay'),
     (v, ag, 'system', 'clean one', null, 'done', 2, 'Done: 4 prospects checked, 3 sites verified, cost 12 cents'),
@@ -222,7 +222,7 @@ begin
   select j2 into j from jsonb_array_elements(snap -> 'data' -> 'tasks') j2 where j2 ->> 'title' like 'clean one%' or j2 ->> 'title' = 'clean one';
   if j ->> 'result' <> 'Done: 4 prospects checked, 3 sites verified, cost 12 cents' then raise exception 'C5 a clean result was altered: %', j ->> 'result'; end if;
   select j2 into j from jsonb_array_elements(snap -> 'data' -> 'tasks') j2 where j2 ->> 'result' like 'Researched%';
-  if j is not null and (j ->> 'result' not like '%https://acmeplumbing.ca/about%' or j ->> 'result' not like '%3 prospects, 2 verified%') then raise exception 'C6 research result lost its non-personal content: %', j ->> 'result'; end if;
+  if j is not null and (j ->> 'result' not like '%https://zenithplumbing.ca/about%' or j ->> 'result' not like '%3 prospects, 2 verified%') then raise exception 'C6 research result lost its non-personal content: %', j ->> 'result'; end if;
   if (select count(*) from jsonb_array_elements(snap -> 'data' -> 'tasks') j2 where j2 ->> 'result' = '[redacted:uncertain]') < 2 then raise exception 'C7 detector-flagged and over-length results must fail closed'; end if;
   select j2 into j from jsonb_array_elements(snap -> 'data' -> 'memory') j2 where j2 ->> 'content' like '%voilà%';
   if j is null or j ->> 'content' <> 'Règle: toujours répondre en français, voilà des accents' then raise exception 'C8 clean text must come back unchanged, accents included: %', j; end if;

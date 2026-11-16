@@ -44,16 +44,28 @@ revoke all on function public.backup_assert_reader() from service_role;
 
 -- The single catalogue of owner-only / backup-identity objects. The RULE is the catalogue: every public function whose name starts with backup_ or redaction_ (plus agent_runs_scrub) and every
 -- public relation whose name starts with ffm_redaction_ is internal; the reader list below is the only exception. A new helper that follows the naming rule is covered without editing this file.
+-- Round 8 (integration rehearsal S1): public.backup_suppression_export() (consent-integrity migration, PR #20; it does not exist on this branch alone) is on the reader list: 13 functions once it is
+-- installed. It returns the opt-out list as KEYED HASHES for the off-site file. Without this entry the naming rule made it owner-only and the backup silently lost the list.
+-- Round 8 (S4): the catalogue also lists PROCEDURES and AGGREGATES of the two name families (kind 'function': one GRANT / REVOKE ... ON ROUTINE covers all three), every VIEW and MATERIALIZED VIEW named
+-- ffm_redaction_* and every view / materialized view, in ANY schema, that reads a ffm_redaction_* relation directly or through other views (a view runs with its owner's rights, so `select * from
+-- some_view` would hand the key to whoever may read the view). Names are quoted (a mixed-case name used to break the regclass cast).
 create or replace function public.backup_acl_catalogue() returns table (kind text, name text, holder text, guarded boolean)
 language sql stable security invoker set search_path to 'pg_catalog' as $$
+  with recursive rel as (
+    select c.oid from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'S', 'v', 'm') and c.relname like 'ffm\_redaction\_%'
+    union
+    select rw.ev_class from rel join pg_depend d on d.refobjid = rel.oid and d.refclassid = 'pg_class'::regclass and d.classid = 'pg_rewrite'::regclass
+                         join pg_rewrite rw on rw.oid = d.objid where rw.ev_class <> rel.oid
+  )
   select 'function'::text, p.oid::regprocedure::text,
-         case when p.proname in ('backup_schema', 'backup_export_policy', 'backup_snapshot', 'backup_snapshot_page', 'backup_table_digest', 'backup_snapshot_cost', 'backup_redaction_meta',
-                                 'backup_epoch', 'backup_deny_prepare', 'backup_deny_release', 'backup_redaction_status', 'redaction_denylist_status') then 'backup_reader' else 'owner only' end,
-         pg_get_functiondef(p.oid) like '%perform public.backup_assert_reader()%'
-    from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind = 'f' and (p.proname ~ '^(backup_|redaction_)' or p.proname = 'agent_runs_scrub')
+         case when p.prokind = 'f' and p.proname in ('backup_schema', 'backup_export_policy', 'backup_snapshot', 'backup_snapshot_page', 'backup_table_digest', 'backup_snapshot_cost', 'backup_redaction_meta',
+                                 'backup_epoch', 'backup_deny_prepare', 'backup_deny_release', 'backup_redaction_status', 'redaction_denylist_status',
+                                 'backup_suppression_export') then 'backup_reader' else 'owner only' end,
+         case when p.prokind = 'f' then pg_get_functiondef(p.oid) like '%perform public.backup_assert_reader()%' else false end
+    from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p', 'a') and (p.proname ~ '^(backup_|redaction_)' or p.proname = 'agent_runs_scrub')
   union all
-  select case c.relkind when 'S' then 'sequence' else 'table' end, 'public.' || c.relname, 'owner only', false
-    from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p', 'S') and c.relname like 'ffm\_redaction\_%'
+  select case c.relkind when 'S' then 'sequence' when 'v' then 'view' when 'm' then 'view' else 'table' end, quote_ident(n.nspname) || '.' || quote_ident(c.relname), 'owner only', false
+    from rel join pg_class c on c.oid = rel.oid join pg_namespace n on n.oid = c.relnamespace
   order by 1, 2
 $$;
 revoke all on function public.backup_acl_catalogue() from public, anon, authenticated;
@@ -94,10 +106,10 @@ do $$
 declare r record;
 begin
   for r in select p.oid::regprocedure::text as sig, c.holder from public.backup_acl_catalogue() c join pg_proc p on p.oid = c.name::regprocedure where c.kind = 'function' loop
-    execute format('revoke all on function %s from public, anon, authenticated, service_role, backup_reader', r.sig);
+    execute format('revoke all on routine %s from public, anon, authenticated, service_role, backup_reader', r.sig);
     if r.holder = 'backup_reader' then execute format('grant execute on function %s to backup_reader', r.sig); end if;
   end loop;
-  for r in select c.kind, c.name from public.backup_acl_catalogue() c where c.kind in ('table', 'sequence') loop
+  for r in select c.kind, c.name from public.backup_acl_catalogue() c where c.kind in ('table', 'sequence', 'view') loop
     if r.kind = 'sequence' then execute format('revoke all on sequence %s from public, anon, authenticated, service_role, backup_reader', r.name);
     else execute format('revoke all on table %s from public, anon, authenticated, service_role, backup_reader', r.name); end if;
   end loop;
@@ -106,4 +118,8 @@ end $$;
 alter function public.backup_schema() set search_path to 'pg_catalog';
 alter function public.backup_classification() set search_path to 'pg_catalog';
 alter function public.backup_pii_column_exceptions() set search_path to 'pg_catalog';
+-- the consent PR's export (when installed) is a definer function of the backup_ family with `search_path = public`; its body is schema-qualified, so it gets the same treatment as the three above
+do $$ begin
+  if to_regprocedure('public.backup_suppression_export()') is not null then alter function public.backup_suppression_export() set search_path to 'pg_catalog'; end if;
+end $$;
 -- future helpers created after this file still get the lockdown's default grant to service_role; R4 forces a revoke after each new function, and the ACL manifest check fails the gate on any drift

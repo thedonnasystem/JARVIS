@@ -43,14 +43,26 @@ def hq_enabled() -> bool:
 
 # The backup uses its own, narrower identity (the `backup_reader` database role) for its RPC calls: hq_backup sets this for the duration of a call; every other request keeps the service key.
 AUTH_OVERRIDE: contextvars.ContextVar = contextvars.ContextVar("hq_auth_override", default=None)
+# What goes in the `apikey` header while AUTH_OVERRIDE is set. A Supabase gateway checks `apikey` against the PROJECT's API keys before PostgREST sees the request, so a custom-role JWT there is
+# expected to be rejected (401): the gateway key is the project's anon / publishable key (public by design, it carries no data access here: the JWT in Authorization decides the database role).
+# None = send the override token as apikey too (a plain PostgREST without a gateway). The service key is NEVER used for an overridden call.
+APIKEY_OVERRIDE: contextvars.ContextVar = contextvars.ContextVar("hq_apikey_override", default=None)
+
+
+def auth_headers() -> tuple[str, str]:
+    """(apikey, bearer token) for the current call. Without an override both are the service key; with one, the bearer is the override token and apikey is the gateway key or that same token."""
+    override = AUTH_OVERRIDE.get()
+    if not override:
+        return HQ_SUPABASE_SERVICE_KEY, HQ_SUPABASE_SERVICE_KEY
+    return (APIKEY_OVERRIDE.get() or override), override
 
 
 def _request(method: str, path: str, body: dict | None = None, timeout: int = 30, prefer: str | None = None, exact: bool = False):
     url = f"{HQ_SUPABASE_URL}{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
-    token = AUTH_OVERRIDE.get() or HQ_SUPABASE_SERVICE_KEY
-    req.add_header("apikey", token)
+    apikey, token = auth_headers()
+    req.add_header("apikey", apikey)
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Content-Type", "application/json")
     if prefer:

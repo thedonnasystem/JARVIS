@@ -15,7 +15,19 @@ Rules
   R6 applied no migration that exists on the base ref (default origin/overnight-build) may be modified, renamed or
              deleted, unless it is listed in MODIFIED_ALLOWLIST with a reason. Skipped with a notice if the base ref is
              unreachable (CI must fetch full history).
+  R7 postlock  a `postlock` migration runs AFTER the lockdown, so nothing later can take back what it hands out. It may only restrict. In such a file (comments removed; DO bodies, function bodies and
+             string literals are read too, because `execute 'grant ...'` is a grant) these are errors:
+               - any GRANT whose grantee is public / anon / authenticated / service_role, or cannot be read (a format placeholder), on anything: functions, routines, tables, sequences, schemas, roles
+               - `with grant option` / `with admin option`
+               - `alter default privileges ... grant`
+               - `create policy ... to` an API role
+               - `drop event trigger X` that is not followed by `create event trigger X` in the same file; `alter event trigger ... disable`
+               - `alter function | procedure | routine ... security invoker | definer`, `... owner to`
+               - `disable trigger`, `disable row level security`, `session_replication_role`
+               - a (re)definition of public.backup_assert_reader() whose text is not pinned in GUARD_PINS (the guard is the last line of defence: replacing it must be a reviewed, deliberate edit of this file)
+             R7 is a TRIPWIRE, not a security boundary: SQL can be written in ways no pattern sees. Every postlock file still needs human review (MIGRATIONS.md; owner decision).
 """
+import hashlib
 import argparse
 import os
 import re
@@ -194,6 +206,84 @@ def check_revokes(filename, text, keep_open):
     return errs
 
 
+API_ROLES = ("public", "anon", "authenticated", "service_role")
+# {postlock filename: sha256 of its backup_assert_reader() definition, whitespace-normalised}. Changing the guard, or defining it in a new postlock file, fails the lint until the pin is updated here on purpose.
+GUARD_PINS = {
+    "20261121_postlock_backup_identity_v1.sql": "5f6ba9e9a1f6c285d7bc2092e082f9e78ae0b04ee196cd79d3cf9106369cf6ad",
+    "20261122_postlock_backup_identity_v2.sql": "daf39a18c02b4b4fc4e7532f5c7a4f206845dee8515e9b49bb28f8e1524fcffe",
+}
+GUARD_DEF = re.compile(r"create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?backup_assert_reader\s*\(.*?\$\$.*?\$\$", re.I | re.S)
+
+
+def strip_comments(text):
+    """Remove -- and /* */ comments only. Dollar-quoted bodies and string literals are KEPT: dynamic SQL inside them is what R7 has to read."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text.startswith("--", i):
+            j = text.find("\n", i); j = n if j < 0 else j
+            i = j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2); j = n if j < 0 else j + 2
+            out.append(" "); i = j
+        elif text[i] == "'":                # a string literal is copied whole, so a `--` inside it is not taken for a comment
+            j = i + 1
+            while j < n:
+                if text[j] == "'" and text[j + 1:j + 2] == "'":
+                    j += 2; continue
+                if text[j] == "'":
+                    break
+                j += 1
+            out.append(text[i:j + 1]); i = j + 1
+        else:
+            out.append(text[i]); i += 1
+    return "".join(out)
+
+
+def guard_pin(defn):
+    return hashlib.sha256(re.sub(r"\s+", " ", defn.strip()).encode()).hexdigest()
+
+
+GRANT_ANY = re.compile(r"\bgrant\b(?P<what>[^;]*?)\bto\b(?P<rest>[^;]{0,200})", re.I | re.S)
+GRANTEES = re.compile(r"\s+((?:(?:role|group)\s+)?\"?[A-Za-z_]\w*\"?(?:\s*,\s*(?:(?:role|group)\s+)?\"?[A-Za-z_]\w*\"?)*)", re.I)
+
+
+def check_postlock(filename, text, pins=None):
+    """R7 for one postlock file. Returns a list of error strings."""
+    pins = GUARD_PINS if pins is None else pins
+    sql = strip_comments(text)
+    low = sql.lower()
+    errs = []
+    for m in GRANT_ANY.finditer(sql):
+        what = " ".join(m.group("what").split())[:60]
+        g = GRANTEES.match(m.group("rest"))
+        if not g:                               # `to %s`, `to ' || role`, `to $1`: the grantee is computed, so the lint cannot say it is harmless
+            errs.append(f"R7 {filename}: grant `{what}` has a grantee the lint cannot read ({' '.join(m.group('rest').split())[:30]!r}): name the role literally")
+            continue
+        names = {re.sub(r"^(?:role|group)\s+", "", t.strip(), flags=re.I).strip('"').lower() for t in g.group(1).split(",")}
+        if names & set(API_ROLES):
+            errs.append(f"R7 {filename}: grants `{what}` to {', '.join(sorted(names & set(API_ROLES)))}: a postlock migration may only restrict")
+    for pat, msg in (
+        (r"\bwith\s+(?:grant|admin)\s+option\b", "`with grant / admin option`: the grantee could hand the privilege on"),
+        (r"\balter\s+default\s+privileges\b[^;]*\bgrant\b", "`alter default privileges ... grant`: every future object would be granted"),
+        (r"\bcreate\s+policy\b[^;]*\bto\s+(?:[\w\"]+\s*,\s*)*\"?(?:public|anon|authenticated|service_role)\b", "`create policy ... to` an API role"),
+        (r"\balter\s+event\s+trigger\b[^;]*\bdisable\b", "`alter event trigger ... disable`"),
+        (r"\balter\s+(?:function|procedure|routine)\b[^;]*\bsecurity\s+(?:invoker|definer)\b", "`alter function ... security invoker / definer` (changes whose rights a function runs with)"),
+        (r"\balter\s+(?:function|procedure|routine|table|view|sequence)\b[^;]*\bowner\s+to\b", "`... owner to` (changes who owns, and so who may alter, an object)"),
+        (r"\bdisable\s+(?:trigger|row\s+level\s+security)\b", "`disable trigger` / `disable row level security`"),
+        (r"\bsession_replication_role\b", "`session_replication_role` (switches triggers off)"),
+    ):
+        if re.search(pat, low, re.S):
+            errs.append(f"R7 {filename}: {msg} is not allowed in a postlock migration")
+    for m in re.finditer(r"\bdrop\s+event\s+trigger\s+(?:if\s+exists\s+)?\"?(\w+)\"?", low):
+        if not re.search(r"\bcreate\s+event\s+trigger\s+\"?" + re.escape(m.group(1)) + r"\b", low[m.end():]):
+            errs.append(f"R7 {filename}: drops event trigger {m.group(1)} without re-creating it later in the same file")
+    for m in GUARD_DEF.finditer(sql):
+        if pins.get(filename) != guard_pin(m.group(0)):
+            errs.append(f"R7 {filename}: (re)defines backup_assert_reader() and the definition is not the pinned one. The guard is what refuses the API roles when a grant is wrong: "
+                        f"review the change, then set GUARD_PINS[{filename!r}] = {guard_pin(m.group(0))!r} in scripts/lint_migrations.py")
+    return errs
+
+
 def read_order(root):
     with open(os.path.join(root, "migrations", "APPLY_ORDER.txt")) as f:
         return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
@@ -263,6 +353,10 @@ def lint(root=ROOT, base="origin/overnight-build", grandfathered=GRANDFATHERED, 
             continue
         with open(os.path.join(mdir, f)) as fh:
             errs += check_revokes(f, fh.read(), keep_open)
+    for f in files:  # R7
+        if POSTLOCK_RE.match(f):
+            with open(os.path.join(mdir, f)) as fh:
+                errs += check_postlock(f, fh.read())
     if check_git:  # R6
         ch, note = applied_changes(root, base)
         if note:
@@ -275,7 +369,7 @@ def lint(root=ROOT, base="origin/overnight-build", grandfathered=GRANDFATHERED, 
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Lint migrations/ (rules R1-R6, see module docstring and MIGRATIONS.md)")
+    ap = argparse.ArgumentParser(description="Lint migrations/ (rules R1-R7, see module docstring and MIGRATIONS.md)")
     ap.add_argument("--base", default=os.environ.get("LINT_BASE", "origin/overnight-build"))
     ap.add_argument("--root", default=ROOT)
     ap.add_argument("--no-git", action="store_true", help="skip R6")

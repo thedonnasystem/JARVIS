@@ -1,4 +1,5 @@
 kind	name	anon	authenticated	service_role	security	note	backup_reader
+event_trigger	ffm_backup_acl_sweep	-	-	-	enabled	ddl_command_end -> backup_acl_event (22 command tags): keeps backup_* / redaction_* / ffm_redaction_* owner-only after later DDL	-
 function	_queue_alert(text,interval,text)	-	-	execute	security_definer		-
 function	accounts_text()	-	-	execute	security_definer		-
 function	activate_venture(text,text)	-	-	execute	invoker		-
@@ -32,6 +33,7 @@ function	authorize_action(text,text,integer,text,uuid,uuid,jsonb)	-	-	execute	in
 function	autonomy_report(numeric,integer)	-	-	execute	invoker		-
 function	backup_acl_catalogue()	-	-	-	invoker	internal: owner only	-
 function	backup_acl_event()	-	-	-	security_definer	internal: owner only	-
+function	backup_acl_event_status()	-	-	-	invoker	internal: owner only	-
 function	backup_acl_sweep()	-	-	-	security_definer	internal: owner only	-
 function	backup_assert_reader()	-	-	-	invoker	internal: owner only	-
 function	backup_classification()	-	-	-	invoker	internal: owner only	-
@@ -52,6 +54,7 @@ function	backup_epoch()	-	-	-	security_definer	backup identity: backup_reader on
 function	backup_export_policy()	-	-	-	security_definer	backup identity: backup_reader only	execute
 function	backup_fold_text(text)	-	-	-	invoker	internal: owner only	-
 function	backup_normalise(text)	-	-	-	invoker	internal: owner only	-
+function	backup_ordinary_words()	-	-	-	invoker	internal: owner only	-
 function	backup_pii_column_exceptions()	-	-	-	invoker	internal: owner only	-
 function	backup_pk_order(text)	-	-	-	invoker	internal: owner only	-
 function	backup_probe_encoded(text,jsonb,integer)	-	-	-	invoker	internal: owner only	-
@@ -61,6 +64,8 @@ function	backup_redact_json(jsonb,jsonb,integer,text)	-	-	-	invoker	internal: ow
 function	backup_redact_json_k(jsonb,text,jsonb,integer,text)	-	-	-	invoker	internal: owner only	-
 function	backup_redact_patterns(text,jsonb)	-	-	-	invoker	internal: owner only	-
 function	backup_redact_row(text,jsonb,jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_redact_slug(text,jsonb)	-	-	-	invoker	internal: owner only	-
+function	backup_redact_slug_array(text[],jsonb)	-	-	-	invoker	internal: owner only	-
 function	backup_redact_text(text,jsonb,integer,text)	-	-	-	invoker	internal: owner only	-
 function	backup_redact_text_full(text,jsonb,integer,text)	-	-	-	invoker	internal: owner only	-
 function	backup_redaction_context()	-	-	-	security_definer	internal: owner only	-
@@ -68,6 +73,7 @@ function	backup_redaction_meta(jsonb)	-	-	-	security_definer	backup identity: ba
 function	backup_redaction_spec()	-	-	-	invoker	internal: owner only	-
 function	backup_redaction_status()	-	-	-	security_definer	backup identity: backup_reader only	execute
 function	backup_schema()	-	-	-	security_definer	backup identity: backup_reader only	execute
+function	backup_slug_h(text,text)	-	-	-	invoker	internal: owner only	-
 function	backup_snapshot(text[])	-	-	-	security_definer	backup identity: backup_reader only	execute
 function	backup_snapshot_cost()	-	-	-	security_definer	backup identity: backup_reader only	execute
 function	backup_snapshot_page(text,integer,integer,uuid)	-	-	-	security_definer	backup identity: backup_reader only	execute
@@ -198,6 +204,7 @@ function	redaction_epoch_bump_upd()	-	-	-	security_definer	trigger function: can
 function	redaction_h(text,text,text)	-	-	-	invoker	internal: owner only	-
 function	redaction_pads()	-	-	-	invoker	internal: owner only	-
 function	redaction_sources()	-	-	-	invoker	internal: owner only	-
+function	redaction_venture_slug_guard()	-	-	-	security_definer	trigger function: cannot be called directly	-
 function	release_spend(uuid)	-	-	execute	invoker		-
 function	request_account(text,text,text,text,text,integer,text[])	-	-	execute	security_definer		-
 function	reserve_llm_budget(text,integer,text,text)	-	-	execute	invoker		-
