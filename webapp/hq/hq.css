@@ -47,3 +47,14 @@
 .org-info{cursor:pointer}.org-i{fill:var(--bg);stroke:var(--gold);stroke-width:1}.org-it{fill:var(--gold);font-size:12px;text-anchor:middle;font-weight:700}
 @media (min-width:700px){.hq-grid{grid-template-columns:repeat(2,1fr)}.hq-tiles{grid-template-columns:repeat(3,1fr)}.hq-heat{grid-template-columns:repeat(4,1fr)}.hq-nav{margin:0;padding-left:0;padding-right:0;flex-wrap:wrap}}
 #tabs button{font-size:.66rem}
+/* v2: Jarvis planner, missions, org tree. Tap targets >= 44px. */
+.chip{min-height:44px}.hq-link{min-height:44px}.hq-back{min-height:44px}
+.hq-rowbtn{min-height:44px;align-items:center}.hq-rowbtn span:last-child{flex:none}
+.hq-input,.hq-select{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin:6px 0;font:inherit;min-height:44px}
+.hq-sim{margin:4px 0 8px;padding:8px 10px;border:1px solid var(--warn);border-radius:10px;background:#2a2110;color:#f1deae;font-size:.85rem}
+.hq-ol{margin:4px 0 8px;padding-left:20px}.hq-ol li{margin:4px 0}.hq-appr .tag{color:var(--warn);border-color:var(--warn)}
+.hq-task .tag{flex:none}.s-done,.s-approved{color:var(--ok);border-color:var(--ok)}.s-blocked,.s-declined,.s-cancelled{color:var(--bad);border-color:var(--bad)}.s-doing{color:var(--gold);border-color:var(--gold)}
+.hq-tree{list-style:none;margin:0;padding-left:16px;border-left:1px solid var(--line)}.hq-root{padding-left:0;border-left:0}
+.hq-node{margin:6px 0}.hq-nb{padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.k-chair>.hq-nb,.k-jarvis>.hq-nb{border-color:var(--gold)}.k-std>.hq-nb{border-style:dashed}
+button[disabled]{opacity:.5;cursor:not-allowed}

@@ -13,7 +13,7 @@ function h(tag, attrs, ...kids) {
 }
 const sb = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
 const S = { snap: null, inbox: null, msgs: [], tab: 'chat', seen: new Set(), busy: false };
-// ?demo=1 opens the FENDEZY GROUP HQ screens on synthetic data only: no login, no database call of any kind (hq/demo_data.js).
+// ?demo=1 opens the FENDEZY HQ screens with the offline Jarvis planner only: no login, no database call of any kind (hq/org.js, hq/jarvis.js).
 const DEMO = /(?:^|[?&])demo=1(?:&|$)/.test(location.search) && !!window.HQ;
 const TABS = DEMO ? [['hq', 'HQ']] : [['chat', 'Jarvis'], ['inbox', 'Inbox'], ['hq', 'HQ'], ['home', 'Home'], ['missions', 'Missions'], ['agents', 'Agents'], ['money', 'Money'], ['feed', 'Feed']];
 
@@ -157,9 +157,11 @@ function rInbox(s) {
           onclick: () => { if (a.confirm && !confirm(a.label + ' this?')) return; act(a.kind, a.payload); } }, a.label || a.verb)))
         : (it.command ? h('div', { class: 'dim' }, 'In Telegram: ' + it.command) : null))));
 }
-// ---------- FENDEZY GROUP HQ (hq/hq.js): read-only screens; in demo mode they read hq/demo_data.js, signed in they overlay what the existing reads already return ----------
+// ---------- FENDEZY HQ (hq/hq.js): org screens + offline Jarvis planner (SIMULATED); signed in, LIVE panels show what the existing reads already return ----------
 function rHQ(s) {
-  window.HQ.render($('v-hq'), DEMO ? { mode: 'demo' } : { mode: 'live', snap: s, office: S.office, inbox: inboxItems(s), goTab: show });
+  window.HQ.render($('v-hq'), DEMO ? { mode: 'demo' } : { mode: 'live', snap: s, office: S.office, inbox: inboxItems(s), goTab: show,
+    // LIVE hand-off: the existing Missions-tab call (app_send kind 'mission', verb 'new'); no new RPC, grant or migration
+    sendMission: (objective) => send('', 'mission', { verb: 'new', objective }) });
 }
 function rChat() {
   const box = $('msgs'); const atEnd = box.parentElement.scrollHeight - box.parentElement.scrollTop - box.parentElement.clientHeight < 80;

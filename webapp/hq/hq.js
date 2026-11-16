@@ -1,85 +1,52 @@
 'use strict';
-// FENDEZY GROUP HQ screens. Read-only. Reads ONLY through HQ.model(ctx): demo mode uses window.HQ_DEMO (hq/demo_data.js, synthetic);
-// live mode (signed-in owner) overlays whatever the existing app_* reads already return (app_snapshot, app_office, app_needs_you) and
-// leaves everything the database cannot answer yet as SIMULATED / NOT CONNECTED / INCOMPLETE. No network calls, no writes, no HTML injection: all text is set as text.
+// FENDEZY HQ screens + the text Jarvis (v1). Org names and policy come from hq/org.js (owner-provided). Missions planned here come from the
+// OFFLINE planner (hq/jarvis.js): SIMULATED, stored in this browser only (localStorage, try/catch), never sent anywhere.
+// Signed in (live mode), panels backed by the existing app_* reads are labelled LIVE, and the Chairman can hand an objective to the EXISTING
+// mission engine through ctx.sendMission (app.js -> app_send kind 'mission', verb 'new': the same call the Missions tab already makes).
+// No other network call, no LLM call, no HTML injection: all text is set as text nodes.
 (function (root) {
   const doc = root.document;
-  const NS = 'http://www.w3.org/2000/svg';
-  const SCREENS = [['overview', 'Overview'], ['org', 'Org chart'], ['divisions', 'Divisions'], ['offices', 'Offices'], ['jarvis', 'Jarvis'], ['managers', 'Managers'],
-    ['agents', 'Agents'], ['missions', 'Missions'], ['activity', 'Activity'], ['finance', 'Finance'], ['health', 'Health']];
-  const DETAIL_TYPES = { division: 1, manager: 1, mission: 1, office: 1 };
+  const SCREENS = [['overview', 'Overview'], ['jarvis', 'Jarvis'], ['missions', 'Missions'], ['org', 'Org chart'], ['divisions', 'Divisions'], ['offices', 'Offices'],
+    ['managers', 'Managers'], ['agents', 'Agents'], ['activity', 'Activity'], ['finance', 'Finance'], ['health', 'Health']];
+  const DETAIL_TYPES = { division: 1, mission: 1 };
+  const KEY = 'fendezy.hq.sim.v1';
+  const EXAMPLE = 'Research the Ottawa commercial cleaning market and prepare a business launch proposal.';
+  const J = () => root.HQJarvis; const ORG = () => root.HQ_ORG;
 
-  // ---------- tiny helpers (text only) ----------
+  // ---------- helpers (text only) ----------
   function h(tag, attrs, ...kids) {
     const e = doc.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) { if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v !== false && v != null) e.setAttribute(k, v); }
-    for (const c of kids.flat(2)) if (c != null && c !== false) e.append(c.nodeType ? c : doc.createTextNode(String(c)));
-    return e;
-  }
-  function sv(tag, attrs, ...kids) {
-    const e = doc.createElementNS(NS, tag);
-    for (const [k, v] of Object.entries(attrs || {})) { if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (v != null && v !== false) e.setAttribute(k, v); }
-    for (const c of kids.flat(2)) if (c != null && c !== false) e.append(c.nodeType ? c : doc.createTextNode(String(c)));
+    for (const c of kids.flat(3)) if (c != null && c !== false) e.append(c.nodeType ? c : doc.createTextNode(String(c)));
     return e;
   }
   const usd = (c) => '$' + ((Number(c) || 0) / 100).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const mins = (m) => (m == null ? '' : m < 2 ? 'now' : m < 90 ? Math.round(m) + 'm' : m < 2160 ? Math.round(m / 60) + 'h' : Math.round(m / 1440) + 'd');
-  const sinceMin = (t) => (t ? Math.max(0, (Date.now() - new Date(t).getTime()) / 60000) : null);
   const pct = (a, b) => Math.min(100, Math.round(100 * (Number(a) || 0) / Math.max(1, Number(b) || 1)));
-  const trunc = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
-  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const txt = (v, dflt) => (v == null || v === '' ? (dflt == null ? 'unknown' : dflt) : String(v));
+  const when = (iso) => { const t = new Date(iso); return isNaN(t) ? '' : t.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'; };
+  const SRC = { LIVE: 'live', SIMULATED: 'sim', 'NOT CONNECTED': 'nc', 'OWNER-DEFINED · NOT CONNECTED': 'nc' };
+  const TIPS = { LIVE: 'Read from the live database through an existing app_* function', SIMULATED: 'Demo / offline planner. Not live company data.', 'NOT CONNECTED': 'No live data source for this panel', 'OWNER-DEFINED · NOT CONNECTED': 'Owner-provided structure. The database has no division or office tables yet.' };
+  const badge = (src) => h('span', { class: 'hq-badge b-' + SRC[src], title: TIPS[src] }, src);
+  const panel = (title, src, ...body) => h('section', { class: 'card hq-panel', 'data-src': SRC[src] }, h('div', { class: 'row hq-ph' }, h('h3', {}, title), badge(src)), ...body);
+  const dim = (t) => h('div', { class: 'dim' }, t);
+  const kv = (a, b) => h('div', { class: 'row hq-kv' }, h('span', { class: 'dim' }, a), h('span', {}, b));
+  const meter = (a, b) => h('div', { class: 'bar' }, h('i', { style: 'width:' + pct(a, b) + '%' }));
+  const tag = (t, cls) => h('span', { class: 'tag ' + (cls || '') }, t);
+  const btn = (label, fn, cls, extra) => h('button', Object.assign({ class: cls || 'ghost', type: 'button', onclick: fn }, extra || {}), label);
+  const UN = 'Unassigned — awaiting owner';
 
-  // ---------- model: the ONE place data comes from ----------
-  const SRC = { LIVE: 'live', SIMULATED: 'sim', 'NOT CONNECTED': 'nc', INCOMPLETE: 'inc' };
-  function model(ctx) {
-    const D = clone(root.HQ_DEMO);
-    const demo = !ctx || ctx.mode !== 'live' || !ctx.snap;
-    const M = { demo, d: D, src: {} };
-    const all = ['overview', 'org', 'divisions', 'offices', 'managers', 'j_state', 'j_approvals', 'j_gateway', 'j_policy', 'agents', 'missions', 'feed', 'f_cap', 'f_capital', 'f_ledger', 'h_checks', 'h_deploy', 'h_backup', 'h_consent'];
-    all.forEach((k) => { M.src[k] = 'SIMULATED'; });
-    D.liveVentures = null;
-    if (demo) return M;
-    const s = ctx.snap; const st = s.state || {};
-    D.jarvis.state = { mode: st.mode, kill_switch: !!st.kill_switch, pause_reason: st.pause_reason, cap_cents: st.cap_cents, last_heartbeat_min: sinceMin(st.last_heartbeat) };
-    M.src.j_state = 'LIVE'; M.src.j_gateway = 'LIVE';
-    const inbox = Array.isArray(ctx.inbox) ? ctx.inbox : [];
-    D.jarvis.pending_approvals = inbox.map((i) => ({ id: String(i.ref_id), title: i.title, why: i.why, age_min: sinceMin(i.created_at), division_id: null, kind: i.kind }));
-    M.src.j_approvals = 'LIVE';
-    if (Array.isArray(s.policy) && s.policy.length) { D.jarvis.policy = s.policy.map((p) => ({ action: p.action, tier: p.tier })); M.src.j_policy = 'LIVE'; } else { D.jarvis.policy = []; M.src.j_policy = 'NOT CONNECTED'; }
-    if (Array.isArray(ctx.office) && ctx.office.length) {
-      const live = ctx.office.map((f) => ({ fn: f.fn, name: f.name, defined_in: 'repo', head: (f.agents[0] || {}).slug || null, headline: f.headline, agents: f.agents.length, open: f.open, blocked: f.blocked, done_7d: f.done_7d,
-        spent_7d_cents: f.spent_7d, charter: '', members: f.agents.map((a) => ({ slug: a.slug, title: a.title, status: a.status })) }));
-      D.offices = live.concat(D.offices.filter((o) => o.defined_in === 'inferred'));
-      M.src.offices = 'INCOMPLETE';
-    }
-    D.agents = (s.agents || []).map((a) => ({ slug: a.slug, title: a.title, role: a.role, status: a.status, tier: a.tier, venture: a.venture, team_id: null, cap_cents: a.cap_cents, spent_today: a.spent_today, done_7d: a.done_7d, open: a.open, last_task: a.last_task }));
-    M.src.agents = 'LIVE';
-    D.missions = (s.missions || []).map((m) => ({ id: m.id, title: String(m.title || '').replace(/^Mission: /, ''), status: m.status, verdict: m.verdict, division_id: null, budget_cents: m.budget_cents, spent_cents: m.spent_cents,
-      expected_cad: m.expected_cad, days_to_cash: m.days_to_cash, objective: m.objective, success: m.success, risks: m.risks, next_action: m.next_action, gate: null, updated_min: sinceMin(m.updated_at), steps: [] }));
-    M.src.missions = 'LIVE';
-    D.feed = (s.feed || []).map((f) => ({ min_ago: sinceMin(f.at), type: f.type, who: f.who, text: f.text, status: f.status, division_id: null }));
-    M.src.feed = 'LIVE';
-    const c = s.capital || null;
-    if (c) { D.finance.capital = c; M.src.f_capital = 'LIVE'; } else M.src.f_capital = 'NOT CONNECTED';
-    D.finance.spend_today_cents = s.spend_today_cents || 0;
-    D.finance.spend_7d = (s.spend_7d || []).map((x) => ({ d: x.d, c: x.c }));
-    M.src.f_cap = 'LIVE';
-    D.finance.by_division = []; D.finance.ledger = { cash_in_30d_cents: s.pnl && s.pnl.total ? s.pnl.total.revenue_cents : null, cash_out_30d_cents: null, expected_not_cash_cents: s.pnl && s.pnl.total ? s.pnl.total.pipeline_cents : null, rows_30d: null, note: 'Only the 30-day profit and loss summary is readable from the app. A ledger transaction list is not connected.' };
-    M.src.f_ledger = 'INCOMPLETE';
-    D.health.checks = (s.systems || []).map((x) => ({ name: x.name, status: x.status === 'ok' ? 'ok' : x.status || 'unknown', checked_min: sinceMin(x.checked), detail: x.url ? 'registered system' : '' }));
-    D.health.checks.unshift({ name: 'Engine heartbeat', status: st.kill_switch ? 'stopped' : (D.jarvis.state.last_heartbeat_min != null && D.jarvis.state.last_heartbeat_min <= 20 ? 'ok' : 'stale'), checked_min: D.jarvis.state.last_heartbeat_min, detail: 'Ticks every 5 minutes' });
-    M.src.h_checks = 'LIVE';
-    D.health.deployments = []; D.health.backups = null; D.health.consent_gate = null;
-    M.src.h_deploy = 'NOT CONNECTED'; M.src.h_backup = 'NOT CONNECTED'; M.src.h_consent = 'NOT CONNECTED';
-    D.liveVentures = (s.ventures || []).map((v) => ({ slug: v.slug, name: v.name, status: v.status, agents: v.agents, leads: v.leads, in_cents: v.in_cents, out_cents: v.out_cents, expected_cents: v.expected_cents, ai_cents_7d: v.ai_cents_7d }));
-    M.src.overview = 'INCOMPLETE';
-    return M;
+  // ---------- state + local store ----------
+  const S = { screen: 'overview', detail: null, ctx: null, box: null, draft: null, divPick: '', input: '', mfilter: 'open', msg: '', store: null };
+  function store() {
+    if (!S.store) { let raw = null; try { raw = root.localStorage.getItem(KEY); } catch (e) { raw = null; } S.store = raw ? J().load(raw) : J().emptyState(); }
+    return S.store;
   }
-
-  // ---------- state ----------
-  const S = { screen: 'overview', detail: null, open: null, filters: { mstat: 'all', adiv: 'all', atype: 'all', astat: 'all' }, ctx: null, box: null };
-  const findDiv = (M, id) => M.d.divisions.find((x) => x.id === id);
-  const divName = (M, id) => { const d = findDiv(M, id); return d ? d.name : id ? String(id) : 'none'; };
+  function save() { try { root.localStorage.setItem(KEY, JSON.stringify(S.store)); } catch (e) { /* private mode / blocked storage: keep in memory */ } }
+  const live = () => !!(S.ctx && S.ctx.mode === 'live' && S.ctx.snap);
+  const simSrc = 'SIMULATED';
+  const orgSrc = () => (live() ? 'OWNER-DEFINED · NOT CONNECTED' : 'SIMULATED');
+  const divName = (id) => (ORG().divisions.find((d) => d.id === id) || {}).name || txt(id, 'none');
+  const offName = (id) => (ORG().corporate_offices.find((o) => o.id === id) || {}).name || txt(id, 'none');
 
   function readHash() {
     const raw = String((root.location && root.location.hash) || '').replace(/^#/, ''); if (!raw) return;
@@ -87,247 +54,258 @@
     if (SCREENS.some((x) => x[0] === scr)) { S.screen = scr; S.detail = DETAIL_TYPES[type] === 1 && id ? { type, id } : null; }
   }
   function writeHash() { try { const hs = '#' + S.screen + (S.detail ? '/' + S.detail.type + '/' + encodeURIComponent(S.detail.id) : ''); if (root.history && root.history.replaceState) root.history.replaceState(null, '', hs); } catch (e) {} }
-  function go(screen, detail) { S.screen = screen; S.detail = detail || null; writeHash(); draw(); if (S.box && S.box.parentElement) S.box.parentElement.scrollTop = 0; }
+  function go(screen, detail) { S.screen = screen; S.detail = detail || null; S.msg = ''; writeHash(); draw(); if (S.box && S.box.parentElement) S.box.parentElement.scrollTop = 0; }
+  function mutate(res) { if (res && res.error) S.msg = res.error; else { S.msg = ''; save(); } draw(); }
 
-  // ---------- shared pieces ----------
-  const badge = (src) => h('span', { class: 'hq-badge b-' + SRC[src], title: { LIVE: 'Read from the live database through an existing app_* function', SIMULATED: 'Synthetic demo numbers. Not real.', 'NOT CONNECTED': 'No data source exists yet for this panel', INCOMPLETE: 'Partly live, partly missing' }[src] }, src);
-  const panel = (title, src, ...body) => h('section', { class: 'card hq-panel', 'data-src': SRC[src] }, h('div', { class: 'row hq-ph' }, h('h3', {}, title), badge(src)), ...body);
-  const dim = (t) => h('div', { class: 'dim' }, t);
-  const kv = (a, b) => h('div', { class: 'row hq-kv' }, h('span', { class: 'dim' }, a), h('span', {}, b));
-  const meter = (a, b, cls) => h('div', { class: 'bar' }, h('i', { class: cls || '', style: 'width:' + pct(a, b) + '%' }));
-  const dot = (health) => h('i', { class: 'hq-dot d-' + (health || 'grey'), 'aria-hidden': 'true' });
-  const tag = (t, cls) => h('span', { class: 'tag ' + (cls || '') }, t);
-  const link = (label, fn) => h('button', { class: 'ghost hq-link', onclick: fn }, label);
-  const back = (screen, label) => h('button', { class: 'ghost hq-back', onclick: () => go(screen) }, '‹ ' + label);
-  const ownerNote = (t, where) => h('div', { class: 'hq-owner' }, h('b', {}, 'Owner action' + (where === '' ? '. ' : ' in ' + (where || 'Telegram') + '. ')), t, ' This screen cannot change it.');
-  const filterBar = (key, options, M) => h('div', { class: 'hq-chips', role: 'group' }, options.map(([v, l]) => h('button', { class: 'chip' + (S.filters[key] === v ? ' on' : ''), 'aria-pressed': String(S.filters[key] === v), onclick: () => { S.filters[key] = v; draw(); } }, l)));
-
-  // ---------- derived alerts (computed from the model, labelled with the source of the number) ----------
-  function alerts(M) {
-    const d = M.d, out = []; const j = d.jarvis.state;
-    if (j.kill_switch) out.push({ lvl: 'bad', text: 'Kill switch is ON: all agents stopped.', src: M.src.j_state });
-    else if (j.last_heartbeat_min == null || j.last_heartbeat_min > 20) out.push({ lvl: 'bad', text: 'No heartbeat for ' + (j.last_heartbeat_min == null ? '?' : Math.round(j.last_heartbeat_min)) + ' minutes: HQ may be down.', src: M.src.j_state });
-    const cap = j.cap_cents || 330; const sp = d.finance.spend_today_cents;
-    if (sp >= cap * 0.8) out.push({ lvl: sp >= cap ? 'bad' : 'warn', text: 'AI spend today ' + usd(sp) + ' is ' + pct(sp, cap) + '% of the ' + usd(cap) + ' cap.', src: M.src.f_cap });
-    const blocked = d.missions.filter((m) => m.status === 'blocked'); if (blocked.length) out.push({ lvl: 'warn', text: blocked.length + ' mission' + (blocked.length > 1 ? 's' : '') + ' blocked: ' + trunc(blocked[0].title, 50), src: M.src.missions });
-    if (d.health.backups && /unproven|not captured/.test(String(d.health.backups.status) + String(d.health.backups.restore_proof))) out.push({ lvl: 'warn', text: 'Backups configured but no restore proof captured.', src: M.src.h_backup });
-    if (M.src.divisions === 'SIMULATED') d.divisions.filter((x) => x.health === 'amber' || x.health === 'red').forEach((x) => out.push({ lvl: x.health === 'red' ? 'bad' : 'warn', text: x.name + ': ' + (x.risks[0] || 'needs attention'), src: 'SIMULATED' }));
-    return out;
+  // ---------- live readers (only fields the existing app_snapshot already returns) ----------
+  function liveState() {
+    const s = S.ctx.snap; const st = s.state || {};
+    const beat = st.last_heartbeat ? Math.round((Date.now() - new Date(st.last_heartbeat).getTime()) / 60000) : null;
+    return { mode: txt(st.mode).replace(/_/g, '-'), kill: !!st.kill_switch, pause: st.pause_reason || '', cap: Number(st.cap_cents) || 0, spend: Number(s.spend_today_cents) || 0, beat };
+  }
+  function livePanel() {
+    const L = liveState();
+    return panel('Live controls (read-only)', 'LIVE', kv('Mode', L.mode), kv('Kill switch', L.kill ? 'ON: all agents stopped' : 'off'), L.pause ? kv('Paused', L.pause) : null,
+      kv('AI spend today', usd(L.spend) + ' of ' + usd(L.cap) + ' daily cap'), meter(L.spend, L.cap), kv('Engine heartbeat', L.beat == null ? 'none recorded' : L.beat + ' min ago'),
+      dim('Read from app_snapshot. Change controls only in the existing Home tab or Telegram.'));
   }
 
   // ---------- screens ----------
-  function sOverview(M) {
-    const d = M.d, j = d.jarvis, st = j.state;
-    const run = st.kill_switch ? ['KILL SWITCH ON', 'bad'] : st.pause_reason ? ['PAUSED', 'warn'] : ['RUNNING', 'ok'];
-    const needs = j.pending_approvals; const act = d.agents.filter((a) => a.status === 'active').length;
-    const live = d.missions.filter((m) => !/completed|rejected|abandoned|failed/.test(m.status)).length;
-    const tile = (label, val, sub, src, go_) => h('button', { class: 'hq-tile', onclick: go_ }, h('span', { class: 'dim' }, label), h('b', {}, val), h('span', { class: 'dim' }, sub), badge(src));
+  function pendingApprovals() { return store().missions.filter((m) => !m.cancelled).flatMap((m) => m.approvals.filter((a) => a.status === 'pending').map((a) => ({ m, a }))); }
+
+  function sOverview() {
+    const st = store(); const O = ORG(); const P = O.policy;
+    const counts = {}; st.missions.forEach((m) => { const k = J().missionStatus(m); counts[k] = (counts[k] || 0) + 1; });
+    const pend = pendingApprovals();
     return [
-      panel('Group status', M.src.j_state, h('div', { class: 'row' }, h('div', { class: 'big hq-status ' + run[1] }, run[0]), h('div', { class: 'dim' }, 'mode ' + String(st.mode || '?').replace(/_/g, ' ') + ' · beat ' + mins(st.last_heartbeat_min))),
-        dim(st.mode === 'dry_run' ? 'Dry-run: nothing can be sent or spent for real. Enforced in the database.' : 'Live mode.')),
-      h('div', { class: 'hq-tiles' },
-        tile('AI spend today', usd(d.finance.spend_today_cents), 'of ' + usd(st.cap_cents) + ' cap', M.src.f_cap, () => go('finance')),
-        tile('Operating cash', d.finance.capital && d.finance.capital.available_cents != null ? usd(d.finance.capital.available_cents) : 'n/a', 'available', M.src.f_capital, () => go('finance')),
-        tile('Waiting on you', String(needs.length), 'approvals and questions', M.src.j_approvals, () => go('jarvis')),
-        tile('Live missions', String(live), d.missions.filter((m) => m.status === 'blocked').length + ' blocked', M.src.missions, () => go('missions')),
-        tile('Agents active', act + '/' + d.agents.length, 'workforce', M.src.agents, () => go('agents')),
-        tile('Divisions', String(d.divisions.length), d.divisions.filter((x) => x.health === 'green').length + ' green', M.src.divisions, () => go('divisions'))),
-      panel('Needs the Chairman', M.src.j_approvals, ...(needs.length ? needs.slice(0, 5).map((n) => h('div', { class: 'hq-need' }, h('div', {}, n.title), h('div', { class: 'dim' }, [n.why, n.age_min != null ? mins(n.age_min) + ' ago' : ''].filter(Boolean).join(' · ')))) : [dim('Nothing waiting on you.')]),
-        link('Open Jarvis control center', () => go('jarvis'))),
-      panel('Alerts', M.demo ? 'SIMULATED' : 'INCOMPLETE', ...(alerts(M).length ? alerts(M).map((a) => h('div', { class: 'hq-alert a-' + a.lvl }, h('span', {}, a.text), badge(a.src))) : [dim('No alerts.')])),
-      panel('Divisions at a glance', M.src.divisions, h('div', { class: 'hq-heat' }, d.divisions.map((x) => h('button', { class: 'hq-heatc', onclick: () => go('divisions', { type: 'division', id: x.id }) }, dot(x.health), h('span', {}, x.name), h('span', { class: 'dim' }, x.lifecycle))))),
-      M.demo ? panel('How to read this page', 'SIMULATED', dim('Every number here is synthetic. Badges show where a panel would get real data: LIVE (existing database read), SIMULATED (demo), NOT CONNECTED (no source yet), INCOMPLETE (partly live).')) : panel('How to read this page', 'INCOMPLETE', dim('LIVE panels come from the database you are signed in to. SIMULATED panels (divisions, managers, teams, budgets, KPIs) are a proposal: the database has no such tables yet.')),
+      live() ? livePanel() : panel('Group status', simSrc, dim('Status as of ' + O.status_as_of.date + ', not live.'), ...O.status_as_of.items.slice(0, 4).map(([a, b]) => kv(a, b)), h('div', { class: 'btns' }, btn('Open system health', () => go('health')))),
+      panel('Jarvis', simSrc, dim('Type an objective in plain language. Jarvis plans it, routes it to a division and offices, and lists what needs your approval. Planning is offline: no agent runs.'),
+        h('div', { class: 'btns' }, btn('Give Jarvis an objective', () => go('jarvis'), ''))),
+      panel('Needs your approval', simSrc, ...(pend.length ? pend.slice(0, 6).map(({ m, a }) => h('button', { class: 'hq-rowbtn', type: 'button', onclick: () => go('missions', { type: 'mission', id: m.id }) }, h('span', {}, a.text), h('span', { class: 'dim' }, m.id))) : [dim('Nothing waiting. Approvals appear here when Jarvis plans a mission.')]),
+        live() ? dim('Live approvals from the database are in the Inbox tab.') : null),
+      panel('Missions', simSrc, kv('Planned', String(counts.planned || 0)), kv('In progress', String(counts['in progress'] || 0)), kv('Blocked', String(counts.blocked || 0)), kv('Complete', String(counts.complete || 0)), kv('Cancelled', String(counts.cancelled || 0)),
+        h('div', { class: 'btns' }, btn('Open missions', () => go('missions')))),
+      panel('Organization', orgSrc(), kv('Divisions', O.divisions.length + ', all DORMANT'), kv('Group offices', String(O.corporate_offices.length)), kv('Division managers', UN), kv('Spend today', live() ? 'see Live controls' : '$0.00 (simulated)'), kv('AI daily cap (policy)', usd(P.ai_daily_cap_cents)),
+        h('div', { class: 'btns' }, btn('Org chart', () => go('org')), btn('Finance', () => go('finance')))),
     ];
   }
 
-  // org chart: indented tree drawn as SVG, expandable, phone friendly
-  function orgNodes(M) {
-    const d = M.d; const O = S.open;
-    const kids = {};
-    const n = (id, label, sub, kind, ref, health, children) => ({ id, label, sub, kind, ref, health, children: children || [] });
-    const divNodes = d.divisions.map((x) => {
-      const mgr = d.managers.find((m) => m.id === x.manager_id);
-      const teams = (x.team_ids || []).map((tid) => d.teams.find((t) => t.id === tid)).filter(Boolean).map((t) => n('t:' + t.id, t.name, t.agent_ids.length + (t.agent_ids.length === 1 ? ' agent' : ' agents'), 'team', null, null, []));
-      const mn = mgr ? n('m:' + mgr.id, mgr.title, mgr.status, 'manager', mgr.id, mgr.status === 'active' ? 'green' : 'grey', teams) : null;
-      return n('d:' + x.id, x.name, x.lifecycle, 'division', x.id, x.health, mn ? [mn] : teams);
-    });
-    const offNodes = d.offices.map((o) => n('o:' + o.fn, o.name, o.agents ? o.agents + (o.agents === 1 ? ' agent' : ' agents') : 'unstaffed', 'office', o.fn, o.agents ? 'green' : 'grey', []));
-    const tree = n('chair', 'Chairman', 'Owner', 'chair', null, null, [n('jarvis', 'Jarvis (COO)', 'only agent that contacts the Chairman', 'jarvis', null, 'green', [
-      n('g:off', 'Corporate offices', offNodes.length + ' offices', 'group', null, null, offNodes), n('g:div', 'Divisions', divNodes.length + ' divisions', 'group', null, null, divNodes)])]);
-    const rows = []; (function walk(x, lvl) { rows.push({ x, lvl }); kids[x.id] = x.children; if (O.has(x.id)) x.children.forEach((c) => walk(c, lvl + 1)); })(tree, 0);
-    return { rows, tree };
-  }
-  function sOrg(M) {
-    const W = 360, RH = 32; const { rows } = orgNodes(M); const H = rows.length * RH + 6;
-    const svg = sv('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'hq-org', role: 'img', 'aria-label': 'Organization chart: Chairman, Jarvis, corporate offices, divisions, managers, teams' });
-    const ypos = []; rows.forEach((r, i) => { ypos[i] = 3 + i * RH; });
-    const parentIdx = (i) => { for (let k = i - 1; k >= 0; k--) if (rows[k].lvl === rows[i].lvl - 1) return k; return -1; };
-    rows.forEach((r, i) => { const p = parentIdx(i); if (p >= 0) { const px = 10 + (r.lvl - 1) * 16 + 8; svg.append(sv('path', { d: 'M' + px + ' ' + (ypos[p] + 24) + ' V' + (ypos[i] + 13) + ' H' + (10 + r.lvl * 16), class: 'org-line' })); } });
-    const toggle = (id) => { if (S.open.has(id)) S.open.delete(id); else S.open.add(id); draw(); };
-    const open = (x) => { if (x.kind === 'division') go('divisions', { type: 'division', id: x.ref }); else if (x.kind === 'manager') go('managers', { type: 'manager', id: x.ref }); else if (x.kind === 'office') go('offices', { type: 'office', id: x.ref }); else if (x.kind === 'jarvis') go('jarvis'); };
-    const hasDetail = (x) => ['division', 'manager', 'office', 'jarvis'].includes(x.kind);
-    rows.forEach((r, i) => {
-      const x = r.x, px = 10 + r.lvl * 16, w = W - px - 6, y = ypos[i], exp = S.open.has(x.id), kidsN = x.children.length;
-      const g = sv('g', { class: 'org-node k-' + x.kind, role: 'button', tabindex: '0', 'data-node': x.id, 'aria-label': x.label + (kidsN ? (exp ? ', expanded' : ', collapsed') : ''), 'aria-expanded': kidsN ? String(exp) : null,
-        onclick: () => (kidsN ? toggle(x.id) : hasDetail(x) ? open(x) : null), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (kidsN) toggle(x.id); else if (hasDetail(x)) open(x); } } });
-      g.append(sv('rect', { x: px, y, width: w, height: 26, rx: 7, class: 'org-box' }));
-      if (x.health) g.append(sv('circle', { cx: px + 10, cy: y + 13, r: 4, class: 'org-dot d-' + x.health }));
-      const tx = px + (x.health ? 20 : 9); const maxc = Math.max(8, Math.floor((w - (tx - px) - 34) / 5.9));
-      g.append(sv('text', { x: tx, y: y + 11, class: 'org-t' }, trunc(x.label, maxc)), sv('text', { x: tx, y: y + 22, class: 'org-s' }, trunc(x.sub, maxc + 6)));
-      if (kidsN) g.append(sv('text', { x: px + w - 22, y: y + 17, class: 'org-chev' }, exp ? '−' : '+'));
-      svg.append(g);
-      if (kidsN && hasDetail(x)) {
-        svg.append(sv('g', { class: 'org-info', role: 'button', tabindex: '0', 'data-open': x.id, 'aria-label': 'Open ' + x.label, onclick: () => open(x), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(x); } } },
-          sv('circle', { cx: px + w - 8, cy: y + 13, r: 8, class: 'org-i' }), sv('text', { x: px + w - 8, y: y + 17, class: 'org-it' }, '›')));
-      }
-    });
-    const all = () => { const ids = new Set(); (function w(x) { ids.add(x.id); x.children.forEach(w); })(orgNodes(M).tree); S.open = ids; draw(); };
-    return [panel('Fendezy Group organization', 'SIMULATED',
-      dim('Chairman → Jarvis → corporate offices and eight divisions → managers → teams. Tap a row to expand; tap the › button to open its profile.'),
-      h('div', { class: 'btns' }, h('button', { class: 'ghost', onclick: all }, 'Expand all'), h('button', { class: 'ghost', onclick: () => { S.open = new Set(['chair', 'jarvis', 'g:off', 'g:div']); draw(); } }, 'Collapse')),
-      h('div', { class: 'hq-orgwrap' }, svg),
-      dim('Offices (repo-defined) carry live agent counts when signed in. Divisions, managers and teams are an inferred proposal: the repo has no division table.'))];
+  function planView(p) {
+    const O = ORG(); const div = O.divisions.find((d) => d.id === p.division);
+    const pick = h('select', { 'aria-label': 'Responsible division', class: 'hq-select', onchange: (e) => { S.divPick = e.target.value; S.draft = J().plan(S.draft.objective, O, { division: S.divPick }); draw(); } },
+      O.divisions.map((d) => { const o = h('option', { value: d.id }, d.n + ' ' + d.name); if (d.id === p.division) o.selected = true; return o; }));
+    const send = live() && S.ctx.sendMission ? btn('Also send to the live mission engine', () => {
+      if (!root.confirm('Send this objective to the live mission engine (existing app_send mission/new)? The engine evaluates it under the existing caps, dry-run mode and approvals. The offline plan is not sent.')) return;
+      Promise.resolve(S.ctx.sendMission(p.objective)).then((id) => { S.msg = id ? 'Objective sent to the live mission engine. It appears under Live missions once the engine records it.' : 'Not sent: see the message at the top.'; draw(); }).catch((e) => { S.msg = 'Not sent: ' + (e && e.message ? e.message : 'error'); draw(); });
+    }) : null;
+    return panel('Jarvis plan (draft)', simSrc, h('p', { class: 'hq-sim' }, p.note),
+      h('h4', { class: 'hq-h4' }, '1. Understanding'), h('p', {}, p.understanding),
+      h('h4', { class: 'hq-h4' }, '2. Task breakdown'), h('ol', { class: 'hq-ol' }, p.tasks.map((t) => h('li', {}, t.title, ' ', tag(t.kind), t.office ? h('span', { class: 'dim' }, ' · ' + offName(t.office)) : null))),
+      h('h4', { class: 'hq-h4' }, '3. Responsible division'), pick, dim('Status: DORMANT. Confidence: ' + p.confidence + '. ' + p.why),
+      kv('Supporting offices', p.offices.map(offName).join(', ')),
+      h('h4', { class: 'hq-h4' }, '4. Proposed agents and AI cost (estimate)'),
+      h('ul', { class: 'hq-ol' }, p.tasks.map((t) => h('li', {}, t.agent + ': ' + (t.est_cents ? usd(t.est_cents) + ' est.' : 'no AI cost')))),
+      kv('Estimated AI cost', usd(p.est_cents) + ' vs ' + usd(p.cap_cents) + ' daily cap'), meter(p.est_cents, p.cap_cents),
+      dim(p.within_cap ? 'Fits within one day at the cap. Estimates are planning assumptions, not measurements.' : 'Over the daily cap: would take ' + p.days_at_cap + ' days at the cap.'),
+      h('h4', { class: 'hq-h4' }, '5. Deliverables expected'), h('ul', { class: 'hq-ol' }, p.deliverables.map((d) => h('li', {}, d))),
+      h('h4', { class: 'hq-h4' }, '6. Needs your approval'), h('ul', { class: 'hq-ol hq-appr' }, p.approvals.map((a) => h('li', {}, tag(a.kind), ' ', a.text))),
+      h('div', { class: 'btns' }, btn('Create mission (simulated)', () => {
+        const m = J().createMission(store(), S.draft, O); if (!m) return; save(); S.draft = null; S.input = ''; S.divPick = ''; go('missions', { type: 'mission', id: m.id });
+      }, ''), btn('Discard', () => { S.draft = null; draw(); })),
+      send ? h('div', { class: 'btns' }, send) : null);
   }
 
-  function sDivisions(M) {
-    const d = M.d;
-    if (S.detail && S.detail.type === 'division') {
-      const x = findDiv(M, S.detail.id); if (!x) return [back('divisions', 'Divisions'), dim('Unknown division.')];
-      const mgr = d.managers.find((m) => m.id === x.manager_id);
-      return [back('divisions', 'All divisions'),
-        panel(x.name, M.src.divisions, h('div', { class: 'row' }, h('span', {}, [dot(x.health), ' ', x.health]), tag(x.lifecycle)), dim(x.charter), kv('Origin', x.origin),
-          kv('Manager', mgr ? h('button', { class: 'ghost hq-link', onclick: () => go('managers', { type: 'manager', id: mgr.id }) }, mgr.title) : 'none')),
-        panel('Budget and money', M.src.divisions, kv('Monthly AI budget', usd(x.budget.monthly_cents)), kv('Spent this month', usd(x.budget.spent_cents)), meter(x.budget.spent_cents, x.budget.monthly_cents),
-          kv('Cash in / out', usd(x.money.in_cents) + ' / ' + usd(x.money.out_cents)), kv('Expected (not cash)', usd(x.money.expected_cents))),
-        panel('KPIs', M.src.divisions, ...x.kpis.map((k) => h('div', { class: 'hq-kpi' }, kv(k.name, k.value + (k.unit === '%' ? '%' : '') + ' / target ' + k.target + (k.unit === '%' ? '%' : '')), meter(k.value, k.target || 1)))),
-        panel('Teams', M.src.divisions, ...(x.team_ids.length ? x.team_ids.map((tid) => { const t = d.teams.find((q) => q.id === tid); return t ? h('div', { class: 'hq-sub' }, h('b', {}, t.name), dim(t.purpose), dim(t.agent_ids.map((id) => { const a = d.agents.find((q) => q.slug === id); return a ? a.title : id; }).join(', '))) : null; }) : [dim('No teams yet.')])),
-        panel('Risks', M.src.divisions, ...(x.risks.length ? x.risks.map((r) => h('div', { class: 'hq-alert a-warn' }, r)) : [dim('None recorded.')])),
-        panel('Missions', M.src.missions, ...(d.missions.filter((m) => m.division_id === x.id).map((m) => h('button', { class: 'hq-rowbtn', onclick: () => go('missions', { type: 'mission', id: m.id }) }, h('span', {}, m.title), tag(m.status)))), ...(d.missions.some((m) => m.division_id === x.id) ? [] : [dim('No missions linked.')]))];
+  function sJarvis() {
+    const ta = h('textarea', { id: 'hq-objective', rows: 3, maxlength: 600, 'aria-label': 'Objective for Jarvis', placeholder: 'e.g. ' + EXAMPLE, class: 'hq-input', oninput: (e) => { S.input = e.target.value; } });
+    ta.value = S.input;
+    const doPlan = () => { const p = J().plan(ta.value, ORG()); if (p.error) { S.msg = p.error; S.draft = null; } else { S.msg = ''; S.draft = p; S.divPick = ''; } S.input = ta.value; draw(); };
+    const recent = store().missions.slice(0, 5);
+    return [
+      panel('Give Jarvis an objective', simSrc, ta, h('div', { class: 'btns' }, btn('Plan it', doPlan, ''), btn('Use example', () => { S.input = EXAMPLE; ta.value = EXAMPLE; doPlan(); })),
+        dim('Offline planner: rule-based, zero AI cost, nothing leaves this device. It never runs agents, researches, contacts anyone or spends.')),
+      S.draft ? planView(S.draft) : null,
+      panel('Recent missions', simSrc, ...(recent.length ? recent.map((m) => missionRow(m)) : [dim('No missions yet.')])),
+      panel('Live mission engine', live() ? 'LIVE' : 'NOT CONNECTED', live()
+        ? dim('Signed in: after planning, "Also send to the live mission engine" hands the objective to the existing engine through app_send (mission/new), the same path as the Missions tab. Missions it records are listed under Missions as LIVE.')
+        : dim('Not connected in demo mode. Signed in to the real app, Jarvis can hand an objective to the existing mission engine (app_send mission/new). Nothing is sent from here.')),
+      panel('Voice', 'NOT CONNECTED', h('button', { type: 'button', class: 'ghost', disabled: 'disabled', 'aria-disabled': 'true' }, 'Voice (ElevenLabs) — planned after text Jarvis is stable')),
+    ];
+  }
+
+  function missionRow(m) {
+    const st = J().missionStatus(m);
+    return h('button', { class: 'hq-rowbtn', type: 'button', onclick: () => go('missions', { type: 'mission', id: m.id }) },
+      h('span', {}, h('b', {}, m.id), ' ', m.title), h('span', { class: 'dim' }, st + ' · ' + J().progress(m) + '%'));
+  }
+
+  function sMissions() {
+    if (S.detail && S.detail.type === 'mission') { const m = store().missions.find((x) => x.id === S.detail.id); if (m) return missionDetail(m); }
+    const all = store().missions;
+    const f = { open: (m) => !['complete', 'cancelled'].includes(J().missionStatus(m)), all: () => true, complete: (m) => J().missionStatus(m) === 'complete', cancelled: (m) => m.cancelled };
+    const list = all.filter(f[S.mfilter] || f.all);
+    const chips = h('div', { class: 'hq-chips', role: 'group' }, [['open', 'Open'], ['complete', 'Complete'], ['cancelled', 'Cancelled'], ['all', 'All']].map(([k, l]) =>
+      h('button', { class: 'chip' + (S.mfilter === k ? ' on' : ''), type: 'button', 'aria-pressed': String(S.mfilter === k), onclick: () => { S.mfilter = k; draw(); } }, l)));
+    const out = [panel('Missions (offline planner)', simSrc, chips, ...(list.length ? list.map(missionRow) : [dim(all.length ? 'No missions in this filter.' : 'No missions yet. Give Jarvis an objective.')]),
+      h('div', { class: 'btns' }, btn('New objective', () => go('jarvis'), '')))];
+    if (live()) {
+      const lm = Array.isArray(S.ctx.snap.missions) ? S.ctx.snap.missions : [];
+      out.push(panel('Live missions (database)', 'LIVE', ...(lm.length ? lm.map((m) => h('div', { class: 'hq-sub' }, h('div', {}, txt(String(m.title || '').replace(/^Mission: /, ''), 'Untitled')),
+        dim(txt(m.status) + (m.verdict ? ' · ' + m.verdict : '') + ' · spent ' + usd(m.spent_cents) + ' of ' + usd(m.budget_cents)), m.next_action ? dim('Next: ' + m.next_action) : null)) : [dim('No missions recorded in the database.')]),
+        dim('Pause, resume or abandon these in the Missions tab.')));
     }
-    const cards = d.divisions.map((x) => { const mgr = d.managers.find((m) => m.id === x.manager_id);
-      return h('button', { class: 'card hq-div', onclick: () => go('divisions', { type: 'division', id: x.id }) }, h('div', { class: 'row' }, h('h3', {}, x.name), tag(x.lifecycle)), h('div', { class: 'dim' }, [dot(x.health), ' ', x.health, ' · ', mgr ? mgr.title : 'no manager']),
-        h('div', { class: 'dim' }, trunc(x.charter, 90)), meter(x.budget.spent_cents, x.budget.monthly_cents), h('div', { class: 'dim' }, usd(x.budget.spent_cents) + ' of ' + usd(x.budget.monthly_cents) + ' / month · ' + x.kpis.length + ' KPIs')); });
-    const out = [panel(d.divisions.length + ' divisions', M.src.divisions, dim('INFERRED from the venture list: the repo defines no division table. Edit hq/demo_data.js to change the proposal.')), h('div', { class: 'hq-grid' }, cards)];
-    if (d.liveVentures) out.push(panel('Live ventures (real, from the database)', 'LIVE', ...(d.liveVentures.length ? d.liveVentures.map((v) => h('div', { class: 'hq-sub' }, h('div', { class: 'row' }, h('b', {}, v.name), tag(v.status)), dim(v.agents + ' agents · ' + v.leads + ' leads · in ' + usd(v.in_cents) + ' · out ' + usd(v.out_cents) + ' · AI 7d ' + usd(v.ai_cents_7d)))) : [dim('No active ventures.')])));
     return out;
   }
 
-  function sOffices(M) {
-    const d = M.d;
-    if (S.detail && S.detail.type === 'office') {
-      const o = d.offices.find((x) => x.fn === S.detail.id); if (!o) return [back('offices', 'Offices'), dim('Unknown office.')];
-      return [back('offices', 'All offices'), panel(o.name, o.defined_in === 'repo' ? M.src.offices : 'SIMULATED', tag(o.defined_in === 'repo' ? 'defined in repo' : 'inferred / proposed'), dim(o.headline), dim(o.charter || 'Charter not stored in the database.'),
-        kv('Head', o.head || 'unstaffed'), kv('Agents', String(o.agents)), kv('Open / blocked', o.open + ' / ' + o.blocked), kv('Done this week', String(o.done_7d)), kv('AI spend 7d', usd(o.spent_7d_cents)),
-        ...((o.members || []).map((a) => h('div', { class: 'row dim' }, h('span', {}, a.title || a.slug), h('span', {}, a.status)))))];
-    }
-    return [panel('Corporate offices', M.src.offices, dim('The nine functions come from the repo (office_v1). Legal and Security & Risk are proposed additions, not in the repo.')),
-      ...d.offices.map((o) => h('button', { class: 'card hq-div', onclick: () => go('offices', { type: 'office', id: o.fn }) }, h('div', { class: 'row' }, h('h3', {}, o.name), tag(o.defined_in === 'repo' ? 'repo' : 'proposed')), dim(o.headline), dim(o.agents + ' agents · ' + o.open + ' open · ' + o.blocked + ' blocked · ' + o.done_7d + ' done this week')))];
-  }
-
-  function sJarvis(M) {
-    const d = M.d, j = d.jarvis, st = j.state; const cap = st.cap_cents || 330; const sp = d.finance.spend_today_cents;
-    const top = d.agents.slice().sort((a, b) => (b.spent_today || 0) - (a.spent_today || 0)).slice(0, 6);
+  function missionDetail(m) {
+    const O = ORG(); const Jv = J(); const st = Jv.missionStatus(m); const stx = store();
+    const taskRow = (t) => {
+      const pg = Jv.pendingGates(m, t); const open = !m.cancelled && t.status !== 'done' && t.status !== 'cancelled';
+      const nextLabel = t.status === 'doing' ? 'Mark done' : 'Start';
+      return h('div', { class: 'hq-sub hq-task' }, h('div', { class: 'row' }, h('span', {}, h('b', {}, t.id), ' ', t.title), tag(t.status, 's-' + t.status.replace(/\s/g, ''))),
+        dim([t.agent, t.office ? offName(t.office) : '', t.est_cents ? usd(t.est_cents) + ' est. AI' : '', t.kind !== 'internal' ? t.kind + ' action' : ''].filter(Boolean).join(' · ')),
+        t.reason ? dim('Blocked: ' + t.reason) : null,
+        open && pg.length ? dim('Waiting for your approval: ' + pg.join(', ')) : null,
+        open ? h('div', { class: 'btns' }, btn(nextLabel, () => mutate(Jv.advanceTask(stx, m.id, t.id)), 'ghost', pg.length ? { disabled: 'disabled' } : null),
+          t.status !== 'blocked' ? btn('Blocked', () => { const r = root.prompt ? root.prompt('What is blocking it?') : ''; if (r === null) return; mutate(Jv.blockTask(stx, m.id, t.id, r || '')); }) : null,
+          btn('Cancel task', () => mutate(Jv.cancelTask(stx, m.id, t.id)))) : null);
+    };
+    const noteKind = h('select', { 'aria-label': 'Note type', class: 'hq-select' }, [['finding', 'Finding'], ['deliverable', 'Deliverable'], ['recommendation', 'Recommendation']].map(([v, l]) => h('option', { value: v }, l)));
+    const noteText = h('textarea', { rows: 2, maxlength: 2000, 'aria-label': 'Note text', class: 'hq-input', placeholder: 'Record a finding, deliverable or recommendation (you write it; no agent has)' });
+    const blk = Jv.blockers(m);
     return [
-      panel('Status (display only)', M.src.j_state,
-        h('div', { class: 'row' }, h('span', {}, 'Kill switch'), h('span', { class: 'hq-state ' + (st.kill_switch ? 'bad' : 'ok'), 'data-kill': st.kill_switch ? 'on' : 'off' }, st.kill_switch ? 'ON' : 'OFF')),
-        h('div', { class: 'row' }, h('span', {}, 'Mode'), h('span', { class: 'hq-state ' + (st.mode === 'dry_run' ? 'ok' : 'warn') }, String(st.mode || '?').replace(/_/g, ' ').toUpperCase())),
-        kv('Heartbeat', mins(st.last_heartbeat_min) + ' ago'), kv('Paused reason', st.pause_reason || 'none'),
-        ownerNote('Kill switch: /kill and /resume. Mode and limits: /capital, /policy.')),
-      panel('Spend gateway', M.src.j_gateway, kv('AI spent today', usd(sp) + ' of ' + usd(cap)), meter(sp, cap, sp >= cap * 0.8 ? 'warm' : ''), kv('Company daily cap', usd(cap)), kv('Reserve floor', usd(j.gateway.reserve_floor_cents)), dim(j.gateway.note),
-        h('h4', { class: 'hq-h4' }, 'Highest spenders today'), ...top.map((a) => h('div', { class: 'row dim' }, h('span', {}, a.title), h('span', {}, usd(a.spent_today) + ' / ' + usd(a.cap_cents)))),
-        ownerNote('Caps are changed with /capital. Agents cannot change them.')),
-      panel('Pending approvals', M.src.j_approvals, ...(j.pending_approvals.length ? j.pending_approvals.map((p) => h('div', { class: 'hq-need' }, h('div', {}, p.title), h('div', { class: 'dim' }, [p.why, p.age_min != null ? mins(p.age_min) + ' ago' : ''].filter(Boolean).join(' · ')))) : [dim('Nothing pending.')]),
-        M.demo ? dim('Demo: no buttons here by design. In the live app, approve or reject in the Inbox tab or in Telegram.') : link('Decide in the Inbox tab', () => S.ctx && S.ctx.goTab && S.ctx.goTab('inbox'))),
-      panel('Autonomy tiers', M.src.j_policy, ...(j.policy.length ? j.policy.map((p) => h('div', { class: 'row' }, h('span', { class: 'dim' }, p.action), tag(p.tier, 't-' + p.tier))) : [dim('Policy table not readable yet.')]), ownerNote('Tiers change with /policy.'))];
+      btn('‹ Missions', () => go('missions'), 'ghost hq-back'),
+      panel(m.id + ' · ' + m.title, simSrc, h('p', { class: 'hq-sim' }, m.note),
+        kv('Status', st), kv('Progress', Jv.progress(m) + '%'), meter(Jv.progress(m), 100), kv('Owner', m.owner),
+        kv('Division', divName(m.division) + ' (DORMANT)'), kv('Supporting offices', m.offices.map(offName).join(', ')), kv('Estimated AI cost', usd(m.est_cents) + ' (planning estimate)'), kv('Created', when(m.created_at)),
+        h('p', {}, m.understanding)),
+      panel('Tasks', simSrc, dim('Nothing advances by itself. You move each task by hand; every change is written to Activity.'), ...m.tasks.map(taskRow)),
+      panel('Blockers', simSrc, ...(blk.length ? blk.map((b) => h('div', { class: 'hq-alert a-warn' }, b)) : [dim('No blockers.')])),
+      panel('Needs your approval', simSrc, dim('Recorded in this browser only. Approving here authorizes nothing in the real company and runs nothing.'),
+        ...m.approvals.map((a) => h('div', { class: 'hq-sub' }, h('div', { class: 'row' }, h('span', {}, h('b', {}, a.id), ' ', a.text), tag(a.status, 's-' + a.status)),
+          !m.cancelled && a.status === 'pending' ? h('div', { class: 'btns' }, btn('Record approval', () => mutate(Jv.decide(stx, m.id, a.id, true))), btn('Decline', () => mutate(Jv.decide(stx, m.id, a.id, false)))) : null))),
+      panel('Findings, deliverables and recommendations', simSrc,
+        h('h4', { class: 'hq-h4' }, 'Expected deliverables'), h('ul', { class: 'hq-ol' }, m.deliverables.map((d) => h('li', {}, d.text + ' (' + d.status + ')'))),
+        h('h4', { class: 'hq-h4' }, 'Recorded by the Chairman'), ...(m.notes.length ? m.notes.map((n) => h('div', { class: 'hq-sub' }, tag(n.kind), ' ', n.text, dim(when(n.at)))) : [dim('None yet. No agent has produced findings.')]),
+        m.cancelled ? null : h('div', {}, noteKind, noteText, h('div', { class: 'btns' }, btn('Add note', () => mutate(Jv.addNote(stx, m.id, noteKind.value, noteText.value)))))),
+      m.cancelled ? null : h('div', { class: 'btns' }, h('select', { 'aria-label': 'Reassign division', class: 'hq-select', onchange: (e) => { if (e.target.value) mutate(Jv.reassign(stx, m.id, e.target.value, O)); } },
+        h('option', { value: '' }, 'Reassign division…'), O.divisions.filter((d) => d.id !== m.division).map((d) => h('option', { value: d.id }, d.name))),
+        btn('Cancel mission', () => { if (root.confirm('Cancel ' + m.id + '? Open tasks become cancelled.')) mutate(Jv.cancelMission(stx, m.id)); }, 'bad')),
+    ];
   }
 
-  function sManagers(M) {
-    const d = M.d;
-    if (S.detail && S.detail.type === 'manager') {
-      const m = d.managers.find((x) => x.id === S.detail.id); if (!m) return [back('managers', 'Managers'), dim('Unknown manager.')];
-      const div = findDiv(M, m.division_id); const teams = d.teams.filter((t) => t.division_id === m.division_id);
-      return [back('managers', 'All managers'), panel(m.title, 'SIMULATED', h('div', { class: 'row' }, tag(m.status), tag(m.tier + ' model')), dim(m.charter), kv('Division', div ? h('button', { class: 'ghost hq-link', onclick: () => go('divisions', { type: 'division', id: div.id }) }, div.name) : 'none'),
-        kv('Reports to', m.reports_to), kv('Authority', m.authority), kv('Scorecard', m.scorecard.flag + ' · ' + m.scorecard.done_7d + ' done this week' + (m.scorecard.cents_per_done != null ? ' · ' + m.scorecard.cents_per_done + 'c per task' : '')), kv('Last report', m.last_report)),
-        panel('Teams managed', 'SIMULATED', ...(teams.length ? teams.map((t) => h('div', { class: 'hq-sub' }, h('b', {}, t.name), dim(t.purpose), dim(t.agent_ids.join(', ')))) : [dim('No teams yet.')]))];
+  function sOrg() {
+    const O = ORG(); const ti = O.corporate_offices.find((o) => o.id === 'technology-security');
+    const node = (title, sub, kids, cls) => h('li', { class: 'hq-node ' + (cls || '') }, h('div', { class: 'hq-nb' }, h('b', {}, title), sub ? dim(sub) : null), kids && kids.length ? h('ul', { class: 'hq-tree' }, kids) : null);
+    return [panel('Org chart', orgSrc(), dim('Reporting line: division managers report to Jarvis; Jarvis reports to the Chairman.'),
+      h('ul', { class: 'hq-tree hq-root' }, node('Chairman', 'Final authority', [node('Jarvis', 'Group operator', [
+        node('Divisions (8, all DORMANT)', null, O.divisions.map((d) => node(d.n + '. ' + d.name, 'Manager: ' + UN, null, 'k-div'))),
+        node('Group offices (8)', null, O.corporate_offices.map((o) => node(o.name, 'Head: ' + UN, o === ti ? O.standing_functions.map((f) => node(f.name, 'Standing function. ' + f.note, null, 'k-std')) : null, 'k-off'))),
+      ], 'k-jarvis')], 'k-chair')))];
+  }
+
+  function sDivisions() {
+    const O = ORG();
+    if (S.detail && S.detail.type === 'division') {
+      const d = O.divisions.find((x) => x.id === S.detail.id);
+      if (d) {
+        const ms = store().missions.filter((m) => m.division === d.id);
+        return [btn('‹ Divisions', () => go('divisions'), 'ghost hq-back'),
+          panel(d.n + '. ' + d.name, orgSrc(), h('p', {}, d.charter.text), kv('Status', 'DORMANT'), kv('Authorized to operate', 'No'), kv('Authorized to spend', 'No'),
+            kv('Manager', UN), kv('Reports to', 'Jarvis'), dim('Activating this division needs the Chairman\'s approval.')),
+          panel('Missions routed here (offline planner)', simSrc, ...(ms.length ? ms.map(missionRow) : [dim('None.')]))];
+      }
     }
-    return [panel('Division managers', M.src.managers, dim('Manager profiles are an inferred proposal (no manager table in the database yet).')),
-      ...d.managers.map((m) => h('button', { class: 'card hq-div', onclick: () => go('managers', { type: 'manager', id: m.id }) }, h('div', { class: 'row' }, h('h3', {}, m.title), tag(m.status)), dim(divName(M, m.division_id)), dim(trunc(m.last_report, 100)), dim('scorecard ' + m.scorecard.flag + ' · ' + m.scorecard.done_7d + ' done this week')))];
+    return [panel('Divisions', orgSrc(), dim('All eight are DORMANT: not authorized to operate or spend.'),
+      h('div', { class: 'hq-grid' }, O.divisions.map((d) => h('button', { class: 'hq-div', type: 'button', onclick: () => go('divisions', { type: 'division', id: d.id }) },
+        h('div', { class: 'row' }, h('h3', {}, d.n + '. ' + d.name), tag('DORMANT')), dim(d.charter.text), dim('Manager: ' + UN)))))];
   }
 
-  function sAgents(M) {
-    const d = M.d; const f = S.filters; const teamOf = (a) => d.teams.find((t) => t.id === a.team_id);
-    const list = d.agents.filter((a) => (f.astat === 'all' || a.status === f.astat) && (f.adiv === 'all' || (teamOf(a) || {}).division_id === f.adiv || (f.adiv === 'none' && !teamOf(a))));
-    const groups = {}; list.forEach((a) => { const t = teamOf(a); const k = t ? t.name : (a.venture || 'Company'); (groups[k] = groups[k] || []).push(a); });
-    const cap = (a) => h('details', { class: 'card hq-agent' }, h('summary', {}, h('b', {}, a.title), ' ', tag(a.status), ' ', h('span', { class: 'dim' }, a.role)),
-      kv('Today', usd(a.spent_today) + ' of ' + usd(a.cap_cents)), meter(a.spent_today, a.cap_cents), kv('Open / done this week', a.open + ' / ' + a.done_7d), kv('Model tier', a.tier || ''), a.last_task ? dim('Last: ' + a.last_task) : null);
-    return [panel('Workforce', M.src.agents, kv('Agents', d.agents.length + ' (' + d.agents.filter((a) => a.status === 'active').length + ' active)'), kv('Spend today', usd(d.agents.reduce((t, a) => t + (a.spent_today || 0), 0))),
-      filterBar('astat', [['all', 'All'], ['active', 'Active'], ['paused', 'Paused']], M),
-      M.demo ? filterBar('adiv', [['all', 'All divisions'], ...d.divisions.map((x) => [x.id, x.name])], M) : dim('Agents are grouped by venture. Mapping agents to divisions needs the org model (not connected).'),
-      dim('Read-only. Pause/resume stays on the Agents tab of the app.')),
-      ...Object.keys(groups).sort().flatMap((k) => [h('h4', { class: 'hq-h4' }, k), ...groups[k].map(cap)]), ...(list.length ? [] : [dim('No agents match.')])];
+  function sOffices() {
+    const O = ORG(); const ms = store().missions;
+    return [panel('Group offices', orgSrc(), dim('Shared offices serve every division. Heads not yet defined by the owner.'),
+      h('div', { class: 'hq-grid' }, O.corporate_offices.map((o) => h('div', { class: 'hq-div' }, h('h3', {}, o.name), dim('Head: ' + UN),
+        dim('Supporting ' + ms.filter((m) => !m.cancelled && m.offices.includes(o.id)).length + ' simulated mission(s)'))))),
+    panel('Standing functions', orgSrc(), ...O.standing_functions.map((f) => h('div', { class: 'hq-sub' }, h('b', {}, f.name), dim('Governed under ' + offName(f.governed_by) + '. ' + f.note), tag('owner to confirm'))))];
   }
 
-  const MSTAT = [['all', 'All'], ['active', 'Active'], ['blocked', 'Blocked'], ['planning', 'Planning'], ['completed', 'Done']];
-  const mFilter = (m, v) => v === 'all' || (v === 'active' ? /executing|running|active|approved/.test(m.status) : v === 'done' ? m.status === 'completed' : m.status === (v === 'completed' ? 'completed' : v));
-  function sMissions(M) {
-    const d = M.d;
-    if (S.detail && S.detail.type === 'mission') {
-      const m = d.missions.find((x) => String(x.id) === String(S.detail.id)); if (!m) return [back('missions', 'Missions'), dim('Unknown mission.')];
-      return [back('missions', 'All missions'), panel(m.title, M.src.missions, h('div', { class: 'row' }, tag(m.status), tag(m.verdict || 'no verdict')), dim(divName(M, m.division_id)), m.objective ? h('p', {}, m.objective) : null, m.success ? h('p', {}, h('b', {}, 'Success: '), m.success) : null, m.risks ? h('p', {}, h('b', {}, 'Risks: '), m.risks) : null,
-        m.next_action ? h('p', {}, h('b', {}, 'Next: '), m.next_action) : null, m.gate ? h('p', {}, h('b', {}, 'Gate: '), m.gate) : null, kv('Budget', usd(m.spent_cents) + ' of ' + usd(m.budget_cents)), meter(m.spent_cents, m.budget_cents),
-        m.expected_cad ? kv('Expected (not cash)', '$' + m.expected_cad + ' CAD') : null, m.updated_min != null ? kv('Updated', mins(m.updated_min) + ' ago') : null),
-        panel('Tasks', M.demo ? 'SIMULATED' : 'NOT CONNECTED', ...(m.steps && m.steps.length ? m.steps.map((s, i) => h('div', { class: 'row' }, h('span', {}, (i + 1) + '. ' + s.title), tag(s.status))) : [dim('Task list per mission is not readable from the app yet.')])),
-        M.demo ? dim('Demo: read-only.') : link('Pause / resume / abandon on the Missions tab', () => S.ctx && S.ctx.goTab && S.ctx.goTab('missions'))];
+  function sManagers() {
+    const O = ORG();
+    return [panel('Jarvis', orgSrc(), kv('Reports to', 'Chairman'), dim(O.jarvis.role)),
+      panel('Division managers', orgSrc(), ...O.divisions.map((d) => h('div', { class: 'hq-sub row' }, h('span', {}, d.name), h('span', { class: 'dim' }, UN + ' · reports to Jarvis')))),
+      panel('Office heads', orgSrc(), ...O.corporate_offices.map((o) => h('div', { class: 'hq-sub row' }, h('span', {}, o.name), h('span', { class: 'dim' }, UN))))];
+  }
+
+  function sAgents() {
+    const roles = {}; store().missions.filter((m) => !m.cancelled).forEach((m) => m.tasks.forEach((t) => { if (/proposed/.test(t.agent)) (roles[t.agent] = roles[t.agent] || new Set()).add(m.id); }));
+    const out = [];
+    if (live()) {
+      const ag = Array.isArray(S.ctx.snap.agents) ? S.ctx.snap.agents : [];
+      out.push(panel('Agents in the database', 'LIVE', ...(ag.length ? ag.map((a) => h('div', { class: 'hq-sub' }, h('div', { class: 'row' }, h('b', {}, txt(a.title || a.slug, 'agent')), tag(txt(a.status))),
+        dim(txt(a.role, 'no role') + ' · spent today ' + usd(a.spent_today) + ' of ' + usd(a.cap_cents)))) : [dim('No agents recorded.')])));
     }
-    const list = d.missions.filter((m) => mFilter(m, S.filters.mstat));
-    const counts = {}; d.missions.forEach((m) => { counts[m.status] = (counts[m.status] || 0) + 1; });
-    return [panel('Missions and tasks', M.src.missions, dim(d.missions.length + ' missions · ' + Object.entries(counts).map(([k, v]) => v + ' ' + k).join(', ')), filterBar('mstat', MSTAT, M)),
-      ...list.map((m) => h('button', { class: 'card hq-div', onclick: () => go('missions', { type: 'mission', id: m.id }) }, h('div', { class: 'row' }, h('h3', {}, m.title), tag(m.status)), dim(divName(M, m.division_id) + (m.next_action ? ' · next: ' + trunc(m.next_action, 50) : '')), meter(m.spent_cents, m.budget_cents), dim(usd(m.spent_cents) + ' of ' + usd(m.budget_cents)))),
-      ...(list.length ? [] : [dim('No missions match this filter.')])];
+    out.push(panel('Division workforce', orgSrc(), dim('No agents are assigned to any division. ' + UN + '.')));
+    out.push(panel('Proposed by the offline planner', simSrc, dim('Roles Jarvis would need. None of these agents exists or has run.'),
+      ...(Object.keys(roles).length ? Object.entries(roles).map(([r, ids]) => h('div', { class: 'hq-sub row' }, h('span', {}, r), h('span', { class: 'dim' }, [...ids].join(', ')))) : [dim('None yet.')])));
+    return out;
   }
 
-  function sActivity(M) {
-    const d = M.d; const f = S.filters.atype; const list = d.feed.filter((x) => f === 'all' || x.type === f);
-    return [panel('Company activity', M.src.feed, filterBar('atype', [['all', 'All'], ['task', 'Tasks'], ['message', 'Messages'], ['audit', 'Audit']], M)),
-      ...list.map((x) => h('div', { class: 'card hq-feed' }, h('div', { class: 'row dim' }, h('span', {}, (x.who || 'system') + ' · ' + x.type + (x.division_id ? ' · ' + divName(M, x.division_id) : '')), h('span', {}, mins(x.min_ago))), h('div', {}, x.text), x.status ? tag(x.status) : null)),
-      ...(list.length ? [] : [dim('No activity of this type.')])];
+  function sActivity() {
+    const a = store().activity;
+    const out = [panel('Activity (offline planner and your manual changes)', simSrc, ...(a.length ? a.slice(0, 100).map((x) => h('div', { class: 'hq-sub' }, h('div', {}, x.text), dim(when(x.at)))) : [dim('No activity yet.')]))];
+    if (live()) {
+      const f = Array.isArray(S.ctx.snap.feed) ? S.ctx.snap.feed : [];
+      out.unshift(panel('Execution history (database)', 'LIVE', ...(f.length ? f.slice(0, 40).map((x) => h('div', { class: 'hq-sub' }, h('div', {}, txt(x.text, '')), dim([txt(x.who, ''), txt(x.type, ''), txt(x.status, ''), x.at ? when(x.at) : ''].filter(Boolean).join(' · ')))) : [dim('No recorded activity.')])));
+    }
+    return out;
   }
 
-  function sFinance(M) {
-    const d = M.d, f = d.finance, c = f.capital || {}, cap = d.jarvis.state.cap_cents || 330; const mx = Math.max(1, ...f.spend_7d.map((x) => x.c));
+  function sFinance() {
+    const P = ORG().policy; const B = ORG().bank;
+    const planned = store().missions.filter((m) => !m.cancelled).reduce((a, m) => a + m.tasks.filter((t) => t.status !== 'done' && t.status !== 'cancelled').reduce((b, t) => b + t.est_cents, 0), 0);
     return [
-      panel('AI spend cap', M.src.f_cap, h('div', { class: 'big' }, usd(f.spend_today_cents)), dim('spent today of the ' + usd(cap) + ' daily company cap'), meter(f.spend_today_cents, cap, f.spend_today_cents >= cap * 0.8 ? 'warm' : ''), ownerNote('The cap is changed with /capital.')),
-      panel('Last 7 days', M.src.f_cap, ...(f.spend_7d.length ? f.spend_7d.map((x) => h('div', { class: 'hq-bar' }, h('span', { class: 'dim' }, x.d), h('span', { class: 'bar' }, h('i', { style: 'width:' + pct(x.c, mx) + '%' })), h('span', {}, usd(x.c)))) : [dim('No spend recorded.')])),
-      panel('Operating capital', M.src.f_capital, c.available_cents != null ? [kv('Available', usd(c.available_cents)), kv('Started with', usd(c.fund_cents)), kv('Money in (received only)', usd(c.revenue_cents)), kv('AI spend', usd(c.ai_spend_cents)), kv('Reserved', usd(c.reserved_cents)),
-        kv('This week', usd(c.week_spend_cents) + ' of ' + usd(c.weekly_limit_cents)), kv('Per purchase limit', usd(c.per_transaction_limit_cents)), kv('Reserve floor', usd(c.min_reserve_cents)),
-        c.bank_balance_cents != null ? kv('Bank balance (source of truth)', usd(c.bank_balance_cents) + ' · ' + c.bank_age_days + 'd ago') : kv('Bank balance', 'not recorded')] : [dim('Capital controller not live.')], ownerNote('Limits: /capital. Bank balance and reconciliation are entered on the Money tab.')),
-      panel('Ledger summary', M.src.f_ledger, kv('Cash in (30d)', f.ledger.cash_in_30d_cents != null ? usd(f.ledger.cash_in_30d_cents) : 'not available'), kv('Cash out (30d)', f.ledger.cash_out_30d_cents != null ? usd(f.ledger.cash_out_30d_cents) : 'not available'), kv('Expected, not cash', f.ledger.expected_not_cash_cents != null ? usd(f.ledger.expected_not_cash_cents) : 'not available'), dim(f.ledger.note)),
-      panel('AI spend by division (7d)', M.src.divisions === 'SIMULATED' && f.by_division.length ? 'SIMULATED' : 'NOT CONNECTED', ...(f.by_division.length ? f.by_division.map((x) => kv(divName(M, x.division_id), usd(x.ai_cents_7d))) : [dim('Spend is not tagged by division in the database yet.')]))];
+      live() ? livePanel() : panel('AI spend today', simSrc, kv('Spent today', '$0.00 SIMULATED'), kv('Daily cap (policy)', usd(P.ai_daily_cap_cents)), meter(0, P.ai_daily_cap_cents), dim('Demo mode: no spend is read or made.')),
+      panel('Capital policy (read-only)', live() ? 'NOT CONNECTED' : simSrc, dim('Owner policy. Shown as written; not editable here and not read from the database.'),
+        kv('Capital framework', usd(P.capital_framework_cents)), kv('Reserve', usd(P.reserve_cents)), kv('Hard stop', usd(P.hard_stop_cents)), kv('Low-cost mode at', usd(P.low_cost_mode_cents)),
+        kv('Per-transaction limit', usd(P.per_transaction_limit_cents)), kv('Weekly limit', usd(P.weekly_limit_cents)), kv('Global daily AI cap', usd(P.ai_daily_cap_cents)),
+        kv('Automatic reloads', P.automatic_reloads ? 'Yes' : 'None'), kv('New subscriptions', P.new_subscriptions), kv('Tax set-aside', P.tax_set_aside_pct + '%'),
+        kv('Operating buffer', P.operating_buffer_months + ' months'), kv('Reinvestment pool', P.reinvestment_pool.join(' / ') + ' split'), kv('Max active revenue ventures', String(P.max_active_revenue_ventures)),
+        kv('Bank reconciliation', 'Manual')),
+      panel('Bank: ' + B.name, live() ? 'NOT CONNECTED' : simSrc, kv('Balance', B.status), dim('No balance is shown. Reconcile manually.')),
+      panel('Planned AI cost of open simulated missions', simSrc, kv('Estimated, not spent', usd(planned)), dim('Planning estimates from the offline planner. Nothing has been spent.')),
+    ];
   }
 
-  function sHealth(M) {
-    const d = M.d, H = d.health; const cls = (s) => (s === 'ok' ? 'ok' : s === 'warn' || s === 'dormant' ? 'warn' : 'bad');
-    return [
-      panel('Health checks', M.src.h_checks, ...H.checks.map((c) => h('div', { class: 'row' }, h('span', {}, [h('i', { class: 'hq-dot d-' + (cls(c.status) === 'ok' ? 'green' : cls(c.status) === 'warn' ? 'amber' : 'red') }), ' ', c.name]), h('span', { class: 'dim' }, c.status + (c.checked_min != null ? ' · ' + mins(c.checked_min) : ''))))),
-      panel('Deployments', M.src.h_deploy, ...(H.deployments.length ? H.deployments.map((x) => h('div', { class: 'hq-sub' }, h('div', { class: 'row' }, h('b', {}, x.name), tag(x.status)), dim(x.env + ' · ' + x.ref + ' · ' + mins(x.age_min) + ' ago'))) : [dim('Deployment status is not readable from the app.')]), ownerNote('Merges and production deploys need release authorization from the Chairman.', '')),
-      panel('Backups', M.src.h_backup, ...(H.backups ? [kv('Status', H.backups.status), kv('Last run', mins(H.backups.last_run_min) + ' ago'), kv('Restore proof', H.backups.restore_proof), dim(H.backups.note)] : [dim('Backup state is not readable from the app.')])),
-      panel('Consent gate', M.src.h_consent, ...(H.consent_gate ? [h('div', { class: 'row' }, h('span', {}, 'State'), h('span', { class: 'hq-state ' + (H.consent_gate.state === 'on' ? 'ok' : 'warn') }, String(H.consent_gate.state).toUpperCase())), dim(H.consent_gate.detail)] : [dim('Consent gate state is not readable from the app.')]), ownerNote('Only the Chairman can turn it on.', ''))];
+  function sHealth() {
+    const O = ORG(); const out = [];
+    if (live()) {
+      out.push(livePanel());
+      const sys = Array.isArray(S.ctx.snap.systems) ? S.ctx.snap.systems : [];
+      out.push(panel('Registered systems', 'LIVE', ...(sys.length ? sys.map((x) => kv(txt(x.name, 'system'), txt(x.status))) : [dim('None registered.')])));
+    }
+    out.push(panel('System and security status', live() ? 'NOT CONNECTED' : simSrc, dim('Status as of ' + O.status_as_of.date + ', not live.'), ...O.status_as_of.items.map(([a, b]) => kv(a, b))));
+    out.push(panel('Engineering & Reliability', orgSrc(), dim(O.standing_functions[0].note)));
+    return out;
   }
 
-  const RENDER = { overview: sOverview, org: sOrg, divisions: sDivisions, offices: sOffices, jarvis: sJarvis, managers: sManagers, agents: sAgents, missions: sMissions, activity: sActivity, finance: sFinance, health: sHealth };
-
-  // ---------- draw ----------
+  // ---------- frame ----------
   function draw() {
-    const box = S.box; if (!box) return;
-    const M = model(S.ctx); S.model = M;
-    if (!S.open) S.open = new Set(['chair', 'jarvis', 'g:off', 'g:div']);
-    const banner = M.demo
-      ? h('div', { class: 'hq-banner demo', role: 'status' }, h('b', {}, 'SIMULATED DATA. '), 'Demo only: every number, name and status is synthetic. Nothing is connected.')
-      : h('div', { class: 'hq-banner mixed', role: 'status' }, h('b', {}, 'MIXED DATA. '), 'Panels badged LIVE come from the database. SIMULATED / NOT CONNECTED / INCOMPLETE panels are placeholders.');
-    const nav = h('div', { class: 'hq-nav', role: 'navigation', 'aria-label': 'HQ sections' }, SCREENS.map(([k, t]) => h('button', { class: 'chip' + (S.screen === k ? ' on' : ''), 'data-screen': k, 'aria-current': S.screen === k ? 'page' : null, onclick: () => go(k) }, t)));
-    let body; try { body = RENDER[S.screen](M); } catch (e) { body = [h('p', { class: 'dim' }, 'This screen could not be drawn: ' + String((e && e.message) || e))]; }
-    box.replaceChildren(h('div', { class: 'hq' }, h('div', { class: 'hq-head' }, h('h1', {}, 'FENDEZY GROUP'), h('div', { class: 'dim' }, 'Headquarters' + (M.demo ? ' · demo' : ''))), banner, nav, h('div', { class: 'hq-body', 'data-screen': S.screen }, body)));
+    if (!S.box) return;
+    const fn = { overview: sOverview, jarvis: sJarvis, missions: sMissions, org: sOrg, divisions: sDivisions, offices: sOffices, managers: sManagers, agents: sAgents, activity: sActivity, finance: sFinance, health: sHealth }[S.screen] || sOverview;
+    const banner = live()
+      ? h('div', { class: 'hq-banner mixed', role: 'note' }, 'Signed in. LIVE panels read the database through existing app_* functions. SIMULATED panels come from the offline planner in this browser. Division and office names are the owner\'s structure; the database has no division tables yet.')
+      : h('div', { class: 'hq-banner demo', role: 'note' }, 'SIMULATED. Demo mode: nothing here is live company data. ' + J().SIM_NOTE.replace(/^SIMULATED\. /, '') + ' Division and office names are the owner\'s structure.');
+    const nav = h('nav', { class: 'hq-nav', 'aria-label': 'HQ screens' }, SCREENS.map(([k, l]) => h('button', { class: 'chip' + (S.screen === k ? ' on' : ''), type: 'button', 'data-screen': k, 'aria-current': S.screen === k ? 'page' : null, onclick: () => go(k) }, l)));
+    let body; try { body = fn(); } catch (e) { body = [panel('Error', simSrc, dim('This screen failed to render: ' + (e && e.message ? e.message : 'error')))]; }
+    S.box.replaceChildren(h('div', { class: 'hq' }, h('div', { class: 'hq-head' }, h('h1', {}, 'FENDEZY HQ')), banner, nav,
+      S.msg ? h('div', { class: 'hq-alert a-warn', role: 'status' }, S.msg) : null, ...[].concat(body).filter(Boolean)));
   }
-  function render(box, ctx) { S.box = box; S.ctx = ctx; if (!S.hashRead) { S.hashRead = true; readHash(); } draw(); }
-  root.HQ = { render, model, SCREENS, go, state: S };
-})(typeof window !== 'undefined' ? window : globalThis);
+
+  function render(box, ctx) {
+    const first = !S.box; S.box = box; S.ctx = ctx || { mode: 'demo' };
+    if (first) readHash();
+    // never redraw over the Chairman's typing: live refreshes arrive every few seconds
+    const a = doc.activeElement; if (!first && a && box.contains(a) && /^(TEXTAREA|SELECT|INPUT)$/.test(a.tagName)) return;
+    draw();
+  }
+  root.HQ = { render, SCREENS, _state: S, _reset: () => { S.store = null; S.draft = null; S.input = ''; S.msg = ''; S.detail = null; S.screen = 'overview'; } };
+})(window);
