@@ -1,0 +1,52 @@
+# PROPOSAL ONLY. To adopt: the Owner (or an authorised release) copies this job into .github/workflows/tests.yml, then marks
+# `oversight-check` as a required status check in branch protection (owner action OA-1) and adds `/docs/oversight/ @thedonnasystem`
+# to .github/CODEOWNERS (OA-2). Changing a workflow or CODEOWNERS is itself a protected change (PC-WORKFLOW / PC-CODEOWNERS).
+#
+# Design notes
+# - The engine and ledger are checked out from the BASE branch into ./_trusted, so a PR cannot change the checks that judge it.
+# - permissions: contents read, checks read, actions read (to read the other jobs' results and logs). No write scope.
+# - It waits for unit / migrations / secret-scan of the same SHA, because it reads their results.
+# - Exit 10 (REJECT) and 20 (NEEDS_MORE_WORK) both fail the job; only 0 passes. Any other exit code is an engine error and also fails.
+# - UNTESTED: this job has never run in GitHub Actions. `gh` is preinstalled on ubuntu-latest; GH_TOKEN is the job token.
+# - Expect it to be red on most PRs that touch migrations (owner-gate hits) until owner decisions can be recorded (OD-2). Until then
+#   consider running it as non-required, for information.
+  oversight-check:
+    needs: [unit, migrations, secret-scan]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: _trusted
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with: { python-version: "3.12" }
+      - run: pip install --require-hashes -r _trusted/requirements/dev.lock
+      - name: Ledger verifies and is append-only
+        run: python3 _trusted/ops/oversight/ledger.py verify --file ops/oversight/ledger/reviews.jsonl
+      - name: Mandatory checks (read-only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -uo pipefail
+          python3 _trusted/ops/oversight/mandatory_checks.py --repo-dir "$GITHUB_WORKSPACE" --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER" --sha "$HEAD_SHA" --base "origin/$BASE_REF" \
+            --ledger ops/oversight/ledger/reviews.jsonl --registry _trusted/ops/oversight/dependency_provenance.json \
+            --out "$RUNNER_TEMP/oversight.json" --summary "$RUNNER_TEMP/oversight.md"
+          rc=$?
+          [ -f "$RUNNER_TEMP/oversight.md" ] && cat "$RUNNER_TEMP/oversight.md" >> "$GITHUB_STEP_SUMMARY"
+          exit $rc

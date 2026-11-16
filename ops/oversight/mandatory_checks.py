@@ -17,7 +17,8 @@ Verdict
                        control is touched, which only a recorded Owner decision can release (the engine cannot)
     NEEDS_MORE_WORK    no FAIL but at least one UNVERIFIED
     RECOMMEND_APPROVE  every check PASS / NOT_APPLICABLE. A recommendation only: it authorises nothing.
-Exit code: 0 RECOMMEND_APPROVE, 1 REJECT, 2 NEEDS_MORE_WORK, 3 usage/engine error.
+Exit code: 0 RECOMMEND_APPROVE, 10 REJECT, 20 NEEDS_MORE_WORK. ANY other code (3 usage, 1 crash, ...) is an engine error:
+    treat it as "nothing was verified", never as a verdict, and do not trust an output file left from an earlier run.
 
 Rules about evidence
     * nothing is asserted without a recorded command or API call (the `commands` list holds argv, exit code, sha256 of output)
@@ -170,7 +171,7 @@ def scan_diff(files):
                 if lines:
                     out.append(_f("PC-SECRET", "reject", path, f"secret-like value ({name}) on {len(lines)} added line(s); value not shown", lines[0]))
         if path in GUARD_TOOLS:
-            out.append(_f("PC-GUARD", "owner_gate", path, "a lint / gate / guard tool is " + ("DELETED" if d["status"] == "D" else "modified"),))
+            out.append(_f("PC-GUARD", "owner_gate", path, "a lint / gate / guard tool is " + {"D": "DELETED", "A": "added"}.get(d["status"], "modified")))
             if d["status"] == "D":
                 out[-1]["class"] = "reject"
         if path.startswith(".github/workflows/"):
@@ -507,10 +508,10 @@ def check_independent_review(entries, sha, author):
     title = "Independent review recorded for this exact head (reviewer is not the author)"
     if entries is None:
         return check("INDEPENDENT-REVIEW", title, UNVERIFIED, ["the oversight ledger could not be read or did not verify"])
-    mine = [e for e in entries if e.get("type") == "review" and (e.get("subject") or {}).get("sha") == sha]
+    entries = [e for e in entries if e.get("type") in ("review", "import")]      # mechanical_check entries are not reviews
+    mine = [e for e in entries if (e.get("subject") or {}).get("sha") == sha]
     if not mine:
-        older = sorted({(e.get("subject") or {}).get("sha", "")[:12] for e in entries if e.get("type") == "review"
-                        and author and (e.get("author") or {}).get("id") == author})
+        older = sorted({(e.get("subject") or {}).get("sha", "")[:12] for e in entries if author and (e.get("author") or {}).get("id") == author})
         note = f" Reviews exist for other heads by this author: {', '.join(older)}." if older else ""
         return check("INDEPENDENT-REVIEW", title, UNVERIFIED, [f"no review of {sha[:12]} is recorded in the ledger.{note} A new head needs a fresh independent review."])
     findings, ev = [], []
@@ -866,6 +867,9 @@ def main(argv=None):
     if not SHA_RE.match(a.sha):
         print("--sha must be the full 40-hex commit SHA (a branch name or short SHA can move)", file=sys.stderr)
         return 3
+    for stale in (a.out, a.summary):          # a crash must not leave an earlier run's file looking like this run's result
+        if stale and os.path.exists(stale):
+            os.remove(stale)
     registry = None
     try:
         with open(a.registry) as f:
@@ -882,7 +886,7 @@ def main(argv=None):
         with open(a.summary, "w") as f:
             f.write(md)
     print(md if a.out else text, end="")
-    return {"RECOMMEND_APPROVE": 0, "REJECT": 1, "NEEDS_MORE_WORK": 2}[res["verdict"]]
+    return {"RECOMMEND_APPROVE": 0, "REJECT": 10, "NEEDS_MORE_WORK": 20}[res["verdict"]]
 
 
 if __name__ == "__main__":

@@ -389,6 +389,10 @@ class IndependentReview(unittest.TestCase):
         self.assertEqual(self.st([rev(1), rev(2, rec="NEEDS_MORE_WORK", reviewer="rev-c")]), M.FAIL, "the LATEST review decides")
         self.assertEqual(self.st([rev(1, rec="REJECT"), rev(2, reviewer="rev-c")]), M.PASS)
 
+    def test_import_type_entries_count_as_reviews(self):
+        self.assertEqual(self.st([rev(1, typ="import", rec="NEEDS_MORE_WORK", imported=True)]), M.FAIL)
+        self.assertEqual(self.st([rev(1, typ="import", imported=True)]), M.UNVERIFIED)
+
     def test_imported_approval_is_unverified_but_imported_rejection_blocks(self):
         self.assertEqual(self.st([rev(1, typ="review", imported=True)]), M.UNVERIFIED)
         self.assertEqual(self.st([rev(1, rec="NEEDS_MORE_WORK", imported=True)]), M.FAIL)
