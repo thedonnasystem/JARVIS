@@ -76,5 +76,40 @@ class Blanks(unittest.TestCase):
         self.assertEqual(data["tasks"][0], {"id": 1})
 
 
+class UniqueBlanks(unittest.TestCase):
+    """E2a: a blanked column inside a UNIQUE index must not collapse rows onto one value."""
+    SCHEMA = {"tables": [{"name": "evidence_sources", "columns": [{"name": "task_id", "type": "uuid", "notnull": True}, {"name": "content_sha256", "type": "text", "notnull": True},
+                                                                    {"name": "url", "type": "text", "notnull": True}, {"name": "final_url", "type": "text", "notnull": True}]}],
+              "indexes": [{"table": "evidence_sources", "name": "evidence_sources_dedupe_idx",
+                           "def": "CREATE UNIQUE INDEX evidence_sources_dedupe_idx ON public.evidence_sources USING btree (task_id, content_sha256, final_url)"}], "constraints": []}
+    MAN = {"redaction": {"blanked_columns": ["evidence_sources.url", "evidence_sources.final_url"]}}
+
+    def rows(self):
+        return {"evidence_sources": [{"task_id": "t1", "content_sha256": "h", "url": "https://a.example/x", "final_url": "https://a.example/x"},
+                                      {"task_id": "t1", "content_sha256": "h", "url": "https://b.example/y", "final_url": "https://b.example/y"}]}
+
+    def test_blanked_unique_column_gets_a_distinct_value_per_row(self):
+        data = self.rows()
+        R.apply_blanks(self.SCHEMA, data, self.MAN, {})
+        vals = [r["final_url"] for r in data["evidence_sources"]]
+        self.assertEqual(len(set(vals)), 2); self.assertTrue(all(len(v) >= 30 and v.startswith(R.BLANK_MARKER) for v in vals))
+        R.assert_unique_feasible(self.SCHEMA, data)                      # no exception: the index can be built
+
+    def test_the_old_collapse_is_caught_before_anything_is_loaded(self):
+        data = self.rows()
+        for r in data["evidence_sources"]:
+            r["final_url"] = ""                                          # what the old restore produced
+        with self.assertRaises(R.Fail) as cm:
+            R.assert_unique_feasible(self.SCHEMA, data)
+        self.assertIn("evidence_sources_dedupe_idx", str(cm.exception)); self.assertIn("nothing was loaded", str(cm.exception))
+
+    def test_nulls_are_distinct_and_partial_or_expression_indexes_are_skipped(self):
+        sch = {"tables": [], "constraints": [{"table": "t", "type": "u", "name": "u1", "def": "UNIQUE (a, b)"}],
+               "indexes": [{"table": "t", "name": "p", "def": "CREATE UNIQUE INDEX p ON public.t USING btree (a) WHERE (b IS NULL)"}, {"table": "t", "name": "e", "def": "CREATE UNIQUE INDEX e ON public.t USING btree (lower(a))"}]}
+        R.assert_unique_feasible(sch, {"t": [{"a": "x", "b": None}, {"a": "x", "b": None}]})      # NULL in b: distinct
+        with self.assertRaises(R.Fail):
+            R.assert_unique_feasible(sch, {"t": [{"a": "x", "b": 1}, {"a": "x", "b": 1}]})
+
+
 if __name__ == "__main__":
     unittest.main()

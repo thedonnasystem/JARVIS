@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 
 import hq_backup as B
 B._NO_SLEEP = True
+os.environ["BACKUP_READER_JWT"] = "test.reader.jwt"      # the backup refuses to run without it (no service-key fallback); tests that clear the environment set it again
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "scripts", "replica"))
 from fake_b2 import FakeB2  # noqa: E402
@@ -36,6 +37,9 @@ def fake_request(method, path, body=None, prefer=None, timeout=30, exact=False):
         return POLICY
     if method == "POST" and path.endswith("/rpc/backup_schema"):
         return SCHEMA
+    if method == "POST" and path.endswith("/rpc/backup_snapshot"):                       # the one-statement database snapshot (the only read path: no raw-table fallback exists)
+        return {"data": {t: [{"id": i, "v": f"{t}{i}", "note": "café \U0001F600"} for i in range(ROWS.get(t, 0))] for t in POLICY["exported"]},
+                "schema": SCHEMA, "method": "x", "policy": POLICY, "redaction": REDACTION}
     if method == "GET" and "/audit_log" in path:
         return []
     if method == "GET":
@@ -57,14 +61,14 @@ class FakeStore:
         self.posts = []
 
     def __call__(self, method, path, body=None, prefer=None, timeout=30, exact=False):
-        if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch")):
+        if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch", "/rpc/backup_snapshot", "/rpc/backup_snapshot_cost")):
             self.posts.append((path, body))
             return None
         return fake_request(method, path, body, prefer)
 
 
 def b2_env(fake, auth="keyW:secretW"):
-    return {"BACKUP_KEY": KEY, "BACKUP_PUT_URL": f"b2://{fake.bucket_id}/hq", "BACKUP_AUTH": auth}
+    return {"BACKUP_KEY": KEY, "BACKUP_PUT_URL": f"b2://{fake.bucket_id}/hq", "BACKUP_AUTH": auth, "BACKUP_READER_JWT": "test.reader.jwt"}
 
 
 def b2_patches(fake):
@@ -89,13 +93,6 @@ class Dump(unittest.TestCase):
         self.assertIn("manifest.json", names); self.assertIn("schema.json", names); self.assertIn("data/ideas.jsonl", names)
         self.assertNotIn("data/push_config.jsonl", names)
 
-    def test_without_schema_function_backup_is_flagged_incomplete(self):
-        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=no_schema_request):
-            blob, m = B.dump()
-        self.assertFalse(m["complete"]); self.assertEqual(m["table_list_source"], "database export policy")
-        self.assertEqual(sorted(m["tables"]), ["ideas", "ledger", "tasks"])                 # only what the policy allows; no built-in list to fall back on
-        self.assertNotIn("push_config", m["tables"]); self.assertNotIn("push_subscriptions", m["tables"])
-
     def test_unicode_survives(self):
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=fake_request):
             blob, _ = B.dump()
@@ -112,16 +109,6 @@ class Dump(unittest.TestCase):
         self.assertEqual(str(back["a"]), "30.00"); self.assertEqual(str(back["b"]), "0.1234567890123456789012")
         self.assertEqual(back["h"], "NaN"); self.assertEqual(back["t"], "\\u0000DEC:1")        # look-alike text is left alone
 
-    def test_backup_reads_with_exact_decimals(self):
-        seen = []
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if "/rest/v1/ideas" in path:
-                seen.append(exact)
-            return fake_request(method, path, body, prefer)
-        with mock.patch("hq._request", side_effect=req):
-            B.dump()
-        self.assertTrue(seen and all(seen))   # every read asked for exact numbers
-
     def test_primary_key_order_parsed_from_schema(self):
         self.assertEqual(B._pk_order(SCHEMA, "ledger"), "&order=day.asc,kind.asc")
         self.assertEqual(B._pk_order(SCHEMA, "tasks"), "&order=id.asc")
@@ -129,27 +116,6 @@ class Dump(unittest.TestCase):
         evil = {"constraints": [{"table": "t", "type": "p", "def": 'PRIMARY KEY ("a;drop")'}]}
         self.assertEqual(B._pk_order(evil, "t"), "&order=id.asc")
 
-    def test_paging_reads_every_page(self):
-        calls = []
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if path.endswith("/rpc/backup_export_policy"):
-                return {"exported": ["big"], "excluded": [], "unclassified": []}
-            if path.endswith("/rpc/backup_schema"):
-                return {"tables": [{"name": "big"}], "constraints": []}
-            off = int(path.split("offset=")[1]); calls.append(off)
-            return [{"id": i} for i in range(off, min(off + B.PAGE, 2300))]
-        with mock.patch("hq._request", side_effect=req):
-            _, m = B.dump()
-        self.assertEqual(m["tables"]["big"]["rows"], 2300); self.assertEqual(calls, [0, 1000, 2000, 2300] * 2)   # two consistency passes, every page plus the empty terminating page
-
-    def test_unordered_fallback_when_sort_column_missing(self):
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if "order=" in path:
-                raise urllib.error.HTTPError(path, 400, "bad", {}, None)
-            return fake_request(method, path)
-        with mock.patch("hq._request", side_effect=req):
-            _, m = B.dump()
-        self.assertEqual(m["tables"]["ideas"]["rows"], 3)
 
 
 class Consistency(unittest.TestCase):
@@ -165,27 +131,6 @@ class Consistency(unittest.TestCase):
             return fake_request(method, path, body, prefer)
         return req, calls
 
-    def test_stable_data_is_consistent(self):
-        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=fake_request):
-            _, m = B.dump()
-        self.assertTrue(m["consistency"]["consistent"]); self.assertTrue(m["consistency"]["method"].startswith("two identical full reads"))
-        self.assertEqual(m["consistency"]["attempts"], 1); self.assertIn("snapshot_unavailable", m["consistency"])
-
-    def test_data_that_settles_is_retried_then_consistent(self):
-        req, calls = self._moving(stop_after=2)
-        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req):
-            _, m = B.dump()
-        self.assertTrue(m["consistency"]["consistent"])
-        self.assertGreaterEqual(m["consistency"]["attempts"], 2)
-
-    def test_data_that_keeps_moving_is_flagged_and_bounded(self):
-        req, calls = self._moving()
-        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req):
-            _, m = B.dump()
-        self.assertFalse(m["consistency"]["consistent"])
-        self.assertEqual(m["consistency"]["changing_tables"], ["tasks"])
-        self.assertEqual(calls["n"], 2 * B.CONSISTENCY_ATTEMPTS)   # bounded: two reads per attempt, no endless loop
-
     def _run_with(self, req_fn, put=None):
         sent, audits, puts = [], [], []
         def wrapped(method, path, body=None, prefer=None, timeout=30, exact=False):
@@ -199,34 +144,6 @@ class Consistency(unittest.TestCase):
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=wrapped), mock.patch.object(B, "put_files", side_effect=put or fake_put):
             r = B.run(force=True)
         return r, sent, audits, puts
-
-    def test_inconsistent_backup_is_never_uploaded_and_is_reported_as_failure(self):
-        """Owner directive A: consistent:false is refused (it used to be saved with a warning)."""
-        req, calls = self._moving()
-        r, sent, audits, puts = self._run_with(req)
-        self.assertFalse(r["ok"]); self.assertIn("not verified consistent", r["reason"])
-        self.assertEqual(puts, []); self.assertEqual(audits, ["backup_failed"]); self.assertEqual(len(sent), 1); self.assertIn("Backup failed", sent[0])
-
-    def test_fallback_without_a_readable_epoch_is_not_verified_and_is_refused(self):
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if path.endswith("/rpc/backup_epoch"):
-                raise urllib.error.HTTPError(path, 404, "no function", {}, None)
-            return fake_request(method, path, body, prefer)
-        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req):
-            _, m = B.dump()
-        self.assertFalse(m["consistency"]["consistent"]); self.assertEqual(m["consistency"]["epoch"], "unavailable")
-        r, sent, audits, puts = self._run_with(req)
-        self.assertFalse(r["ok"]); self.assertEqual(puts, [])
-
-    def test_a_source_epoch_that_changes_during_the_fallback_read_is_refused(self):
-        n = {"c": 0}
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if path.endswith("/rpc/backup_epoch"):
-                n["c"] += 1
-                return {**EPOCH, "seq": n["c"]}        # a different value on every read: a lead changed between the reads
-            return fake_request(method, path, body, prefer)
-        r, sent, audits, puts = self._run_with(req)
-        self.assertFalse(r["ok"]); self.assertEqual(puts, [])
 
     def test_missing_unknown_or_non_boolean_consistency_is_refused_in_every_mode(self):
         for bad in (None, {}, {"consistent": None}, {"consistent": "true"}, {"consistent": 1}, {"consistent": False}, "yes"):
@@ -345,11 +262,59 @@ class BackupIdentity(unittest.TestCase):
             B.hq.AUTH_OVERRIDE.reset(tok)
         self.assertEqual(sent["authorization"], "Bearer reader.jwt.token"); self.assertNotIn("service-key-value", json.dumps(sent))
 
-    def test_without_the_token_the_service_key_path_is_unchanged(self):
-        with mock.patch.dict(os.environ, {}, clear=False), mock.patch("hq._request", return_value={"ok": 1}) as m:
+    def test_without_the_token_nothing_is_sent_and_the_service_key_is_never_substituted(self):
+        sent = []
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch("hq._request", side_effect=lambda *a, **k: sent.append(a) or {}):
             os.environ.pop("BACKUP_READER_JWT", None)
-            self.assertEqual(B._rpc("/rest/v1/rpc/backup_epoch", {}), {"ok": 1})
-        self.assertEqual(m.call_args[0][:2], ("POST", "/rest/v1/rpc/backup_epoch"))
+            with self.assertRaises(B.BackupError) as cm:
+                B._rpc("/rest/v1/rpc/backup_epoch", {})
+        self.assertEqual(sent, []); self.assertIn("BACKUP_READER_JWT", str(cm.exception)); self.assertIn("never falls back", str(cm.exception))
+
+    def test_a_backup_run_without_the_token_refuses_records_the_failure_and_uploads_nothing(self):
+        posts, puts = [], []
+        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if method == "POST" and "/rpc/" not in path:
+                posts.append((path, body)); return None
+            raise AssertionError(f"a request was made without the backup token: {method} {path}")
+        env = {k: v for k, v in ENV.items()}
+        with mock.patch.dict(os.environ, env), mock.patch("hq._request", side_effect=req), mock.patch.object(B, "put_files", side_effect=lambda f: puts.append(f)):
+            os.environ.pop("BACKUP_READER_JWT", None)
+            r = B.run(force=True)
+        self.assertFalse(r["ok"]); self.assertIn("BACKUP_READER_JWT", r["reason"]); self.assertEqual(puts, [])
+        self.assertIn("backup_failed", [b["action"] for p, b in posts if p.endswith("/audit_log")])
+
+    def test_a_failed_snapshot_never_falls_back_to_reading_raw_tables_with_the_service_key(self):
+        for err in (urllib.error.HTTPError("u", 500, "x", {}, None), urllib.error.HTTPError("u", 404, "x", {}, None), TimeoutError()):
+            seen = []
+            def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+                seen.append((method, path))
+                if path.endswith("/rpc/backup_snapshot"):
+                    raise err
+                return fake_request(method, path, body, prefer)
+            with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req):
+                with self.assertRaises(B.BackupError) as cm:
+                    B.dump()
+            self.assertIn("refusing to fall back", str(cm.exception))
+            self.assertEqual([p for m, p in seen if m == "GET"], [], err)               # no GET /rest/v1/<table> read, with any key
+            self.assertFalse(hasattr(B, "_read_table") or hasattr(B, "_read_consistent"))
+
+    def test_the_snapshot_call_asks_for_exact_numbers_and_is_consistent(self):
+        seen = []
+        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_snapshot"):
+                seen.append(exact)
+            return fake_request(method, path, body, prefer)
+        with mock.patch("hq._request", side_effect=req):
+            _, m = B.dump()
+        self.assertEqual(seen, [True]); self.assertTrue(m["consistency"]["consistent"])
+
+    def test_a_snapshot_whose_table_list_does_not_match_its_policy_is_refused(self):
+        s = Snapshot()
+        for bad in ({"ideas": [], "ledger": []}, {"ideas": [], "ledger": [], "tasks": [], "push_config": [{"vapid_private": "SECRET"}]}):
+            with mock.patch("hq._request", side_effect=s.snap_req(data=bad)):
+                with self.assertRaises(B.BackupError) as cm:
+                    B.dump()
+            self.assertIn("does not match", str(cm.exception))
 
 
 class Preflight(unittest.TestCase):
@@ -433,23 +398,6 @@ class Snapshot(unittest.TestCase):
             _, m2 = B.dump()
         self.assertEqual({t: v["sha256"] for t, v in m1["tables"].items()}, {t: v["sha256"] for t, v in m2["tables"].items()})
 
-    def test_snapshot_errors_fall_back_to_two_reads_with_a_reason(self):
-        for err, text in ((urllib.error.HTTPError("u", 500, "x", {}, None), "HTTP 500"), (urllib.error.HTTPError("u", 404, "x", {}, None), "not installed"), (TimeoutError(), "TimeoutError")):
-            with mock.patch("hq._request", side_effect=self.snap_req(fail=err)):
-                _, m = B.dump()
-            self.assertIn(text, m["consistency"]["snapshot_unavailable"]); self.assertTrue(m["consistency"]["method"].startswith("two identical full reads"))
-
-    def test_inconsistent_snapshot_content_is_rejected_not_trusted(self):
-        bad = {"ideas": [], "ledger": []}                                    # missing "tasks"
-        with mock.patch("hq._request", side_effect=self.snap_req(data=bad)):
-            _, m = B.dump()
-        self.assertIn("does not match", m["consistency"]["snapshot_unavailable"])
-        leaked = {"ideas": [], "ledger": [], "tasks": [], "push_config": [{"vapid_private": "SECRET"}]}
-        with mock.patch("hq._request", side_effect=self.snap_req(data=leaked)):
-            blob, m = B.dump()
-        self.assertNotIn("push_config", m["tables"])
-        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
-            self.assertFalse([n for n in tar.getnames() if "push" in n])
 
 
 class ReviewFixes(unittest.TestCase):
@@ -461,65 +409,6 @@ class ReviewFixes(unittest.TestCase):
             self.assertTrue(B._b2_ok_url(u), u)
         for u in ("http://pod-000-1.backblaze.com/x", "https://evilbackblaze.com/x", "https://backblaze.com.evil.io/x", "https://127.0.0.1/x", "ftp://a.backblazeb2.com"):
             self.assertFalse(B._b2_ok_url(u), u)
-
-    def test_schema_error_other_than_404_fails_the_backup_instead_of_downgrading(self):
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if path.endswith("/rpc/backup_schema"):
-                raise urllib.error.HTTPError(path, 500, "boom", {}, None)
-            return fake_request(method, path, body, prefer)
-        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req):
-            with self.assertRaises(urllib.error.HTTPError):
-                B.dump()
-            r = B.run(force=True)
-        self.assertFalse(r["ok"])
-
-    def test_row_cap_below_page_size_loses_nothing(self):
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if path.endswith("/rpc/backup_export_policy"):
-                return {"exported": ["big"], "excluded": [], "unclassified": []}
-            if path.endswith("/rpc/backup_schema"):
-                return {"tables": [{"name": "big"}], "constraints": []}
-            off = int(path.split("offset=")[1]); return [{"id": i} for i in range(off, min(off + 100, 450))]   # server caps every page at 100
-        with mock.patch("hq._request", side_effect=req):
-            _, m = B.dump()
-        self.assertEqual(m["tables"]["big"]["rows"], 450)
-
-    def test_unordered_fallback_refuses_large_tables(self):
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if path.endswith("/rpc/backup_export_policy"):
-                return {"exported": ["big"], "excluded": [], "unclassified": []}
-            if path.endswith("/rpc/backup_schema"):
-                return {"tables": [{"name": "big"}], "constraints": []}
-            if "order=" in path:
-                raise urllib.error.HTTPError(path, 400, "no column", {}, None)
-            off = int(path.split("offset=")[1]); return [{"id": i} for i in range(off, min(off + 1000, 2500))]
-        with mock.patch("hq._request", side_effect=req):
-            with self.assertRaises(B.BackupError):
-                B.dump()
-
-    def test_sequences_come_from_the_schema_read_after_the_data(self):
-        reads = {"n": 0}
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if path.endswith("/rpc/backup_schema"):
-                reads["n"] += 1
-                return {**SCHEMA, "sequences": [{"name": "s", "last_value": 100 * reads["n"]}]}
-            return fake_request(method, path, body, prefer)
-        with mock.patch("hq._request", side_effect=req):
-            blob, _ = B.dump()
-        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
-            seq = json.loads(tar.extractfile("schema.json").read())["sequences"][0]["last_value"]
-        self.assertEqual(seq, 200)   # the second (after-data) read, not the first
-
-    def test_table_list_changing_during_backup_is_refused(self):
-        reads = {"n": 0}
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if path.endswith("/rpc/backup_schema"):
-                reads["n"] += 1
-                return SCHEMA if reads["n"] == 1 else {**SCHEMA, "tables": SCHEMA["tables"] + [{"name": "newtable"}]}
-            return fake_request(method, path, body, prefer)
-        with mock.patch("hq._request", side_effect=req):
-            with self.assertRaises(B.BackupError):
-                B.dump()
 
     def test_generic_put_without_name_placeholder_is_rejected(self):
         with mock.patch.dict(os.environ, {"BACKUP_KEY": KEY, "BACKUP_PUT_URL": "https://store.example.com/backup"}):
@@ -591,7 +480,7 @@ class ReviewFixes(unittest.TestCase):
                 raise urllib.error.URLError("down")
             if method == "POST" and path.endswith("/audit_log"):
                 audits.append(body["action"]); return None
-            if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch")):
+            if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch", "/rpc/backup_snapshot", "/rpc/backup_snapshot_cost")):
                 return None
             return fake_request(method, path, body, prefer)
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req), \
@@ -797,15 +686,6 @@ class Run(unittest.TestCase):
             r = B.run(force=True)
         self.assertFalse(r["ok"]); self.assertNotIn(KEY, json.dumps(r))
 
-    def test_incomplete_backup_succeeds_but_tells_the_owner(self):
-        store = FakeStore()
-        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
-            return no_schema_request(method, path, body, prefer) if method == "GET" or path.endswith("backup_schema") else store(method, path, body, prefer)
-        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req), \
-             mock.patch.object(B, "put_files", return_value={"target": "put", "files": {}}):
-            r = B.run(force=True)
-        self.assertTrue(r["ok"]); self.assertFalse(r["complete"])
-
     def test_due_window(self):
         with mock.patch("hq._request", return_value=[]):
             self.assertTrue(B.due(datetime(2026, 11, 13, 8, 0, tzinfo=timezone.utc)))    # 03:00 Toronto
@@ -875,25 +755,6 @@ class LeakRedaction(unittest.TestCase):
         self.assertIn("ledger.note", m["redaction"]["columns"]); self.assertIn("agent_runs.summary", m["redaction"]["columns"])
         with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
             self.assertIn(b"250000", tar.extractfile("data/ledger.jsonl").read())
-
-    def test_fallback_never_exports_the_free_text_of_the_leak_columns(self):
-        rows = {"ideas": [{"id": 1, "v": "keep me"}], "ledger": [{"id": 1, "kind": "expense", "amount_cents": 36000, "note": "Setter payout (close): Sam Setter"}],
-                "tasks": [{"id": 1, "status": "done", "title": "Follow up Jean Tremblay", "detail": "call 613-555-0142", "result": "Jean Tremblay jean@x.com"}]}
-        def r(method, path, body=None, prefer=None, timeout=30, exact=False):
-            if path.endswith("/rpc/backup_snapshot"):
-                raise urllib.error.HTTPError(path, 404, "no function", {}, None)
-            if method == "GET" and "/rest/v1/" in path and "audit_log" not in path:
-                t = path.split("/rest/v1/")[1].split("?")[0]
-                return rows.get(t, []) if "offset=0" in path else []
-            return fake_request(method, path, body, prefer, exact=exact)
-        with mock.patch("hq._request", side_effect=r):
-            blob, m = B.dump()
-        self.assertEqual(m["redaction"]["mode"], "fallback_blanked")
-        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
-            allj = b"".join(tar.extractfile(n).read() for n in tar.getnames() if n.startswith("data/"))
-        for secret in (b"Tremblay", b"Sam Setter", b"613-555", b"jean@x.com"):
-            self.assertNotIn(secret, allj)
-        self.assertIn(b"36000", allj); self.assertIn(b'"status":"done"', allj); self.assertIn(b"keep me", allj)
 
     def test_blank_keeps_json_structure_numbers_and_booleans(self):
         out = B.blank_leak_columns("audit_log", [{"id": 7, "action": "do_not_contact", "detail": {"leads_marked": 2, "ok": True, "reason": "Jean 613-555-0142", "ids": ["a", 3]}}])[0]

@@ -96,12 +96,63 @@ do $$
 declare bad text;
 begin
   select string_agg(c.name, ', ') into bad from cat c join pg_proc p on p.oid = c.fn
-   where c.kind = 'function' and p.prosecdef and p.prorettype <> 'trigger'::regtype and p.proname !~ '^(backup_assert_reader|backup_acl_catalogue)$'
+   where c.kind = 'function' and p.prosecdef and p.prorettype <> 'trigger'::regtype and p.proname !~ '^(backup_assert_reader|backup_acl_catalogue|backup_acl_sweep|backup_acl_event)$'
      and p.prolang = (select oid from pg_language where lanname = 'plpgsql') and not c.guarded;
   if bad is not null then raise exception 'D3 security definer backup functions without the guard: %', bad; end if;
 end $$;
 
 -- D4: the lockdown's own statement, re-run (and a worse one: all three API roles, tables and sequences too) must not let a guarded function or a key read through
+grant execute on all functions in schema public to service_role, anon, authenticated;
+grant all on all tables in schema public to service_role;
+grant all on all sequences in schema public to service_role;
+-- D1 (round 7): with the event trigger installed the blanket grants above exposed NOTHING: the sweep ran at the end of each GRANT
+do $$
+declare bad text; ro text;
+begin
+  if not exists (select 1 from pg_event_trigger where evtname = 'ffm_backup_acl_sweep' and evtenabled = 'O') then raise exception 'D1 the ACL event trigger is not installed and enabled'; end if;
+  foreach ro in array array['service_role', 'anon', 'authenticated'] loop
+    select string_agg(c.name, ', ') into bad from cat c where c.kind = 'function' and has_function_privilege(ro, c.fn, 'execute');
+    if bad is not null then raise exception 'D1 a blanket grant exposed % to %', bad, ro; end if;
+    select string_agg(c.name, ', ') into bad from cat c where c.kind = 'table' and has_table_privilege(ro, case when c.kind = 'table' then c.name::regclass end, 'select,insert,update,delete');
+    if bad is not null then raise exception 'D1 a blanket grant exposed table % to %', bad, ro; end if;
+    select string_agg(c.name, ', ') into bad from cat c where c.kind = 'sequence' and has_sequence_privilege(ro, case when c.kind = 'sequence' then c.name::regclass end, 'usage,select,update');
+    if bad is not null then raise exception 'D1 a blanket grant exposed sequence % to %', bad, ro; end if;
+  end loop;
+  if has_function_privilege('backup_reader', 'public.backup_epoch()'::regprocedure, 'execute') is not true then raise exception 'D1 the sweep took the reader its own function away'; end if;
+end $$;
+-- D1b a function / table / sequence created LATER by the owner (SQL editor, a migration without the lint, drop-and-recreate) is closed in the same statement
+create function public.backup_zz_newhelper() returns int language sql security definer as $f$ select 1 $f$;
+create table public.ffm_redaction_zznew (x int);
+create sequence public.ffm_redaction_zznewseq;
+create function public.redaction_zz_newhelper() returns int language sql as $f$ select 1 $f$;
+do $$
+declare ro text;
+begin
+  foreach ro in array array['public', 'service_role', 'anon', 'authenticated', 'backup_reader'] loop
+    if has_function_privilege(ro, 'public.backup_zz_newhelper()'::regprocedure, 'execute') or has_function_privilege(ro, 'public.redaction_zz_newhelper()'::regprocedure, 'execute') then raise exception 'D1b new internal function is executable by %', ro; end if;
+    if has_table_privilege(ro, 'public.ffm_redaction_zznew', 'select,insert,update,delete') then raise exception 'D1b new internal table is readable by %', ro; end if;
+    if has_sequence_privilege(ro, 'public.ffm_redaction_zznewseq', 'usage,select,update') then raise exception 'D1b new internal sequence is usable by %', ro; end if;
+  end loop;
+end $$;
+-- ... and an ALTER (rename into the internal namespace) does too
+create table public.zz_plain (x int);
+grant all on public.zz_plain to service_role;
+alter table public.zz_plain rename to ffm_redaction_zzrenamed;
+do $$ begin if has_table_privilege('service_role', 'public.ffm_redaction_zzrenamed', 'select') then raise exception 'D1c a table renamed into the internal namespace stays readable by service_role'; end if; end $$;
+-- D1d the trigger and its functions are owner-only: service_role cannot disable, drop or replace them, and cannot call them
+do $$
+declare s text; ro text;
+begin
+  foreach s in array array['alter event trigger ffm_backup_acl_sweep disable', 'drop event trigger ffm_backup_acl_sweep', 'create or replace function public.backup_acl_sweep() returns integer language sql as ''select 0''',
+                           'select public.backup_acl_sweep()', 'alter function public.backup_acl_sweep() owner to service_role', 'drop function public.backup_acl_event() cascade'] loop
+    foreach ro in array array['service_role', 'anon', 'authenticated'] loop
+      if pg_temp.refused(ro, s) is not true then raise exception 'D1d % could run: %', ro, s; end if;
+    end loop;
+  end loop;
+  if not exists (select 1 from pg_event_trigger where evtname = 'ffm_backup_acl_sweep' and evtenabled = 'O') then raise exception 'D1d the event trigger changed'; end if;
+end $$;
+-- D4 defence in depth: even with the event trigger OFF (owner action) and the grants wrong, every guarded function still refuses the API roles
+alter event trigger ffm_backup_acl_sweep disable;
 grant execute on all functions in schema public to service_role, anon, authenticated;
 grant all on all tables in schema public to service_role;
 grant all on all sequences in schema public to service_role;
@@ -124,7 +175,25 @@ begin
     raise exception 'D4 test premise: the blanket grant should have exposed some unguarded helpers';
   end if;
 end $$;
+-- D2 (round 7): the guard is an allow-list. A member of service_role, a custom role that was granted everything and the platform's authenticator are refused although EXECUTE is granted
+create role zz_member nologin; grant service_role to zz_member; grant usage on schema public to zz_member;
+create role zz_custom nologin; grant usage on schema public to zz_custom; grant execute on all functions in schema public to zz_custom; grant all on all tables in schema public to zz_custom;
+do $$
+declare r record; ro text; n int := 0;
+begin
+  foreach ro in array array['zz_member', 'zz_custom'] loop
+    for r in select * from cases where guarded and what = 'reader fn' loop
+      if not pg_temp.refused(ro, r.sql) then raise exception 'D2 % passed the guard: %', ro, r.sql; end if;
+      n := n + 1;
+    end loop;
+  end loop;
+  -- the intended identities still pass: the owner (this session) and backup_reader
+  perform public.backup_epoch();
+  set local role backup_reader; perform public.backup_epoch(); reset role;
+  raise notice 'D2 % calls refused for non-allow-listed roles', n;
+end $$;
 \ir ../migrations/20261121_postlock_backup_identity_v1.sql
+\ir ../migrations/20261122_postlock_backup_identity_v2.sql
 do $$
 declare bad text; ro text;
 begin

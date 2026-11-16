@@ -55,6 +55,49 @@ begin
   e0 := e1; delete from public.leads where email = 'noise-2@example.test';
   e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B26 deleting a row did not move the epoch'; end if;
 
+  -- ---- round 7, B2b: INSERT / DELETE bump only when the set of DISTINCT source values changes (a drafted outbox email to a known address is noise), and every real change is still seen
+  insert into public.outbox (agent, channel, to_ref, body, venture_id) values ('donna-ops', 'email', 'b2b-known@example.test', 'first draft', v);
+  e0 := public.backup_epoch();
+  insert into public.outbox (agent, channel, to_ref, body, venture_id) values ('donna-ops', 'email', 'b2b-known@example.test', 'second draft', v);
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B30 an outbox row to an already-known address moved the epoch'; end if;
+  insert into public.outbox (agent, channel, to_ref, body, venture_id) values ('donna-ops', 'email', null, 'no recipient yet', v);
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B31 an outbox row with a NULL to_ref moved the epoch'; end if;
+  insert into public.outbox (agent, channel, to_ref, body, venture_id) select 'donna-ops', 'email', 'b2b-known@example.test', 'batch ' || g, v from generate_series(1, 25) g;
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B32 a batch of outbox rows to a known address moved the epoch'; end if;
+  for i in 1..20 loop insert into public.outbox (agent, channel, to_ref, body, venture_id) values ('donna-ops', 'email', 'b2b-known@example.test', 'noise ' || i, v); end loop;
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B33 continuous outbox noise moved the epoch'; end if;
+  insert into public.leads (venture_id, name, email, phone, status) values (v, 'B2b Twin', 'b2b-twin@example.test', '613-555-0391', 'new');
+  e0 := public.backup_epoch();
+  insert into public.leads (venture_id, name, email, phone, status) values (v, 'B2b Twin', 'b2b-twin@example.test', '613-555-0391', 'new');
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B34 a second lead row with every value already known moved the epoch'; end if;
+  delete from public.leads where id = (select id from public.leads where email = 'b2b-twin@example.test' order by id limit 1);
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B35 deleting one of two rows with the same values moved the epoch'; end if;
+  delete from public.outbox where body like 'noise %';
+  e1 := public.backup_epoch(); if e1 <> e0 then raise exception 'B36 deleting outbox rows whose address is still held by another row moved the epoch'; end if;
+  -- the other direction: every real change is seen
+  insert into public.outbox (agent, channel, to_ref, body, venture_id) values ('donna-ops', 'email', 'b2b-new@example.test', 'to a new address', v);
+  e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B37 an outbox row to a NEW address did not move the epoch'; end if;
+  e0 := e1; insert into public.leads (venture_id, name, email, phone, status) values (v, 'B2b Twin', 'b2b-twin-2@example.test', '613-555-0391', 'new');
+  e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B38 a lead with a known name but a NEW email did not move the epoch'; end if;
+  e0 := e1; delete from public.outbox where to_ref = 'b2b-new@example.test';
+  e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B39 deleting the last row that holds an address did not move the epoch'; end if;
+  e0 := e1; insert into public.outbox (agent, channel, to_ref, body, venture_id) select 'donna-ops', 'email', 'b2b-bulk-' || g || '@example.test', 'bulk', v from generate_series(1, 250) g;
+  e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B40 a bulk insert of 250 new addresses did not move the epoch'; end if;
+  e0 := e1; delete from public.outbox where body = 'bulk';
+  e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B41 a bulk delete did not move the epoch'; end if;
+  -- a write that skips the triggers is still caught by the distinct-value digest, a duplicate-only one is not (nothing changed)
+  e0 := public.backup_epoch(); set local session_replication_role = replica;
+  insert into public.outbox (agent, channel, to_ref, body, venture_id) values ('donna-ops', 'email', 'b2b-known@example.test', 'bypass duplicate', v);
+  e1 := public.backup_epoch(); if e1 <> e0 then set local session_replication_role = origin; raise exception 'B42 a trigger-bypassing duplicate moved the epoch'; end if;
+  insert into public.outbox (agent, channel, to_ref, body, venture_id) values ('donna-ops', 'email', 'b2b-bypass@example.test', 'bypass new', v);
+  set local session_replication_role = origin;
+  e1 := public.backup_epoch(); if e1 = e0 then raise exception 'B43 a trigger-bypassing write of a new address was not detected'; end if;
+
+  -- B1b (round 7): a COMMENT or an owner change of a function of the export path moves the code hash too (they are not in pg_get_functiondef)
+  e0 := public.backup_epoch(); comment on function public.backup_fold_text(text) is 'epoch probe';
+  e1 := public.backup_epoch(); if e1 ->> 'code' = e0 ->> 'code' then raise exception 'B44 a COMMENT on an export-path function did not change the code hash'; end if;
+  comment on function public.backup_fold_text(text) is null;
+
   -- ---- round 6, B1: redefining ANY function of the export path (every backup_* / redaction_* function, the detector twin, the writer trigger) or changing the spec moves the epoch
   declare fr record; cnt int := 0; def text;
   begin

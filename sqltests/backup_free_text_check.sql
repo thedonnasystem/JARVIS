@@ -8,8 +8,9 @@ declare
     'escalations.evidence','escalations.resolution','escalations.summary','evidence_sources.final_url','evidence_sources.text','evidence_sources.title','evidence_sources.url','executor_runs.purpose','executor_runs.refusal_reason',
     'human_handoffs.task','human_handoffs.url','human_handoffs.why_human','ideas.demand_source','ideas.description','ideas.kill_metric','ideas.result','ideas.revisit_trigger','memory.content','memory.source','missions.checkpoint',
     'missions.evidence','missions.next_action','missions.owner_decision','missions.plan','missions.result','missions.risks','missions.success_definition','missions.verdict_reason','owner_messages.answer','owner_messages.body',
-    'owner_messages.options','payment_instructions.payee','predictions.action_ref','predictions.expected','predictions.outcome','reconciliation_flags.detail','tasks.detail','tasks.result','tasks.title','web_messages.body','web_messages.payload'];
-  want_strict text[] := array['audit_log.detail', 'ledger.note', 'missions.objective', 'missions.title'];
+    'owner_messages.options','payment_instructions.payee','predictions.action_ref','predictions.expected','predictions.outcome','reconciliation_flags.detail','tasks.detail','tasks.result','tasks.title','web_messages.body','web_messages.payload',
+    'agents.charter','agents.metric','ventures.description','ventures.primary_metric','venture_goals.metric'];
+  want_strict text[] := array['agents.title', 'audit_log.detail', 'departments.name', 'ledger.note', 'missions.objective', 'missions.title', 'venture_config.call_to_action', 'venture_config.offer', 'venture_goals.unit', 'ventures.name'];
   got text[]; v uuid; ag text; agid uuid; snap jsonb; pg jsonb; rec record; cn text; n int; txt text; mid uuid; i int;
 begin
   select id into v from public.ventures order by slug limit 1; select slug, id into ag, agid from public.agents order by slug limit 1;
@@ -63,6 +64,24 @@ begin
   if position('zzbrackenfeather' in lower(((public.backup_snapshot() -> 'data' -> 'agents'))::text)) > 0 then raise exception 'E11 a glued known name reached the single-statement export of a LIGHT column (agents.title)'; end if;
   pg := public.backup_snapshot_page('agents', 0, 50);
   if position('zzbrackenfeather' in lower((pg -> 'rows')::text)) > 0 then raise exception 'E11b a glued known name reached the paged export of a LIGHT column'; end if;
+  -- E12 (round 7, E1b) 3-4 character known name tokens glued / pluralised / digit-suffixed are blanked in LIGHT and STRICT, and the bare word is still redacted IN PLACE (the field survives)
+  insert into public.leads (venture_id, name, email, status) values (v, 'Imran Khan', 'e12a@example.test', 'new'), (v, 'Priya Shah', 'e12b@example.test', 'new'), (v, 'Wei Lee', 'e12c@example.test', 'new'),
+                                                                   (v, 'Tom Fox', 'e12d@example.test', 'new'), (v, 'Sam Wong', 'e12e@example.test', 'new');
+  declare ctx2 jsonb := public.backup_redaction_context(); w2 text; m2 text;
+  begin
+    foreach m2 in array array['light', 'strict'] loop
+      foreach w2 in array array['the Khans', 'khan2024', 'jkhan', 'Shah123', 'fox2024', 'Lees', 'LeeFamily', 'Wongs', 'jfox', 'mrfox', 'call the Khans tomorrow about the quote', 'Mr Wong2024 asked'] loop
+        if public.backup_redact_text(w2, ctx2, 500, m2) ~* '(khan|shah|lee|fox|wong)' then raise exception 'E12 % let % through: %', m2, w2, public.backup_redact_text(w2, ctx2, 500, m2); end if;
+      end loop;
+      if public.backup_redact_text('Call Imran Khan today', ctx2, 500, m2) !~ 'today' or public.backup_redact_text('Call Imran Khan today', ctx2, 500, m2) ~* 'khan' then raise exception 'E12b % the bare name must be redacted in place: %', m2, public.backup_redact_text('Call Imran Khan today', ctx2, 500, m2); end if;
+      if public.backup_redact_text('Heating and cooling service plan, review quarterly', ctx2, 500, m2) <> 'Heating and cooling service plan, review quarterly' then raise exception 'E12c % clean text was changed', m2; end if;
+    end loop;
+  end;
+  insert into public.handbook (version, content, active) values ((select coalesce(max(version), 0) + 1 from public.handbook), 'owner note: the Khans and khan2024', false);
+  update public.ledger set note = 'payout jfox and Shah123' where id = (select id from public.ledger order by id limit 1);
+  if lower((public.backup_snapshot() -> 'data' -> 'handbook')::text || (public.backup_snapshot() -> 'data' -> 'ledger')::text) ~ '(khan|shah123|jfox)' then raise exception 'E12d a short glued known name reached the single-statement export (LIGHT or STRICT column)'; end if;
+  pg := public.backup_snapshot_page('handbook', 0, 100); if lower((pg -> 'rows')::text) ~ 'khan' then raise exception 'E12e a short glued known name reached the paged export (LIGHT)'; end if;
+  pg := public.backup_snapshot_page('ledger', 0, 100); if lower((pg -> 'rows')::text) ~ '(shah123|jfox)' then raise exception 'E12f a short glued known name reached the paged export (STRICT)'; end if;
   alter table public.ideas add column zz_new_note text;
   if not exists (select 1 from public.backup_effective_spec(public.backup_export_policy() -> 'exported') where table_name = 'ideas' and column_name = 'zz_new_note' and mode = 'strict' and not classified) then raise exception 'E9 an unclassified column is not strict'; end if;
   alter table public.ideas drop column zz_new_note;

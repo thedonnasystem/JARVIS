@@ -309,6 +309,68 @@ def rebuild_schema(cur, schema: dict, rep: dict):
 BLANK_MARKER = "[blanked: not stored off-site]"   # 30 characters: satisfies the longest minimum-length CHECK on a blanked column today (venture_procedures.steps >= 20)
 
 
+def _split_cols(txt: str) -> list:
+    out, depth, cur = [], 0, ""
+    for ch in txt:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur.strip()); cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur.strip())
+    return out
+
+
+def _unique_defs(schema: dict) -> list:
+    """[(table, name, [column expressions], has_where)] for every unique index and every unique / primary-key constraint, from the saved definitions."""
+    import re
+    out = []
+    for i in schema.get("indexes", []):
+        d = str(i.get("def", ""))
+        m = re.match(r"CREATE UNIQUE INDEX \S+ ON (?:ONLY )?(?:public\.)?\"?([^\s\"(]+)\"? USING \w+ \((.*)\)(?: INCLUDE \(.*\))?( WHERE .*)?$", d, re.S)
+        if m:
+            out.append((i.get("table") or m.group(1), i.get("name"), _split_cols(m.group(2)), bool(m.group(3))))
+    for c in schema.get("constraints", []):
+        if c.get("type") in ("u", "p"):
+            m = re.match(r"(?:UNIQUE|PRIMARY KEY)(?: NULLS NOT DISTINCT)? \((.*?)\)(?: INCLUDE.*)?$", str(c.get("def", "")), re.S)
+            if m:
+                out.append((c.get("table"), c.get("name"), _split_cols(m.group(1)), False))
+    return out
+
+
+def _unique_columns(schema: dict) -> dict:
+    """{table: {column names that appear in any unique index / constraint}} (an expression index counts every identifier it mentions)."""
+    import re
+    res = {}
+    for t, _n, cols, _w in _unique_defs(schema):
+        for e in cols:
+            for ident in re.findall(r'"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*)', e):
+                res.setdefault(t, set()).add(ident[0] or ident[1])
+    return res
+
+
+def assert_unique_feasible(schema: dict, data: dict) -> None:
+    """Before any row is loaded: every plain-column UNIQUE index / constraint must be satisfiable by the rows of THIS archive (after blanking). A violation fails the restore cleanly here,
+    naming the index, instead of failing after the data is loaded when the index is built. (Partial and expression indexes cannot be evaluated here; rebuild_constraints reports those with the index name.)"""
+    import re
+    for t, name, cols, has_where in _unique_defs(schema):
+        if has_where or t not in data or not all(re.fullmatch(r'"?[A-Za-z_][A-Za-z0-9_]*"?', e) for e in cols):
+            continue
+        names = [e.strip('"') for e in cols]
+        seen = {}
+        for row in data[t]:
+            key = tuple(json.dumps(row.get(n), sort_keys=True) for n in names)
+            if any(row.get(n) is None for n in names):
+                continue                                        # NULLs are distinct in a unique index
+            if key in seen:
+                raise Fail(f"restore refused before loading: unique index/constraint {name} on {t} ({', '.join(names)}) would be violated by this archive (two rows share the same key); nothing was loaded")
+            seen[key] = 1
+
+
 def apply_blanks(schema: dict, data: dict, manifest: dict, rep: dict) -> None:
     """Columns the backup exported BLANK (manifest redaction.blanked_columns: agent / scraper / client free text that is not safe to keep off-site) restore as:
       * NULL where the column is nullable and no CHECK constraint mentions it (the honest "no value"),
@@ -324,6 +386,7 @@ def apply_blanks(schema: dict, data: dict, manifest: dict, rep: dict) -> None:
     for c in schema.get("constraints", []):
         if c.get("type") == "c":
             checks.setdefault(c.get("table"), []).append(str(c.get("def", "")))
+    uniq = _unique_columns(schema)
     n = 0
     for tc in blanked:
         t, _, c = str(tc).partition(".")
@@ -340,9 +403,12 @@ def apply_blanks(schema: dict, data: dict, manifest: dict, rep: dict) -> None:
             val = BLANK_MARKER
         else:
             val = "" if notnull else None
-        for row in data[t]:
+        in_unique = c in uniq.get(t, set()) and ty in ("text", "character varying", "varchar", "citext") and (notnull or val is not None)
+        for k, row in enumerate(data[t]):
             if c in row:
-                row[c] = val
+                # a column inside a UNIQUE index / constraint must not collapse to one shared value (evidence_sources_dedupe_idx is unique on (task_id, content_sha256, final_url) and final_url is blanked):
+                # every row gets its own marker ("[blanked: not stored off-site] #<n>", still >= 30 chars so minimum-length checks hold)
+                row[c] = f"{BLANK_MARKER} #{k + 1}" if in_unique else val
                 n += 1
     rep["blanked_fields_restored_empty"] = n
 
@@ -385,7 +451,9 @@ def load_data(cur, schema: dict, data: dict, rep: dict):
 def rebuild_constraints(cur, schema: dict, rep: dict):
     warnings = []
     for i in schema.get("indexes", []):      # first: a foreign key may rely on a plain unique index that is not itself a constraint
-        cur.execute(i["def"])
+        err = _try(cur, i["def"])
+        if err:
+            raise Fail(f'index {i.get("name")} on {i.get("table")} could not be built on the restored data ({err[:120]}); the restore is aborted and nothing was committed')
     for kind in FK_LAST:
         for c in schema.get("constraints", []):
             if c["type"] != kind and not (kind == "x" and c["type"] not in FK_LAST):
@@ -689,7 +757,7 @@ def main():
                 cur.execute("drop schema public cascade"); cur.execute("drop schema if exists supabase_migrations cascade"); cur.execute("create schema public")
             cur.execute("set time zone 'UTC'")
             skipped = rebuild_schema(cur, schema, rep); rep["steps"]["schema_rebuilt"] = "PASS"
-            apply_blanks(schema, data, manifest, rep); load_data(cur, schema, data, rep); rep["steps"]["data_loaded"] = "PASS"
+            apply_blanks(schema, data, manifest, rep); assert_unique_feasible(schema, data); load_data(cur, schema, data, rep); rep["steps"]["data_loaded"] = "PASS"
             rebuild_constraints(cur, schema, rep); rebuild_rest(cur, schema, rep); replay_schema_acl_and_comments(cur, schema, rep)
             rep["steps"]["constraints_indexes_triggers_views_policies_grants"] = "PASS" if not rep["views_failed"] else "FAIL"
             rep.setdefault("not_restored", {}).update(dict(skipped))

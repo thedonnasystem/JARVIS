@@ -107,7 +107,38 @@ if [ -n "$dburl" ] && command -v psql >/dev/null 2>&1; then
     *) pii_flag "BACKUP IDENTITY: not as expected (role exists / service_role may execute / backup_reader may execute = $idn) - apply migration 20261121_postlock_backup_identity_v1 (after the lockdown)";;
   esac
 fi
-if [ -n "${BACKUP_READER_JWT:-}" ]; then ok "BACKUP_READER_JWT is set (the backup calls its functions as role backup_reader, never with the service key)"
-else warn "BACKUP_READER_JWT is not set: after the post-lockdown migration the backup is refused by the database (fail closed, nothing uploaded). Owner decision: see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md rule 12"; fi
+# BACKUP_READER_JWT is the ONLY credential the backup may use (hq_backup refuses to run without it and never falls back to the service key). Decoded here WITHOUT a network call and without printing it:
+# the role claim must be exactly backup_reader and exp must be in the future. A missing, malformed, expired or wrong-role token is a FAIL under --require-pii-exclusion (a WARN otherwise): the nightly backup would refuse.
+jwt_state="$(BJ="${BACKUP_READER_JWT:-}" python3 - <<'PY' 2>/dev/null || echo "undecodable"
+import base64, json, os, sys, time
+t = os.environ.get("BJ", "").strip()
+if not t:
+    print("unset"); sys.exit(0)
+try:
+    p = t.split(".")
+    if len(p) != 3 or not all(p):
+        print("malformed"); sys.exit(0)
+    pad = lambda x: x + "=" * (-len(x) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(pad(p[1])))
+    json.loads(base64.urlsafe_b64decode(pad(p[0])))
+except Exception:
+    print("malformed"); sys.exit(0)
+role = claims.get("role") if isinstance(claims, dict) else None
+exp = claims.get("exp") if isinstance(claims, dict) else None
+if role != "backup_reader":
+    print("wrongrole"); sys.exit(0)
+if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+    print("noexp"); sys.exit(0)
+print("expired" if exp <= time.time() else "ok")
+PY
+)"
+case "$jwt_state" in
+  ok) ok "BACKUP_READER_JWT decodes, role = backup_reader, exp is in the future (signature is checked by the database when the backup runs; the backup uses no other credential)";;
+  unset) pii_flag "BACKUP_READER_JWT is not set: the backup refuses to run without it (it never falls back to the service key). Owner decision: see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md rule 12";;
+  wrongrole) pii_flag "BACKUP_READER_JWT does not carry role = backup_reader (a token for any other role, service_role included, must not be used for the backup)";;
+  expired) pii_flag "BACKUP_READER_JWT has expired (exp is in the past): mint a new one";;
+  noexp) pii_flag "BACKUP_READER_JWT has no exp claim: a never-expiring backup token is refused, mint one with an expiry";;
+  *) pii_flag "BACKUP_READER_JWT is not a decodable JWT (expected three base64url parts with a JSON payload)";;
+esac
 echo; echo "Result: $fails FAIL, $warns WARN."; echo "Not checked here (check by eye): bucket is Private; lifecycle rule set; BACKUP_KEY stored in 2 places; migration 20261113_backup_schema_v1.sql applied (the Telegram /backup check shows it)."
 [ "$fails" = 0 ]

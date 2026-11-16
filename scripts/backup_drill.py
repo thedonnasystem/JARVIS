@@ -119,6 +119,11 @@ def seed_leaks(conn):
                        ("Drill research (encoded)", "see cHJpc2NhQHZhbmRlbmJyb2VrLWRyaWxsLmV4YW1wbGU= and 0x" + "prisca@vandenbroek-drill.example".encode().hex() + " and Prisca\u00a0Vandenbroek")):
         cur.execute("insert into tasks (venture_id, assigned_agent, created_by, title, detail, status, priority, result) values (%s,%s,'system',%s,%s,'done',2,%s)",
                     (v, ag, title, "Prompt mentions Prisca Vandenbroek 613-555-0911", res))
+    # round 7 (E2a): two evidence rows of ONE task with the same content hash and different final URLs (mirrors / identical block pages). final_url is blanked in the export, evidence_sources_dedupe_idx is UNIQUE
+    # on (task_id, content_sha256, final_url): the restore must give each row its own blank value, or the index cannot be built after the data is loaded.
+    cur.execute("select id from tasks where title like 'Drill research (raw%%' limit 1"); ev_task = cur.fetchone()[0]
+    for u in ("https://mirror-a.drill.example/p", "https://mirror-b.drill.example/p"):
+        cur.execute("insert into evidence_sources (task_id, kind, title, url, final_url, host_norm, content_sha256, text) values (%s,'page','Drill block page',%s,%s,%s,%s,'access denied')", (ev_task, u, u, u.split('/')[2], "ab" * 32))
     cur.execute("insert into escalations (from_agent, kind, summary) values (%s,'uncertain',%s)", (ag, "Drill research: Prisca Vandenbroek prisca@vandenbroek-drill.example 613-555-0911"))
     cur.execute("select id from agents where slug=%s", (ag,)); aid = cur.fetchone()[0]
     cur.execute("insert into agent_runs (agent_id, status, summary) values (%s,'ok',%s)", (aid, "Run summary: contacted Prisca Vandenbroek (prisca@vandenbroek-drill.example, 613-555-0911); 3 leads, $0.12"))
@@ -223,6 +228,10 @@ def main():
             dcur.execute("select (select count(*) from public.tasks where result is not null and result <> ''), (select count(*) from public.memory where content <> ''), (select count(*) from public.memory where kind = 'fact' and source is null), (select count(*) from public.memory)")
             bl = dcur.fetchone()
         check("E1 RESTORE OF BLANKED COLUMNS: tasks.result / memory.content come back empty, memory.source satisfies memory_fact_needs_source (marker), no constraint broken", bl[0] == 0 and bl[1] == 0 and bl[2] == 0 and bl[3] > 0, str(bl))
+        with psycopg2.connect(DST) as dc, dc.cursor() as dcur:
+            dcur.execute("select count(*), count(distinct final_url), min(length(final_url)), (select count(*) from pg_indexes where indexname = 'evidence_sources_dedupe_idx') from public.evidence_sources where content_sha256 = %s", ("ab" * 32,))
+            ev = dcur.fetchone()
+        check("E2a RESTORE OF A BLANKED UNIQUE-INDEX COLUMN (full restore_backup.py path): two evidence rows with the same hash and different final URLs restore with distinct blank values and evidence_sources_dedupe_idx is built", ev[0] == 2 and ev[1] == 2 and ev[2] >= 30 and ev[3] == 1, str(ev))
         import io as _io, tarfile as _tf
         mf = json.loads(_tf.open(fileobj=_io.BytesIO(Fernet(key.encode()).decrypt(enc)), mode="r:gz").extractfile("manifest.json").read())
         _tar = _tf.open(fileobj=_io.BytesIO(Fernet(key.encode()).decrypt(enc)), mode="r:gz")

@@ -32,12 +32,12 @@ ALWAYS_EXCLUDE = re.compile(r"^(ws_|ffm_)|^(client_workspaces|leads|outbox|lead_
 # Client text that the system copies into EXPORTED tables (DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 2). The database redacts these columns inside backup_snapshot()
 # (migration 20261120_backup_redact_leak_paths_v1, mirrored by public.backup_redaction_spec()); this is the SECOND, independent lock in code:
 #   * a snapshot that does not say it was redacted for all four required paths is refused (an old backup_snapshot() would export the raw text);
-#   * the two-read fallback exports no string outside the spec's KEEP columns (blank_leak_columns, hq_backup_keep.KEEP generated from the spec);
+#   * (retired in round 7) the two-read raw-table fallback is gone: it needed the service key. blank_leak_columns / hq_backup_keep.KEEP stay as a tested second lock for any future raw-row path;
 #   * after redaction, any email address, phone number or contact-like JSON number still found in a strict column (the snapshot's own spec) makes the backup REFUSE to be written.
 UNCERTAIN = "[redacted:uncertain]"
 REDACTION_VERSION = 2
 REQUIRED_REDACTION = {("audit_log", "detail"), ("ledger", "note"), ("tasks", "result"), ("agent_runs", "summary")}
-# The two-read fallback has no database redactor, so it blanks EVERY string except (a) columns the export spec classifies KEEP (hq_backup_keep.KEEP, generated from
+# The (retired) raw-row path has no database redactor, so blank_leak_columns blanks EVERY string except (a) columns the export spec classifies KEEP (hq_backup_keep.KEEP, generated from
 # backup_redaction_spec() by scripts/gen_backup_keep.py; a unit test fails when it is stale) and (b) values that are plainly not text (uuid, ISO timestamp / date, number).
 # A column nobody classified yet is therefore blanked too: fail closed. json keeps keys, numbers and booleans.
 STRICT_COLUMNS = {"audit_log": ["detail"], "ledger": ["note"], "tasks": ["result"], "agent_runs": ["summary"], "escalations": ["summary"]}   # floor only: the snapshot spec adds every other strict column
@@ -79,11 +79,11 @@ BACKUP_READER_ENV = "BACKUP_READER_JWT"      # a JWT with role = backup_reader (
 
 
 def _rpc(path: str, body: dict | None = None, **kw):
-    """Call a backup function as the backup identity. With BACKUP_READER_JWT set the call is made with that token (the service key is NOT sent); without it the service key is used, which
-    works only on a database where the post-lockdown backup-identity migration has not been applied (after it, the database refuses the call and the backup fails closed, nothing is uploaded)."""
+    """Call a backup function as the backup identity. BACKUP_READER_JWT is the ONLY credential these calls may use: without it the call is refused here (nothing is sent, and the service key is never
+    substituted), so a backup run records the failure instead of reading with a broader key."""
     tok = os.environ.get(BACKUP_READER_ENV, "").strip()
     if not tok:
-        return hq._request("POST", path, body, **kw)
+        raise BackupError(f"{BACKUP_READER_ENV} is not set: the backup runs only as the backup_reader identity and never falls back to the service key (see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md rule 12)")
     reset = hq.AUTH_OVERRIDE.set(tok)
     try:
         return hq._request("POST", path, body, **kw)
@@ -295,27 +295,6 @@ def _pk_order(schema: dict | None, table: str) -> str:
     return f"&order={ORDER.get(table, 'id')}.asc"
 
 
-def _read_table(t: str, schema: dict | None) -> list:
-    """Page until an EMPTY page, advancing by what was actually returned, so a server-side row cap below PAGE cannot drop rows."""
-    rows, off = [], 0
-    order, unordered = _pk_order(schema, t), False
-    while off < MAX_ROWS_PER_TABLE:
-        try:
-            page = hq._request("GET", f"/rest/v1/{t}?select=*{order}&limit={PAGE}&offset={off}", exact=True) or []
-        except urllib.error.HTTPError as e:
-            if e.code != 400 or not order:   # no such sort column: unordered paging is only safe when everything fits in one page
-                raise
-            order, unordered = "", True
-            page = hq._request("GET", f"/rest/v1/{t}?select=*&limit={PAGE}&offset={off}", exact=True) or []
-        if not page:
-            return rows
-        rows.extend(page)
-        if unordered and (off > 0 or len(page) >= PAGE):
-            raise BackupError(f"{t}: cannot page a large table without a sort key")
-        off += len(page)
-    raise BackupError(f"{t}: more than {MAX_ROWS_PER_TABLE} rows; refusing to write a partial backup")
-
-
 _DEC = re.compile(r'"\\u0000DEC:(-?[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)"')
 
 
@@ -336,17 +315,6 @@ def _add(tar: tarfile.TarFile, name: str, data: bytes) -> None:
 CONSISTENCY_ATTEMPTS = 3
 
 
-def _read_all(names, schema) -> dict:
-    """One pass over every table: {table: (jsonl bytes, row count)}."""
-    out = {}
-    for t in names:
-        rows = blank_leak_columns(t, _read_table(t, schema))
-        assert_no_digit_runs(t, rows)
-        assert_redacted({t: rows})          # the same second lock as for the database-redacted path: a contact-like leaf in a strict column refuses the backup
-        out[t] = (("\n".join(row_json(r) for r in rows)).encode(), len(rows))
-    return out
-
-
 def _epoch() -> dict | None:
     """The redaction-source epoch vector (backup_epoch(): one counter bumped by owner-only triggers on every insert, update, delete and truncate of a client / lead / suppression source table and of the deny-list,
     plus the source row counts and a hash of the redaction code and the export policy). None when the database cannot tell: that is NOT consistent."""
@@ -355,27 +323,6 @@ def _epoch() -> dict | None:
     except Exception:
         return None
     return e if isinstance(e, dict) and isinstance(e.get("seq"), int) and not isinstance(e.get("seq"), bool) else None
-
-
-def _read_consistent(names, schema) -> tuple[dict, dict]:
-    """Fallback (no database snapshot function): the REST API cannot give one transaction across requests, so every table is read twice and the pass counts only when both reads are
-    byte-identical AND the redaction-source epoch is the same before and after (nothing changed anywhere). Without a readable epoch the result is NOT verified consistent, and a backup
-    that is not verified consistent is never uploaded (run())."""
-    last = None
-    for attempt in range(1, CONSISTENCY_ATTEMPTS + 1):
-        e0 = _epoch()
-        first = _read_all(names, schema)
-        second = _read_all(names, schema)
-        e1 = _epoch()
-        moved = sorted(t for t in names if hashlib.sha256(first[t][0]).digest() != hashlib.sha256(second[t][0]).digest())
-        epoch_state = "unavailable" if (e0 is None or e1 is None) else ("unchanged" if e0 == e1 else "changed")
-        last = (second, moved, epoch_state, attempt)
-        if not moved and epoch_state == "unchanged":
-            return second, {"consistent": True, "method": "two identical full reads and an unchanged source epoch", "epoch": epoch_state, "attempts": attempt}
-        if epoch_state == "unavailable":
-            break                                                     # retrying cannot make an unreadable epoch readable
-    second, moved, epoch_state, attempt = last
-    return second, {"consistent": False, "method": "two identical full reads and an unchanged source epoch", "epoch": epoch_state, "attempts": attempt, "changing_tables": moved[:10]}
 
 
 def _encode_rows(rows: list) -> tuple[bytes, int]:
@@ -455,6 +402,8 @@ def _try_snapshot() -> tuple[dict | None, str]:
     Returns (snapshot, "") or (None, reason). Any problem falls back to the two-read method rather than failing the backup."""
     try:
         snap = _rpc("/rest/v1/rpc/backup_snapshot", {}, timeout=180, exact=True)
+    except BackupError:
+        raise                                          # e.g. no BACKUP_READER_JWT: the run fails with that reason, not with a generic "snapshot unavailable"
     except urllib.error.HTTPError as e:
         return None, ("backup_snapshot() not installed" if e.code == 404 else f"backup_snapshot() failed (HTTP {e.code})")
     except Exception as e:
@@ -509,20 +458,8 @@ def dump() -> tuple[bytes, dict]:
         manifest["consistency"] = {"consistent": True, "method": "single SQL statement snapshot (all tables + schema)", "attempts": 1}
         names = list(data_by_table)
     else:
-        schema = get_schema()
-        pol = get_policy()
-        names = [t for t in pol["exported"] if t not in SKIP]
-        manifest["table_list_source"] = "database export policy"
-        data_by_table, manifest["consistency"] = _read_consistent(names, schema)
-        manifest["consistency"]["snapshot_unavailable"] = why
-        manifest["redaction"] = {"mode": "fallback_blanked", "rule": "every string outside the spec's KEEP columns is blanked", "keep_columns": len(KEEP_COLUMNS)}
-        if schema:
-            # Read the schema AGAIN after the data: sequence positions must not be older than the rows we saved (a restored sequence behind the
-            # data would hand out ids that already exist). If the table list changed while we were reading, refuse: tomorrow's run starts clean.
-            after = get_schema()
-            if not after or sorted(t["name"] for t in after["tables"]) != sorted(t["name"] for t in schema["tables"]) or get_policy()["exported"] != pol["exported"]:
-                raise BackupError("tables were added or removed while the backup was being read; will retry later")
-            schema = after
+        # no raw-table fallback: reading GET /rest/v1/<table> needs the broad service key, which the backup identity forbids. A failed snapshot is a failed backup (recorded by run()), retried tomorrow.
+        raise BackupError(f"the database snapshot is unavailable ({why}); refusing to fall back to reading raw tables with the service key")
     if any(ALWAYS_EXCLUDE.search(t) for t in names):
         raise BackupError("a client table reached the export list; refusing to write the backup")
     manifest["excluded"] = sorted((str(e.get("table")), str(e.get("class"))) for e in pol["excluded"] if isinstance(e, dict))    # names and classes only, never data

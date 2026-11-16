@@ -88,6 +88,16 @@ if r2.get("_attempts") != 2:
 # ---- round 6: noise writes must not starve the backup; a redefined redactor / spec function must discard the archive
 case("noise: 0-row updates and non-source-column updates between pages (every attempt) do not disturb the backup", lambda: (m("update public.leads set name = 'x' where false"), m("update public.leads set score = coalesce(score, 0) + 1, status = 'contacted' where email = 'race-1@example.test'"), m("update public.leads set name = name where email = 'race-1@example.test'")), True)
 r3 = case("noise: still ONE attempt", None, True)
+# ---- round 7 (B2b): continuous outbox INSERTs (a drafted email per lead) to an already-known address, or without a recipient, do not starve the backup; an address that is NEW to the redaction context still discards it
+m("insert into public.outbox (agent, channel, to_ref, body, venture_id) select 'donna-ops', 'email', 'race-1@example.test', 'seed', id from public.ventures order by slug limit 1")
+def outbox_noise():
+    m("insert into public.outbox (agent, channel, to_ref, body, venture_id) select 'donna-ops', 'email', 'race-1@example.test', 'race-noise ' || g, id from public.ventures, generate_series(1, 40) g order by slug limit 40")
+    m("insert into public.outbox (agent, channel, to_ref, body, venture_id) select 'donna-ops', 'email', null, 'race-noise null', id from public.ventures order by slug limit 1")
+r5 = case("noise: continuous outbox inserts to a known address / no recipient do not disturb the paged backup (one attempt, uploaded)", outbox_noise, True)
+if r5.get("_attempts") != 1:
+    print("FAIL outbox noise forced a retry:", r5.get("_attempts")); fails.append("outbox-noise-attempts")
+case("an outbox row to a NEW address between pages (every attempt) discards the archive", lambda: m("insert into public.outbox (agent, channel, to_ref, body, venture_id) select 'donna-ops', 'email', %s, 'race-noise new', id from public.ventures order by slug limit 1", "race-n%d@example.test" % next(K)), False)
+m("delete from public.outbox where body like 'race-noise%' or body = 'seed'")
 with mut.cursor() as c:
     c.execute("select pg_get_functiondef('public.backup_redact_patterns(text,jsonb)'::regprocedure)"); orig_def = c.fetchone()[0]
     c.execute("select pg_get_functiondef('public.backup_redaction_spec()'::regprocedure)"); orig_spec = c.fetchone()[0]

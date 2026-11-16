@@ -31,6 +31,8 @@ function	audit_task_bulk_update()	-	-	execute	invoker	trigger function: cannot b
 function	authorize_action(text,text,integer,text,uuid,uuid,jsonb)	-	-	execute	invoker		-
 function	autonomy_report(numeric,integer)	-	-	execute	invoker		-
 function	backup_acl_catalogue()	-	-	-	invoker	internal: owner only	-
+function	backup_acl_event()	-	-	-	security_definer	internal: owner only	-
+function	backup_acl_sweep()	-	-	-	security_definer	internal: owner only	-
 function	backup_assert_reader()	-	-	-	invoker	internal: owner only	-
 function	backup_classification()	-	-	-	invoker	internal: owner only	-
 function	backup_ctx_add(jsonb,jsonb)	-	-	-	invoker	internal: owner only	-
@@ -191,6 +193,7 @@ function	redaction_denylist_status()	-	-	-	security_definer	backup identity: bac
 function	redaction_epoch_bump()	-	-	-	security_definer	trigger function: cannot be called directly	-
 function	redaction_epoch_bump_del()	-	-	-	security_definer	trigger function: cannot be called directly	-
 function	redaction_epoch_bump_ins()	-	-	-	security_definer	trigger function: cannot be called directly	-
+function	redaction_epoch_bump_rows()	-	-	-	security_definer	trigger function: cannot be called directly	-
 function	redaction_epoch_bump_upd()	-	-	-	security_definer	trigger function: cannot be called directly	-
 function	redaction_h(text,text,text)	-	-	-	invoker	internal: owner only	-
 function	redaction_pads()	-	-	-	invoker	internal: owner only	-

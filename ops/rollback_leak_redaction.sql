@@ -59,3 +59,6 @@ drop table if exists public.ffm_redaction_found;
 commit;
 -- The post-lockdown backup identity (20261121_postlock_backup_identity_v1.sql: role backup_reader, backup_assert_reader(), backup_acl_catalogue(), the revokes) is deliberately NOT rolled back: it only restricts,
 -- and a function that still carries the guard (e.g. backup_schema) must keep finding backup_assert_reader(). To hand a function back to service_role, grant it explicitly (an owner decision).
+-- Round 7: 20261122_postlock_backup_identity_v2.sql (the allow-list guard and the event trigger ffm_backup_acl_sweep) is kept too. Consequences, on purpose: (1) backup_schema() is NOT handed back to service_role (it keeps the guard
+-- and stays revoked), and any backup_* / redaction_* grant that a re-applied older migration issues is revoked again at the end of that GRANT by the event trigger, so the old service-key backup client cannot run after this
+-- rollback (hq_backup.py no longer has a service-key path in any case). (2) To hand a function back deliberately, an owner first runs `alter event trigger ffm_backup_acl_sweep disable;`, grants, and re-enables it.

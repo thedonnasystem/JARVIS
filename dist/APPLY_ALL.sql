@@ -5009,16 +5009,20 @@ end $$;
 -- assembles the context object from the term arrays (live names, plus names the deny-list adds)
 create or replace function public.backup_ctx_build(p_phrases text[], p_parts text[], p_squashed text[], p_phones text[], p_base jsonb default '{}'::jsonb) returns jsonb
 language plpgsql immutable set search_path to 'pg_catalog' as $$
-declare alts text[]; nre text; sq text[]; ph text[];
+declare alts text[]; nre text; sq text[]; ph text[]; sh text[];
 begin
   alts := array(select distinct x from unnest(coalesce(p_phrases, '{}') || coalesce(p_parts, '{}')) x where x <> '');
+  -- round 7 (E1b): a 3-4 letter name token (Khan, Shah, Lee, Fox, Wong) cannot be matched as a substring of the squashed text (it sits inside ordinary words), so it is matched as a WHOLE WORD that carries at most
+  -- a 3-letter prefix and a plural / family / digit suffix (never the bare word: name_re redacts that in place): 'khans', 'jkhan', 'mrfox', 'khan2024', 'Shah123', 'LeeFamily'. A 2-letter token stays an accepted residual (documented).
+  sh := array(select distinct x from unnest(coalesce(p_parts, '{}') || array(select jsonb_array_elements_text(coalesce(p_base -> 'short_tokens', '[]'::jsonb)))) x where x ~ '^[a-z]{3,4}$');
   if cardinality(alts) > 0 then
     nre := '(?<![a-z0-9])(?:' || array_to_string(array(select x from unnest(alts) x order by length(x) desc, x), '|') || ')(?![a-z0-9])';
   else nre := ''; end if;
   sq := array(select distinct x from unnest(coalesce(p_squashed, '{}')) x where length(x) >= 5 and x ~ '^[a-z0-9]+$');
   ph := array(select distinct x from unnest(coalesce(p_phones, '{}')) x where length(x) >= 7 and x ~ '^[0-9]+$');
   return coalesce(p_base, '{}'::jsonb) || jsonb_build_object('v', 2, 'phrases', to_jsonb(coalesce(p_phrases, '{}')), 'parts', to_jsonb(coalesce(p_parts, '{}')), 'name_re', nre,
-           'squashed', to_jsonb(sq), 'sq_re', case when cardinality(sq) > 0 then '(?:' || array_to_string(sq, '|') || ')' else '' end, 'phones', to_jsonb(ph), 'n_terms', cardinality(alts));
+           'squashed', to_jsonb(sq), 'sq_re', case when cardinality(sq) > 0 then '(?:' || array_to_string(sq, '|') || ')' else '' end,
+           'short_re', case when cardinality(sh) > 0 then '(?<![a-z0-9])(?:[a-z]{1,3}(?:' || array_to_string(sh, '|') || ')(?:s|es|ish|family|fam|[0-9]{1,8})?|(?:' || array_to_string(sh, '|') || ')(?:s|es|ish|family|fam|[0-9]{1,8}))(?![a-z0-9])' else '' end, 'phones', to_jsonb(ph), 'n_terms', cardinality(alts));
 end $$;
 
 -- adds what the deny-list scan found (plaintext terms that occur in the data) to a context
@@ -5041,7 +5045,7 @@ begin
       sq := sq || array_to_string(tok, '');
     end if;
   end loop;
-  return public.backup_ctx_build(ph, pa, sq, pn, p_ctx - 'phrases' - 'parts' - 'name_re' - 'squashed' - 'sq_re' - 'phones' - 'n_terms');
+  return public.backup_ctx_build(ph, pa, sq, pn, p_ctx - 'phrases' - 'parts' - 'name_re' - 'squashed' - 'sq_re' - 'short_re' - 'phones' - 'n_terms');
 end $$;
 
 -- fast, exact twin of ws_sensitive_hits() for the NON-digit categories (the redactor ignores the three digit-shaped ones). Same normalisation, same stems; the per-word health loop is ONE alternation.
@@ -5142,12 +5146,13 @@ end $$;
 -- The full name pattern stays in the context ('alts_full') for the one case that needs it: a decoded base64/hex blob.
 create or replace function public.backup_ctx_hot(p_ctx jsonb, p_found jsonb) returns jsonb
 language plpgsql immutable set search_path to 'pg_catalog' as $$
-declare e jsonb; ph text[] := '{}'; sq text[] := '{}'; names text[]; chains text[]; keep boolean; base jsonb;
+declare e jsonb; ph text[] := '{}'; sq text[] := '{}'; names text[]; chains text[]; keep boolean; base jsonb; shortt text[] := '{}';
 begin
-  base := p_ctx - 'live' - 'phrases' - 'parts' - 'name_re' - 'squashed' - 'sq_re' - 'phones' - 'n_terms';
+  base := p_ctx - 'live' - 'phrases' - 'parts' - 'name_re' - 'squashed' - 'sq_re' - 'short_re' - 'phones' - 'n_terms';
   if coalesce(p_ctx ->> 'deny', 'false') <> 'true' or p_found is null then return p_ctx || jsonb_build_object('alts_full', coalesce(substring(p_ctx ->> 'name_re' from '^\(\?<!\[a-z0-9\]\)\(\?:(.*)\)\(\?!\[a-z0-9\]\)$'), '')); end if;
   names := array(select jsonb_array_elements_text(p_found -> 'names')); chains := array(select jsonb_array_elements_text(p_found -> 'chains'));
   for e in select * from jsonb_array_elements(p_ctx -> 'live') loop
+    shortt := shortt || array(select z from jsonb_array_elements_text(coalesce(e -> 't', '[]'::jsonb)) z where z ~ '^[a-z]{3,4}$');     -- 3-4 letter tokens of EVERY live name stay too (E1b): 'khans' does not hash like 'khan', so the scan cannot select them
     sq := sq || array(select jsonb_array_elements_text(coalesce(e -> 'ss', '[]'::jsonb)));       -- the squashed (spaced / glued / suffixed) forms of EVERY live name stay in the context: a token that does not occur whole can still occur letter-spaced or glued ('p i c a r d e a u', 'jpicardeau', 'picardeau1')
     keep := jsonb_array_length(e -> 't') = 0;                                     -- a name made only of operating words (a business called "Barrhaven Plumbing") is always kept
     if not keep then keep := exists (select 1 from jsonb_array_elements_text(e -> 't') z where z = any (names)); end if;
@@ -5157,6 +5162,7 @@ begin
       if (e ->> 's') is not null then sq := sq || (e ->> 's'); end if;
     end if;
   end loop;
+  base := base || jsonb_build_object('short_tokens', to_jsonb(shortt));
   return public.backup_ctx_add(public.backup_ctx_build(ph, '{}', sq, '{}', base || jsonb_build_object('alts_full', coalesce(substring(p_ctx ->> 'name_re' from '^\(\?<!\[a-z0-9\]\)\(\?:(.*)\)\(\?!\[a-z0-9\]\)$'), ''))),
                                p_found);
 end $$;
@@ -5393,7 +5399,7 @@ create or replace function public.backup_redact_text_full(p text, p_ctx jsonb, p
 language plpgsql stable set search_path to 'pg_catalog' as $$
 declare
   u constant text := '[redacted:uncertain]';
-  ctx jsonb; t text; t1 text; r text; nxt text; m text; i int; prot text[] := '{}'; sq text; sq2 text; s text; dg text; rt text; rc text; nre text; sqre text; hits text[]; found jsonb; plain boolean; k text; kc text; wsp text;
+  ctx jsonb; t text; t1 text; r text; nxt text; m text; i int; prot text[] := '{}'; sq text; sq2 text; s text; dg text; rt text; rc text; nre text; sqre text; shre text; hits text[]; found jsonb; plain boolean; k text; kc text; wsp text;
   is_strict boolean := (p_mode = 'strict');
   email_re constant text := '[a-z0-9._%+''-]{2,}@[a-z0-9-]{2,}(?:\.[a-z0-9-]{2,})+';
   obf_re constant text := '[a-z0-9._%+''-]{2,}[\[({<](?:at|arobase|@)[\])}>][a-z0-9-]+(?:(?:[\[({<](?:dot|point|\.)[\])}>]|\.)[a-z0-9-]+)+';
@@ -5405,7 +5411,7 @@ begin
   if p_max is not null and length(p) > p_max then return u; end if;
   begin
     ctx := coalesce(p_ctx, public.backup_redaction_context());
-    nre := coalesce(ctx ->> 'name_re', ''); sqre := coalesce(ctx ->> 'sq_re', '');
+    nre := coalesce(ctx ->> 'name_re', ''); sqre := coalesce(ctx ->> 'sq_re', ''); shre := coalesce(ctx ->> 'short_re', '');
     plain := (octet_length(p) = length(p) and strpos(p, '%') = 0 and strpos(p, '&') = 0 and strpos(p, '\') = 0);
     if not plain then                                                   -- not plain ASCII: fold look-alikes, then decode escapes until nothing changes
       t := public.backup_normalise(p);
@@ -5417,12 +5423,12 @@ begin
     if length(t) <= 80 and (coalesce(ctx ->> 'scanned', 'false') = 'true' or coalesce(ctx ->> 'deny', 'false') <> 'true') then
       if t ~ '^[0-9]{1,6}$' then return p; end if;
       if t ~ '^[a-z][a-z0-9]*(?:[_:./-][a-z0-9]+)*$' and t !~ '[0-9]{3}' and t !~ '(^|[_:./-])[a-z0-9]([_:./-]|$)'
-         and (nre = '' or t !~* nre) and (sqre = '' or regexp_replace(t, '[^a-z0-9]', '', 'g') !~ sqre) then return p; end if;
+         and (nre = '' or t !~* nre) and (sqre = '' or regexp_replace(t, '[^a-z0-9]', '', 'g') !~ sqre) and (shre = '' or t !~* shre) then return p; end if;
     end if;
     -- a direct call (no snapshot scan) with a deny-list: look this one string up
     if coalesce(ctx ->> 'scanned', 'false') <> 'true' and coalesce(ctx ->> 'deny', 'false') = 'true' then
       found := public.backup_deny_terms(t, ctx);
-      if found is not null then ctx := public.backup_ctx_add(ctx, found) || jsonb_build_object('scanned', true); nre := coalesce(ctx ->> 'name_re', ''); sqre := coalesce(ctx ->> 'sq_re', ''); end if;
+      if found is not null then ctx := public.backup_ctx_add(ctx, found) || jsonb_build_object('scanned', true); nre := coalesce(ctx ->> 'name_re', ''); sqre := coalesce(ctx ->> 'sq_re', ''); shre := coalesce(ctx ->> 'short_re', ''); end if;
     end if;
     -- the detector flags the whole field. Its three digit-shaped categories (sin/card/account-like) join every number in the text into one string and so flag ordinary prose with amounts and dates;
     -- those shapes are handled by this redactor's own digit rules instead. EVERY OTHER detector category blanks the field.
@@ -5458,6 +5464,7 @@ begin
     -- longer a guarantee-free zone; bounded over-blanking of configuration text that merely contains a known name is accepted)
     if kc is not null and r = t1 then sq := kc; else sq := lower(regexp_replace(r, '[^a-zA-Z0-9]', '', 'g')); end if;
     if sqre <> '' and sq ~ sqre then return u; end if;
+    if shre <> '' and lower(t1) ~ shre then return u; end if;                -- E1b: a 3-4 letter known name glued / pluralised / digit-suffixed as one word ('khans', 'jkhan', 'khan2024')
     if is_strict then
       if length(sq) >= 7 and jsonb_array_length(coalesce(ctx -> 'phones', '[]'::jsonb)) > 0 then
         dg := regexp_replace(r, '[^0-9]', '', 'g');
@@ -5502,7 +5509,7 @@ end $$;
 -- sqltests/leak_redaction_check.sql section G proves, on a corpus, that the exits and the full redactor give the same answer.
 create or replace function public.backup_redact_text(p text, p_ctx jsonb default null, p_max integer default 20000, p_mode text default 'strict') returns text
 language plpgsql stable set search_path to 'pg_catalog' as $$
-declare nre text; sqre text; hits text[]; is_strict boolean := (p_mode = 'strict');
+declare nre text; sqre text; shre text; hits text[]; is_strict boolean := (p_mode = 'strict');
   rot26 constant text := 'nopqrstuvwxyzabcdefghijklmNOPQRSTUVWXYZABCDEFGHIJKLM';
 begin
   if p is null then return null; end if;
@@ -5510,10 +5517,10 @@ begin
   if p_max is not null and length(p) > p_max then return '[redacted:uncertain]'; end if;
   if p_ctx is not null and length(p) <= 300 and (p_ctx ->> 'scanned') = 'true' and octet_length(p) = length(p) and strpos(p, '%') = 0 and strpos(p, '&') = 0 and strpos(p, '\') = 0 then
     if p ~ '^[0-9]{1,6}$' then return p; end if;
-    nre := coalesce(p_ctx ->> 'name_re', ''); sqre := coalesce(p_ctx ->> 'sq_re', '');
+    nre := coalesce(p_ctx ->> 'name_re', ''); sqre := coalesce(p_ctx ->> 'sq_re', ''); shre := coalesce(p_ctx ->> 'short_re', '');
     if p !~ '(?:[0-9][^0-9A-Za-z]*){7}' and p !~ '@|[A-Za-z0-9+/_-]{16}|https?:|www\.|[\[({<][ \t]*(?:at|arobase)|[ \t](?:at|arobase)[ \t]+[a-z0-9-]+(?:[ \t]+(?:dot|point)[ \t]|\.[a-z]{2})' 
        and p !~* '(?:(?:zero|oh|one|two|three|four|five|six|seven|eight|nine|un|deux|trois|quatre|cinq|sept|huit|neuf|[0-9])[ \t,.\-]+){5}'
-       and (nre = '' or p !~* nre) then
+       and (nre = '' or p !~* nre) and (shre = '' or p !~* shre) then
       if sqre <> '' and (lower(regexp_replace(p, '[^a-zA-Z0-9]', '', 'g')) ~ sqre or lower(regexp_replace(translate(p, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ', rot26), '[^a-zA-Z0-9]', '', 'g')) ~ sqre) then
         return public.backup_redact_text_full(p, p_ctx, p_max, p_mode);
       end if;
@@ -5606,15 +5613,15 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('action_policy', 'updated_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('agent_runs', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('agent_runs', 'summary', 'text', 'blank', null, 'BLANK: free text written by an agent, a scraper, a client or a counterparty cannot be made safe by pattern and known-name redaction (an unknown person''s name passes), so it is not exported; it restores as blank / NULL (see the policy, section 2, E)'),
-    ('agents', 'charter', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('agents', 'charter', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
     ('agents', 'department_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('agents', 'metric', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('agents', 'metric', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
     ('agents', 'model_tier', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('agents', 'office_function', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('agents', 'role', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('agents', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('agents', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('agents', 'title', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('agents', 'title', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
     ('alert_state', 'key', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('app_owners', 'email', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('approval_requests', 'action', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5653,7 +5660,7 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('company_profile', 'sender_name', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('company_profile', 'venture_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('departments', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('departments', 'name', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('departments', 'name', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
     ('departments', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('departments', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('escalations', 'department_slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5802,24 +5809,24 @@ language sql immutable set search_path to 'pg_catalog' as $$
     ('venture_assets', 'notes', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('venture_assets', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_assets', 'url', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
-    ('venture_config', 'call_to_action', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('venture_config', 'offer', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('venture_config', 'call_to_action', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
+    ('venture_config', 'offer', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
     ('venture_config', 'updated_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_goals', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('venture_goals', 'metric', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('venture_goals', 'metric', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
     ('venture_goals', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('venture_goals', 'unit', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('venture_goals', 'unit', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
     ('venture_procedures', 'created_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_procedures', 'owner_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_procedures', 'status', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('venture_procedures', 'steps', 'text', 'blank', null, 'agent / scraper / counterparty / unknown writer: free text is not exported (round 6)'),
     ('venture_procedures', 'title', 'text', 'keep', null, 'unique key or system reference (table/id, dedupe key, url key): altering it could collide on restore or break lookups; written by code, not typed text'),
-    ('ventures', 'description', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('ventures', 'description', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
     ('ventures', 'gate_criteria', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
     ('ventures', 'kind', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ventures', 'manager_agent', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
-    ('ventures', 'name', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
-    ('ventures', 'primary_metric', 'text', 'light', null, 'free text or title: patterns and known names only (never blanked)'),
+    ('ventures', 'name', 'text', 'strict', 500, 'short label written by an LLM tool or owner command: strict redaction, owner decision whether to blank (round 7, E2b)'),
+    ('ventures', 'primary_metric', 'text', 'blank', null, 'written by an LLM tool (hq_start_venture / add_goal): free text is not exported (round 7, E2b)'),
     ('ventures', 'proposed_by', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ventures', 'slug', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
     ('ventures', 'stage', 'text', 'keep', null, 'identifier, status, code, hash or the owner/business own setting; not free text'),
@@ -5969,19 +5976,22 @@ end $$;
 -- (session_replication_role = replica) and changed a count is seen too; every function of the backup_* / redaction_* families (by catalog name, not a hand list) and the full export spec (table list AND every column's mode) are hashed so a migration applied mid-export is seen.
 create or replace function public.backup_epoch() returns jsonb
 language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
-declare rws jsonb := '{}'::jsonb; t record; n bigint;
+declare rws jsonb := '{}'::jsonb; t record; n text;
 begin
-  for t in select distinct s.table_name from public.redaction_sources() s where to_regclass('public.' || s.table_name) is not null order by 1 loop
-    execute format('select count(*) from public.%I', t.table_name) into n;
-    rws := rws || jsonb_build_object(t.table_name, n);
+  -- the backstop for writes that skip the triggers (a privileged session_replication_role = replica write, a disabled trigger, a column rewrite): a digest of the DISTINCT values of every redaction-source column,
+  -- which is exactly what the redaction context reads. Rows that add or remove no distinct value (a drafted outbox email to a known address) do not move it.
+  for t in select s.table_name, s.column_name from public.redaction_sources() s where to_regclass('public.' || s.table_name) is not null
+            and exists (select 1 from pg_attribute a where a.attrelid = to_regclass('public.' || s.table_name) and a.attname = s.column_name and a.attnum > 0 and not a.attisdropped) order by 1, 2 loop
+    execute format('select md5(coalesce(string_agg(v, chr(31) order by v), '''')) from (select distinct %I::text v from public.%I where %I is not null) q', t.column_name, t.table_name, t.column_name) into n;
+    rws := rws || jsonb_build_object(t.table_name || '.' || t.column_name, n);
   end loop;
   return jsonb_build_object(
     'seq', (select case when is_called then last_value else 0 end from public.ffm_redaction_epoch_seq),
-    'rows', rws,
+    'sources', rws,
     'denylist_rows', (select count(*) from public.ffm_redaction_denylist),
     'policy', md5(public.backup_export_policy()::text || '|' || coalesce((select string_agg(x::text, '|' order by x::text) from public.backup_effective_spec(public.backup_export_policy() -> 'exported') x), '')),
     -- EVERY function the export path can execute, derived from the catalog by name (not a hand list): the backup_* and redaction_* families, the detector twin and the writer trigger. A migration applied mid-export changes this.
-    'code', md5(coalesce((select string_agg(p.oid::regprocedure::text || md5(pg_get_functiondef(p.oid)), ',' order by p.oid::regprocedure::text) from pg_proc p
+    'code', md5(coalesce((select string_agg(p.oid::regprocedure::text || md5(pg_get_functiondef(p.oid) || '|' || pg_get_userbyid(p.proowner) || '|' || coalesce(p.proacl::text, '') || '|' || coalesce(obj_description(p.oid, 'pg_proc'), '')), ',' order by p.oid::regprocedure::text) from pg_proc p
                            where p.pronamespace = 'public'::regnamespace and p.prokind in ('f', 'p') and (p.proname ~ '^(backup_|redaction_)' or p.proname in ('ws_sensitive_hits', 'agent_runs_scrub'))), '')));
 end $$;
 revoke all on function public.backup_epoch() from public, anon, authenticated;
@@ -6304,20 +6314,48 @@ end $$;
 revoke all on function public.redaction_epoch_bump() from public, anon, authenticated, service_role;
 -- Round 6 (false invalidation): INSERT / DELETE bump only when the statement touched at least one row, UPDATE only when a REDACTION-SOURCE COLUMN of at least one row actually changed (transition tables), so no-op updates
 -- (`where false`), status / score / body updates and every write to a non-source column leave the epoch alone. TRUNCATE always bumps. The row counts in backup_epoch() stay as the backstop for writes that skip triggers.
+-- Round 7 (B2b): an INSERT or DELETE bumps the epoch only when it changes the set of DISTINCT values of a redaction-source column (what backup_redaction_context() actually reads: select distinct col ...).
+-- A drafted outbox email to an address that is already known (or with a NULL to_ref), a second lead row with an existing name, a delete of a duplicate: no bump. A new distinct value, the last row of a value
+-- going away, a bulk insert (more than 200 distinct values: not worth the lookups) and TRUNCATE do bump. The columns are the trigger arguments (from redaction_sources()).
 create or replace function public.redaction_epoch_bump_ins() returns trigger
 language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+declare c text; n int; fresh boolean;
 begin
-  if exists (select 1 from new_rows) then perform nextval('public.ffm_redaction_epoch_seq'); end if;
+  foreach c in array tg_argv loop
+    execute format('select count(*) from (select distinct %1$I::text from new_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2 limit 201) q', c) into n;
+    continue when n = 0;
+    if n > 200 then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
+    -- a value is NEW when the table holds no more rows with it than this statement inserted
+    execute format('select exists (select 1 from (select distinct %1$I::text v from new_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2) q
+                     where (select count(*) from %2$s t where t.%1$I::text = q.v) <= (select count(*) from new_rows r where r.%1$I::text = q.v))', c, tg_relid::regclass) into fresh;
+    if fresh then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
+  end loop;
   return null;
 end $$;
 revoke all on function public.redaction_epoch_bump_ins() from public, anon, authenticated, service_role;
 create or replace function public.redaction_epoch_bump_del() returns trigger
 language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+declare c text; n int; gone boolean;
 begin
-  if exists (select 1 from old_rows) then perform nextval('public.ffm_redaction_epoch_seq'); end if;
+  foreach c in array tg_argv loop
+    execute format('select count(*) from (select distinct %1$I::text from old_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2 limit 201) q', c) into n;
+    continue when n = 0;
+    if n > 200 then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
+    -- a value is GONE when no row of the table holds it any more
+    execute format('select exists (select 1 from (select distinct %1$I::text v from old_rows where %1$I is not null and length(btrim(%1$I::text)) >= 2) q
+                     where not exists (select 1 from %2$s t where t.%1$I::text = q.v))', c, tg_relid::regclass) into gone;
+    if gone then perform nextval('public.ffm_redaction_epoch_seq'); return null; end if;
+  end loop;
   return null;
 end $$;
 revoke all on function public.redaction_epoch_bump_del() from public, anon, authenticated, service_role;
+create or replace function public.redaction_epoch_bump_rows() returns trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+begin
+  if exists (select 1 from new_rows) then perform nextval('public.ffm_redaction_epoch_seq'); end if;      -- the deny-list: every row actually added (an `on conflict do nothing` capture adds none)
+  return null;
+end $$;
+revoke all on function public.redaction_epoch_bump_rows() from public, anon, authenticated, service_role;
 create or replace function public.redaction_epoch_bump_upd() returns trigger
 language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
 declare cols text[] := tg_argv;
@@ -6338,15 +6376,15 @@ begin
     execute format('drop trigger if exists redaction_epoch_ins on public.%I', t.table_name);
     execute format('drop trigger if exists redaction_epoch_upd on public.%I', t.table_name);
     execute format('drop trigger if exists redaction_epoch_del on public.%I', t.table_name);
-    execute format('create trigger redaction_epoch_ins after insert on public.%I referencing new table as new_rows for each statement execute function public.redaction_epoch_bump_ins()', t.table_name);
+    execute format('create trigger redaction_epoch_ins after insert on public.%I referencing new table as new_rows for each statement execute function public.redaction_epoch_bump_ins(%s)', t.table_name, (select string_agg(quote_literal(c), ', ') from unnest(t.cols) c));
     execute format('create trigger redaction_epoch_upd after update on public.%I referencing old table as old_rows new table as new_rows for each statement execute function public.redaction_epoch_bump_upd(%s)',
                    t.table_name, (select string_agg(quote_literal(c), ', ') from unnest(t.cols) c));
-    execute format('create trigger redaction_epoch_del after delete on public.%I referencing old table as old_rows for each statement execute function public.redaction_epoch_bump_del()', t.table_name);
+    execute format('create trigger redaction_epoch_del after delete on public.%I referencing old table as old_rows for each statement execute function public.redaction_epoch_bump_del(%s)', t.table_name, (select string_agg(quote_literal(c), ', ') from unnest(t.cols) c));
     execute format('drop trigger if exists redaction_epoch_trunc on public.%I', t.table_name);
     execute format('create trigger redaction_epoch_trunc after truncate on public.%I for each statement execute function public.redaction_epoch_bump()', t.table_name);
   end loop;
   drop trigger if exists redaction_epoch on public.ffm_redaction_denylist;
-  create trigger redaction_epoch after insert on public.ffm_redaction_denylist referencing new table as new_rows for each statement execute function public.redaction_epoch_bump_ins();   -- an `on conflict do nothing` capture that adds no row does not count
+  create trigger redaction_epoch after insert on public.ffm_redaction_denylist referencing new table as new_rows for each statement execute function public.redaction_epoch_bump_rows();   -- an `on conflict do nothing` capture that adds no row does not count
 end $$;
 
 -- counts only, never a hash
@@ -6679,3 +6717,86 @@ alter function public.backup_schema() set search_path to 'pg_catalog';
 alter function public.backup_classification() set search_path to 'pg_catalog';
 alter function public.backup_pii_column_exceptions() set search_path to 'pg_catalog';
 -- future helpers created after this file still get the lockdown's default grant to service_role; R4 forces a revoke after each new function, and the ACL manifest check fails the gate on any drift
+
+-- ===== 20261122_postlock_backup_identity_v2.sql =====
+-- POST-LOCKDOWN, round 7: closes the gaps the independent verifier found in the backup identity (20261121_postlock_backup_identity_v1.sql). Only restricts; safe to re-run; apply LAST.
+--
+-- D2  the guard is an ALLOW-LIST, not a name blacklist. A session passes only when its EFFECTIVE role (the role PostgREST set from the JWT, or SET ROLE, else the login role) is backup_reader, or is the
+--     owner of the guard function, or is a superuser. A login role that is a member of service_role, a custom role that was granted everything, anon, authenticated, authenticator: all refused.
+-- D1  a function named backup_* / redaction_* (or agent_runs_scrub) or a table / sequence named ffm_redaction_* that is created, altered or granted LATER (a migration without the lint, the SQL editor, a blanket
+--     `grant execute on all functions in schema public to service_role`, a drop-and-recreate) is brought back to the catalogue's rule at the end of that very statement by an EVENT TRIGGER:
+--     no PUBLIC / anon / authenticated / service_role privilege on any of them; backup_reader keeps (and gets back) EXECUTE on exactly the reader list. Same transaction, so there is no window.
+--     ALTER DEFAULT PRIVILEGES cannot be limited by name pattern, so it is not used; the event trigger is the control.
+-- D3  the same sweep revokes table / sequence privileges on ffm_redaction_* after any blanket grant (the lockdown's default privileges grant every new table to service_role).
+-- The event trigger and its functions are owner-only: service_role cannot drop, disable or replace them (tested in sqltests/backup_identity_check.sql).
+
+create or replace function public.backup_assert_reader() returns void
+language plpgsql stable security invoker set search_path to 'pg_catalog' as $$
+declare r text := coalesce(nullif(current_setting('role', true), ''), 'none'); eff text; own text;
+begin
+  eff := case when r = 'none' then session_user::text else r end;
+  if eff = 'backup_reader' then return; end if;
+  select pg_get_userbyid(p.proowner) into own from pg_proc p where p.oid = to_regprocedure('public.backup_assert_reader()');
+  if eff = own then return; end if;
+  if exists (select 1 from pg_roles where rolname = eff and rolsuper) then return; end if;
+  raise exception 'this function is for the backup identity (role backup_reader) only' using errcode = '42501';
+end $$;
+revoke all on function public.backup_assert_reader() from public, anon, authenticated;
+revoke all on function public.backup_assert_reader() from service_role;
+
+-- one sweep: every internal object back to the catalogue's rule. Cheap (about 70 objects) and idempotent; it only issues a REVOKE / GRANT when a privilege is actually wrong.
+create or replace function public.backup_acl_sweep() returns integer
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+declare r record; who text; n integer := 0; api text[];
+begin
+  if current_setting('ffm.acl_sweep', true) = '1' then return 0; end if;                 -- our own REVOKEs fire the event trigger again: once is enough
+  perform set_config('ffm.acl_sweep', '1', true);
+  api := array(select x from unnest(array['public', 'anon', 'authenticated', 'service_role']) x where x = 'public' or exists (select 1 from pg_roles where rolname = x));
+  for r in select c.kind, c.name, c.holder from public.backup_acl_catalogue() c loop
+    if r.kind = 'function' then
+      foreach who in array api loop
+        if has_function_privilege(who, r.name::regprocedure, 'execute') then
+          execute format('revoke all on function %s from %s', r.name::regprocedure, case when who = 'public' then 'public' else quote_ident(who) end); n := n + 1;
+        end if;
+      end loop;
+      if r.holder = 'backup_reader' and exists (select 1 from pg_roles where rolname = 'backup_reader') then
+        if not has_function_privilege('backup_reader', r.name::regprocedure, 'execute') then execute format('grant execute on function %s to backup_reader', r.name::regprocedure); n := n + 1; end if;
+      elsif exists (select 1 from pg_roles where rolname = 'backup_reader') and has_function_privilege('backup_reader', r.name::regprocedure, 'execute') then
+        execute format('revoke all on function %s from backup_reader', r.name::regprocedure); n := n + 1;
+      end if;
+    else
+      foreach who in array api || case when exists (select 1 from pg_roles where rolname = 'backup_reader') then array['backup_reader'] else '{}'::text[] end loop
+        if r.kind = 'sequence' then
+          if has_sequence_privilege(who, r.name::regclass, 'usage,select,update') then execute format('revoke all on sequence %s from %s', r.name::regclass, case when who = 'public' then 'public' else quote_ident(who) end); n := n + 1; end if;
+        elsif has_table_privilege(who, r.name::regclass, 'select,insert,update,delete,truncate,references,trigger') then
+          execute format('revoke all on table %s from %s', r.name::regclass, case when who = 'public' then 'public' else quote_ident(who) end); n := n + 1;
+        end if;
+      end loop;
+    end if;
+  end loop;
+  perform set_config('ffm.acl_sweep', '', true);
+  return n;
+end $$;
+revoke all on function public.backup_acl_sweep() from public, anon, authenticated;
+revoke all on function public.backup_acl_sweep() from service_role;
+
+create or replace function public.backup_acl_event() returns event_trigger
+language plpgsql volatile security definer set search_path to 'pg_catalog' as $$
+begin
+  perform public.backup_acl_sweep();
+end $$;
+revoke all on function public.backup_acl_event() from public, anon, authenticated;
+revoke all on function public.backup_acl_event() from service_role;
+
+-- bring everything to the rule now, then install the event trigger. Creating an event trigger needs superuser (a hosted project may not allow it to the migration owner): then the migration says so
+-- loudly and scripts/acl_manifest.py --check (a gate step) plus the guard remain the controls; the owner can have the trigger created by the platform admin role.
+select public.backup_acl_sweep();
+do $$
+begin
+  if exists (select 1 from pg_event_trigger where evtname = 'ffm_backup_acl_sweep') then drop event trigger ffm_backup_acl_sweep; end if;
+  create event trigger ffm_backup_acl_sweep on ddl_command_end
+    when tag in ('CREATE FUNCTION', 'ALTER FUNCTION', 'CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO', 'ALTER TABLE', 'CREATE SEQUENCE', 'ALTER SEQUENCE', 'GRANT', 'REVOKE', 'ALTER DEFAULT PRIVILEGES', 'CREATE EXTENSION')
+    execute function public.backup_acl_event();
+exception when insufficient_privilege then
+  raise warning 'could not create event trigger ffm_backup_acl_sweep (%): ask the platform admin to run the create event trigger statement in 20261122_postlock_backup_identity_v2.sql; until then new backup_* / redaction_* objects need a manual revoke (scripts/acl_manifest.py --check catches drift)', sqlerrm;
+end $$;
