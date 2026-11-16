@@ -18,3 +18,6 @@
 # Commit 4885f72 (history of open PR #16, build/leak-redaction round 8): synthetic gateway-key fixture 'sb_publishable_abc123'
 # passed to BACKUP_GATEWAY_APIKEY in a unit test that proves the gateway key is ignored for ordinary requests.
 4885f72873e199900407ca7d032d4e19f9422d47:test_hq_backup.py:generic-api-key:323
+# Commit 3675ba1 (history of open PR #25, build/hq-experience): constant named KEY holding the browser localStorage slot name
+# for simulated missions; not a credential. Renamed in ed222cb.
+3675ba108dc87d1a908e11eecb982b5bd7b657ae:webapp/hq/hq.js:generic-api-key:12
