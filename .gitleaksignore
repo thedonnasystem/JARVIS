@@ -1,0 +1,17 @@
+# Audited gitleaks finding fingerprints (commit:file:rule:line), one per synthetic test fixture. Nothing else is suppressed.
+# Format and rules: HARDENING_NOTES.md section 3; the audited list + hash + count: scripts/gitleaks_ignore_audit.json.
+# scripts/check_gitleaks_ignore.py (CI) fails if this file differs from that list. Add an entry only for a reviewed synthetic
+# value in a test fixture; never for a real secret (rotate + remove instead), never with a wildcard.
+#
+# Commit 5828a5e4 (closed PR #14 head, build/consent-integrity): throwaway literal 'fixture-key-0123456789abcdefghijklmnop' that
+# SQL tests/replica e2e insert into a scratch ffm_secrets table (set_by 'fixture').
+5828a5e4f05e5c53c66f9a911e024161d46fd325:sqltests/audit_paths_check.sql:generic-api-key:18
+5828a5e4f05e5c53c66f9a911e024161d46fd325:sqltests/venture_generic_check.sql:generic-api-key:8
+5828a5e4f05e5c53c66f9a911e024161d46fd325:sqltests/ffm_consent_check.sql:generic-api-key:20
+5828a5e4f05e5c53c66f9a911e024161d46fd325:sqltests/venture_deals_replies_check.sql:generic-api-key:7
+5828a5e4f05e5c53c66f9a911e024161d46fd325:scripts/replica/e2e.sql:generic-api-key:117
+5828a5e4f05e5c53c66f9a911e024161d46fd325:sqltests/ffm_onboarding_check.sql:generic-api-key:20
+5828a5e4f05e5c53c66f9a911e024161d46fd325:sqltests/inbox_needs_you_check.sql:generic-api-key:7
+5828a5e4f05e5c53c66f9a911e024161d46fd325:sqltests/pending_signoff_check.sql:generic-api-key:8
+# Commit 15a69bc8 (history of open PR #15, build/consent-integrity-v2): guessable phrase passed to ffm_set_key in test F6e to prove it is refused.
+15a69bc8c39a98e3be492f601dd5ca412b1de1fd:sqltests/consent_review_fixes_check.sql:generic-api-key:321
