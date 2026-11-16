@@ -9,7 +9,7 @@
   const SCREENS = [['overview', 'Overview'], ['jarvis', 'Jarvis'], ['missions', 'Missions'], ['org', 'Org chart'], ['divisions', 'Divisions'], ['offices', 'Offices'],
     ['managers', 'Managers'], ['agents', 'Agents'], ['activity', 'Activity'], ['finance', 'Finance'], ['health', 'Health']];
   const DETAIL_TYPES = { division: 1, mission: 1 };
-  const KEY = 'fendezy.hq.sim.v1';
+  const STORE_NAME = 'fendezy.hq.sim.v1';   // browser-storage slot name (not a credential)
   const EXAMPLE = 'Research the Ottawa commercial cleaning market and prepare a business launch proposal.';
   const J = () => root.HQJarvis; const ORG = () => root.HQ_ORG;
 
@@ -38,10 +38,10 @@
   // ---------- state + local store ----------
   const S = { screen: 'overview', detail: null, ctx: null, box: null, draft: null, divPick: '', input: '', mfilter: 'open', msg: '', store: null };
   function store() {
-    if (!S.store) { let raw = null; try { raw = root.localStorage.getItem(KEY); } catch (e) { raw = null; } S.store = raw ? J().load(raw) : J().emptyState(); }
+    if (!S.store) { let raw = null; try { raw = root.localStorage.getItem(STORE_NAME); } catch (e) { raw = null; } S.store = raw ? J().load(raw) : J().emptyState(); }
     return S.store;
   }
-  function save() { try { root.localStorage.setItem(KEY, JSON.stringify(S.store)); } catch (e) { /* private mode / blocked storage: keep in memory */ } }
+  function save() { try { root.localStorage.setItem(STORE_NAME, JSON.stringify(S.store)); } catch (e) { /* private mode / blocked storage: keep in memory */ } }
   const live = () => !!(S.ctx && S.ctx.mode === 'live' && S.ctx.snap);
   const simSrc = 'SIMULATED';
   const orgSrc = () => (live() ? 'OWNER-DEFINED · NOT CONNECTED' : 'SIMULATED');
