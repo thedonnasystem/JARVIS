@@ -407,27 +407,47 @@ language sql immutable set search_path to 'pg_catalog' as $$
   select 'zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|deux|trois|quatre|cinq|sept|huit|neuf|dix|onze|douze|treize|quatorze|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent|cents|mille|milles|millions'::text;
 $$;
 
--- 6d. FINANCIAL AND APPLICATION DETAIL (review round 4, B1 / S6). Fails closed: in insurance-context text an amount of money is refused unless it is one of two marketing forms:
---       a PRICE PER PERIOD   "from $18 a month", "only $25/week", "des 25 $ par mois", "$25/month"   (lead word, at most 3 digits, per day / week / month; never per hour or per year)
---       a COVERAGE CEILING   "up to $500,000", "jusqu'a 1 000 000 $"                              (the words "up to" / "jusqu'a" and a round number of thousands)
+-- 6d. FINANCIAL AND APPLICATION DETAIL (review round 4, B1 / S6; round 5, RV17-D B1). Fails closed: in insurance-context text an amount of money is refused unless it is one of two marketing forms:
+--       a PRICE PER MONTH    "from $18 a month", "only $25/month", "des 25 $ par mois", "$25/month"   (lead word, at most 3 digits, per month only; never per day, week, hour or year)
+--       a COVERAGE CEILING   "up to $500,000", "jusqu'a 1 000 000 $"                              (the words "up to" / "jusqu'a", a round number of thousands, then the end of the clause or the
+--                                                                                                 word coverage / couverture / protection: nothing else, never a period word)
 --     Refused whatever the other words are: any other currency amount ("$85,000", "45000 $", "85k", "$30/hour"), a spelled-out magnitude (hundred, thousand, million, mille, cent),
---     a number word next to a period ("fifty a year", "six monthly"), a spelled-out age ("age forty five"), payment-trouble wording (late on, behind on, arrears, unemployed, bankrupt),
---     and (p_strict, a single value) a pay / debt word (pay, paid, makes, earns, salary, paycheque, mortgage, loan, debt, tax, cash, rent, job ...) in the same value as ANY amount or number.
+--     a number word next to a period ("fifty a year", "six monthly"), a spelled-out age ("age forty five", "you are forty five", any "forty five"-style compound), payment-trouble wording
+--     (late on, behind on / with, fell behind, in default, missed payments, unemployed, bankrupt, "no savings", "a large loan", "makes less than", "a good living"), and
+--     round 5: ANY number (no currency sign needed, any grouping, '#' or '+' included) next to a period, either order ("85,000 a year", "6,500 monthly", "4,200 every two weeks", "85 000 par an");
+--     (p_strict, a single value) a pay / debt / benefit / savings / receive word (pay, makes, earns, salary, paycheque, mortgage, loan, debt, tax, cash, rent, job, budget, savings, benefits,
+--     pension, retirement, "you get", receives, take home ...) in the same value as ANY amount or number; (not p_strict: the all-columns scan of a row) a period in one column and a
+--     number in another ("you get more than 85,000" + "a year"), and "your / votre ..." + a pay / debt word with any amount in the row ("your mortgage" + "from $999 a month").
 --     Input: a folded view (approved terms already cut out). Never echoes. The joined all-columns scan passes p_strict = false (a product price in one column next to "mortgage" in another is normal ad copy).
 create or replace function public.ws_financial_hit(p_fold text, p_strict boolean default true) returns boolean
 language plpgsql immutable set search_path to 'pg_catalog' as $$
 declare n text; m text; nw text := '(?:' || public.ws_number_words() || ')';
         amt text := '(?:\$ ?[0-9]{1,3}(?:[.,][0-9]{2})?|[0-9]{1,3}(?:[.,][0-9]{2})? ?\$)';
+        num text := '[0-9#](?:[0-9 ,.]*[0-9])?\+?';
+        per text := '(?:(?:(?:a|an|per|par|each|every|/|de l|l) ?(?:years?|yrs?|months?|mos?|weeks?|wks?|days?|an|ans|annees?|mois|semaines?|jours?|heures?|hours?|hrs?)'
+                    || '|monthly|yearly|annually|annual|weekly|daily|biweekly|bi-weekly|fortnightly|hourly|mensuel[a-z]*|annuel[a-z]*|hebdomadaire[a-z]*|quotidien[a-z]*'
+                    || '|every (?:two|2|other|second|few) (?:weeks?|months?)|toutes les (?:deux|2) semaines)(?![a-z]))';
+        tens text := 'twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|vingt|trente|quarante|cinquante|soixante';
+        units text := '(?:one|two|three|four|five|six|seven|eight|nine|un|une|deux|trois|quatre|cinq|six|sept|huit|neuf)';
+        payw text := '(?:pay|pays|paid|paying|payez|paye|payes|payer|make|makes|made|making|earn[a-z]*|gagne[a-z]*|salar[a-z]*|wages?|paycheques?|paychecks?|paystubs?|mortgages?|hypothe[a-z]*|'
+                     || 'loans?|prets?|debts?|dettes?|owe[sd]?|owing|doit|tax|taxes|impots?|cash|rent|loyer|job|jobs|emploi|worth|net|gross|brut|hourly|income|incomes|revenus?|'
+                     || 'budget|budgets|savings|saved|epargnes?|economies|benefits?|prestations?|pensions?|retirement|retraite|allowances?|allocations?|inheritance|heritage|assets|actifs|'
+                     || 'gets|receives?|received|receiving|recevez|recoi[st]|recevoir|touchez|touche|touches|take home|takes home|took home|you get|you ll get|you will get|you re getting|vous obtenez)';
 begin
   n := ' ' || translate(coalesce(p_fold, ''), '€£¥', repeat(chr(36), 3)) || ' ';
   n := regexp_replace(replace(n, '''', ' '), '[[:space:]]+', ' ', 'g');
   n := replace(n, ' pour cent', ' %');
-  -- the two allowed forms become placeholders
+  -- the two allowed forms become placeholders (round 5: a price is per MONTH only)
   n := regexp_replace(n, '([^a-z0-9$])(from|only|just|at|for|as low as|starting at|starts at|under|less than|about|des|a partir de|pour|seulement|moins de) ' || amt
-                         || ' ?(?:(?:/|per|a|an|par|each|every) ?)?(?:mo|month|mois|week|semaine|day|jour|monthly|weekly|daily)(?![a-z0-9])', '\1 zzprice ', 'g');
+                         || ' ?(?:(?:/|per|a|an|par|each|every) ?)?(?:mo|month|mois|monthly)(?![a-z0-9])', '\1 zzprice ', 'g');
   n := regexp_replace(n, '([^a-z0-9$,.])\$ ?[0-9]{1,3}(?:[.,][0-9]{2})? ?/ ?(?:mo|month|mois)(?![a-z0-9])', '\1 zzprice ', 'g');
   n := regexp_replace(n, '([^a-z0-9$])(up to|jusqu a|jusqu au) (?:\$ ?[1-9][0-9]{0,2}(?:,000){1,2}|[1-9][0-9]{0,2}(?: 000){1,2} ?\$)(?![0-9k]|[,.][0-9])', '\1 zzcov ', 'g');
   if n ~ '\$|[0-9] ?(?:dollars?|cad|usd|euros?|bucks|piastres?|grand|k)(?![a-z0-9])' then return true; end if;
+  -- round 5: a coverage ceiling is followed by the end of the clause or by a coverage word, nothing else ("up to $85,000 a year", "up to $412,000 on the home": refused)
+  if n ~ 'zzcov(?! *(?:[.,;:!?)]|$)| (?:in |of |de |en |d )?(?:coverage|couverture|protection)(?![a-z]))' then return true; end if;
+  -- round 5: ANY number next to a period, either order, no currency sign needed ("85,000 a year", "6,500 monthly", "#850 weekly", "4 200 par mois", "annually: over 85,000")
+  if n ~ ('(?:^|[^0-9a-z])' || num || ' ?[.,:;-]? ?' || per)
+     or n ~ ('[^a-z]' || per || ' ?(?:[:=]|is|of|de|est) ?(?:over |more than |plus de |about |around |at least |au moins )?' || num || '(?![0-9])') then return true; end if;
   -- a spelled-out COUNT of things ("over ten thousand families", "plus de mille clients"): the words over / more than, number words, then a plural noun that is not money or time
   n := regexp_replace(n, '([^a-z])(over|more than|plus de) ' || nw || '(?: ' || nw || ')* (?!dollars|bucks|years|months|weeks|hours|days|piastres|euros|ans|mois|cents)(?=[a-z]+s[^a-z])', '\1\2 zzcount ', 'g');
   if n ~ '[^a-z](?:hundred|thousand|million|billion|mille|milles|millions|millier|milliers|cent|cents)(?![a-z])' then return true; end if;
@@ -435,13 +455,26 @@ begin
      or n ~ ('[^a-z]' || nw || ' (?:yearly|monthly|weekly|annually|hourly|biweekly)(?![a-z])') then return true; end if;
   if n ~ ('[^a-z](?:age|aged|ages|agee|agees)[^a-z0-9]{0,3}(?:de )?' || nw || '(?![a-z])')
      or n ~ ('[^a-z]' || nw || '(?:[ -]+' || nw || ')?[ -]+(?:years?|yrs?|ans)[ -]+(?:old|olds)(?![a-z])') then return true; end if;
+  -- round 5: a spelled-out age without the word "age": a compound ("forty five", "quarante-cinq"), or a tens / teens word after "you are" / "is" / "turning" / "vous avez"
+  if n ~ ('[^a-z](?:' || tens || ')[ -]+(?:et )?' || units || '(?![a-z])')
+     or n ~ ('[^a-z](?:you are|you re|youre|is|turning|turned|vous avez|tu as|il a|elle a|j ai) (?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|' || tens || ')(?![a-z])') then return true; end if;
   if n ~ ('[^a-z](?:(?:months?|weeks?|days?|payments?|mois|semaines?|paiements?) (?:late|behind|overdue|en retard)|late on|behind on|overdue|en retard|past due|arrears|arrerages|'
           || 'missed (?:[a-z]+ ){0,2}payments?|laid off|out of work|unemployed|sans emploi|chomage|bankrupt[a-z]*|faillite|foreclos[a-z]*|garnish[a-z]*|collections agency)(?![a-z])') then return true; end if;
-  if p_strict and n ~ ('[^a-z](?:pay|pays|paid|paying|payez|paye|payes|payer|make|makes|made|making|earn[a-z]*|gagne[a-z]*|salar[a-z]*|wages?|paycheques?|paychecks?|paystubs?|mortgages?|hypothe[a-z]*|'
-          || 'loans?|prets?|debts?|dettes?|owe[sd]?|owing|doit|tax|taxes|impots?|cash|rent|loyer|job|jobs|emploi|worth|net|gross|brut|hourly|income|incomes|revenus?)(?![a-z])') then
-    m := regexp_replace(n, '([^0-9])24 ?/ ?7([^0-9])', '\1 \2', 'g');
-    m := regexp_replace(m, '([^0-9])(?:19|20)[0-9]{2}([^0-9])', '\1 \2', 'g');
-    m := regexp_replace(m, '[0-9]+ ?-? ?(?:minutes?|mins?|hours?|heures?|days?|jours?|seconds?|secondes?|steps?|etapes?|reasons?|raisons?|stars?|etoiles?|tips?|conseils?)(?![a-z])', ' ', 'g');
+  -- round 5: payment trouble and money circumstances without an amount ("behind with the mortgage", "the mortgage is behind", "no savings", "a large loan", "makes less than", "a good living")
+  if n ~ ('[^a-z](?:behind (?:with|in|on)|(?:is|are|am|was|were|be|been|fell|falling|fall|falls|get|gets|got|getting) behind|(?:is|are|am|was|were) late|late (?:with|paying|payments?|on)|in default|default(?:ed|ing|s)? on|'
+          || 'delinquen[a-z]*|en defaut|retard de paiement|missed (?:a |the |your |their |his |her |my )?(?:payments?|rent|installments?)|'
+          || '(?:no|zero|little|without|sans|pas d|aucune?|not much|any) (?:savings|epargnes?|economies|income|revenus?|pension|retirement savings|job|emploi|benefits|assets)|'
+          || '(?:large|big|huge|massive|heavy|small|giant|gros|grosse|grosses|lourde?s?) (?:loans?|debts?|mortgages?|prets?|dettes?|hypotheques?)|'
+          || '(?:make|makes|made|making|earn[a-z]*|gagne[a-z]*) (?:less|more) than|(?:make|makes|made|making|earn[a-z]*) a (?:good|decent|great|modest|comfortable|nice|solid|small|low|high) (?:living|salary|wage|income))(?![a-z])') then return true; end if;
+  m := regexp_replace(n, '([^0-9])24 ?/ ?7([^0-9])', '\1 \2', 'g');
+  m := regexp_replace(m, '([^0-9])(?:19|20)[0-9]{2}([^0-9])', '\1 \2', 'g');
+  m := regexp_replace(m, '[0-9]+ ?-? ?(?:minutes?|mins?|hours?|heures?|days?|jours?|seconds?|secondes?|steps?|etapes?|reasons?|raisons?|stars?|etoiles?|tips?|conseils?)(?![a-z])', ' ', 'g');
+  if not p_strict then
+    -- the all-columns scan of a row (round 5): a period in one column and a money-sized number in another ("you get more than 85,000" + "a year"), and a possessive pay / debt word next to any
+    -- amount in the row ("your mortgage" + "from $999 a month")
+    if m ~ ('[^a-z]' || per) and m ~ '[0-9]{3}|[0-9][ ,.][0-9]{3}|zzcov|[^a-z](?:hundred|thousand|million|mille|cent)' then return true; end if;     -- (a money-sized number: a short date or count is not)
+    if n ~ ('[^a-z](?:your|you|votre|vos|ton|ta|tes|his|her|their|leur|leurs|son|sa|ses) (?:[a-z]+ )?' || payw || '(?![a-z])') and n ~ 'zzprice|zzcov|zzcount|[0-9]' then return true; end if;
+  elsif n ~ ('[^a-z]' || payw || '(?![a-z])') then
     if m ~ ('zzprice|zzcov|zzcount|%|[0-9]|[^a-z]' || replace(nw, '|one|', '|') || '(?![a-z])') then return true; end if;      -- ("one" alone is a pronoun far more often than a number)
   end if;
   return false;
@@ -544,10 +577,13 @@ begin
     v := regexp_replace(v, '(^|[^0-9a-z])[0-9]+ ?\+? ?(years?|ans) (of experience|d experience|in business|of service|de service|serving)', '\1 zznum \3', 'g');
     v := regexp_replace(v, '(^|[^a-z])(top|meilleurs?) +[0-9]{1,2}([^0-9a-z]|$)', '\1 zznum \3', 'g');
     v := regexp_replace(v, '(^|[^0-9a-z])[0-9]{1,2} +(reasons?|raisons?|stars?|etoiles?|steps?|etapes?|tips?|conseils?|astuces?|ways|mistakes|myths|questions?)([^a-z]|$)', '\1 zznum \2\3', 'g');
-    v := regexp_replace(v, '(^|[^a-z])(over|more than|plus de|plus d|plus que) +([0-9]{1,3}([, ][0-9]{3})+|[0-9]{3,})\+?', '\1\2 zznum ', 'g');
+    -- round 5 (RV17-D B1): "over / more than / plus de N" is a number form only as a COUNT of customers ("over 5,000 families"); "savings over 250,000", "over 85,000 on the house" stay numbers
+    v := regexp_replace(v, '(^|[^a-z])(over|more than|plus de|plus d|plus que) +([0-9]{1,3}([, ][0-9]{3})+|[0-9]{3,})\+? +(families|clients|customers|canadians|policyholders|members|businesses|households|reviews|familles|canadiens|membres|entreprises|avis)([^a-z]|$)', '\1\2 zznum \5\6', 'g');
     v := regexp_replace(v, '(^|[^a-z])(since|depuis) +(19|20)[0-9]{2}([^0-9]|$)', '\1\2 zznum \4', 'g');
-    for m in select g from regexp_matches(v, '((?:ages?|aged) +([0-9]{1,2}) ?(?:-|to|and|a|et) ?([0-9]{1,2}))', 'g') as r(g) loop
-      if abs(m[3]::integer - m[2]::integer) >= 15 and m[2]::integer >= 18 then v := replace(v, m[1], ' zznum '); end if;
+    -- an age RANGE: "ages 18 to 65" (round 5: "and" / "et" join two ages, not a range, and both bounds are round: 18, 19, 21 or a multiple of 5)
+    for m in select g from regexp_matches(v, '((?:ages?|aged) +([0-9]{1,2}) ?(?:-|to|a) ?([0-9]{1,2}))(?![0-9])', 'g') as r(g) loop
+      if abs(m[3]::integer - m[2]::integer) >= 15 and m[2]::integer >= 18 and m[3]::integer > m[2]::integer
+         and (m[2]::integer in (18, 19, 21) or m[2]::integer % 5 = 0) and m[3]::integer % 5 = 0 then v := replace(v, m[1], ' zznum '); end if;
     end loop;
     if hrs then   -- opening hours: "9 to 5", "9am - 5pm", "9h a 17h", only next to an hours word or a fixed phrase such as Mon-Fri
       v := regexp_replace(v, '(^|[^0-9a-z])([0-9]|1[0-9]|2[0-4])(:[0-5][0-9])? ?(am|pm|h)? ?(-|to|a|et|and) ?([0-9]|1[0-9]|2[0-4])(:[0-5][0-9])? ?(am|pm|h)?([^0-9a-z]|$)', '\1 zznum \9', 'g');
@@ -584,9 +620,12 @@ end $$;
 -- S3 (review round 4): the insurance screen no longer depends on what a free-text, nullable label happens to say. A workspace gets the insurance screen UNLESS its vertical is exactly
 -- one of the verticals this system knows to be something else (today: 'mortgage', the only other vertical with an onboarding template). NULL, blank, misspelled, unknown, new: insurance
 -- screen (fail closed). A new non-insurance vertical is added here, by a migration, never by naming a workspace.
+-- Round 5 (N1), the documented normalisation, and the only one: lower() and trimming of ASCII spaces at both ends. So 'mortgage', 'Mortgage', 'MORTGAGE' and ' mortgage ' are the mortgage
+-- vertical; everything else is compared EXACTLY: no Unicode folding, so a tab, a newline, a non-breaking space, a Cyrillic look-alike, fullwidth letters, a soft hyphen, 'mortgages' or
+-- 'mortgage-broker' are not 'mortgage' and get the insurance screen (fail closed).
 create or replace function public.ws_vertical_insurance(p_vertical text) returns boolean
 language sql immutable set search_path to 'pg_catalog' as $$
-  select lower(btrim(coalesce(p_vertical, ''))) <> all (array['mortgage']);
+  select lower(btrim(coalesce(p_vertical, ''), ' ')) <> all (array['mortgage']);
 $$;
 
 create or replace function public.ws_insurance_context(p_text text, p_ws uuid) returns boolean
@@ -1080,15 +1119,25 @@ begin
   if p_col = 'blocked_until' then
     if p_table <> 'ffm_onboarding_items' then return false; end if;
     if lower(v) ~ '^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]* [0-9]{1,2}(, [0-9]{4})?$' then return true; end if;       -- a plain date (ISO dates are refused by the old account-number rule, as before)
-  elsif p_col <> all (array['status', 'stage', 'kind', 'provider', 'template_key', 'approved_by', 'provided_by', 'destination_kind', 'channel', 'basis', 'wording_version', 'recorded_by', 'set_by']) then
+  elsif p_col <> all (array['status', 'stage', 'kind', 'provider', 'template_key', 'approved_by', 'provided_by', 'destination_kind', 'channel', 'basis', 'wording_version', 'recorded_by', 'set_by', 'evidence_ref']) then
     return false;
   end if;
   if p_col = any (array['approved_by', 'recorded_by', 'set_by', 'provided_by']) and v ~* '^[a-z0-9._%+-]{1,60}@[a-z0-9.-]{3,60}\.[a-z]{2,10}$' then v := split_part(v, '@', 1);          -- an actor e-mail: its local part gets the same word checks
+  elsif p_col = 'evidence_ref' then
+    if v !~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' then return false; end if;                                -- the capture-reference shape (PR #20), up to 100 characters
   elsif v !~ '^[A-Za-z0-9_:.-]{1,60}$' then return false; end if;
+  -- round 5 (S6): an ACTOR tag names who acted, nothing else: a word of a short fixed list of insurer-decision, care, pregnancy, status and claim words makes it free text
+  -- (and, below, for every structural column: a run of number words such as "fortyfive") ("insurer_declined", "needs_daily_care", "expecting_wk20"). (Not the whole vocabulary hard-deny list: it holds 'client' and 'test', real actor tags.)
+  if p_col = any (array['approved_by', 'recorded_by', 'set_by', 'provided_by']) then
+    foreach w in array regexp_split_to_array(regexp_replace(lower(v), '([a-z])([0-9])|([0-9])([a-z])', '\1\3_\2\4', 'g'), '[_:.+-]+') loop
+      if w = any (array['needs', 'need', 'needed', 'care', 'declined', 'decline', 'denied', 'refused', 'expecting', 'pregnant', 'wk', 'weeks', 'week', 'insurer', 'insured', 'claim', 'claims',
+                        'sick', 'ill', 'daily', 'smoker', 'smokes', 'widow', 'widowed', 'divorced', 'retired', 'unemployed', 'disabled', 'senior', 'junior']) then return false; end if;
+    end loop;
+  end if;
   -- round 4 (N5): a token is split at separators AND between letters and digits ("age45" -> age, 45); a pay / age / number word makes it free text ("makes_85k", "fifty_thousand")
   foreach w in array regexp_split_to_array(regexp_replace(lower(v), '([a-z])([0-9])|([0-9])([a-z])', '\1\3_\2\4', 'g'), '[_:.-]+') loop
     if length(w) >= 2 and w ~ '[a-z]' and (public.ws_name_word_hit(w) or public.ws_health_word_hit(w)) then return false; end if;
-    if w ~ ('^(' || public.ws_number_words() || '|age|aged|ages|dob|born|old|makes|make|earns|earn|pay|paid|pays|salary|income|owes|owe|debt|mortgage|loan|rent|k|yrs|yr|yo)$') then return false; end if;
+    if w ~ ('^((?:' || public.ws_number_words() || ')+|age|aged|ages|dob|born|old|makes|make|earns|earn|pay|paid|pays|salary|income|owes|owe|debt|mortgage|loan|rent|k|yrs|yr|yo)$') then return false; end if;
   end loop;
   return true;
 end $$;
@@ -1199,7 +1248,13 @@ begin
   res := public.ws_classify_core(p_value, null, false, false, false);            -- the old screen first, always: nothing it refused is ever accepted here
   if not (res ->> 'allowed')::boolean then return res || nofree; end if;
   -- values the erasure functions write themselves (ffm_erase_lead): never refused, or an erasure in an insurance workspace would fail
-  if (p_col in ('name', 'source') and v = '[erased]') or (p_table = 'ffm_consent_log' and p_col = 'source' and v ~ '^erasure:(erasure_request|withdrawal|retention_expired|other)$') then return res || nofree; end if;
+  -- (round 5, N5: the 'erasure:<reason>' source of an erasure row is accepted by ffm_guard on the withdrawal path only, never here)
+  if p_col in ('name', 'source') and v = '[erased]' then return res || nofree; end if;
+  -- round 5 (N8): a routing rule NAME may be one of a few fixed structural names ("Main rule", "Default route", "Backup CRM route"): no free word, at most one digit, so no personal data
+  if p_table = 'ffm_routing_rules' and p_col = 'name'
+     and public.ws_fold_text(v) ~ '^(main|default|primary|secondary|backup|fallback|first|second|third|new|crm|email|webhook)( (lead|leads))?( (crm|email|webhook))?( (rule|route|routing|routing rule))?( [1-9])?$' then
+    return res || nofree;
+  end if;
   if p_table = 'ws_leads' and p_col = 'name' then return public.ws_person_name_check(p_value) || nofree; end if;
   if p_table = 'ws_leads' and p_col = 'email' and v ~* '^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{3,80}\.[a-z]{2,10}$' then
     for w in select m[1] from regexp_matches(public.ws_fold_text(v), '[a-z]{3,}', 'g') as m loop
@@ -1222,6 +1277,9 @@ begin
     -- an e-mail address or a link: list screen (its words get the name and health checks). Anything else without spaces must be such a reference id, or it is refused.
     if v ~ '[@/]' then return public.ws_onboarding_value_check('crm_destination', p_value) || nofree; end if;
     if v ~ '^[A-Za-z][A-Za-z_:.-]{0,50}[0-9]{0,6}[A-Za-z]{0,3}$' and public.ws_structural_value(p_table, 'kind', v) then return res || nofree; end if;
+    -- round 5 (integration S7): a consent evidence reference in the capture-reference shape of PR #20 (^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$, an opaque form-submission id): no vocabulary test,
+    -- but every word gets the name / health / pay / age / number checks and every earlier category applies (the old screen above already ran)
+    if p_table = 'ffm_consent_log' and v ~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' and public.ws_structural_value(p_table, 'evidence_ref', v) then return res || nofree; end if;
     return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word'), 'free', false);
   end if;
   -- a lead / consent SOURCE tag ("web form", "referral", "meta_ad"): one or two plain words, each of them clear of every deny list (people, narrative, health, names, numbers, pay / debt).
@@ -1304,8 +1362,14 @@ end $$;
 create or replace function public.ffm_guard() returns trigger
 language plpgsql set search_path to 'pg_catalog' as $$
 declare k text; v text; res jsonb; allv text := ''; freev text := ''; j jsonb := to_jsonb(new); jo jsonb; v_ws uuid; c_ws uuid; ctx boolean := false; person boolean; structural boolean; n_vals integer := 0; n_free integer := 0;
+        prot boolean := false; pre text; body text; protv text := ''; n_prot integer := 0; src_pre text := '';
+        wd_source constant text := 'withdrawal (wording not stored)'; wd_actor constant text := 'unknown (not stored)';
 begin
   person := tg_table_name <> all (array['ffm_ad_sets', 'ffm_creatives', 'ffm_approvals', 'ffm_onboarding_items']);
+  -- ROUND 5 (RV17-D S4, integration S7): a consent WITHDRAWAL or ERASURE row (basis 'withdrawn': only ffm_withdraw_consent and ffm_erase_lead write it; the bot has no INSERT grant) is NEVER
+  -- refused or lost for the wording of any column, in any workspace. A column that fails the screen is replaced by a fixed tag (source: 'withdrawal (wording not stored)', keeping a generated
+  -- 'via <channel>: ' / 'no usable identifier for <channel>: ' prefix; recorded_by: 'unknown (not stored)'; evidence_ref and wording_version: NULL). The text is not stored; the withdrawal is.
+  prot := tg_table_name = 'ffm_consent_log' and tg_op = 'INSERT' and j ->> 'basis' = 'withdrawn';
   if tg_op = 'UPDATE' then
     jo := to_jsonb(old);
     -- a row that MOVES to another workspace (or a workspace that changes vertical) is screened in full, like a new row
@@ -1319,6 +1383,43 @@ begin
                 and not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = e.key and a.attnum > 0 and not a.attisdropped
                                   and a.atttypid in ('uuid'::regtype, 'timestamptz'::regtype)) loop
     continue when btrim(v) = '';
+    if tg_table_name = 'ffm_consent_log' then
+      -- machine-written consent columns (PR #20 shapes, CHECK-constrained): never screened and never joined. verification is set by ffm_record_consent from a closed list.
+      continue when (k = 'verification' and v = any (array['not_applicable', 'ok', 'no_capture', 'capture_erased', 'channel_mismatch', 'wording_mismatch', 'lead_mismatch', 'unbound',
+                                                             'capture_key_missing', 'no_contact', 'contact_mismatch']))
+                 or (k = 'basis' and v = any (array['express', 'implied', 'withdrawn', 'unverified']))
+                 or (k = 'channel' and v = any (array['email', 'sms', 'phone', 'mail', 'all']))
+                 or (k = 'source' and v = '[erased]');                                 -- written by ffm_erase_lead (the immutability trigger allows it only during an erasure)
+      if prot then
+        pre := '';
+        body := v;
+        if k = 'source' then
+          -- literals the consent functions write themselves: an erasure row ('erasure:<one of four reasons>', channel all, by the owner) and the default 'unspecified'
+          continue when v = 'unspecified'
+                     or (v ~ '^erasure:(erasure_request|withdrawal|retention_expired|other)$' and j ->> 'channel' = 'all' and j ->> 'recorded_by' = 'owner');
+          pre := coalesce(substring(v from '^(?:via (?:telegram|post|mail|whatsapp|signal|other): |no usable identifier for (?:email|sms|phone): )'), '');
+          body := substr(v, length(pre) + 1);
+          src_pre := pre;
+        end if;
+        if btrim(body) = '' then
+          res := jsonb_build_object('allowed', length(v) <= 120);
+        elsif ctx then
+          res := public.ws_person_column_check(tg_table_name, k, body, v_ws);
+        else
+          res := public.ws_classify_core(body, null, false, public.ws_structural_value(tg_table_name, k, body), false);
+        end if;
+        if (res ->> 'allowed')::boolean and (k <> 'source' or length(v) <= 120) then
+          protv := protv || ' ' || body; n_prot := n_prot + 1;
+        elsif k = 'source' then new.source := pre || wd_source;
+        elsif k = 'recorded_by' then new.recorded_by := wd_actor;
+        elsif k = 'evidence_ref' then new.evidence_ref := null;
+        elsif k = 'wording_version' then new.wording_version := null;
+        else
+          raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+        end if;
+        continue;
+      end if;
+    end if;
     if ctx and tg_table_name = 'ffm_onboarding_items' and k = 'value_text' then
       res := public.ws_onboarding_value_check(j ->> 'template_key', v);       -- onboarding values are business contacts and wording, not marketing copy (see ws_onboarding_value_check)
       if not (res ->> 'allowed')::boolean then
@@ -1328,13 +1429,6 @@ begin
     elsif person and ctx and (jo is null or (jo ->> k) is distinct from v) then
       -- S2: a person table (routing, consent) of an insurance workspace gets the insurance screen, column by column (ws_person_column_check); on UPDATE only for the values that change
       res := public.ws_person_column_check(tg_table_name, k, v, v_ws);
-      -- A WITHDRAWAL IS NEVER LOST FOR ITS WORDING: when the source or the evidence reference of a withdrawal passes the old screen but not the insurance screen, the row is stored
-      -- with the fixed tag 'withdrawal' (or without the reference) instead of being refused. The text is not stored; the withdrawal is.
-      if not (res ->> 'allowed')::boolean and tg_table_name = 'ffm_consent_log' and tg_op = 'INSERT' and j ->> 'basis' = 'withdrawn' and k in ('source', 'evidence_ref')
-         and (public.ws_classify_core(v, null, false, false, false) ->> 'allowed')::boolean then
-        if k = 'source' then new.source := 'withdrawal'; else new.evidence_ref := null; end if;
-        continue;
-      end if;
       if (res ->> 'free')::boolean then freev := freev || ' ' || v; n_free := n_free + 1; end if;
     else
       -- a structural column (enum, template key, actor tag, template title, date) skips only the vocabulary test, and only when the value really looks like one
@@ -1356,6 +1450,16 @@ begin
     res := public.ws_classify_core(freev, v_ws, true, true, true);      -- the free-text columns of a person row, joined (insurance screen)
     if not (res ->> 'allowed')::boolean then
       raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
+  end if;
+  if n_prot > 1 then
+    -- the kept columns of a withdrawal / erasure row, joined (a value split across them): on a hit every caller-supplied column becomes its fixed tag; the row is still stored
+    res := case when ctx then public.ws_classify_core(protv, v_ws, true, true, true) else public.ws_classify_core(protv, null, false, true, false) end;
+    if not (res ->> 'allowed')::boolean then
+      if new.source is distinct from 'unspecified' and new.source !~ '^erasure:' then new.source := src_pre || wd_source; end if;
+      if new.recorded_by is distinct from 'owner' and new.recorded_by is distinct from 'unknown' then new.recorded_by := wd_actor; end if;
+      new.evidence_ref := null;
+      new.wording_version := null;
     end if;
   end if;
   return new;

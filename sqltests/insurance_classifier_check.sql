@@ -1182,21 +1182,21 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
       perform pg_temp.expect_fail(format($q$update public.ws_leads set note = %L where id = %L$q$, s, l4), 'Sensitive data refused%');
       perform pg_temp.expect_fail(format($q$insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (%L, %L, 'crm', 'crm-acme')$q$, ins4, s), 'Sensitive data refused%');
       perform pg_temp.expect_fail(format($q$insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (%L, 'Main rule', 'crm', %L)$q$, ins4, s), 'Sensitive data refused%');
-      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'express', 'v1', 'web form', now(), %L, 'owner')$q$, ins4, l4, s), 'Sensitive data refused%');
-      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, recorded_by) values (%L, %L, 'email', 'express', 'v1', %L, now(), 'owner')$q$, ins4, l4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'implied', 'v1', 'web form', now(), %L, 'owner')$q$, ins4, l4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, recorded_by) values (%L, %L, 'email', 'implied', 'v1', %L, now(), 'owner')$q$, ins4, l4, s), 'Sensitive data refused%');
       perform pg_temp.expect_fail(format($q$insert into public.client_workspaces (slug, name, vertical) values ('ic-s2-x', %L, 'insurance')$q$, s), 'Sensitive data refused%');
     end loop;
     foreach s in array array['takes_metformin_daily', 'makes_85k', 'age45', 'fifty_thousand', 'born-1984-03-12', 'maria.lopez@gmail.com'] loop       -- a reference id or actor tag is not a way around it
       perform pg_temp.expect_fail(format($q$insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (%L, 'Main rule', 'crm', %L)$q$, ins4, s), 'Sensitive data refused%');
-      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'express', 'v1', 'web form', now(), %L, 'owner')$q$, ins4, l4, s), 'Sensitive data refused%');
-      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, recorded_by) values (%L, %L, 'email', 'express', 'v1', 'web form', now(), %L)$q$, ins4, l4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'implied', 'v1', 'web form', now(), %L, 'owner')$q$, ins4, l4, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, recorded_by) values (%L, %L, 'email', 'implied', 'v1', 'web form', now(), %L)$q$, ins4, l4, s), 'Sensitive data refused%');
     end loop;
     -- EXPECTED: ordinary person rows of an insurance workspace are still stored (names are names, contact fields are contact fields, tags and reference ids are tags)
     perform public.ws_add_lead(ins4, c4, 'Jean-Luc O''Neil', 'jl.oneil@example.com', '+1 (613) 555-0143', 'referral');
     perform public.ws_add_lead(ins4, c4, 'Sam Other', null, null, 'meta_ad', 'callback about life insurance');     -- an approved product term is product interest, not health
     insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (ins4, 'Leads to the broker', 'crm', 'crm-acme');
     insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (ins4, 'Email the office', 'email', 'leads@acme.ca');
-    insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (ins4, l4, 'email', 'express', 'form-v3', 'web form', now(), 'form-submission-1001', 'bot');
+    insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (ins4, l4, 'email', 'implied', 'form-v3', 'web form', now(), 'form-submission-1001', 'bot');
     insert into public.client_workspaces (slug, name, vertical) values ('ic-s2-ok', 'Maple Leaf Insurance Brokers Inc.', 'insurance');
     -- EXPECTED: a non-insurance (mortgage) workspace is UNCHANGED on the person tables: the old screen, nothing more. The value below has no word of the old lists and was stored before this migration too.
     perform public.ws_add_lead(other, cb, 'Pat Example', 'pat@example.com', '613-555-0142', 'web form', 'wants a callback about renewal, takes metformin daily');
@@ -1222,9 +1222,10 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
     perform pg_temp.expect_fail($q$update public.client_workspaces set vertical = 'insurance' where slug = 'ic-mv'$q$, 'Sensitive data refused%');
     -- EXPECTED: a WITHDRAWAL in an insurance workspace is never refused for its wording (the text is replaced by a fixed tag), and an ERASURE works (it writes its own fixed values)
     tid := public.ffm_withdraw_consent(ins4, wx, 'email', 'said to stop calling, moving away next spring', 'voicemail left on the office line', 'bot');
-    if (select source || '/' || coalesce(evidence_ref, 'null') from public.ffm_consent_log where id = tid) <> 'withdrawal/null' then raise exception 'R4.S2 withdrawal wording was stored or the withdrawal was lost'; end if;
+    if (select source || '/' || coalesce(evidence_ref, 'null') from public.ffm_consent_log where id = tid) <> 'withdrawal (wording not stored)/null' then raise exception 'R4.S2 withdrawal wording was stored or the withdrawal was lost'; end if;
     if public.ffm_can_contact(wx, 'email') then raise exception 'R4.S2 the withdrawal did not take effect'; end if;
-    perform pg_temp.expect_fail(format($q$select public.ffm_withdraw_consent(%L, %L, 'sms', 'has diabetes, stop', null, 'bot')$q$, ins4, wx), 'Sensitive data refused%');   -- (the old screen still refuses, as before this migration)
+    tid := public.ffm_withdraw_consent(ins4, wx, 'sms', 'has diabetes, stop', null, 'bot');   -- round 5 (S4): even wording the OLD screen refuses no longer blocks a withdrawal; it is not stored
+    if (select source from public.ffm_consent_log where id = tid) not like '%withdrawal (wording not stored)' then raise exception 'R4.S2 a withdrawal with refused wording was not stored with the fixed tag'; end if;
     perform pg_temp.expect_fail(format($q$select public.ffm_record_consent(%L, %L, 'sms', 'express', 'v1', 'said yes on the phone, takes metformin daily', now(), 'form-1', 'bot')$q$, ins4, l4), 'Sensitive data refused%');   -- a consent row gets no such exception
     perform public.ffm_erase_lead(ins4, wx, 'erasure_request');
     if (select name || '/' || coalesce(note, 'null') from public.ws_leads where id = wx) <> '[erased]/null' then raise exception 'R4.S2 erasure did not blank the lead'; end if;
@@ -1303,6 +1304,162 @@ Disability insurance for professionals and business owners in Gatineau$corpus$, 
       perform pg_temp.expect_fail(format($q$insert into public.ffm_approvals (workspace_id, kind, ref_id, approved_by) values (%L, 'campaign', %L, %L)$q$, ins4, c4, s), 'Sensitive data refused%');
     end loop;
     if not (public.ws_structural_value('ffm_approvals', 'approved_by', 'owner') and public.ws_structural_value('ffm_approvals', 'approved_by', 'bot:setter-1')) then raise exception 'R4.N5 ordinary actor tags'; end if;
+  end;
+  -- ===== R5: fifth review of PR #17 (RV17-D) and integration finding S7 (PR #20 consent columns). Every item: EXPECTED in the comment, ACTUAL asserted. =====
+  perform pg_temp.as_owner(true);
+  declare i5 uuid; c5 uuid; a5 uuid; l5 uuid; mc uuid; rid uuid; rec record; has_ver boolean; k5 integer := 0; em text;
+  begin
+    insert into public.client_workspaces (slug, name, vertical, status) values ('ic-r5', 'IC Round Five', 'insurance', 'active') returning id into i5;
+    insert into public.ws_campaigns (workspace_id, name) values (i5, 'Spring promo') returning id into c5;
+    insert into public.ffm_ad_sets (workspace_id, campaign_id, name) values (i5, c5, 'Families plan') returning id into a5;
+    insert into public.ws_campaigns (workspace_id, name) values (other, 'Spring promo') returning id into mc;
+
+    -- R5.S4 (SAFETY, regression at 12709e7) a consent WITHDRAWAL or ERASURE, and the suppression it writes, is never refused or lost because of the wording of ANY column, in ANY workspace.
+    --   EXPECTED: the withdrawal row is stored; a column whose text fails the screen is stored as a fixed tag (source 'withdrawal (wording not stored)', recorded_by 'unknown (not stored)',
+    --   evidence_ref NULL); the withdrawal takes effect (ffm_can_contact false) and the address is suppressed. (At 12709e7: refused with "ffm_consent_log.recorded_by (unknown_word)".)
+    foreach s in array array['jarvis bot', 'setter Pat', 'Jean Tremblay', 'setter makes 85k', 'takes metformin daily', 'has diabetes', 'age forty five'] loop
+      for rec in select w, e from (values (i5, 'r5a'), (other, 'r5b')) v(w, e) loop
+        k5 := k5 + 1; em := rec.e || '-' || chr(96 + k5) || '@example.com';
+        l5 := public.ws_add_lead(rec.w, case when rec.w = i5 then c5 else mc end, 'Pat Example', em, '613-555-0150', 'web form');
+        perform public.ffm_record_consent(rec.w, l5, 'email', 'express', 'v1', 'web form', now(), 'form-r5-1', 'bot');
+        rid := public.ffm_withdraw_consent(rec.w, l5, 'email', 'reply STOP', 'msg-1', s);
+        if rid is null or not exists (select 1 from public.ffm_consent_log where id = rid and basis = 'withdrawn') then raise exception 'R5.S4 withdrawal lost for recorded_by %', s; end if;
+        if public.ffm_can_contact(l5, 'email') then raise exception 'R5.S4 withdrawal with recorded_by % did not take effect', s; end if;
+        if not public.is_suppressed(em) then raise exception 'R5.S4 the address was not suppressed (recorded_by %)', s; end if;
+        if s in ('setter makes 85k', 'takes metformin daily', 'has diabetes', 'age forty five') and rec.w = i5
+           and (select recorded_by from public.ffm_consent_log where id = rid) <> 'unknown (not stored)' then raise exception 'R5.S4 sensitive recorded_by stored: %', s; end if;
+        if s = 'has diabetes' and (select recorded_by from public.ffm_consent_log where id = rid) <> 'unknown (not stored)' then raise exception 'R5.S4 recorded_by refused by the old screen was stored (%)', rec.e; end if;
+      end loop;
+    end loop;
+    -- every caller-supplied column at once, in both workspaces, with wording the old screen refuses, and a value split across the columns of the row
+    for rec in select w, e from (values (i5, 'r5c'), (other, 'r5d')) v(w, e) loop
+      l5 := public.ws_add_lead(rec.w, case when rec.w = i5 then c5 else mc end, 'Pat Example', rec.e || '@example.com', '613-555-0151', 'web form');
+      rid := public.ffm_withdraw_consent(rec.w, l5, 'all', 'said on the call that his wife has cancer, stop', 'diabetes form 2', 'Jean Tremblay, setter makes $85k');
+      em := case when rec.w = i5 then 'unknown (not stored)' else 'Jean Tremblay, setter makes $85k' end;     -- (mortgage: the strict screen, as before, accepts this actor)
+      if (select source || '/' || coalesce(evidence_ref, 'null') || '/' || recorded_by from public.ffm_consent_log where id = rid) <> 'withdrawal (wording not stored)/null/' || em then
+        raise exception 'R5.S4 refused wording was stored in a withdrawal row (%): %', rec.e, (select source || '/' || coalesce(evidence_ref, 'null') || '/' || recorded_by from public.ffm_consent_log where id = rid);
+      end if;
+      if public.ffm_can_contact(l5, 'sms') or public.is_suppressed(rec.e || '@example.com') is not true then raise exception 'R5.S4 an all-channel withdrawal with refused wording did not take effect (%)', rec.e; end if;
+      rid := public.ffm_withdraw_consent(rec.w, l5, 'email', repeat('stop ', 30), null, 'bot');                       -- a source longer than the 120-character column limit
+      if (select source from public.ffm_consent_log where id = rid) <> 'withdrawal (wording not stored)' then raise exception 'R5.S4 a long withdrawal source was not replaced by the tag'; end if;
+    end loop;
+    l5 := public.ws_add_lead(i5, c5, 'Pat Example', 'r5e@example.com', null, 'web form');
+    rid := public.ffm_withdraw_consent(i5, l5, 'email', 'stop a year', 'msg-85000', 'bot');                                  -- each column passes alone, the row joined does not
+    if (select source || '/' || coalesce(evidence_ref, 'null') from public.ffm_consent_log where id = rid) <> 'withdrawal (wording not stored)/null' then raise exception 'R5.S4 split value kept in a withdrawal row'; end if;
+    -- ordinary withdrawals keep their wording (EXPECTED: stored as written)
+    rid := public.ffm_withdraw_consent(i5, l5, 'sms', 'reply STOP', 'msg-77', 'bot');
+    if (select source || '/' || evidence_ref || '/' || recorded_by from public.ffm_consent_log where id = rid) <> 'reply STOP/msg-77/bot' then raise exception 'R5.S4 an ordinary withdrawal was changed'; end if;
+    rid := public.ffm_withdraw_consent(i5, l5, 'phone', null, null, null);
+    if (select source || '/' || recorded_by from public.ffm_consent_log where id = rid) <> 'unspecified/unknown' then raise exception 'R5.S4 the default withdrawal values were changed'; end if;
+    -- the record path is NOT relaxed: a consent with a free-text actor or sensitive wording is refused (a refused consent can only reduce contact). EXPECTED: refused.
+    l5 := public.ws_add_lead(i5, c5, 'Pat Example', 'r5k@example.com', null, 'web form');
+    perform pg_temp.expect_fail(format($q$select public.ffm_record_consent(%L, %L, 'email', 'express', 'v1', 'web form', now(), 'form-r5-2', 'jarvis bot')$q$, i5, l5), 'Sensitive data refused%');
+    -- ERASURE in both workspaces of a lead whose withdrawal wording was refused. EXPECTED: works; erasure row source 'erasure:erasure_request' by the owner.
+    for rec in select w, e from (values (i5, 'r5f'), (other, 'r5g')) v(w, e) loop
+      l5 := public.ws_add_lead(rec.w, case when rec.w = i5 then c5 else mc end, 'Pat Example', rec.e || '@example.com', '613-555-0152', 'web form');
+      perform public.ffm_withdraw_consent(rec.w, l5, 'all', 'has diabetes, stop', null, 'setter Pat');
+      perform public.ffm_erase_lead(rec.w, l5, 'erasure_request');
+      if not exists (select 1 from public.ffm_consent_log where lead_id = l5 and source = '[erased]' and recorded_by = 'owner' and channel = 'all') then raise exception 'R5.S4 erasure row missing (%)', rec.e; end if;
+      if exists (select 1 from public.ffm_consent_log where lead_id = l5 and (source <> '[erased]' or evidence_ref is not null)) then raise exception 'R5.S4 erasure left wording (%)', rec.e; end if;
+      if not public.is_suppressed(rec.e || '@example.com') then raise exception 'R5.S4 erasure did not suppress the address (%)', rec.e; end if;
+    end loop;
+    -- R5.N5 the 'erasure:<reason>' source is a literal of the ERASURE path only (withdrawn, all channels, by the owner). EXPECTED: refused on a consent row; replaced by the tag on a bot withdrawal.
+    l5 := public.ws_add_lead(i5, c5, 'Pat Example', 'r5h@example.com', null, 'web form');
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'implied', 'v1', 'erasure:withdrawal', now(), 'form-1', 'owner')$q$, i5, l5), 'Sensitive data refused%');
+    insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, source, captured_at, recorded_by) values (i5, l5, 'all', 'withdrawn', 'erasure:withdrawal', now(), 'bot') returning id into rid;
+    if (select source from public.ffm_consent_log where id = rid) <> 'withdrawal (wording not stored)' then raise exception 'R5.N5 a bot withdrawal kept the erasure source'; end if;
+    insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, source, captured_at, recorded_by) values (i5, l5, 'all', 'withdrawn', 'erasure:other', now(), 'owner') returning id into rid;
+    if (select source from public.ffm_consent_log where id = rid) <> 'erasure:other' then raise exception 'R5.N5 the erasure literal was changed'; end if;
+
+    -- R5.S7 (integration with PR #20) the consent columns. EXPECTED: PR #20's machine codes and generated shapes are accepted exactly in an insurance workspace (verification codes, 'unverified'
+    --   basis, capture-reference evidence, version labels, 'via <channel>: ' / 'no usable identifier for <channel>: ' withdrawal prefixes); sensitive evidence is still refused.
+    l5 := public.ws_add_lead(i5, c5, 'Pat Example', 'r5i@example.com', '613-555-0153', 'web form');
+    foreach s in array array['form-abc-001', 'fresh-1', 'inquiry-77', 'cap_7f3a9c.v2', 'form-submission-1001', 'Form_A.v2-0042', 'web-' || repeat('a1', 40)] loop
+      insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (i5, l5, 'email', 'implied', 'form-a-v2', 'web form', now(), s, 'owner');
+    end loop;
+    foreach s in array array['diabetes-form-2', 'bank statement attached', 'diabetes form 2', 'form-1984-03-12', 'makes_85k', 'age45', 'fortyfive-1'] loop
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (%L, %L, 'email', 'implied', 'v1', 'web form', now(), %L, 'owner')$q$, i5, l5, s), 'Sensitive data refused%');
+    end loop;
+    foreach s in array array['via telegram: reply STOP', 'via post: unspecified', 'no usable identifier for sms: reply STOP', 'no usable identifier for email: unspecified'] loop
+      insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, source, captured_at, recorded_by) values (i5, l5, 'all', 'withdrawn', s, now(), 'bot') returning id into rid;
+      if (select source from public.ffm_consent_log where id = rid) <> s then raise exception 'R5.S7 generated withdrawal source changed: %', s; end if;
+    end loop;
+    insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, source, captured_at, recorded_by) values (i5, l5, 'all', 'withdrawn', 'via telegram: wife has cancer', now(), 'bot') returning id into rid;
+    if (select source from public.ffm_consent_log where id = rid) <> 'via telegram: withdrawal (wording not stored)' then raise exception 'R5.S7 the generated prefix was not kept with the tag'; end if;
+    has_ver := exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'ffm_consent_log' and column_name = 'verification');
+    if has_ver then          -- only once PR #20 is merged: the verification column and the 'unverified' basis
+      foreach s in array array['not_applicable', 'ok', 'no_capture', 'capture_erased', 'channel_mismatch', 'wording_mismatch', 'lead_mismatch', 'unbound', 'capture_key_missing', 'no_contact', 'contact_mismatch'] loop
+        execute format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by, verification) values (%L, %L, 'email', 'implied', 'v1', 'web form', now(), 'form-abc-001', 'owner', %L)$q$, i5, l5, s);
+        execute format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by, verification) values (%L, %L, 'email', 'unverified', 'v1', 'web form', now(), 'form-abc-001', 'bot', %L)$q$, i5, l5, s);
+      end loop;
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by, verification) values (%L, %L, 'email', 'implied', 'v1', 'web form', now(), 'form-abc-001', 'owner', 'has_diabetes')$q$, i5, l5), 'Sensitive data refused%');
+    end if;
+    -- (mortgage workspace) the same machine values are stored there too
+    l5 := public.ws_add_lead(other, mc, 'Pat Example', 'r5j@example.com', null, 'web form');
+    insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by) values (other, l5, 'email', 'implied', 'form-a-v2', 'web form', now(), 'form-abc-001', 'owner');
+
+    -- R5.B1 (BLOCKER) money forms without a currency sign, with "over", after "up to $X", benefit / savings / debt, payment trouble without an amount, several ages, split across columns.
+    --   EXPECTED: refused in an insurance workspace with and without approved terms. (At 12709e7: all allowed; most stored in 26 of 31 write targets.)
+    foreach s in array array['you get more than 85,000 a year', 'you take home over 6,500 monthly', 'the family gets over 120,000 yearly', 'more than 85,000 annually, self employed', 'plus de 85 000 par an',
+                             'you receive over 2,400 monthly in benefits', 'you get over 4,200 every two weeks', 'plus de 4 200 par mois, travailleur autonome', 'you get #850 weekly', 'your premium is #450 monthly',
+                             'over 85,000+ a year', 'you get over 85,000. A year', 'over ８５,０００ a year', 'more than 85.000 a year', 'annually: 85,000', '85,000 a year', '6,500 monthly',
+                             'up to $85,000 a year', 'you get up to $85,000 a year', 'up to $2,000 monthly', 'up to $412,000 on the home', 'up to $1,000,000 in savings', 'jusqu''à 85 000 $ par an', 'jusqu''à 4 000 $ par mois',
+                             'you get from $850 a week', 'only $850 a week', 'just $45 a day', 'your budget: from $999 a month',
+                             'savings over 250,000', 'over 412,000 on the house', 'budget over 85,000 annually', 'net worth over 1,200,000', 'benefits of over 2,400 monthly', 'retirement: over 3,100 monthly',
+                             'you are behind with your mortgage payments', 'the mortgage is behind', 'fell behind on rent', 'late with the car loan', 'missed two payments', 'you have a large loan and no savings',
+                             'you make less than your partner', 'you make a good living', 'you are forty five', 'forty five, self employed, two young students at home', 'quarante-cinq, travailleur autonome',
+                             'ages 45 and 62', 'ages 45 and 62, both self employed', 'ages 45 to 62'] loop
+      perform pg_temp.must_block('R5.B1 terms', s, ins4);
+      perform pg_temp.must_block('R5.B1 no terms', s, ins2);
+    end loop;
+    foreach s in array array['you get more than 85,000 a year', 'up to $85,000 a year', 'savings over 250,000', 'you are behind with your mortgage payments', 'ages 45 and 62'] loop
+      perform pg_temp.expect_fail(format($q$insert into public.ws_campaigns (workspace_id, name) values (%L, %L)$q$, i5, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body) values (%L, %L, %L, 'Free quote', %L)$q$, i5, c5, a5, s), 'Sensitive data refused%');
+      perform pg_temp.expect_fail(format($q$select public.ws_add_lead(%L, %L, 'Pat Example', null, null, 'web form', %L)$q$, i5, c5, s), 'Sensitive data refused%');
+    end loop;
+    -- split across the columns of one row (each value passes alone)
+    perform pg_temp.must_pass('R5.B1 split part', 'Trusted by over 85,000 families', i5);
+    perform pg_temp.must_pass('R5.B1 split part', 'Review your coverage every year', i5);
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body) values (%L, %L, %L, 'Trusted by over 85,000 families', 'Review your coverage every year')$q$, i5, c5, a5), 'Sensitive data refused%');
+    perform pg_temp.expect_fail(format($q$insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body) values (%L, %L, %L, 'Your mortgage', 'From $999 a month')$q$, i5, c5, a5), 'Sensitive data refused%');
+    -- EXPECTED: the allowed forms still pass: a price per month with a lead word (3 digits at most), a bare coverage ceiling, a count of customers, an age range, opening hours
+    foreach s in array array['Life insurance from $18 a month. Get your free quote today.', 'Health insurance from $25/month', 'Assurance vie dès 25 $ par mois', 'Life insurance: coverage up to $500,000',
+                             'Coverage up to $1,000,000.', 'Assurance vie : couverture jusqu''à 1 000 000 $', 'Over 5,000 families protected since 2009.', 'Plus de 5 000 familles protégées depuis 2009.',
+                             'Guaranteed acceptance for ages 50 to 75.', 'Life insurance for ages 18 to 65', 'Support 24 hours a day, 7 days a week', 'Open 7 days a week', 'Compare quotes in 2 minutes.'] loop
+      perform pg_temp.must_pass('R5.B1 allowed form', s, ins4);
+    end loop;
+    insert into public.ffm_creatives (workspace_id, campaign_id, ad_set_id, headline, body) values (i5, c5, a5, 'Over 5,000 families protected since 2009', 'Coverage up to $500,000. From $18 a month.');
+    -- L (asserted limits, documented): a 3-digit monthly price with a lead word and a bare ceiling are indistinguishable from a personal amount; "since <year>" stays a number form
+    foreach s in array array['for $999 a month', 'up to $85,000', 'insured since 1984'] loop perform pg_temp.must_pass('R5.B1 L', s, ins2); end loop;
+    -- mortgage workspace and strict screen: unchanged (the financial rules apply in insurance context only)
+    foreach s in array array['you get more than 85,000 a year', 'ages 45 and 62', 'the mortgage is behind'] loop
+      if public.ws_classify_text(s, other) is distinct from public.ws_classify_text(s, null) then raise exception 'R5.B1 the mortgage workspace differs from the strict screen on: %', s; end if;
+    end loop;
+
+    -- R5.S6 actor tags. EXPECTED: tokens that state an age, an insurer decision, a care need or a pregnancy are free text (refused in an insurance workspace); ordinary actor tags pass.
+    foreach s in array array['fortyfive', 'insurer_declined', 'needs_daily_care', 'expecting_wk20', 'fifty-five', 'claim_denied'] loop
+      if public.ws_structural_value('ffm_approvals', 'approved_by', s) or public.ws_structural_value('ffm_onboarding_items', 'provided_by', s) then raise exception 'R5.S6 % is still an actor tag', s; end if;
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_approvals (workspace_id, kind, ref_id, approved_by) values (%L, 'campaign', %L, %L)$q$, i5, c5, s), 'Sensitive data refused%');
+    end loop;
+    foreach s in array array['owner', 'bot', 'client', 'test', 'moe', 'setter', 'bot:setter-1', 'jarvis-bot', 'owner@acme.ca', 'agent-7', 'seed', 'unknown'] loop
+      if not public.ws_structural_value('ffm_approvals', 'approved_by', s) then raise exception 'R5.S6 ordinary actor tag % refused', s; end if;
+    end loop;
+
+    -- R5.N1 the vertical comparison: lower() and ASCII-space trimming only, then exactly 'mortgage'. EXPECTED: the first four are mortgage, every other value is insurance (fail closed).
+    foreach s in array array['mortgage', 'Mortgage', 'MORTGAGE', ' mortgage '] loop
+      if public.ws_vertical_insurance(s) then raise exception 'R5.N1 % should be the mortgage vertical', s; end if;
+    end loop;
+    foreach s in array array[E'\tmortgage', E'mortgage\n', 'mortgage' || chr(160), 'mortgages', 'mortgage-broker', 'm' || chr(1086) || 'rtgage', 'mort' || chr(173) || 'gage', 'ｍｏｒｔｇａｇｅ', 'mortgage insurance'] loop
+      if not public.ws_vertical_insurance(s) then raise exception 'R5.N1 % must get the insurance screen', s; end if;
+    end loop;
+
+    -- R5.N8 routing rule names. EXPECTED: a few fixed structural names are stored in an insurance workspace; anything else on a rule name is still screened.
+    foreach s in array array['Main rule', 'Default route', 'Backup CRM route', 'Primary rule 2', 'Fallback', 'Main lead rule'] loop
+      insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (i5, s, 'crm', 'crm-acme');
+    end loop;
+    foreach s in array array['Main rule diabetes', 'Main rule 45', 'Jean rule', 'Main rule for Maria', 'Default route, makes $85k'] loop
+      perform pg_temp.expect_fail(format($q$insert into public.ffm_routing_rules (workspace_id, name, destination_kind, destination_ref) values (%L, %L, 'crm', 'crm-acme')$q$, i5, s), 'Sensitive data refused%');
+    end loop;
   end;
   -- R4.N4 per-role EXECUTE for the functions the G5/G6 loop did not cover: the seven round-3 functions and the six round-4 functions. EXPECTED: anon 0, authenticated 0, service_role 1, no PUBLIC grant.
   foreach f in array array['public.ws_stem_match(text,text[])', 'public.ws_name_word_hit(text)', 'public.ws_health_word_hit(text)', 'public.ws_add_fixed_phrase(text,text)', 'public.ws_remove_fixed_phrase(uuid)',
