@@ -126,7 +126,7 @@ Closed in this revision (each has tests named after the finding in `scripts/test
 | S2 owner decisions | Section 6 |
 | S3 ledger robustness | ASCII canonical form, strict types, file lock, verify-after-write, documented repair |
 | S4 review override | I2 |
-| S5 / S6 test evidence, own evidence files | TEST-RESULTS (new) and TEST-CLAIMS; `ops/oversight/evidence/*.json|md` are data (secrets still scanned) |
+| S5 / S6 test evidence, own evidence files | TEST-RESULTS (new) and TEST-CLAIMS; `ops/oversight/evidence/*.json|md` and `ledger/reviews.jsonl` are data (secrets still scanned) |
 | S7 bundle check | Runs in the engine's temp directory with `TMPDIR` inside it; APPLY_ORDER entries must be plain file names |
 | S8 / S9 proposals | Rewritten; both still never run (workflow) / never applied (SQL) |
 
@@ -137,7 +137,7 @@ Still open. A clean result must not be read as covering any of these:
 | G2 | SQL built at run time. In migrations any `execute <text>`, `quote_ident`, `dblink`, `prepare` is flagged `human_review` (PROTECTED = UNVERIFIED), so it is never a silent pass, but the engine cannot say what it does. `U&` escapes are rejected outright | Would need to execute the code | A person reads the statement; owner release |
 | G3 | SQL sent from Python (string building, f-strings, ORM calls), `importlib` / `exec`, shell commands in scripts | No static rule sees through it | Human review; `test_no_bypass.py`, `test_spend_paths.py` |
 | G4 | A test weakened without deleting lines: an assertion changed to something always true, a fixture loosened, an early `return` | Not detectable by line rules. Detected: deletion, move, gutting (10+ net lines and 30% of the file), skip / xfail / `.only` markers, any removed line in a control test | Human review of test diffs |
-| G5 | A test-named file used by runtime code is detected only when a non-test `.py` file or the Procfile mentions its module name. Files under `/tests/`, `/fixtures/`, `docs/`, `*.md`, `*.txt` are not scanned by the name rules | Dynamic imports and data files read at run time cannot be traced | Human review |
+| G5 | A test-named file used by runtime code is detected only when a non-test `.py` file imports it (`import`, `from`, `import_module`, `__import__` with a literal name) or the Procfile names it. Started through a shell command or a computed name, it is not seen. Files under `/tests/`, `/fixtures/`, `docs/`, `*.md`, `*.txt` are not scanned by the name rules | Dynamic imports and data files read at run time cannot be traced | Human review |
 | G6 | CODEOWNERS: a NEW broader pattern placed last overrides earlier ones. Reported as an owner gate with that warning, not judged | Needs path-pattern evaluation | Owner reads the entry |
 | G7 | Test evidence: only `Ran N tests` blocks that CI prints are read (today: the repo unit suite, 671 on the base). Counts of `scripts/test_*.py`, `sqltests/`, `webtests/` are not printed by the gate, so a claim about them is UNVERIFIED, and their pass/fail is known only through the gate step result | The gate prints step results, not counts | GATE-EVIDENCE (step PASS/FAIL) and the CI job conclusion |
 | G8 | CI trust: check-runs are accepted when GitHub Actions produced them for this SHA under the required job name. Which workflow file produced them is not checked, and a PR can edit the workflow it runs under | GitHub API limits; `pull_request` semantics | PC-WORKFLOW / PC-GATE findings on any workflow change; branch protection (OD-3) |

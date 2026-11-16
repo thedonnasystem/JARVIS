@@ -217,7 +217,7 @@ def expand_renames(files):
 
 
 # ------------------------------------------------------------------------------------------------- file classes
-EVIDENCE_RE = re.compile(r"^ops/oversight/evidence/[^/]+\.(json|md)$")      # the engine's own committed results (data, not code)
+EVIDENCE_RE = re.compile(r"^ops/oversight/(evidence/[^/]+\.(json|md)|ledger/reviews\.jsonl)$")      # the engine's own committed results and the ledger: data, not code
 
 
 def is_test_or_doc(path, runtime_tests=()):
@@ -1286,15 +1286,18 @@ def gather_diff(rec, a, b):
 
 
 def runtime_referenced_tests(rec, sha, files):
-    """Test-named Python files of this change that non-test Python code or the Procfile refers to by module name."""
+    """Test-named Python files of this change that non-test Python code imports (import / from / import_module / __import__)
+    or that the Procfile names. A plain mention in a string or comment is not a use."""
     out = set()
     cands = [p for p in files if p.endswith(".py") and is_test_or_doc(p) and files[p]["status"] != "D"]
     for p in cands[:200]:
         mod = os.path.basename(p)[:-3]
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", mod):
             continue
-        rc, hits, _ = rec.git("grep", "-l", "-w", "-F", "-e", mod, sha, "--", "*.py", "Procfile")
-        for h in hits.splitlines() if rc == 0 else []:
+        imp = rf"(^|[^A-Za-z0-9_])(import|from)[ \t]+([A-Za-z0-9_., \t]*[ .,\t])?{mod}([^A-Za-z0-9_]|$)|(import_module|__import__)[ \t]*\([^)]*[^A-Za-z0-9_]{mod}[^A-Za-z0-9_]"
+        rc1, hits, _ = rec.git("grep", "-l", "-E", "-e", imp, sha, "--", "*.py")
+        rc2, proc, _ = rec.git("grep", "-l", "-w", "-F", "-e", mod, sha, "--", "Procfile")
+        for h in (hits.splitlines() if rc1 == 0 else []) + (proc.splitlines() if rc2 == 0 else []):
             ref = h.split(":", 1)[1] if ":" in h else h
             if ref != p and not is_test_or_doc(ref):
                 out.add(p)

@@ -761,7 +761,7 @@ class RenamesAndFileClasses(unittest.TestCase):
         self.assertIn(("PC-TESTS", "owner_gate"), rules(diff("sqltests/audit_paths_check.sql", removed=["select assert_x();"])))
 
     def test_added_skips(self):
-        for line in (SK + '("later")', SK + "If(True, 'x')", "@" + "skipUnless(HAVE, 'x')", "        self." + "skipTest('x')", "        raise unittest." + "SkipTest()",
+        for line in (SK + '("later")', SK + "If(True, 'x')", "@" + "skipUnless(HAVE, 'x')", "        self." + "skipTest('x')", "        raise unittest.Skip" + "Test()",
                      "@pytest.mark." + "skip", "@unittest." + "expectedFailure"):
             self.assertIn(("PC-TESTS", "owner_gate"), rules(diff("test_hq_engine.py", [line])), line)
             self.assertIn(("PC-TESTS", "reject"), rules(diff("test_spend_paths.py", [line])), line)
@@ -778,6 +778,7 @@ class RenamesAndFileClasses(unittest.TestCase):
         """S6. Before: ops/oversight/evidence/PR20_1899251.json tripped PC-DRYRUN on the PR that committed it."""
         self.assertEqual(rules(diff("ops/oversight/evidence/PR20_1899251.json", ['"msg": "dry_run flag / kill_switch / daily_spend_cap_cents"'], status="A")), set())
         self.assertEqual(rules(diff("ops/oversight/evidence/PR20_1899251.md", ["dry_run"], status="A")), set())
+        self.assertEqual(rules(diff("ops/oversight/ledger/reviews.jsonl", ['{"findings":[{"title":"consent check on kill_switch"}]}'])), set(), "the ledger is data too")
         for p in ("ops/oversight/evidence/run.py", "ops/oversight/evidence/sub/x.json", "ops/oversight_evidence/x.json", "ops/oversight/evidence.json"):
             self.assertTrue(rules(diff(p, ["kill_switch = 1"], status="A")), p + " must not ride on the evidence exemption")
         key = "AK" + "IA" + "B" * 16
@@ -1239,10 +1240,23 @@ class Blockers(RepoFixture):
         self.w("hq_x.py", "import test_helpers\nx = 1\n")
         res, c = self.evaluate(self.commit("runtime code in a test-named file"))
         self.assertTrue(self.found(c, "PC-KILL") and self.found(c, "PC-TESTS"))
+        for how in ("from test_helpers import go\n", "import os, test_helpers as t\n", "import importlib\nm = importlib.import_module('test_helpers')\n", "m = __import__('test_helpers')\n"):
+            sh(self.repo, "git", "checkout", "-q", "-f", self.base)
+            self.w("test_helpers.py", "def go():\n    kill_switch = False\n")
+            self.w("hq_x.py", how + "x = 1\n")
+            res, c = self.evaluate(self.commit("import form"))
+            self.assertTrue(self.found(c, "PC-KILL"), how)
+        sh(self.repo, "git", "checkout", "-q", "-f", self.base)
+        self.w("test_helpers.py", "def go():\n    kill_switch = False\n")
+        self.w("Procfile", "worker: python3 test_helpers.py\n")
+        res, c = self.evaluate(self.commit("started by the Procfile"))
+        self.assertTrue(self.found(c, "PC-KILL"))
         sh(self.repo, "git", "checkout", "-q", "-f", self.base)
         self.w("test_real.py", "def test():\n    kill_switch = False\n")
-        res, c = self.evaluate(self.commit("an ordinary test"))
+        self.w("hq_x.py", "FIXTURES = ('test_real.py',)  # mentions test_real, does not import it\nx = 1\n")
+        res, c = self.evaluate(self.commit("an ordinary test, only mentioned by name"))
         self.assertFalse(self.found(c, "PC-KILL"))
+        self.assertFalse(self.found(c, "PC-TESTS"))
 
     def test_s1_dynamic_sql_makes_protected_unverified(self):
         self.w("migrations/20261113_b_v1.sql", "do $$ begin execute 'select ' || '1'; end $$;\n")
