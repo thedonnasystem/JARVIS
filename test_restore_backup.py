@@ -57,7 +57,7 @@ class Blanks(unittest.TestCase):
         data = {"memory": [{"source": ""}], "payment_instructions": [{"payee": ""}]}
         R.apply_blanks(schema, data, {"redaction": {"blanked_columns": ["memory.source", "payment_instructions.payee"]}}, {})
         self.assertEqual(data["memory"][0]["source"], R.BLANK_MARKER)       # not NULL, not ''
-        self.assertGreaterEqual(len(data["payment_instructions"][0]["payee"]), 2)
+        self.assertGreaterEqual(len(data["payment_instructions"][0]["payee"]), 20)      # the longest minimum-length CHECK on a blanked column is >= 20
 
     def test_not_null_json_column_with_an_array_default_restores_as_an_array(self):
         schema = {"tables": [{"name": "missions", "columns": [{"name": "plan", "type": "jsonb", "notnull": True, "default": "'[]'::jsonb"}, {"name": "meta", "type": "jsonb", "notnull": True, "default": "'{}'::jsonb"}]}]}

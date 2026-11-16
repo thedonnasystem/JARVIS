@@ -306,14 +306,14 @@ def rebuild_schema(cur, schema: dict, rep: dict):
     return skipped
 
 
-BLANK_MARKER = "[blanked]"
+BLANK_MARKER = "[blanked: not stored off-site]"   # 30 characters: satisfies the longest minimum-length CHECK on a blanked column today (venture_procedures.steps >= 20)
 
 
 def apply_blanks(schema: dict, data: dict, manifest: dict, rep: dict) -> None:
     """Columns the backup exported BLANK (manifest redaction.blanked_columns: agent / scraper / client free text that is not safe to keep off-site) restore as:
       * NULL where the column is nullable and no CHECK constraint mentions it (the honest "no value"),
       * '' where it is NOT NULL,
-      * BLANK_MARKER ('[blanked]') where a CHECK constraint mentions a text column (e.g. memory_fact_needs_source: source IS NOT NULL, payment_instructions_payee_check: length(payee) >= 2),
+      * BLANK_MARKER ('[blanked: not stored off-site]') where a CHECK constraint mentions a text column (e.g. memory_fact_needs_source: source IS NOT NULL, payment_instructions_payee_check: length(payee) >= 2),
         because neither NULL nor '' is guaranteed to satisfy an arbitrary CHECK, but a short non-empty marker satisfies not-null and minimum-length checks and says plainly that the text was not backed up,
       * {} for a NOT NULL json column, [] for a NOT NULL array column (NULL when nullable).
     So no NOT NULL / CHECK constraint is broken by the blanking; rebuild_constraints() still reports anything else."""
