@@ -69,6 +69,10 @@
     for (const t of terms) { const m = text.match(new RegExp('\\b(?:' + t + ')\\b', 'g')); if (m) { n += (t.includes(' ') ? 2 : 1) * m.length; hits.push(m[0]); } }
     return { n, hits };
   }
+  // Activation approval text follows the division's status (org.js). Preparing divisions are still not authorized to operate or spend.
+  const activationText = (d) => d.status === 'preparing'
+    ? 'Activate ' + d.name + ' (activation order ' + d.activation_order + '): the division is PREPARING FOR ACTIVATION and is not authorized to spend, sign contracts, contact prospects or launch publicly.'
+    : 'Activate ' + d.name + ': the division is DORMANT and not authorized to operate or spend.';
   const usd = (c) => '$' + ((Number(c) || 0) / 100).toFixed(2);
   const clean = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 600);
 
@@ -108,15 +112,16 @@
     tasks.push({ title: 'Chairman reviews deliverables and decides next step', office: null, kind: 'internal', est_cents: 0, agent: 'Chairman' });
     const est = tasks.reduce((a, x) => a + x.est_cents, 0);
     const days = Math.max(1, Math.ceil(est / CAP_CENTS));
-    // ---------- approvals: never empty (every division is dormant and any agent run spends AI money) ----------
+    // ---------- approvals: never empty (no division is authorized to operate and any agent run spends AI money) ----------
     const approvals = [
-      { kind: 'activation', text: 'Activate ' + div.name + ': the division is DORMANT and not authorized to operate or spend.' },
+      { kind: 'activation', text: activationText(div) },
       { kind: 'money', text: 'Run agents for this mission: estimated ' + usd(est) + ' of AI spend, counted against the $3.30/day cap' + (days > 1 ? ' (over the cap: spread across ' + days + ' days).' : ' (fits within one day).') },
     ];
     const kinds = new Set(tasks.map((x) => x.kind));
     if (kinds.has('spend') || /\$\s?\d|\b(spend\w*|buy|pay\w*|purchas\w*|budgets?|ads?|hire|hiring|subscri\w*|invest\w*)\b/.test(t))
       approvals.push({ kind: 'money', text: 'Any spending beyond AI (per-transaction limit $25, weekly limit $75, no new subscriptions without approval).' });
-    if (kinds.has('external') || /\b(contact\w*|call\w*|emails?|outreach|messag\w*|post\w*|publish\w*|reach out|pitch\w*|text\w*|dm)\b/.test(t))
+    // a division preparing for activation is not authorized to contact prospects: external contact is always listed for it
+    if (div.status === 'preparing' || kinds.has('external') || /\b(contact\w*|call\w*|emails?|outreach|messag\w*|post\w*|publish\w*|reach out|pitch\w*|text\w*|dm)\b/.test(t))
       approvals.push({ kind: 'external', text: 'External contact: anything sent, posted, published or signed on the company\'s behalf.' });
     if (kinds.has('production') || /\b(deploy\w*|production|go live|live site)\b/.test(t))
       approvals.push({ kind: 'production', text: 'Production action: any deploy or change to live systems.' });
@@ -219,7 +224,9 @@
     const m = find(st, mid); const d = org.divisions.find((x) => x.id === divisionId);
     if (!m || !d || m.cancelled || m.division === divisionId) return { error: 'Cannot reassign.' };
     m.division = divisionId; const a = m.approvals.find((x) => x.kind === 'activation');
-    if (a) { a.text = 'Activate ' + d.name + ': the division is DORMANT and not authorized to operate or spend.'; a.status = 'pending'; }
+    if (a) { a.text = activationText(d); a.status = 'pending'; }
+    if (d.status === 'preparing' && !m.approvals.some((x) => x.kind === 'external'))
+      m.approvals.push({ id: 'A' + (m.approvals.length + 1), kind: 'external', text: 'External contact: anything sent, posted, published or signed on the company\'s behalf.', status: 'pending' });
     touch(st, m, m.id + ' reassigned to ' + d.name + ' by the Chairman; activation approval reset to pending.', now); return { ok: true };
   }
   // Validate whatever came back from browser storage; anything malformed is dropped rather than rendered.

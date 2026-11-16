@@ -58,3 +58,4 @@
 .hq-node{margin:6px 0}.hq-nb{padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
 .k-chair>.hq-nb,.k-jarvis>.hq-nb{border-color:var(--gold)}.k-std>.hq-nb{border-style:dashed}
 button[disabled]{opacity:.5;cursor:not-allowed}
+.hq-role{margin-top:6px}.hq-role summary{cursor:pointer;padding:4px 0}.tag.prop,.tag.prep{color:var(--gold);border-color:var(--gold)}

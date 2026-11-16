@@ -52,22 +52,73 @@ for (const k of SCREENS) {
 }
 
 // ---------- organization: owner-provided only ----------
-test('org data: exactly the owner\'s 8 divisions and 8 offices, all dormant, no managers invented', async () => {
+test('org data: the owner\'s 8 divisions and 8 offices; Donna/Wolf Squad/FF Marketing preparing (1-3), five dormant; nobody appointed', async () => {
   const app = await demo(); const O = ORG(app);
   assert.deepEqual([...O.divisions].map((d) => d.name), ['B2B Records', 'Donna', 'The Trap', 'Wolf Squad', 'Pimp AI', 'Monopoly', 'FF Marketing', 'Fruition Factory']);
   assert.deepEqual([...O.corporate_offices].map((o) => o.name), ['Business Development', 'Marketing & Growth', 'Sales & Revenue', 'Operations & Automation', 'Finance & Capital', 'Legal, Risk & Compliance', 'Intelligence & Research', 'Technology & Security']);
-  assert.ok(O.divisions.every((d) => d.status === 'dormant' && !d.authorized_to_operate && !d.authorized_to_spend && d.manager.assigned === null && d.manager.reports_to === 'jarvis'));
+  assert.ok(O.divisions.every((d) => !d.authorized_to_operate && !d.authorized_to_spend && d.manager.assigned === null && d.manager.reports_to === 'jarvis'));
+  assert.deepEqual([...O.divisions.filter((d) => d.status === 'preparing')].map((d) => [d.id, d.activation_order]), [['donna', 1], ['wolf-squad', 2], ['ff-marketing', 3]]);
+  assert.deepEqual([...O.divisions.filter((d) => d.status === 'dormant')].map((d) => d.id), ['b2b-records', 'the-trap', 'pimp-ai', 'monopoly', 'fruition-factory']);
+  assert.equal(O.status_text.preparing, 'Preparing for activation — not authorized to spend, sign contracts, contact prospects or launch publicly');
+  assert.equal(O.status_text.dormant, 'Dormant');
+  assert.ok(O.corporate_offices.every((o) => o.head.assigned === null && o.head.reports_to === 'jarvis'));
   assert.equal(O.jarvis.reports_to, 'chairman');
-  assert.deepEqual([...O.standing_functions].map((f) => [f.name, f.governed_by]), [['Engineering & Reliability', 'technology-security']]);
-  assert.match(O.standing_functions[0].note, /owner to confirm/);
+  app.stop();
+});
+
+test('Engineering & Reliability: approved permanent function under Technology & Security, constraint shown, no "owner to confirm"', async () => {
+  const app = await demo(); const O = ORG(app); const f = O.standing_functions[0];
+  assert.deepEqual([...O.standing_functions].map((x) => [x.name, x.governed_by, x.permanent, x.status]), [['Engineering & Reliability', 'technology-security', true, 'approved']]);
+  assert.deepEqual([...f.responsibilities], ['Platform reliability', 'Infrastructure and deployment health', 'Testing and release engineering', 'Incident detection and recovery', 'Monitoring and rollback readiness', 'Technical documentation and system integrity']);
+  assert.equal(f.constraint, 'Cannot independently approve its own critical production changes.');
+  assert.equal(f.head.assigned, null); assert.equal(f.head.reports_to, 'technology-security');
+  for (const k of ['org', 'offices', 'managers', 'health']) {
+    await app.click(chip(app, k)); const t = view(app).textContent;
+    assert.match(t, /Engineering & Reliability/, k); assert.match(t, /Cannot independently approve its own critical production changes\./, k);
+    assert.ok(!/owner to confirm|awaiting owner/i.test(t), k);
+  }
+  await app.click(chip(app, 'offices')); const t = view(app).textContent;
+  for (const r of f.responsibilities) assert.ok(t.includes(r), r);
+  assert.match(t, /APPROVED/);
+  for (const src of ['webapp/hq/org.js', 'webapp/hq/hq.js']) assert.ok(!/owner to confirm/.test(read(src)), src);
+  app.stop();
+});
+
+test('managers: all 17 positions read exactly "Unassigned — awaiting Chairman\'s appointment." with a PROPOSED role each; no names invented', async () => {
+  const app = await demo(); const O = ORG(app); const UN = 'Unassigned — awaiting Chairman\'s appointment.';
+  assert.equal(O.unassigned_text, UN);
+  const ids = [...O.divisions.map((d) => d.id), ...O.corporate_offices.map((o) => o.id), 'engineering-reliability'];
+  assert.deepEqual(Object.keys(O.proposed_roles).sort(), [...ids].sort());
+  for (const id of ids) { const r = O.proposed_roles[id]; assert.ok(r.role && r.responsibilities.length >= 3 && r.selection_criteria.length >= 3, id); }
+  assert.equal(O.proposed_label, 'PROPOSED — for Chairman approval');
+  assert.match(O.appointment_note, /Jarvis may recommend candidates or agent configurations but cannot grant permissions/);
+  assert.deepEqual({ ...O.reporting_lines }, { division: 'Division manager -> Jarvis -> Chairman', office: 'Office head -> Jarvis -> Chairman', standing_function: 'Engineering & Reliability lead -> Technology & Security' });
   await app.click(chip(app, 'managers'));
-  assert.equal((view(app).textContent.match(/Unassigned — awaiting owner/g) || []).length, 16);
-  await app.click(chip(app, 'org'));
   const t = view(app).textContent;
-  assert.match(t, /Chairman[\s\S]*Jarvis[\s\S]*Divisions \(8, all DORMANT\)[\s\S]*1\. B2B Records[\s\S]*8\. Fruition Factory[\s\S]*Group offices \(8\)[\s\S]*Technology & Security[\s\S]*Engineering & Reliability[\s\S]*owner to confirm/);
+  assert.equal(t.split(UN).length - 1, 17, 'one per position');
+  assert.equal(app.all('#v-hq details.hq-role').length, 17);
+  assert.equal((t.match(/PROPOSED — for Chairman approval/g) || []).length, 18, '17 roles + the panel note');
+  assert.equal((t.match(/Division manager -> Jarvis -> Chairman/g) || []).length, 8);
+  assert.equal((t.match(/Office head -> Jarvis -> Chairman/g) || []).length, 8);
+  assert.equal((t.match(/Engineering & Reliability lead -> Technology & Security/g) || []).length, 1);
+  assert.match(t, /cannot grant permissions/);
+  assert.ok(!/awaiting owner/.test(t));
+  // the docs carry the same proposals
+  const doc = read('ORG_ROLES_PROPOSED.md');
+  assert.match(doc, /PROPOSED — for Chairman approval/); assert.match(doc, /cannot grant permissions/);
+  for (const id of ids) { const r = O.proposed_roles[id]; assert.ok(doc.includes(r.role), id); r.responsibilities.concat(r.selection_criteria).forEach((x) => assert.ok(doc.includes(x), id + ': ' + x)); }
+  app.stop();
+});
+
+test('org chart and divisions: preparing vs dormant shown, Donna detail carries its status, order and proposed role', async () => {
+  const app = await demo();
+  await app.click(chip(app, 'org'));
+  assert.match(view(app).textContent, /Chairman[\s\S]*Jarvis[\s\S]*Divisions \(8: 3 preparing for activation, 5 dormant\)[\s\S]*1\. B2B Records[\s\S]*DORMANT[\s\S]*2\. Donna[\s\S]*PREPARING · order 1[\s\S]*8\. Fruition Factory[\s\S]*Group offices \(8\)[\s\S]*Technology & Security[\s\S]*Engineering & Reliability/);
   await app.click(chip(app, 'divisions')); assert.equal(app.all('#v-hq .hq-grid .hq-div').length, 8);
+  const cards = app.all('#v-hq .hq-grid .hq-div').map((c) => c.textContent);
+  assert.deepEqual(cards.map((c) => (/PREPARING · order (\d)/.exec(c) || [])[1] || (/DORMANT/.test(c) ? 'D' : '?')), ['D', '1', 'D', '2', 'D', 'D', '3', 'D']);
   await app.click(app.all('#v-hq .hq-grid .hq-div')[1]);
-  assert.match(view(app).textContent, /2\. Donna[\s\S]*AI agency, automation and business process systems\.[\s\S]*DORMANT[\s\S]*Authorized to spend\s*No/);
+  assert.match(view(app).textContent, /2\. Donna[\s\S]*AI agency, automation and business process systems\.[\s\S]*Status\s*Preparing for activation — not authorized to spend, sign contracts, contact prospects or launch publicly[\s\S]*Activation order\s*1[\s\S]*Authorized to spend\s*No[\s\S]*Manager\s*Unassigned — awaiting Chairman's appointment\.[\s\S]*PROPOSED — for Chairman approval/);
   assert.equal(app.win.location.hash, '#divisions/division/donna');
   app.stop();
 });
@@ -134,6 +185,13 @@ test('approval list is never empty and covers money, external contact, activatio
   const big = J(app).plan('Research competitors, build a prospect list, email leads, launch a Shopify store, run an ad campaign and build an automation', O);
   assert.equal(big.within_cap, big.est_cents <= 330); assert.equal(big.days_at_cap, Math.max(1, Math.ceil(big.est_cents / 330)));
   assert.ok(big.tasks.length <= 11, 'task list stays short');
+  // a mission routed to a division preparing for activation still needs activation, spend and contact approval
+  for (const [obj, div] of [['Build an AI receptionist automation for a dental clinic', 'donna'], ['Build a prospect list and grow our sales pipeline', 'wolf-squad'], ['Write a newsletter and social media content plan for brand awareness', 'ff-marketing']]) {
+    const p = J(app).plan(obj, O); assert.equal(p.division, div); const k = p.approvals.map((a) => a.kind);
+    assert.ok(k.includes('activation') && k.includes('money') && k.includes('external'), obj);
+    assert.match(p.approvals[0].text, /PREPARING FOR ACTIVATION and is not authorized to spend, sign contracts, contact prospects or launch publicly/);
+  }
+  assert.match(J(app).plan(OTTAWA, O).approvals[0].text, /DORMANT and not authorized to operate or spend/);
   app.stop();
 });
 
@@ -207,6 +265,20 @@ test('finance: policy shown read-only, RBC never shows a number, spend is $0.00 
   const bank = app.all('#v-hq .hq-panel').find((p) => /Bank: RBC/.test(p.textContent));
   assert.match(bank.textContent, /Not connected — manual reconciliation required/); assert.doesNotMatch(bank.textContent, /\d/, 'no number of any kind in the bank panel');
   assert.equal(app.all('#v-hq input, #v-hq select').length, 0, 'nothing editable on Finance');
+  app.stop();
+});
+
+test('finance: reinvestment pool shows the ledger definitions as current and the Chairman\'s labels as proposed, in conflict; ledger untouched', async () => {
+  const app = await demo(); await app.click(chip(app, 'finance'));
+  const pool = app.all('#v-hq .hq-panel').find((p) => /^Reinvestment pool/.test(p.querySelector('h3').textContent));
+  const t = pool.textContent;
+  assert.match(t, /Current \(ledger definitions\)\s*Best venture\s*60%\s*Research and systems\s*25%\s*Held for a deal\s*15%/);
+  assert.match(t, /Chairman's proposed labels\s*Proposed labels — conflict with ledger definitions, awaiting Chairman confirmation\s*Growth & Reinvestment\s*60%\s*Strategic Capital\s*25%\s*Innovation & New Ventures\s*15%/);
+  assert.match(t, /Conflict: .*25%.*15%/);
+  assert.match(t, /33% tax set-aside and the 1\.5-month operating buffer are separate/);
+  // the ledger keeps its own meaning: pool_best / pool_research / pool_deal at 60 / 25 / 15
+  assert.match(read('migrations/20261112_finance_rules_v1.sql'), /pool_best_pct numeric not null default 60, pool_research_pct numeric not null default 25, pool_deal_pct numeric not null default 15/);
+  assert.match(read('hq_waterfall.py'), /best venture .*research and systems .*held for a deal/);
   app.stop();
 });
 

@@ -33,7 +33,22 @@
   const meter = (a, b) => h('div', { class: 'bar' }, h('i', { style: 'width:' + pct(a, b) + '%' }));
   const tag = (t, cls) => h('span', { class: 'tag ' + (cls || '') }, t);
   const btn = (label, fn, cls, extra) => h('button', Object.assign({ class: cls || 'ghost', type: 'button', onclick: fn }, extra || {}), label);
-  const UN = 'Unassigned — awaiting owner';
+  const UN = 'Unassigned — awaiting Chairman\'s appointment.';
+  // division status (org.js): 'preparing' (activation order set by the Chairman) or 'dormant'; neither is authorized to operate or spend
+  const stShort = (d) => (d && d.status === 'preparing' ? 'PREPARING · order ' + d.activation_order : 'DORMANT');
+  const stText = (d) => (ORG().status_text[(d && d.status) || 'dormant'] || ORG().status_text.dormant);
+  const divCounts = () => { const ds = ORG().divisions; const p = ds.filter((d) => d.status === 'preparing').length; return p + ' preparing for activation, ' + (ds.length - p) + ' dormant'; };
+  // PROPOSED role (org.js proposed_roles): a draft for the Chairman; appoints nobody and grants nothing
+  function roleBox(id, line) {
+    const r = ORG().proposed_roles[id]; if (!r) return null;
+    return h('details', { class: 'hq-role' }, h('summary', {}, 'Proposed role ', tag(ORG().proposed_label, 'prop')),
+      h('p', {}, r.role), h('h4', { class: 'hq-h4' }, 'Responsibilities'), h('ul', { class: 'hq-ol' }, r.responsibilities.map((x) => h('li', {}, x))),
+      kv('Reporting line', line), h('h4', { class: 'hq-h4' }, 'Selection criteria'), h('ul', { class: 'hq-ol' }, r.selection_criteria.map((x) => h('li', {}, x))),
+      dim(ORG().appointment_note));
+  }
+  const ER = () => ORG().standing_functions[0];
+  const erBody = () => [h('div', { class: 'row' }, h('b', {}, ER().name), tag('APPROVED')), dim(ER().note), kv('Head', UN), kv('Reports to', offName(ER().governed_by)),
+    h('ul', { class: 'hq-ol' }, ER().responsibilities.map((x) => h('li', {}, x))), h('div', { class: 'hq-alert a-warn' }, 'Constraint: ' + ER().constraint)];
 
   // ---------- state + local store ----------
   const S = { screen: 'overview', detail: null, ctx: null, box: null, draft: null, divPick: '', input: '', mfilter: 'open', msg: '', store: null };
@@ -85,7 +100,7 @@
         live() ? dim('Live approvals from the database are in the Inbox tab.') : null),
       panel('Missions', simSrc, kv('Planned', String(counts.planned || 0)), kv('In progress', String(counts['in progress'] || 0)), kv('Blocked', String(counts.blocked || 0)), kv('Complete', String(counts.complete || 0)), kv('Cancelled', String(counts.cancelled || 0)),
         h('div', { class: 'btns' }, btn('Open missions', () => go('missions')))),
-      panel('Organization', orgSrc(), kv('Divisions', O.divisions.length + ', all DORMANT'), kv('Group offices', String(O.corporate_offices.length)), kv('Division managers', UN), kv('Spend today', live() ? 'see Live controls' : '$0.00 (simulated)'), kv('AI daily cap (policy)', usd(P.ai_daily_cap_cents)),
+      panel('Organization', orgSrc(), kv('Divisions', O.divisions.length + ': ' + divCounts()), kv('Group offices', String(O.corporate_offices.length)), kv('Division managers', UN), kv('Spend today', live() ? 'see Live controls' : '$0.00 (simulated)'), kv('AI daily cap (policy)', usd(P.ai_daily_cap_cents)),
         h('div', { class: 'btns' }, btn('Org chart', () => go('org')), btn('Finance', () => go('finance')))),
     ];
   }
@@ -101,7 +116,7 @@
     return panel('Jarvis plan (draft)', simSrc, h('p', { class: 'hq-sim' }, p.note),
       h('h4', { class: 'hq-h4' }, '1. Understanding'), h('p', {}, p.understanding),
       h('h4', { class: 'hq-h4' }, '2. Task breakdown'), h('ol', { class: 'hq-ol' }, p.tasks.map((t) => h('li', {}, t.title, ' ', tag(t.kind), t.office ? h('span', { class: 'dim' }, ' · ' + offName(t.office)) : null))),
-      h('h4', { class: 'hq-h4' }, '3. Responsible division'), pick, dim('Status: DORMANT. Confidence: ' + p.confidence + '. ' + p.why),
+      h('h4', { class: 'hq-h4' }, '3. Responsible division'), pick, dim('Status: ' + stText(div) + '. Confidence: ' + p.confidence + '. ' + p.why),
       kv('Supporting offices', p.offices.map(offName).join(', ')),
       h('h4', { class: 'hq-h4' }, '4. Proposed agents and AI cost (estimate)'),
       h('ul', { class: 'hq-ol' }, p.tasks.map((t) => h('li', {}, t.agent + ': ' + (t.est_cents ? usd(t.est_cents) + ' est.' : 'no AI cost')))),
@@ -176,7 +191,7 @@
       btn('‹ Missions', () => go('missions'), 'ghost hq-back'),
       panel(m.id + ' · ' + m.title, simSrc, h('p', { class: 'hq-sim' }, m.note),
         kv('Status', st), kv('Progress', Jv.progress(m) + '%'), meter(Jv.progress(m), 100), kv('Owner', m.owner),
-        kv('Division', divName(m.division) + ' (DORMANT)'), kv('Supporting offices', m.offices.map(offName).join(', ')), kv('Estimated AI cost', usd(m.est_cents) + ' (planning estimate)'), kv('Created', when(m.created_at)),
+        kv('Division', divName(m.division) + ' (' + stShort(O.divisions.find((d) => d.id === m.division)) + ')'), kv('Supporting offices', m.offices.map(offName).join(', ')), kv('Estimated AI cost', usd(m.est_cents) + ' (planning estimate)'), kv('Created', when(m.created_at)),
         h('p', {}, m.understanding)),
       panel('Tasks', simSrc, dim('Nothing advances by itself. You move each task by hand; every change is written to Activity.'), ...m.tasks.map(taskRow)),
       panel('Blockers', simSrc, ...(blk.length ? blk.map((b) => h('div', { class: 'hq-alert a-warn' }, b)) : [dim('No blockers.')])),
@@ -196,10 +211,10 @@
   function sOrg() {
     const O = ORG(); const ti = O.corporate_offices.find((o) => o.id === 'technology-security');
     const node = (title, sub, kids, cls) => h('li', { class: 'hq-node ' + (cls || '') }, h('div', { class: 'hq-nb' }, h('b', {}, title), sub ? dim(sub) : null), kids && kids.length ? h('ul', { class: 'hq-tree' }, kids) : null);
-    return [panel('Org chart', orgSrc(), dim('Reporting line: division managers report to Jarvis; Jarvis reports to the Chairman.'),
+    return [panel('Org chart', orgSrc(), dim('Reporting lines: division managers and office heads report to Jarvis; Jarvis reports to the Chairman. Engineering & Reliability reports to Technology & Security.'),
       h('ul', { class: 'hq-tree hq-root' }, node('Chairman', 'Final authority', [node('Jarvis', 'Group operator', [
-        node('Divisions (8, all DORMANT)', null, O.divisions.map((d) => node(d.n + '. ' + d.name, 'Manager: ' + UN, null, 'k-div'))),
-        node('Group offices (8)', null, O.corporate_offices.map((o) => node(o.name, 'Head: ' + UN, o === ti ? O.standing_functions.map((f) => node(f.name, 'Standing function. ' + f.note, null, 'k-std')) : null, 'k-off'))),
+        node('Divisions (' + O.divisions.length + ': ' + divCounts() + ')', null, O.divisions.map((d) => node(d.n + '. ' + d.name, stShort(d) + ' · Manager: ' + UN, null, 'k-div'))),
+        node('Group offices (' + O.corporate_offices.length + ')', null, O.corporate_offices.map((o) => node(o.name, 'Head: ' + UN, o === ti ? O.standing_functions.map((f) => node(f.name, 'Approved standing function. Head: ' + UN + ' Constraint: ' + f.constraint, null, 'k-std')) : null, 'k-off'))),
       ], 'k-jarvis')], 'k-chair')))];
   }
 
@@ -210,29 +225,32 @@
       if (d) {
         const ms = store().missions.filter((m) => m.division === d.id);
         return [btn('‹ Divisions', () => go('divisions'), 'ghost hq-back'),
-          panel(d.n + '. ' + d.name, orgSrc(), h('p', {}, d.charter.text), kv('Status', 'DORMANT'), kv('Authorized to operate', 'No'), kv('Authorized to spend', 'No'),
-            kv('Manager', UN), kv('Reports to', 'Jarvis'), dim('Activating this division needs the Chairman\'s approval.')),
+          panel(d.n + '. ' + d.name, orgSrc(), h('p', {}, d.charter.text), kv('Status', stText(d)), d.activation_order ? kv('Activation order', String(d.activation_order)) : null,
+            kv('Authorized to operate', 'No'), kv('Authorized to spend', 'No'), kv('Manager', UN), kv('Reports to', 'Jarvis'), dim('Activating this division needs the Chairman\'s approval.'),
+            roleBox(d.id, O.reporting_lines.division)),
           panel('Missions routed here (offline planner)', simSrc, ...(ms.length ? ms.map(missionRow) : [dim('None.')]))];
       }
     }
-    return [panel('Divisions', orgSrc(), dim('All eight are DORMANT: not authorized to operate or spend.'),
+    return [panel('Divisions', orgSrc(), dim(O.meta.note),
       h('div', { class: 'hq-grid' }, O.divisions.map((d) => h('button', { class: 'hq-div', type: 'button', onclick: () => go('divisions', { type: 'division', id: d.id }) },
-        h('div', { class: 'row' }, h('h3', {}, d.n + '. ' + d.name), tag('DORMANT')), dim(d.charter.text), dim('Manager: ' + UN)))))];
+        h('div', { class: 'row' }, h('h3', {}, d.n + '. ' + d.name), tag(stShort(d), d.status === 'preparing' ? 'prep' : '')), dim(d.charter.text), dim(stText(d)), dim('Manager: ' + UN)))))];
   }
 
   function sOffices() {
     const O = ORG(); const ms = store().missions;
-    return [panel('Group offices', orgSrc(), dim('Shared offices serve every division. Heads not yet defined by the owner.'),
+    return [panel('Group offices', orgSrc(), dim('Shared offices serve every division. No head is appointed yet.'),
       h('div', { class: 'hq-grid' }, O.corporate_offices.map((o) => h('div', { class: 'hq-div' }, h('h3', {}, o.name), dim('Head: ' + UN),
         dim('Supporting ' + ms.filter((m) => !m.cancelled && m.offices.includes(o.id)).length + ' simulated mission(s)'))))),
-    panel('Standing functions', orgSrc(), ...O.standing_functions.map((f) => h('div', { class: 'hq-sub' }, h('b', {}, f.name), dim('Governed under ' + offName(f.governed_by) + '. ' + f.note), tag('owner to confirm'))))];
+    panel('Standing function: Engineering & Reliability', orgSrc(), h('div', { class: 'hq-sub' }, ...erBody(), roleBox(ER().id, O.reporting_lines.standing_function)))];
   }
 
   function sManagers() {
     const O = ORG();
-    return [panel('Jarvis', orgSrc(), kv('Reports to', 'Chairman'), dim(O.jarvis.role)),
-      panel('Division managers', orgSrc(), ...O.divisions.map((d) => h('div', { class: 'hq-sub row' }, h('span', {}, d.name), h('span', { class: 'dim' }, UN + ' · reports to Jarvis')))),
-      panel('Office heads', orgSrc(), ...O.corporate_offices.map((o) => h('div', { class: 'hq-sub row' }, h('span', {}, o.name), h('span', { class: 'dim' }, UN))))];
+    const pos = (name, sub, id, line) => h('div', { class: 'hq-sub' }, h('div', { class: 'row' }, h('b', {}, name), h('span', { class: 'dim' }, UN)), sub ? dim(sub) : null, roleBox(id, line));
+    return [panel('Jarvis', orgSrc(), kv('Reports to', 'Chairman'), dim(O.jarvis.role), dim(O.appointment_note)),
+      panel('Division managers', orgSrc(), dim('Each role description below is ' + O.proposed_label + '.'), ...O.divisions.map((d) => pos(d.name + ' division manager', stShort(d), d.id, O.reporting_lines.division))),
+      panel('Office heads', orgSrc(), ...O.corporate_offices.map((o) => pos(o.name + ' head', null, o.id, O.reporting_lines.office))),
+      panel('Engineering & Reliability lead', orgSrc(), pos(ER().name + ' lead', 'Approved standing function under ' + offName(ER().governed_by) + '. Constraint: ' + ER().constraint, ER().id, O.reporting_lines.standing_function))];
   }
 
   function sAgents() {
@@ -270,6 +288,11 @@
         kv('Automatic reloads', P.automatic_reloads ? 'Yes' : 'None'), kv('New subscriptions', P.new_subscriptions), kv('Tax set-aside', P.tax_set_aside_pct + '%'),
         kv('Operating buffer', P.operating_buffer_months + ' months'), kv('Reinvestment pool', P.reinvestment_pool.join(' / ') + ' split'), kv('Max active revenue ventures', String(P.max_active_revenue_ventures)),
         kv('Bank reconciliation', 'Manual')),
+      panel('Reinvestment pool', live() ? 'NOT CONNECTED' : simSrc, dim('The ' + P.tax_set_aside_pct + '% tax set-aside and the ' + P.operating_buffer_months + '-month operating buffer are separate from this pool (shown above).'),
+        h('h4', { class: 'hq-h4' }, 'Current (ledger definitions)'), ...P.reinvestment_ledger.map((x) => kv(x.label, x.pct + '%')),
+        h('h4', { class: 'hq-h4' }, 'Chairman\'s proposed labels'), h('div', { class: 'hq-alert a-warn' }, P.reinvestment_proposed.status),
+        ...P.reinvestment_proposed.labels.map((x) => kv(x.label, x.pct + '%')), dim('Conflict: ' + P.reinvestment_proposed.conflict),
+        dim('Percentages are unchanged. The ledger keeps its current definitions until the Chairman confirms.')),
       panel('Bank: ' + B.name, live() ? 'NOT CONNECTED' : simSrc, kv('Balance', B.status), dim('No balance is shown. Reconcile manually.')),
       panel('Planned AI cost of open simulated missions', simSrc, kv('Estimated, not spent', usd(planned)), dim('Planning estimates from the offline planner. Nothing has been spent.')),
     ];
@@ -283,7 +306,7 @@
       out.push(panel('Registered systems', 'LIVE', ...(sys.length ? sys.map((x) => kv(txt(x.name, 'system'), txt(x.status))) : [dim('None registered.')])));
     }
     out.push(panel('System and security status', live() ? 'NOT CONNECTED' : simSrc, dim('Status as of ' + O.status_as_of.date + ', not live.'), ...O.status_as_of.items.map(([a, b]) => kv(a, b))));
-    out.push(panel('Engineering & Reliability', orgSrc(), dim(O.standing_functions[0].note)));
+    out.push(panel('Engineering & Reliability', orgSrc(), ...erBody()));
     return out;
   }
 
