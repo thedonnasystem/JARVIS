@@ -1,0 +1,50 @@
+{
+  "_comment": "Independent acceptance-harness config. Edit here, not in code. The HQ builder's demo URL pattern goes in demo.query.",
+  "demo": {
+    "query": "?demo=1",
+    "_queryAlternatives": ["?demo=1", "#demo", "?mode=demo"],
+    "markerSelectors": ["[data-demo]", "meta[name=hq-demo]", "[data-mode=demo]"],
+    "markerGlobals": ["__DEMO__", "__HQ_DEMO__"],
+    "markerTextRe": "\\b(DEMO MODE|DEMO DATA|SIMULATED)\\b"
+  },
+  "startPath": "index.html",
+  "viewports": { "phone": { "width": 390, "height": 844 }, "desktop": { "width": 1440, "height": 900 } },
+  "nav": {
+    "selectors": "nav button, nav a[href], [role=tab], [role=tablist] button, [data-nav], [data-view-target], a[href^='#']:not([href='#'])",
+    "minTargets": 2,
+    "maxScreens": 30,
+    "settleMs": 450
+  },
+  "screenSelector": ".view.on, [role=tabpanel]:not([hidden]), [data-screen]:not([hidden]):not(.off), main > section:not([hidden])",
+  "panelSelector": ".card, article, [data-panel], .panel",
+  "badges": {
+    "textRe": "\\b(SIMULATED|NOT CONNECTED|INCOMPLETE|LIVE)\\b",
+    "attrSelector": "[data-badge]",
+    "screenScopeSelector": "[data-badge-scope='screen']",
+    "numericRe": "(\\$\\s?\\d)|(\\d\\s?%)|(\\d)",
+    "ignoreAgeTokensRe": "\\b\\d+\\s?(s|m|h|d|min|mins|hr|hrs)\\b"
+  },
+  "a11y": { "tapFailBelow": 32, "tapWarnBelow": 44, "contrastFailBelow": 3, "contrastWarnBelow": 4.5, "maxContrastSamples": 500 },
+  "controls": {
+    "denyRe": "kill|emergency|stop everything|spend.?cap|\\bcaps?\\b|ceiling|\\blimits?\\b|permission|polic(y|ies)|budget|reserve floor|threshold|override|autopilot|disable.{0,12}(guard|safety)",
+    "_note": "Matched against the visible label, aria-label, placeholder, name, id, title of every interactive element (hidden ones too), and against RPC names, app_send kinds and verbs found in the shipped JS."
+  },
+  "rpc": {
+    "_note": "Classification of RPC names. readOnly are the safe allow-list (all app_* getters in the lockdown keep-open list). lowRiskWrite may be called but are reported as INFO. Anything else the shipped JS calls is a FAIL until reviewed and added here.",
+    "readOnly": ["app_snapshot", "app_messages", "app_office", "app_payments", "app_needs_you", "app_venture", "app_venture_extras", "app_push_public_key"],
+    "lowRiskWrite": ["app_send", "app_save_push", "setter_apply"],
+    "denyRe": "kill|cap|limit|polic|permission|budget|ceiling|reserve|set_agent|set_|grant|revoke|override"
+  },
+  "sw": { "file": "sw.js", "precacheNameRe": "SHELL|ASSETS|PRECACHE|URLS|FILES|CORE", "offlineSettleMs": 500 },
+  "xss": {
+    "payloads": [
+      "<img src=x onerror=\"window.__xss=(window.__xss||0)+1\">",
+      "<script>window.__xss=(window.__xss||0)+1</script>",
+      "\"><svg onload=\"window.__xss=(window.__xss||0)+1\">",
+      "javascript:window.__xss=1"
+    ],
+    "urlParams": ["q", "name", "id", "tab", "view", "screen", "slug", "msg", "search", "demo"],
+    "preserveKeys": ["id", "ref_id", "ref_table", "slug", "status", "kind", "role", "fn", "tier", "mode", "verb", "d", "at", "created_at", "updated_at", "due", "type", "flag", "verdict", "action", "idx", "venture", "reply_to", "options_kind"]
+  },
+  "externalAllowHosts": []
+}

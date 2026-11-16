@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QA Fixture App</title><link rel="stylesheet" href="styles.css"><meta name="hq-demo" content="1"></head>
+<body>
+<header><h1>Fixture HQ</h1></header>
+<main id="app">
+  <section id="v-home" class="view on">
+    <div class="card" data-testid="fund"><span class="badge" data-badge>SIMULATED</span><h2>Fund</h2><p id="fund">$0.00</p></div>
+    <div class="card"><span class="badge" data-badge>NOT CONNECTED</span><h2>Bank</h2><p>Balance $12.00</p></div>
+    <div class="card"><h2>Notes</h2><p id="note">No numbers here</p></div>
+  </section>
+  <section id="v-feed" class="view"><div class="card"><span class="badge" data-badge>LIVE</span><h2>Feed</h2><p id="feed">3 events</p></div></section>
+  <section id="v-about" class="view"><div class="card"><h2>About</h2><p id="q">nothing</p></div></section>
+</main>
+<nav><button id="t-home" class="on">Home</button><button id="t-feed">Feed</button><button id="t-about">About</button></nav>
+<script src="app.js"></script>
+</body></html>

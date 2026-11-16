@@ -1,0 +1,6 @@
+body{margin:0;background:#fff;color:#111;font:16px/1.4 system-ui,sans-serif}
+.view{display:none;padding:12px}.view.on{display:block}
+.card{border:1px solid #888;border-radius:8px;padding:10px;margin:8px 0}
+.badge{font-size:12px;font-weight:700;color:#222;background:#fe9;padding:2px 6px;border-radius:4px}
+nav{display:flex;gap:8px;padding:8px}nav button{min-width:64px;min-height:48px;font:inherit;background:#eee;color:#111;border:1px solid #444}nav button.on{background:#ddd}
+[hidden]{display:none!important}
