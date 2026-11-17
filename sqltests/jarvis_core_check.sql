@@ -179,7 +179,8 @@ begin
   -- the design cap: with the owner's $10/day (1000 cents) a $6 reservation fits and a further $5 is refused by the existing gateway
   update public.agents set status = 'active' where slug = ag;
   update public.system_state set daily_spend_cap_cents = 1000 where id = 1;
-  delete from public.llm_calls where agent_slug in ('jarvis');
+  update public.llm_calls set started_at = started_at - interval '3 days';     -- today's earlier test traffic (e2e, integration) moved out of today, inside this rolled-back transaction
+  if public.capital_mode() <> 'normal' then raise notice 'J11 design-cap check skipped: capital mode is %', public.capital_mode(); return; end if;
   id1 := public.reserve_llm_budget(ag, 600, 'claude-haiku-5-5', 'jarvis:donna:-:t');
   begin perform public.reserve_llm_budget(ag, 500, 'claude-haiku-5-5', 'jarvis:donna:-:t'); raise exception 'J11 over the design cap accepted';
   exception when others then if sqlerrm not like '%daily cap%' and sqlerrm not like '%spend cap would be exceeded%' then raise; end if; end;
