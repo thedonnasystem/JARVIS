@@ -6919,6 +6919,2791 @@ grant execute on function public.confirm_deal_won(uuid, integer, text, text, tex
 grant execute on function public.setter_record_payout(text, text, integer, text, text) to service_role;
 grant execute on function public.backup_redaction_status() to service_role;
 
+-- ===== 20261121_consent_evidence_v1.sql =====
+-- FF Marketing consent integrity, part 1: VERIFIABLE EXPRESS-CONSENT EVIDENCE (Priority 2, Nov 2026). Additive; nothing here sends, enables or authorizes outreach.
+--   The problem: ffm_record_consent (20261119) accepted ANY string as evidence_ref, so the bot's service role could mint 'express' valid consent by asserting a form id.
+--   The model (full text: DATA_CLASSIFICATION_AND_BACKUP_POLICY.md section 4):
+--     * a consent CAPTURE is a registered, immutable record: workspace, opaque capture_ref, channel, the approved wording version AND its sha256, the sha256 of the stored raw
+--       artifact (the form submission), the capture time, and a keyed hash binding it to the contact (or, for a hand-attested capture, to one lead id).
+--     * captures are written ONLY by two paths the bot cannot use on its own:
+--         ffm_ingest_capture        form-ingest: the caller must present a SEAL = HMAC-SHA256 over the capture fields with the capture signing key. The key lives in
+--                                   ffm_secrets (no grant to any API role) and in the form endpoint; the bot does not hold it, so it cannot produce a valid seal.
+--         ffm_register_capture_owner  owner-only (ffm_require_owner refuses the bot): consent the owner personally attests (paper, phone with a record).
+--     * ffm_record_consent (replaced, same signature) records basis 'express' ONLY when evidence_ref names a registered capture that matches the channel, the wording version and
+--       the lead's contact (or lead id). Anything else is recorded as basis 'unverified': it is kept for the audit trail and ffm_can_contact ignores it (false).
+--       A CHECK constraint makes it impossible to store an 'express' row without a capture_id, whatever function writes it.
+--   WHAT THE DATABASE CANNOT KNOW: that the form really showed the wording to a real person who ticked it. That is the owner's job (hold the signing key, keep the raw artifacts,
+--   sample-check them). See the policy document, "what a human must still do".
+--   Also here: normalize_phone (E.164-like), a dependency-free HMAC-SHA256 (no pgcrypto needed; tested against Python's hmac), and the secrets table.
+
+-- 1. primitives ------------------------------------------------------------------------------------------------------------------------------------------------------
+create or replace function public.ffm_hmac_sha256(p_key text, p_msg text) returns text
+language plpgsql immutable strict set search_path to 'pg_catalog' as $$
+declare k bytea := convert_to(p_key, 'UTF8'); ip bytea; op bytea; i int; b int;
+begin
+  if length(k) > 64 then k := sha256(k); end if;
+  k := k || decode(repeat('00', 64 - length(k)), 'hex');
+  ip := k; op := k;
+  for i in 0..63 loop
+    b := get_byte(k, i);
+    ip := set_byte(ip, i, b # 54);    -- 0x36
+    op := set_byte(op, i, b # 92);    -- 0x5c
+  end loop;
+  return encode(sha256(op || sha256(ip || convert_to(p_msg, 'UTF8'))), 'hex');
+end $$;
+
+-- Length (1-3) of the country calling code at the start of a digit string, by the E.164 allocation rules (no code is a prefix of another). Used only by normalize_phone.
+create or replace function public.ffm_cc_len(d text) returns integer
+language sql immutable strict set search_path to 'pg_catalog' as $$
+  select case substr(d, 1, 1)
+    when '1' then 1 when '7' then 1
+    when '2' then case when substr(d, 1, 2) in ('20', '27') then 2 else 3 end
+    when '3' then case when substr(d, 2, 1) in ('0', '1', '2', '3', '4', '6', '9') then 2 else 3 end
+    when '4' then case when substr(d, 2, 1) = '2' then 3 else 2 end
+    when '5' then case when substr(d, 2, 1) in ('0', '9') then 3 else 2 end
+    when '6' then case when substr(d, 2, 1) in ('7', '8', '9') then 3 else 2 end
+    when '8' then case when substr(d, 2, 1) in ('1', '2', '4', '6') then 2 else 3 end
+    when '9' then case when substr(d, 2, 1) in ('0', '1', '2', '3', '4', '5', '8') then 2 else 3 end
+    else 3 end
+$$;
+
+-- ONE phone normaliser for SQL and Python (hq_consent.normalize_phone mirrors it; a test runs one table of inputs through both).
+-- Output '+<digits>' or NULL ("not one clean phone number": every caller treats NULL as "do not contact by phone").
+--   handled: spaces, dots, dashes, parentheses, +1 / 1 / 001 prefixes, fullwidth digits and plus (NFKC), Arabic-Indic and Persian digits, zero-width and bidi marks,
+--            unicode dashes, a trailing extension (x123, ext 4, #5) which is dropped (the main line is what is suppressed).
+--   TRUNK PREFIX: a 0 right after the country code is dropped for 44 20 33 49 61 90 971 966 212 962 961 (so '+44 (0)20 ...' = '+44 20 ...'); Italy keeps it; '(0)' where it cannot be interpreted gives NULL.
+--   a number with no + sign: 10 digits = North American (+1), 11 digits starting with 1 = North American, 00<cc>... = international. Anything else without a + is NULL (ambiguous).
+--   North American numbers must have an area code and exchange that start 2-9. Letters (vanity numbers), several numbers in one field, or 7-digit local numbers give NULL.
+create or replace function public.normalize_phone(p text) returns text
+language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
+declare t text; d text; cc text; rest text; paren0 boolean;
+begin
+  if p is null then return null; end if;
+  t := translate(normalize(regexp_replace(p, '[​-‏⁠﻿‪-‮]', '', 'g'), NFKC),
+                 '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹‐‑‒–—―−', '01234567890123456789-------');
+  t := btrim(t);
+  t := regexp_replace(t, '[ \t\n\r\f\v]*(ext\.?|extension|x|#)[ \t\n\r\f\v]*[0-9]{1,6}$', '', 'i');   -- ASCII whitespace ONLY (PG's \s also matches U+2028, U+2029, U+1680; Python's mirror does not)
+  if t = '' or t ~ '[^0-9+()\-. \t\n\r\f\v]' or position('+' in t) > 1 or length(t) - length(replace(t, '+', '')) > 1 then return null; end if;
+  paren0 := t ~ '\([ \t\n\r\f\v]*0[ \t\n\r\f\v]*\)';
+  d := regexp_replace(t, '[^0-9]', '', 'g');
+  if left(t, 1) = '+' then
+    null;
+  elsif d ~ '^00' then
+    d := substr(d, 3); t := '+';
+  elsif d ~ '^[2-9][0-9]{9}$' then
+    d := '1' || d; t := '+';
+  elsif d ~ '^1[0-9]{10}$' then
+    t := '+';
+  else
+    return null;
+  end if;
+  if d ~ '^0' or length(d) < 8 or length(d) > 15 then return null; end if;
+  -- TRUNK PREFIX (review finding 4, extended in the re-review): '+44 (0)20 7946 0958', '+44 020 ...' and '+44 20 ...' are ONE number. The country code is read with the E.164 length rules
+  -- (ffm_cc_len); for a country on the trunk list one 0 right after it is dropped. Italy (39) keeps its 0. For EVERY OTHER country a 0 right after the country code, or a "(0)", is ambiguous
+  -- and gives NULL, which every caller treats as "refuse" (fail closed). Hungary writes its trunk as '06'.
+  if d !~ '^1' then
+    cc := substr(d, 1, public.ffm_cc_len(d));
+    rest := substr(d, length(cc) + 1);
+    if cc = '36' then
+      if rest ~ '^06' then d := cc || substr(rest, 3); elsif rest ~ '^0' or paren0 then return null; end if;
+    elsif cc = any (array['31','353','91','81','46','27','41','972','32','43','45','47','48','7','55','52','54','60','62','63','64','65','66','84','82','86','880','92','94','234','254','255','256',
+                          '213','216','218','20','964','965','968','973','974','970','963','967','98','93','355','40','30','420','421','359','385','386','381','380','375','372','371','370',
+                          '44','33','49','61','90','971','966','212','962','961']) then
+      if rest ~ '^00' then return null; end if;
+      if rest ~ '^0' then d := cc || substr(rest, 2); elsif paren0 then return null; end if;
+    elsif cc = '39' then
+      if paren0 then return null; end if;            -- "(0)" says the 0 is optional; in Italy it is not: ambiguous
+    elsif rest ~ '^0' or paren0 then
+      return null;                                   -- any other country: a 0 after the country code (or a "(0)") cannot be interpreted safely
+    end if;
+    if length(d) < 8 or length(d) > 15 then return null; end if;
+  elsif paren0 then
+    return null;
+  end if;
+  if d ~ '^1' and d !~ '^1[2-9][0-9]{2}[2-9][0-9]{6}$' then return null; end if;
+  return '+' || d;
+end $$;
+
+-- Length-prefixed fields: ffm_lp('ab') = '2:ab'. Every HMAC message below is  '<domain>|v1|' || ffm_lp(field1) || ffm_lp(field2) ...  so (a) two different uses of a key (capture seal, contact binding,
+-- suppression hash, key check) can never produce the same message, and (b) a message can never be re-split at a ':' or '|' inside a field (review finding 1).
+create or replace function public.ffm_lp(p text) returns text
+language sql immutable strict set search_path to 'pg_catalog' as $$ select octet_length(p)::text || ':' || p $$;
+
+-- Key quality policy (review finding 1). NULL = acceptable; otherwise a reason code (never the key). hq_consent.key_problem mirrors it (shared table sqltests/data/key_cases.tsv).
+--   length        fewer than 32 or more than 200 characters
+--   format        not exactly 64 lowercase hex characters (python3 -c "import secrets;print(secrets.token_hex(32))"): ffm_key_fingerprint, key_check in the suppression export and the ffm_set_key return value are HMAC(key, fixed text), so a phrase would be open to offline guessing
+--   low_entropy   fewer than 12 distinct characters, Shannon entropy under 3.0 bits per character, or one character making up more than a quarter of the key
+--   repeated_pattern   an 8-character piece occurring twice, 6+ identical characters in a row, or 8+ characters in a sequence (abcdefgh, 87654321)
+--   related_key   p_other (the other key) is equal to, contained in, contains, or shares a 12-character piece with this key
+-- A statistical check cannot prove a key is random: the owner must still generate it from a CSPRNG (python3 -c "import secrets;print(secrets.token_hex(32))").
+create or replace function public.ffm_key_problem(p_value text, p_other text default null) returns text
+language plpgsql immutable set search_path to 'pg_catalog', 'public' as $$
+declare n int; d int; mx int; h float8; lv text; lo text; i int;
+begin
+  if p_value is null then return 'missing'; end if;
+  n := char_length(p_value);
+  if n < 32 or n > 200 then return 'length'; end if;
+  if p_value !~ '^[0-9a-f]{64}$' then return 'format'; end if;   -- exactly 64 lowercase hex characters (32 random bytes): the key fingerprints are HMACs of FIXED strings, so a guessable phrase could be brute-forced offline
+  select count(*), max(c), -sum((c::float8 / n) * ln(c::float8 / n)) / ln(2.0) into d, mx, h from (select count(*) as c from regexp_split_to_table(p_value, '') ch group by ch) q;
+  if d < 12 or h < 3.0 or mx * 4 > n then return 'low_entropy'; end if;
+  if exists (select 1 from generate_series(1, n - 7) g group by substr(p_value, g, 8) having count(*) > 1) then return 'repeated_pattern'; end if;
+  if p_value ~ '(.)\1{5}' then return 'repeated_pattern'; end if;
+  if exists (select 1 from generate_series(1, n - 7) g where (select bool_and(ascii(substr(p_value, g + k, 1)) = ascii(substr(p_value, g, 1)) + k) from generate_series(0, 7) k)
+                                                          or (select bool_and(ascii(substr(p_value, g + k, 1)) = ascii(substr(p_value, g, 1)) - k) from generate_series(0, 7) k)) then
+    return 'repeated_pattern';
+  end if;
+  if p_other is not null then
+    lv := lower(p_value); lo := lower(p_other);
+    if lv = lo or position(lo in lv) > 0 or position(lv in lo) > 0 then return 'related_key'; end if;
+    for i in 1..(n - 11) loop
+      if position(substr(lv, i, 12) in lo) > 0 then return 'related_key'; end if;
+    end loop;
+  end if;
+  return null;
+end $$;
+
+-- 2. secrets (keys). NO privileges for any API role: only the SECURITY DEFINER functions below read them. Set once, owner-only, never updated or deleted.
+create table if not exists public.ffm_secrets (
+  name text primary key check (name in ('capture_signing_key', 'suppression_hmac_key')),
+  value text not null check (length(value) between 32 and 200),
+  set_by text not null,
+  set_at timestamptz not null default clock_timestamp()
+);
+create or replace function public.ffm_append_only() returns trigger
+language plpgsql set search_path to 'public' as $$
+begin
+  raise exception 'This record set is append-only: rows cannot be changed or removed.' using errcode = 'P0001';
+end $$;
+create table if not exists public.ffm_consent_wordings (
+  workspace_id uuid not null references public.client_workspaces(id) on delete restrict,
+  version text not null check (version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,59}$'),
+  sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'),
+  registered_by text not null,
+  registered_at timestamptz not null default clock_timestamp(),
+  primary key (workspace_id, version)
+);
+create table if not exists public.ffm_consent_captures (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.client_workspaces(id) on delete restrict,
+  capture_ref text not null check (capture_ref ~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$'),   -- opaque id of the form submission: never a name, an address or free text. No ':' and no '|' (review finding 1: the old canonical string could be re-split inside the ref)
+  channel text not null check (channel in ('email', 'sms', 'phone', 'mail')),
+  wording_version text not null check (wording_version ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,59}$'),
+  wording_sha256 text not null check (wording_sha256 ~ '^[0-9a-f]{64}$'),
+  artifact_sha256 text not null check (artifact_sha256 ~ '^[0-9a-f]{64}$'),
+  captured_at timestamptz not null,
+  contact_mac text check (contact_mac is null or contact_mac ~ '^[0-9a-f]{64}$'),   -- keyed hash of the normalised contact; blanked on erasure
+  lead_id uuid,                                                                     -- owner-attested captures may bind to one lead instead (needed for 'mail')
+  registered_via text not null check (registered_via in ('form_ingest', 'owner_attested')),
+  registered_by text not null check (registered_by ~ '^[A-Za-z0-9][A-Za-z0-9 ._@:-]{0,79}$'),
+  created_at timestamptz not null default clock_timestamp(),
+  erased_at timestamptz,
+  unique (workspace_id, capture_ref),
+  check (contact_mac is not null or lead_id is not null or erased_at is not null),
+  foreign key (workspace_id, lead_id) references public.ws_leads (workspace_id, id) on delete restrict
+);
+create index if not exists ffm_captures_lead_idx on public.ffm_consent_captures (lead_id);
+do $$ declare t text; begin
+  foreach t in array array['ffm_secrets', 'ffm_consent_wordings', 'ffm_consent_captures'] loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from public, anon, authenticated, service_role', t);   -- default privileges on the replica / Supabase grant them; take them back
+  end loop;
+  grant select on public.ffm_consent_wordings, public.ffm_consent_captures to service_role;       -- readable (no secrets inside); never writable by an API role
+end $$;
+drop trigger if exists ffm_secrets_append_only on public.ffm_secrets;
+create trigger ffm_secrets_append_only before update or delete on public.ffm_secrets for each row execute function public.ffm_append_only();
+drop trigger if exists ffm_secrets_no_truncate on public.ffm_secrets;
+create trigger ffm_secrets_no_truncate before truncate on public.ffm_secrets for each statement execute function public.ffm_append_only();
+drop trigger if exists ffm_wordings_append_only on public.ffm_consent_wordings;
+create trigger ffm_wordings_append_only before update or delete on public.ffm_consent_wordings for each row execute function public.ffm_append_only();
+drop trigger if exists ffm_wordings_no_truncate on public.ffm_consent_wordings;
+create trigger ffm_wordings_no_truncate before truncate on public.ffm_consent_wordings for each statement execute function public.ffm_append_only();
+
+-- captures are immutable except the owner-only erasure path, which may only blank contact_mac and stamp erased_at
+create or replace function public.ffm_capture_immutable() returns trigger
+language plpgsql set search_path to 'public' as $$
+begin
+  if tg_op = 'UPDATE' and current_setting('app.ffm_erasure', true) = 'on' and new.contact_mac is null and new.erased_at is not null
+     and (to_jsonb(new) - 'contact_mac' - 'erased_at') = (to_jsonb(old) - 'contact_mac' - 'erased_at') then
+    return new;
+  end if;
+  raise exception 'Consent captures are append-only: rows cannot be changed or removed.' using errcode = 'P0001';
+end $$;
+drop trigger if exists ffm_capture_immutable on public.ffm_consent_captures;
+create trigger ffm_capture_immutable before update or delete on public.ffm_consent_captures for each row execute function public.ffm_capture_immutable();
+drop trigger if exists ffm_capture_no_truncate on public.ffm_consent_captures;
+create trigger ffm_capture_no_truncate before truncate on public.ffm_consent_captures for each statement execute function public.ffm_capture_immutable();
+
+-- 3. the consent log learns 'unverified' and carries its capture ---------------------------------------------------------------------------------------------------
+alter table public.ffm_consent_log add column if not exists capture_id uuid references public.ffm_consent_captures (id) on delete restrict;
+alter table public.ffm_consent_log add column if not exists verification text check (verification is null or verification ~ '^[a-z_]{2,40}$');
+alter table public.ffm_consent_log drop constraint if exists ffm_consent_log_basis_check;
+alter table public.ffm_consent_log add constraint ffm_consent_log_basis_check check (basis in ('express', 'implied', 'withdrawn', 'unverified'));
+alter table public.ffm_consent_log drop constraint if exists ffm_consent_log_express_needs_capture;
+alter table public.ffm_consent_log add constraint ffm_consent_log_express_needs_capture check ((basis <> 'express' or capture_id is not null) and (basis <> 'unverified' or capture_id is null)) not valid;   -- NOT VALID: rows from before this migration are not re-checked, every new row is
+create index if not exists ffm_consent_capture_idx on public.ffm_consent_log (capture_id);
+
+-- 4. helpers. NOTE: no function returns a stored key. (The lockdown migration grants execute on EVERY public function to service_role, now and by default privilege, so a function that handed out a key
+--    could not be protected by a revoke. Keys are only ever read INSIDE the SECURITY DEFINER functions that use them, and the table has no grant to any API role.) --------------------------------------------------------------------------
+-- keyed contact binding: same for the form side (see hq_consent.contact_mac) and the database side
+create or replace function public.ffm_contact_mac(p_key text, p_kind text, p_norm text) returns text
+language sql immutable strict set search_path to 'public' as $$
+  select public.ffm_hmac_sha256(p_key, 'con|v1|' || public.ffm_lp(p_kind) || public.ffm_lp(p_norm))
+$$;
+
+-- 5. owner-only setup: keys and approved wordings ---------------------------------------------------------------------------------------------------------------------
+-- Set once. The owner generates the value offline (e.g. python3 -c "import secrets;print(secrets.token_hex(32))"), stores it in a password manager, gives the capture key to the form
+-- endpoint only, and runs this call from the SQL editor with the owner session (see ops/OWNER_CONSENT_INTEGRITY.sql). A key cannot be changed afterwards (rotation = new design + owner decision).
+create or replace function public.ffm_set_key(p_name text, p_value text, p_by text) returns text
+language plpgsql security definer set search_path to 'public' as $$
+declare why text;
+begin
+  perform public.ffm_require_owner();
+  if p_name is null or p_name not in ('capture_signing_key', 'suppression_hmac_key') then raise exception 'unknown key name'; end if;
+  if exists (select 1 from public.ffm_secrets where name = p_name) then raise exception 'key refused: % is already set and cannot be replaced', p_name; end if;
+  why := public.ffm_key_problem(p_value, (select value from public.ffm_secrets where name <> p_name limit 1));
+  if why is not null then
+    raise exception 'key refused (%): use exactly 64 lowercase hex characters from a CSPRNG (secrets.token_hex(32)), and the capture key and the suppression key must be two UNRELATED values', why;   -- never echo the value
+  end if;
+  insert into public.ffm_secrets (name, value, set_by) values (p_name, p_value, coalesce(nullif(btrim(p_by), ''), 'owner'));
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_key_set', 'key/' || p_name, jsonb_build_object('name', p_name));   -- never the value
+  return public.ffm_hmac_sha256(p_value, 'key|v1|' || public.ffm_lp(p_name));
+end $$;
+-- a fingerprint is HMAC(key, constant): it lets the owner and the form endpoint confirm they hold the same key without revealing it
+create or replace function public.ffm_key_fingerprint(p_name text) returns text
+language sql stable security definer set search_path to 'public' as $$
+  select public.ffm_hmac_sha256(value, 'key|v1|' || public.ffm_lp(name)) from public.ffm_secrets where name = p_name
+$$;
+create or replace function public.ffm_register_wording(p_ws uuid, p_version text, p_sha256 text, p_by text) returns void
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  perform public.ffm_require_owner();
+  perform public.ffm_open_ws(p_ws);
+  insert into public.ffm_consent_wordings (workspace_id, version, sha256, registered_by) values (p_ws, p_version, lower(p_sha256), coalesce(nullif(btrim(p_by), ''), 'owner'));
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_wording_registered', 'workspace/' || p_ws, jsonb_build_object('version', p_version));
+end $$;
+
+-- 6. capture registration ---------------------------------------------------------------------------------------------------------------------------------------------
+-- canonical text that the form endpoint signs (hq_consent.capture_seal builds the same string)
+create or replace function public.ffm_capture_canonical(p_ws uuid, p_ref text, p_channel text, p_wv text, p_wsha text, p_at timestamptz, p_contact text, p_asha text) returns text
+language sql immutable set search_path to 'public' as $$
+  select 'cap|v1|' || public.ffm_lp(p_ws::text) || public.ffm_lp(p_ref) || public.ffm_lp(p_channel) || public.ffm_lp(p_wv) || public.ffm_lp(p_wsha) || public.ffm_lp(floor(extract(epoch from p_at))::bigint::text)
+         || public.ffm_lp(p_contact) || public.ffm_lp(p_asha)
+$$;
+
+create or replace function public.ffm_ingest_capture(p_ws uuid, p_capture_ref text, p_channel text, p_wording_version text, p_wording_sha256 text, p_captured_at timestamptz,
+                                                     p_contact text, p_artifact_sha256 text, p_seal text) returns uuid
+language plpgsql security definer set search_path to 'public' as $$
+declare k text := (select value from public.ffm_secrets where name = 'capture_signing_key'); kind text; norm text; v_id uuid; ws_sha text;
+begin
+  perform public.ffm_open_ws(p_ws);
+  if k is null then raise exception 'capture refused: the capture signing key has not been set by the owner'; end if;
+  if p_channel is null or p_channel not in ('email', 'sms', 'phone') then raise exception 'capture refused: form ingest handles email, sms and phone only (use the owner path for mail)'; end if;
+  if p_capture_ref is null or p_wording_version is null or p_wording_sha256 is null or p_captured_at is null or p_contact is null or p_artifact_sha256 is null or p_seal is null
+     then raise exception 'capture refused: missing field'; end if;
+  if p_capture_ref !~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' then raise exception 'capture refused: capture_ref must be letters, digits, dot, underscore or hyphen (no colon, no bar)'; end if;
+  if p_captured_at > clock_timestamp() + interval '5 minutes' then raise exception 'capture refused: captured_at is in the future'; end if;
+  if public.ffm_hmac_sha256(k, public.ffm_capture_canonical(p_ws, p_capture_ref, p_channel, p_wording_version, lower(p_wording_sha256), p_captured_at, p_contact, lower(p_artifact_sha256))) is distinct from lower(p_seal) then
+    raise exception 'capture refused: the seal does not match (wrong signing key or altered fields)';
+  end if;
+  select sha256 into ws_sha from public.ffm_consent_wordings where workspace_id = p_ws and version = p_wording_version;
+  if ws_sha is null or ws_sha <> lower(p_wording_sha256) then raise exception 'capture refused: the wording version is not registered for this workspace, or its hash differs'; end if;
+  kind := case when p_channel = 'email' then 'email' else 'phone' end;
+  norm := case when p_channel = 'email' then public.normalize_addr(p_contact) else public.normalize_phone(p_contact) end;
+  if norm is null then raise exception 'capture refused: the contact is not one clean address or phone number'; end if;
+  insert into public.ffm_consent_captures (workspace_id, capture_ref, channel, wording_version, wording_sha256, artifact_sha256, captured_at, contact_mac, registered_via, registered_by)
+    values (p_ws, p_capture_ref, p_channel, p_wording_version, lower(p_wording_sha256), lower(p_artifact_sha256), p_captured_at, public.ffm_contact_mac(k, kind, norm), 'form_ingest', 'form-ingest')
+    returning id into v_id;
+  insert into public.audit_log (actor, action, target, detail) values ('ffm', 'ffm_capture_registered', 'workspace/' || p_ws, jsonb_build_object('capture', v_id, 'via', 'form_ingest', 'channel', p_channel));
+  return v_id;
+end $$;
+
+create or replace function public.ffm_register_capture_owner(p_ws uuid, p_capture_ref text, p_channel text, p_wording_version text, p_artifact_sha256 text, p_captured_at timestamptz,
+                                                             p_lead uuid, p_contact text, p_by text) returns uuid
+language plpgsql security definer set search_path to 'public' as $$
+declare k text := (select value from public.ffm_secrets where name = 'capture_signing_key'); kind text; norm text; mac text; v_id uuid; ws_sha text;
+begin
+  perform public.ffm_require_owner();
+  perform public.ffm_open_ws(p_ws);
+  if p_channel is null or p_channel not in ('email', 'sms', 'phone', 'mail') then raise exception 'capture refused: channel must be one of email, sms, phone, mail'; end if;
+  if p_captured_at is null or p_captured_at > clock_timestamp() + interval '5 minutes' then raise exception 'capture refused: captured_at is missing or in the future'; end if;
+  select sha256 into ws_sha from public.ffm_consent_wordings where workspace_id = p_ws and version = p_wording_version;
+  if ws_sha is null then raise exception 'capture refused: the wording version is not registered for this workspace'; end if;
+  if p_contact is not null then
+    if k is null then raise exception 'capture refused: the capture signing key has not been set by the owner'; end if;
+    kind := case when p_channel = 'email' then 'email' when p_channel in ('sms', 'phone') then 'phone' else null end;
+    if kind is null then raise exception 'capture refused: a mail capture binds to a lead id, not a contact'; end if;
+    norm := case when kind = 'email' then public.normalize_addr(p_contact) else public.normalize_phone(p_contact) end;
+    if norm is null then raise exception 'capture refused: the contact is not one clean address or phone number'; end if;
+    mac := public.ffm_contact_mac(k, kind, norm);
+  end if;
+  if mac is null and p_lead is null then raise exception 'capture refused: give the contact or the lead it belongs to'; end if;
+  if p_lead is not null and not exists (select 1 from public.ws_leads where id = p_lead and workspace_id = p_ws) then raise exception 'lead not found in this workspace'; end if;
+  insert into public.ffm_consent_captures (workspace_id, capture_ref, channel, wording_version, wording_sha256, artifact_sha256, captured_at, contact_mac, lead_id, registered_via, registered_by)
+    values (p_ws, p_capture_ref, p_channel, p_wording_version, ws_sha, lower(p_artifact_sha256), p_captured_at, mac, p_lead, 'owner_attested', coalesce(nullif(btrim(p_by), ''), 'owner'))
+    returning id into v_id;
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_capture_registered', 'workspace/' || p_ws, jsonb_build_object('capture', v_id, 'via', 'owner_attested', 'channel', p_channel));
+  return v_id;
+end $$;
+
+-- 7. ffm_record_consent, replaced (same signature) --------------------------------------------------------------------------------------------------------------------
+create or replace function public.ffm_record_consent(p_ws uuid, p_lead uuid, p_channel text, p_basis text, p_wording_version text, p_source text,
+                                                      p_captured_at timestamptz, p_evidence_ref text, p_by text) returns uuid
+language plpgsql security definer set search_path to 'public' as $$
+declare v_id uuid; l public.ws_leads; cap public.ffm_consent_captures; verdict text := 'not_applicable'; v_basis text := p_basis; v_at timestamptz := p_captured_at;
+        v_ref text := btrim(p_evidence_ref); k text; kind text; norm text;
+begin
+  perform public.ffm_open_ws(p_ws);
+  if p_basis is null or p_basis not in ('express', 'implied') then raise exception 'consent refused: basis must be express or implied (use ffm_withdraw_consent to withdraw)'; end if;
+  if p_channel is null or p_channel not in ('email', 'sms', 'phone', 'mail') then raise exception 'consent refused: channel must be one of email, sms, phone, mail'; end if;
+  if p_basis = 'implied' then perform public.ffm_require_owner(); end if;
+  if coalesce(btrim(p_wording_version), '') = '' then raise exception 'consent refused: the wording version the person saw is required'; end if;
+  if coalesce(btrim(p_source), '') = '' then raise exception 'consent refused: a source is required'; end if;
+  if coalesce(length(v_ref), 0) < 3 then raise exception 'consent refused: an evidence reference (form or message id) is required'; end if;
+  if p_captured_at is null or p_captured_at > clock_timestamp() + interval '5 minutes' then raise exception 'consent refused: captured_at is missing or in the future'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('ffm_consent:' || p_lead::text, 0));
+  select * into l from public.ws_leads where id = p_lead and workspace_id = p_ws;
+  if l.id is null then raise exception 'lead not found in this workspace'; end if;
+  if exists (select 1 from public.ffm_consent_log where lead_id = p_lead and basis = 'withdrawn' and channel in (p_channel, 'all')) then
+    raise exception 'consent refused: this lead withdrew consent for this channel; a withdrawal is final in v1 (re-opt-in is an owner decision)';
+  end if;
+  if p_basis = 'express' then
+    select * into cap from public.ffm_consent_captures where workspace_id = p_ws and capture_ref = v_ref;
+    if cap.id is null then verdict := 'no_capture';
+    elsif cap.erased_at is not null then verdict := 'capture_erased';
+    elsif cap.channel <> p_channel then verdict := 'channel_mismatch';
+    elsif cap.wording_version <> btrim(p_wording_version) then verdict := 'wording_mismatch';
+    elsif cap.lead_id is not null then verdict := case when cap.lead_id = p_lead then 'ok' else 'lead_mismatch' end;
+    elsif cap.contact_mac is null then verdict := 'unbound';
+    else
+      k := (select value from public.ffm_secrets where name = 'capture_signing_key');
+      kind := case when p_channel = 'email' then 'email' when p_channel in ('sms', 'phone') then 'phone' else null end;
+      norm := case when kind = 'email' then public.normalize_addr(l.email) when kind = 'phone' then public.normalize_phone(l.phone) else null end;
+      if k is null then verdict := 'capture_key_missing';
+      elsif norm is null then verdict := 'no_contact';
+      elsif public.ffm_contact_mac(k, kind, norm) = cap.contact_mac then verdict := 'ok';
+      else verdict := 'contact_mismatch'; end if;
+    end if;
+    if verdict = 'ok' then v_at := cap.captured_at; else v_basis := 'unverified'; end if;
+  end if;
+  insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by, capture_id, verification)
+    values (p_ws, p_lead, p_channel, v_basis, p_wording_version, p_source, v_at, v_ref, coalesce(nullif(btrim(p_by), ''), 'unknown'),
+            case when v_basis = 'express' then cap.id end, verdict) returning id into v_id;
+  insert into public.audit_log (actor, action, target, detail) values ('ffm', 'ffm_consent_recorded', 'workspace/' || p_ws,
+    jsonb_build_object('lead', p_lead, 'channel', p_channel, 'basis', v_basis, 'asked_basis', p_basis, 'verification', verdict, 'consent', v_id));
+  return v_id;
+end $$;
+
+-- 8. grants -----------------------------------------------------------------------------------------------------------------------------------------------------------
+revoke all on function public.ffm_hmac_sha256(text, text) from public, anon, authenticated;
+revoke all on function public.ffm_lp(text) from public, anon, authenticated;
+revoke all on function public.ffm_cc_len(text) from public, anon, authenticated;
+revoke all on function public.ffm_key_problem(text, text) from public, anon, authenticated;
+revoke all on function public.normalize_phone(text) from public, anon, authenticated;
+revoke all on function public.ffm_append_only() from public, anon, authenticated;
+revoke all on function public.ffm_capture_immutable() from public, anon, authenticated;
+revoke all on function public.ffm_contact_mac(text, text, text) from public, anon, authenticated;   -- takes the key as an ARGUMENT (a pure function): it never reads or returns the stored key
+revoke all on function public.ffm_set_key(text, text, text) from public, anon, authenticated;
+revoke all on function public.ffm_key_fingerprint(text) from public, anon, authenticated;
+revoke all on function public.ffm_register_wording(uuid, text, text, text) from public, anon, authenticated;
+revoke all on function public.ffm_capture_canonical(uuid, text, text, text, text, timestamptz, text, text) from public, anon, authenticated;
+revoke all on function public.ffm_ingest_capture(uuid, text, text, text, text, timestamptz, text, text, text) from public, anon, authenticated;
+revoke all on function public.ffm_register_capture_owner(uuid, text, text, text, text, timestamptz, uuid, text, text) from public, anon, authenticated;
+revoke all on function public.ffm_record_consent(uuid, uuid, text, text, text, text, timestamptz, text, text) from public, anon, authenticated;
+grant execute on function public.ffm_hmac_sha256(text, text) to service_role;
+grant execute on function public.ffm_lp(text) to service_role;
+grant execute on function public.ffm_cc_len(text) to service_role;
+grant execute on function public.ffm_key_problem(text, text) to service_role;
+grant execute on function public.ffm_contact_mac(text, text, text) to service_role;
+grant execute on function public.normalize_phone(text) to service_role;
+grant execute on function public.ffm_append_only() to service_role;
+grant execute on function public.ffm_capture_immutable() to service_role;
+grant execute on function public.ffm_set_key(text, text, text) to service_role;
+grant execute on function public.ffm_key_fingerprint(text) to service_role;
+grant execute on function public.ffm_register_wording(uuid, text, text, text) to service_role;
+grant execute on function public.ffm_capture_canonical(uuid, text, text, text, text, timestamptz, text, text) to service_role;
+grant execute on function public.ffm_ingest_capture(uuid, text, text, text, text, timestamptz, text, text, text) to service_role;
+grant execute on function public.ffm_register_capture_owner(uuid, text, text, text, text, timestamptz, uuid, text, text) to service_role;
+grant execute on function public.ffm_record_consent(uuid, uuid, text, text, text, text, timestamptz, text, text) to service_role;
+
+-- ===== 20261121_suppression_integrity_v1.sql =====
+-- FF Marketing consent integrity, part 2: SUPPRESSION INTEGRITY, SURVIVAL ACROSS RESTORE, AND THE OUTREACH GATE (Priority 2, Nov 2026).
+-- Additive except for the replaced functions listed below. Nothing here sends, enables or authorizes outreach: every change can only make a "no" more likely.
+--   (b) PHONE SUPPRESSION: ffm_phone_suppressions (append-only, normalised with normalize_phone) is the phone twin of contact_suppressions. A withdrawal on sms, phone or all
+--       and an erasure add the lead's phone. ffm_can_contact for sms and phone refuses a suppressed number, and refuses a lead whose address/number is missing or unusable.
+--       A re-imported or duplicate lead with the same number (any format) therefore stays refused.
+--   (c) SURVIVAL: contact_suppressions is client PII and must stay out of the plain off-site file. What may travel is a KEYED hash: HMAC-SHA256(suppression key, kind:normalised value).
+--       The key (ffm_secrets.suppression_hmac_key) is separate from BACKUP_KEY, set once by the owner, kept offline by the owner, and never in the backup. backup_suppression_export()
+--       returns only keyed hashes + a count + a digest + a key fingerprint: without the key a hash cannot be reversed or tested against a guessed address.
+--       After a restore the owner re-supplies the key, stages the exported list as the EXPECTED CHECKPOINT and may import it as hash-only suppressions that is_suppressed /
+--       ffm_can_contact honour (a re-contact of a suppressed address is refused even though no plaintext list exists).
+--   (d) OUTREACH GATE: ffm_outreach_gate is DEFAULT-DENY (a fresh database, a restored one, a missing row, a missing key, or a shrunken list all give "closed").
+--       Only the owner-only ffm_verify_suppression can open it, and only when every expected checkpoint entry is present in the live list. ffm_can_contact returns false while closed,
+--       and outbox_dnc_guard refuses to approve or send a drafted message while closed. Closing the gate (ffm_close_outreach_gate) is allowed to anyone: it only reduces what is allowed.
+--   (e) CHANNEL PROHIBITION (v3): a person-directed outbound is allowed ONLY on a channel with a durable suppression identifier: email (normalised address), text/sms and call/phone
+--       (normalised number). telegram, post/mail, whatsapp and every unknown channel are refused at the database (outreach_channel_problem, outreach_recipient_problem, outbox_dnc_guard,
+--       ffm_contact_status, ffm_route_preview) until a durable identifier and check exist for them (a new reviewed migration, never a data change).
+--   (f) RESTORE-CLOSED GATE (v3): the gate is open only while it is bound to things a restore does not carry along: a monotonic suppression EPOCH that the SENDER process also keeps outside
+--       the database (hq_gatemark.py: high-water mark), the instance fingerprint (system identifier + timeline), a RESTORE MARKER newer than the last verification, a fresh sender ATTESTATION
+--       (minutes) and a maximum age since the owner's verification (days). A restored database therefore closes itself; nobody has to remember anything.
+--   Replaced functions (same signatures): is_suppressed, outbox_dnc_guard, ffm_contact_status, ffm_can_contact, ffm_withdraw_consent, ffm_erase_lead, ffm_route_preview.
+--   The tables are named ffm_* ON PURPOSE: backup_export_policy() denies ffm_* by NAME PATTERN, so these tables stay out of the off-site file even if a later migration replaces
+--   backup_classification() without them. (contact_suppressions itself stays client_pii in that list.)
+
+-- 1. phone suppression (append-only, like the email list) ---------------------------------------------------------------------------------------------------------------
+create table if not exists public.ffm_phone_suppressions (
+  phone text primary key check (coalesce(phone = public.normalize_phone(phone), false)),
+  reason text not null,
+  recorded_by text not null,
+  source_lead uuid,
+  recorded_at timestamptz not null default now()
+);
+-- 2. keyed-hash suppressions (what a restore re-establishes) and the staged checkpoint -----------------------------------------------------------------------------------
+create table if not exists public.ffm_suppression_hashes (
+  kind text not null check (kind in ('email', 'phone')),
+  mac text not null check (mac ~ '^[0-9a-f]{64}$'),
+  source text not null check (source in ('restore_import')),
+  imported_at timestamptz not null default clock_timestamp(),
+  primary key (kind, mac)
+);
+create table if not exists public.ffm_suppression_expected (
+  kind text not null check (kind in ('email', 'phone')),
+  mac text not null check (mac ~ '^[0-9a-f]{64}$'),
+  primary key (kind, mac)
+);
+-- 3. the gate: ONE row. A missing row, or any state other than 'verified', is CLOSED. ----------------------------------------------------------------------------------
+create table if not exists public.ffm_outreach_gate (
+  id integer primary key check (id = 1),
+  state text not null check (state in ('unverified', 'verified')),
+  reason text not null,
+  expected_count integer,
+  expected_hash text,
+  expected_key_check text,
+  expected_staged_at timestamptz,
+  verified_raw_count integer,
+  verified_at timestamptz,
+  verified_by text,
+  verified_epoch bigint,          -- the suppression epoch at verification (v3)
+  verified_marker_id bigint,      -- the newest restore-marker id at verification (v3): the gate is open only while it is STILL the newest (deterministic, no wall-clock comparison)
+  instance_fp text,               -- the instance fingerprint at verification (v3)
+  attested_at timestamptz,        -- last time the SENDER (or the owner's verification) attested the gate against its external high-water mark (v3)
+  updated_at timestamptz not null default clock_timestamp()
+);
+insert into public.ffm_outreach_gate (id, state, reason) values (1, 'unverified', 'fresh database: the suppression list has not been verified') on conflict (id) do nothing;
+
+-- v3: the monotonic suppression epoch, the restore markers and the gate configuration. All three are ffm_* (never in the off-site file) and writable only through definer functions.
+create table if not exists public.ffm_epoch (
+  id integer primary key check (id = 1),
+  epoch bigint not null check (epoch >= 1),
+  updated_at timestamptz not null default clock_timestamp()
+);
+insert into public.ffm_epoch (id, epoch) values (1, 1) on conflict (id) do nothing;
+create table if not exists public.ffm_restore_markers (
+  id bigint generated always as identity primary key,
+  restored_at timestamptz not null default clock_timestamp(),
+  source text not null,
+  detail text,
+  recorded_by text not null
+);
+create table if not exists public.ffm_gate_config (
+  id integer primary key check (id = 1),
+  attest_window_minutes integer not null default 15 check (attest_window_minutes between 6 and 120),   -- the engine tick is 300 s: a window below two ticks would close the gate between ticks
+  max_verified_age_days integer not null default 30 check (max_verified_age_days between 1 and 90),
+  phone_outreach_enabled boolean not null default false,   -- text / call (sms / phone) are DISABLED until the owner enables them: the DB gate alone cannot tell a same-instance restore inside the attestation window, and no sender attests for those channels
+  updated_at timestamptz not null default clock_timestamp()
+);
+alter table public.ffm_gate_config add column if not exists phone_outreach_enabled boolean not null default false;
+insert into public.ffm_gate_config (id) values (1) on conflict (id) do nothing;
+-- the highest sender mark the DATABASE has accepted (monotonic): a forged lower mark cannot refresh the gate, and a NEW generation (an anchor) is accepted only with an owner-recorded restore (or first setup)
+create table if not exists public.ffm_sender_mark (
+  id integer primary key check (id = 1),
+  gen bigint not null default 0 check (gen >= 0),
+  epoch bigint not null default 0 check (epoch >= 0),
+  owner_marker_id bigint not null default 0,
+  updated_at timestamptz not null default clock_timestamp()
+);
+insert into public.ffm_sender_mark (id) values (1) on conflict (id) do nothing;
+
+do $$ declare t text; begin
+  foreach t in array array['ffm_phone_suppressions', 'ffm_suppression_hashes', 'ffm_suppression_expected', 'ffm_outreach_gate', 'ffm_epoch', 'ffm_restore_markers', 'ffm_gate_config', 'ffm_sender_mark'] loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from public, anon, authenticated, service_role', t);
+  end loop;
+  grant select on public.ffm_phone_suppressions, public.ffm_outreach_gate, public.ffm_epoch, public.ffm_restore_markers, public.ffm_gate_config, public.ffm_sender_mark to service_role;   -- the bot may READ the list and the gate state; every write goes through a definer function
+end $$;
+drop trigger if exists ffm_phone_supp_append_only on public.ffm_phone_suppressions;
+create trigger ffm_phone_supp_append_only before update or delete on public.ffm_phone_suppressions for each row execute function public.ffm_append_only();
+drop trigger if exists ffm_phone_supp_no_truncate on public.ffm_phone_suppressions;
+create trigger ffm_phone_supp_no_truncate before truncate on public.ffm_phone_suppressions for each statement execute function public.ffm_append_only();
+drop trigger if exists ffm_hashes_append_only on public.ffm_suppression_hashes;
+create trigger ffm_hashes_append_only before update or delete on public.ffm_suppression_hashes for each row execute function public.ffm_append_only();
+drop trigger if exists ffm_hashes_no_truncate on public.ffm_suppression_hashes;
+create trigger ffm_hashes_no_truncate before truncate on public.ffm_suppression_hashes for each statement execute function public.ffm_append_only();
+-- the gate row can be updated only through the functions below; it can never be deleted
+create or replace function public.ffm_gate_no_delete() returns trigger
+language plpgsql set search_path to 'public' as $$
+begin
+  raise exception 'The outreach gate row cannot be deleted or truncated.' using errcode = 'P0001';
+end $$;
+drop trigger if exists ffm_gate_no_delete on public.ffm_outreach_gate;
+create trigger ffm_gate_no_delete before delete on public.ffm_outreach_gate for each row execute function public.ffm_gate_no_delete();
+drop trigger if exists ffm_gate_no_truncate on public.ffm_outreach_gate;
+create trigger ffm_gate_no_truncate before truncate on public.ffm_outreach_gate for each statement execute function public.ffm_gate_no_delete();
+
+-- v3: epoch. It only ever goes up (a direct write that lowers it is refused; a superuser can still do anything, see the policy limits). Markers are append-only. Any write to a
+-- suppression list, the consent log (withdrawals), the lead do-not-contact flag, or a gate transition bumps it, so a database rolled back to an earlier point shows a LOWER epoch than
+-- the one the sender last saw.
+create or replace function public.ffm_epoch_guard() returns trigger
+language plpgsql set search_path to 'public' as $$
+begin
+  if tg_op <> 'UPDATE' or new.epoch <= old.epoch or new.id <> 1 then raise exception 'The suppression epoch only increases and cannot be deleted or truncated.' using errcode = 'P0001'; end if;
+  return new;
+end $$;
+drop trigger if exists ffm_epoch_guard on public.ffm_epoch;
+create trigger ffm_epoch_guard before update or delete on public.ffm_epoch for each row execute function public.ffm_epoch_guard();
+drop trigger if exists ffm_epoch_no_truncate on public.ffm_epoch;
+create trigger ffm_epoch_no_truncate before truncate on public.ffm_epoch for each statement execute function public.ffm_epoch_guard();
+drop trigger if exists ffm_markers_append_only on public.ffm_restore_markers;
+create trigger ffm_markers_append_only before update or delete on public.ffm_restore_markers for each row execute function public.ffm_append_only();
+drop trigger if exists ffm_markers_no_truncate on public.ffm_restore_markers;
+create trigger ffm_markers_no_truncate before truncate on public.ffm_restore_markers for each statement execute function public.ffm_append_only();
+create or replace function public.ffm_epoch_bump() returns trigger
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  update public.ffm_epoch set epoch = epoch + 1, updated_at = clock_timestamp() where id = 1;   -- (a trigger function: it cannot be called, so the service role cannot raise the epoch at will)
+  return null;
+end $$;
+do $$ declare t text; begin
+  foreach t in array array['contact_suppressions', 'ffm_phone_suppressions', 'ffm_suppression_hashes', 'ffm_consent_log'] loop
+    execute format('drop trigger if exists ffm_epoch_bump on public.%I', t);
+    execute format('create trigger ffm_epoch_bump after insert on public.%I for each statement execute function public.ffm_epoch_bump()', t);
+  end loop;
+end $$;
+drop trigger if exists ffm_epoch_bump on public.leads;
+create trigger ffm_epoch_bump after update of do_not_contact on public.leads for each statement execute function public.ffm_epoch_bump();
+drop trigger if exists ffm_epoch_bump_ins on public.leads;
+create trigger ffm_epoch_bump_ins after insert on public.leads for each row when (new.do_not_contact) execute function public.ffm_epoch_bump();     -- a lead created already flagged do-not-contact is a suppression too
+
+-- 4. the suppression lookups -----------------------------------------------------------------------------------------------------------------------------------------
+-- The keyed hash of a normalised value is HMAC-SHA256(suppression key, 'sup|v1|' || lp(kind) || lp(norm)): domain-separated and length-prefixed, so it can never equal a capture seal.
+-- Review finding 1: the previous public.ffm_suppression_mac(kind, norm), executable by service_role, was an HMAC ORACLE on the suppression key (kind was free text). It no longer exists:
+-- the hash is computed INLINE inside the SECURITY DEFINER functions that need it (is_suppressed, ffm_is_phone_suppressed, ffm_suppression_set), so there is nothing for a role to call.
+-- (A revoke on a public function would not hold: the lockdown migration, applied last and re-runnable, grants execute on EVERY public function to service_role. A separate schema would not
+-- survive a restore, which rebuilds schema public only.) The message builder below is a pure function with no key and may stay callable.
+drop function if exists public.ffm_suppression_mac(text, text);
+create or replace function public.ffm_sup_message(p_kind text, p_norm text) returns text
+language sql immutable strict set search_path to 'public' as $$ select 'sup|v1|' || public.ffm_lp(p_kind) || public.ffm_lp(p_norm) $$;
+
+-- email: plaintext list first, then hash-only entries (needs the key). Same name/signature as before; callers (outbox_dnc_guard, deals, ffm_contact_status) are unchanged.
+create or replace function public.is_suppressed(p_address text) returns boolean
+language plpgsql stable security definer set search_path to 'public' as $$
+declare n text := public.normalize_addr(p_address);
+begin
+  if p_address is null then return false; end if;
+  if n is null then return true; end if;     -- not one clean address: cannot be shown to be NOT suppressed, so it counts as suppressed (fail closed)
+  if exists (select 1 from public.contact_suppressions where address = n) then return true; end if;
+  if exists (select 1 from public.ffm_suppression_hashes where kind = 'email') then
+    if not exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key') then return true; end if;     -- hash-only entries but no key to test them with: cannot show the address is NOT suppressed (fail closed)
+    return exists (select 1 from public.ffm_suppression_hashes where kind = 'email' and mac = public.ffm_hmac_sha256((select value from public.ffm_secrets where name = 'suppression_hmac_key'), public.ffm_sup_message('email', n)));
+  end if;
+  return false;
+end $$;
+create or replace function public.ffm_is_phone_suppressed(p_phone text) returns boolean
+language plpgsql stable security definer set search_path to 'public' as $$
+declare n text := public.normalize_phone(p_phone);
+begin
+  if p_phone is null then return false; end if;
+  if n is null then return true; end if;     -- not one clean number (including an ambiguous trunk-prefix form): fail closed, never 'not suppressed'
+  if exists (select 1 from public.ffm_phone_suppressions where phone = n) then return true; end if;
+  if exists (select 1 from public.ffm_suppression_hashes where kind = 'phone') then
+    if not exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key') then return true; end if;     -- same: hashes but no key = fail closed
+    return exists (select 1 from public.ffm_suppression_hashes where kind = 'phone' and mac = public.ffm_hmac_sha256((select value from public.ffm_secrets where name = 'suppression_hmac_key'), public.ffm_sup_message('phone', n)));
+  end if;
+  return false;
+end $$;
+
+-- 5. the gate ---------------------------------------------------------------------------------------------------------------------------------------------------------
+-- Open only when: the gate row says verified, the suppression key exists, and the list has not SHRUNK since verification (the three lists are append-only, so a lower row
+-- count means something removed rows underneath the triggers). Any error is "closed".
+create or replace function public.ffm_instance_fp() returns text
+language plpgsql stable security definer set search_path to 'public' as $$
+declare sid text; tl integer; i integer;
+begin
+  for i in 1..3 loop     -- a transient read error is retried inside the call; only a PERSISTENT failure yields 'unavailable'
+    begin
+      select system_identifier::text into sid from pg_control_system();
+      select timeline_id into tl from pg_control_checkpoint();
+      -- sid: a dump restored into another cluster changes it. tl: a point-in-time recovery promotes a NEW timeline. dboid + the gate table's OID: NOT carried by a logical restore (pg_dump/pg_restore into a
+      -- new database, or into this one after --clean, creates the database / tables afresh with new OIDs), so a same-cluster logical restore no longer looks like the original, with no sender involved.
+      -- (A DATA-ONLY restore into the existing tables keeps both: the residual that only the sender's outside mark and the owner's record-restore step cover.)
+      return sid || ':' || tl || ':' || (select oid::text from pg_database where datname = current_database()) || ':' || 'public.ffm_outreach_gate'::regclass::oid::text;
+    exception when others then
+      if i < 3 then perform pg_sleep(0.05 * i); end if;
+    end;
+  end loop;
+  return 'unavailable';           -- this layer is then absent (and the gate closed: the stored fingerprint cannot be matched), never "open"
+end $$;
+-- Everything that makes the gate valid EXCEPT the freshness of the sender attestation. Used by the open decision and by the anchor rule (an owner who has just verified must be able to anchor).
+-- No wall-clock comparison decides between a restore and a verification: the verification records the NEWEST restore-marker id, and the gate is valid only while that is still the newest.
+create or replace function public.ffm_gate_core_ok() returns boolean
+language plpgsql stable security definer set search_path to 'public' as $$
+declare g public.ffm_outreach_gate; raw integer; ep bigint; cfg public.ffm_gate_config; fp text;
+begin
+  select * into g from public.ffm_outreach_gate where id = 1;
+  if g.id is null or g.state <> 'verified' or g.verified_raw_count is null or g.verified_at is null or g.verified_epoch is null or g.verified_marker_id is null then return false; end if;
+  if not exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key') then return false; end if;
+  select epoch into ep from public.ffm_epoch where id = 1;
+  if ep is null or ep < g.verified_epoch then return false; end if;                                             -- the epoch is missing or LOWER than at verification: rolled back or rebuilt
+  fp := public.ffm_instance_fp();
+  if fp = 'unavailable' or g.instance_fp is distinct from fp then return false; end if;                         -- another cluster, a recovery timeline, or an unreadable fingerprint
+  if g.verified_marker_id <> (select coalesce(max(id), 0) from public.ffm_restore_markers) then return false; end if;   -- a restore was recorded after the verification (or the marker table was rolled back)
+  select * into cfg from public.ffm_gate_config where id = 1;
+  if g.verified_at < clock_timestamp() - make_interval(days => coalesce(cfg.max_verified_age_days, 30)) then return false; end if;   -- the owner's verification is too old
+  raw := (select count(*) from public.contact_suppressions) + (select count(*) from public.ffm_phone_suppressions) + (select count(*) from public.ffm_suppression_hashes);
+  return raw >= g.verified_raw_count;
+exception when others then
+  return false;
+end $$;
+create or replace function public.ffm_outreach_gate_open() returns boolean
+language plpgsql stable security definer set search_path to 'public' as $$
+declare g public.ffm_outreach_gate; cfg public.ffm_gate_config;
+begin
+  if not public.ffm_gate_core_ok() then return false; end if;
+  select * into g from public.ffm_outreach_gate where id = 1;
+  select * into cfg from public.ffm_gate_config where id = 1;
+  return g.attested_at is not null and g.attested_at >= clock_timestamp() - make_interval(mins => coalesce(cfg.attest_window_minutes, 15));    -- no fresh sender attestation: closed by itself
+exception when others then
+  return false;
+end $$;
+create or replace function public.ffm_outreach_gate_status() returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+declare g public.ffm_outreach_gate;
+begin
+  select * into g from public.ffm_outreach_gate where id = 1;
+  return jsonb_build_object('open', public.ffm_outreach_gate_open(), 'core_ok', public.ffm_gate_core_ok(), 'state', coalesce(g.state, 'missing'), 'reason', coalesce(g.reason, 'gate row missing'),
+    'key_set', exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key'), 'checkpoint_staged', g.expected_hash is not null,
+    'expected_count', g.expected_count, 'verified_at', g.verified_at, 'verified_raw_count', g.verified_raw_count,
+    'raw_count_now', (select count(*) from public.contact_suppressions) + (select count(*) from public.ffm_phone_suppressions) + (select count(*) from public.ffm_suppression_hashes),
+    'epoch', (select epoch from public.ffm_epoch where id = 1), 'verified_epoch', g.verified_epoch, 'attested_at', g.attested_at,
+    'instance_matches', g.instance_fp is not distinct from public.ffm_instance_fp(), 'last_restore_marker_id', (select max(id) from public.ffm_restore_markers));
+end $$;
+-- anyone may CLOSE the gate (a restore tool, the bot on suspicion): it can only reduce what is allowed. Only ffm_verify_suppression opens it.
+create or replace function public.ffm_close_outreach_gate(p_reason text, p_by text) returns void
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  insert into public.ffm_outreach_gate (id, state, reason) values (1, 'unverified', left(coalesce(nullif(btrim(p_reason), ''), 'closed'), 300))
+    on conflict (id) do update set state = 'unverified', reason = left(coalesce(nullif(btrim(p_reason), ''), 'closed'), 300), verified_raw_count = null, verified_at = null, verified_by = null,
+      verified_epoch = null, verified_marker_id = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp();
+  update public.ffm_epoch set epoch = epoch + 1, updated_at = clock_timestamp() where id = 1;
+  insert into public.audit_log (actor, action, target, detail) values (coalesce(nullif(btrim(p_by), ''), 'unknown'), 'ffm_outreach_gate_closed', 'gate/1', jsonb_build_object('reason', left(coalesce(p_reason, ''), 300)));
+end $$;
+
+-- 5b. RESTORE-CLOSED GATE (v3) ------------------------------------------------------------------------------------------------------------------------------------------
+-- ffm_owner_record_restore: OWNER ONLY (the SQL editor, or a restore tool running as the database owner). Writes an owner restore MARKER and closes the gate. The only things that can lower the
+-- sender's mark afterwards are this marker plus a fresh owner verification plus an anchor, in that order. (The previous anyone-callable ffm_record_restore is gone: with the lockdown blanket
+-- grant the bot could have called it. The sender's own detection writes its marker inline, below, with source 'detected_by_sender', which never authorises an anchor.)
+create or replace function public.ffm_owner_record_restore(p_detail text) returns bigint
+language plpgsql security definer set search_path to 'public' as $$
+declare m bigint;
+begin
+  perform public.ffm_require_owner();
+  insert into public.ffm_restore_markers (source, detail, recorded_by) values ('owner_restore', left(p_detail, 300), 'owner') returning id into m;
+  perform public.ffm_close_outreach_gate('owner recorded a restore: the suppression list must be re-verified, then the sender anchored', 'owner');
+  return m;
+end $$;
+-- the state the sender compares with its OUTSIDE high-water mark (read-only; no key, no list)
+create or replace function public.ffm_gate_state() returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+begin
+  return jsonb_build_object('epoch', (select epoch from public.ffm_epoch where id = 1), 'instance_fp', public.ffm_instance_fp(), 'open', public.ffm_outreach_gate_open(), 'core_ok', public.ffm_gate_core_ok(),
+    'state', coalesce((select state from public.ffm_outreach_gate where id = 1), 'missing'), 'verified_at', (select verified_at from public.ffm_outreach_gate where id = 1),
+    'last_marker_id', (select max(id) from public.ffm_restore_markers),
+    'last_owner_marker_id', (select coalesce(max(id), 0) from public.ffm_restore_markers where source in ('owner_restore', 'restore_backup.py')),
+    'mark_gen', (select gen from public.ffm_sender_mark where id = 1), 'mark_epoch', (select epoch from public.ffm_sender_mark where id = 1));
+end $$;
+-- ffm_sender_attest: the sender process (which keeps a high-water mark OUTSIDE this database) says what it last saw: (generation, epoch, instance).
+--   * the database must not be BEHIND the sender (epoch lower, or another instance): the gate is closed FOR GOOD (inline marker + close), not merely refused for this call;
+--   * the database remembers the highest mark it has accepted (ffm_sender_mark) and REJECTS a lower one, so a forged low mark cannot refresh a stale gate;
+--   * a HIGHER generation (an anchor) is accepted only while the gate is fully valid and freshly verified (open), and only with an owner restore marker not yet consumed (or at first setup);
+--   * a successful attestation only KEEPS a verified gate fresh; it can never open a closed one.
+create or replace function public.ffm_sender_attest(p_hwm_gen bigint, p_hwm_epoch bigint, p_hwm_instance text) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare ep bigint; fp text := public.ffm_instance_fp(); st text; why text; sm public.ffm_sender_mark; om bigint;
+begin
+  select epoch into ep from public.ffm_epoch where id = 1;
+  select state into st from public.ffm_outreach_gate where id = 1;
+  select * into sm from public.ffm_sender_mark where id = 1;
+  if p_hwm_epoch is null or p_hwm_gen is null or p_hwm_gen < 1 or p_hwm_epoch < 1 then return jsonb_build_object('ok', false, 'reason', 'sender_unanchored'); end if;
+  if fp = 'unavailable' then return jsonb_build_object('ok', false, 'reason', 'instance_unreadable'); end if;      -- a persistent read error: stay closed (the gate cannot match), write NO marker, nothing for the owner to do
+  if ep is null then why := 'epoch row missing (schema rebuilt or restored)';
+  elsif ep < p_hwm_epoch then why := 'rollback detected: database epoch ' || ep || ' is below the sender high-water mark ' || p_hwm_epoch;
+  elsif p_hwm_instance is not null and p_hwm_instance <> fp then why := 'instance changed: the sender saw another database instance or timeline';
+  end if;
+  if why is not null then
+    if st = 'verified' then
+      insert into public.ffm_restore_markers (source, detail, recorded_by) values ('detected_by_sender', left(why, 300), 'sender');
+      perform public.ffm_close_outreach_gate('rollback detected by the sender: ' || left(why, 200), 'sender');
+    end if;
+    return jsonb_build_object('ok', false, 'reason', 'rollback_detected', 'detail', why, 'epoch', ep);
+  end if;
+  if p_hwm_gen < sm.gen or (p_hwm_gen = sm.gen and p_hwm_epoch < sm.epoch) then
+    return jsonb_build_object('ok', false, 'reason', 'mark_regression', 'detail', 'the sender mark is lower than the highest mark this database accepted');
+  end if;
+  if p_hwm_gen > sm.gen then      -- an ANCHOR
+    select coalesce(max(id), 0) into om from public.ffm_restore_markers where source in ('owner_restore', 'restore_backup.py');
+    if p_hwm_epoch <> ep then return jsonb_build_object('ok', false, 'reason', 'anchor_refused', 'detail', 'an anchor must carry exactly the current database epoch (' || ep || '); read ffm_gate_state and retry'); end if;
+    if not public.ffm_gate_core_ok() then return jsonb_build_object('ok', false, 'reason', 'anchor_refused', 'detail', 'the gate is not freshly verified: record the restore, verify the suppression list, THEN anchor'); end if;
+    if sm.gen > 0 and om <= sm.owner_marker_id then return jsonb_build_object('ok', false, 'reason', 'anchor_refused', 'detail', 'a new generation needs an owner-recorded restore (ffm_owner_record_restore) not yet used'); end if;
+    update public.ffm_sender_mark set gen = p_hwm_gen, epoch = p_hwm_epoch, owner_marker_id = om, updated_at = clock_timestamp() where id = 1;
+    insert into public.audit_log (actor, action, target, detail) values ('sender', 'ffm_sender_anchored', 'gate/1', jsonb_build_object('gen', p_hwm_gen, 'epoch', p_hwm_epoch));
+  elsif p_hwm_epoch > sm.epoch then
+    update public.ffm_sender_mark set epoch = p_hwm_epoch, updated_at = clock_timestamp() where id = 1;
+  end if;
+  update public.ffm_outreach_gate set attested_at = clock_timestamp() where id = 1 and state = 'verified' and public.ffm_gate_core_ok();
+  return jsonb_build_object('ok', true, 'epoch', ep, 'instance_fp', fp, 'open', public.ffm_outreach_gate_open());
+end $$;
+create or replace function public.ffm_set_gate_config(p_attest_window_minutes integer, p_max_verified_age_days integer, p_by text) returns void
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  perform public.ffm_require_owner();
+  update public.ffm_gate_config set attest_window_minutes = p_attest_window_minutes, max_verified_age_days = p_max_verified_age_days, updated_at = clock_timestamp() where id = 1;   -- the CHECKs bound both values
+  insert into public.audit_log (actor, action, target, detail) values (coalesce(nullif(btrim(p_by), ''), 'owner'), 'ffm_gate_config_set', 'gate/1', jsonb_build_object('attest_window_minutes', p_attest_window_minutes, 'max_verified_age_days', p_max_verified_age_days));
+end $$;
+
+-- 6. the digest of "what is suppressed", as keyed hashes ---------------------------------------------------------------------------------------------------------------
+-- set = plaintext email list + plaintext phone list + imported hashes, each reduced to (kind, mac), de-duplicated.
+create or replace function public.ffm_suppression_set() returns table (kind text, mac text)
+language plpgsql stable security definer set search_path to 'public' as $$
+declare k text := (select value from public.ffm_secrets where name = 'suppression_hmac_key');
+begin
+  if k is null then raise exception 'the suppression key has not been set by the owner'; end if;
+  return query
+    select s.kind, s.mac from (
+      select 'email'::text as kind, public.ffm_hmac_sha256(k, public.ffm_sup_message('email', c.address)) as mac from public.contact_suppressions c
+      union select 'phone'::text, public.ffm_hmac_sha256(k, public.ffm_sup_message('phone', p.phone)) from public.ffm_phone_suppressions p
+      union select h.kind, h.mac from public.ffm_suppression_hashes h) s;
+end $$;
+create or replace function public.ffm_suppression_digest() returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+declare cnt int; ec int; pc int; h text;
+begin
+  select count(*), count(*) filter (where kind = 'email'), count(*) filter (where kind = 'phone') into cnt, ec, pc from public.ffm_suppression_set();
+  select encode(sha256(convert_to(coalesce(string_agg(kind || ':' || mac, E'\n' order by (kind || ':' || mac) collate "C"), ''), 'UTF8')), 'hex') into h from public.ffm_suppression_set();
+  return jsonb_build_object('count', cnt, 'email_count', ec, 'phone_count', pc, 'hash', h, 'key_check', public.ffm_key_fingerprint('suppression_hmac_key'));
+end $$;
+
+-- 7. the backup export: keyed hashes only, safe for the encrypted off-site file ------------------------------------------------------------------------------------------
+-- search_path is pg_catalog (every reference below is schema-qualified): PR #16's rule for SECURITY DEFINER backup_* functions (its sqltest M17).
+-- CROSS-PR DEPENDENCY (PR #16 leak redaction, round 8): PR #16's post-lockdown file treats every public backup_* function as backup-identity only (revokes service_role, injects
+-- backup_assert_reader()). PR #16 round 8 adds THIS function, by this exact name, to its backup_reader allow-list (13 functions). Do not rename it. Before PR #16 lands, the grant
+-- below (service_role) is how hq_backup reaches it; after PR #16, hq_backup._rpc calls it as backup_reader (BACKUP_READER_JWT) and service_role can no longer execute it.
+create or replace function public.backup_suppression_export() returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare d jsonb; macs jsonb;
+begin
+  if not exists (select 1 from public.ffm_secrets where name = 'suppression_hmac_key') then
+    return jsonb_build_object('version', 1, 'included', false, 'reason', 'the owner has not set the suppression key, so no keyed hashes can be exported');
+  end if;
+  d := public.ffm_suppression_digest();
+  select coalesce(jsonb_agg(jsonb_build_array(kind, mac) order by kind collate "C", mac collate "C"), '[]'::jsonb) into macs from public.ffm_suppression_set();
+  return jsonb_build_object('version', 1, 'included', true, 'key_check', d ->> 'key_check', 'count', (d ->> 'count')::int, 'email_count', (d ->> 'email_count')::int,
+                            'phone_count', (d ->> 'phone_count')::int, 'hash', d ->> 'hash', 'macs', macs);
+end $$;
+
+-- 8. owner-only: stage the checkpoint, optionally import it, verify ----------------------------------------------------------------------------------------------------
+-- p_export = the "suppression" section of a backup (what backup_suppression_export() returned). The checks here are about the export itself; ffm_verify_suppression checks it against the live list.
+create or replace function public.ffm_stage_suppression_checkpoint(p_export jsonb) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare e jsonb; n int := 0; seen text[] := '{}'; kind text; mac text; lines text; calc text; fp text;
+begin
+  perform public.ffm_require_owner();
+  fp := public.ffm_key_fingerprint('suppression_hmac_key');
+  if fp is null then raise exception 'checkpoint refused: set the suppression key first (ffm_set_key)'; end if;
+  if p_export is null or coalesce((p_export ->> 'version')::int, 0) <> 1 or coalesce((p_export ->> 'included')::boolean, false) is not true or jsonb_typeof(p_export -> 'macs') <> 'array' then
+    raise exception 'checkpoint refused: not a suppression export (version 1, included, with a macs list)';
+  end if;
+  if p_export ->> 'key_check' is distinct from fp then raise exception 'checkpoint refused: the export was made with a different suppression key'; end if;
+  for e in select * from jsonb_array_elements(p_export -> 'macs') loop
+    if jsonb_typeof(e) <> 'array' or jsonb_array_length(e) <> 2 then raise exception 'checkpoint refused: malformed entry'; end if;
+    kind := e ->> 0; mac := e ->> 1;
+    if kind is null or kind not in ('email', 'phone') or mac is null or mac !~ '^[0-9a-f]{64}$' then raise exception 'checkpoint refused: malformed entry'; end if;
+    if (kind || ':' || mac) = any (seen) then raise exception 'checkpoint refused: duplicate entry'; end if;
+    seen := seen || (kind || ':' || mac);
+    n := n + 1;
+  end loop;
+  select string_agg(x, E'\n' order by x collate "C") into lines from unnest(seen) x;
+  calc := encode(sha256(convert_to(coalesce(lines, ''), 'UTF8')), 'hex');
+  if n <> (p_export ->> 'count')::int or calc <> p_export ->> 'hash' then raise exception 'checkpoint refused: the list does not match its own count/hash (altered or partial)'; end if;
+  delete from public.ffm_suppression_expected;
+  insert into public.ffm_suppression_expected (kind, mac) select split_part(x, ':', 1), split_part(x, ':', 2) from unnest(seen) x;
+  insert into public.ffm_outreach_gate (id, state, reason, expected_count, expected_hash, expected_key_check, expected_staged_at)
+    values (1, 'unverified', 'checkpoint staged: run ffm_verify_suppression', n, calc, fp, clock_timestamp())
+    on conflict (id) do update set state = 'unverified', reason = 'checkpoint staged: run ffm_verify_suppression', expected_count = n, expected_hash = calc, expected_key_check = fp,
+      expected_staged_at = clock_timestamp(), verified_raw_count = null, verified_at = null, verified_by = null, verified_epoch = null, verified_marker_id = null, instance_fp = null, attested_at = null, updated_at = clock_timestamp();
+  update public.ffm_epoch set epoch = epoch + 1, updated_at = clock_timestamp() where id = 1;
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_suppression_checkpoint_staged', 'gate/1', jsonb_build_object('count', n));
+  return jsonb_build_object('staged', n);
+end $$;
+-- restore path for a database that has no plaintext suppression list: make the staged hashes effective (is_suppressed / ffm_can_contact honour them)
+create or replace function public.ffm_import_suppression_hashes() returns integer
+language plpgsql security definer set search_path to 'public' as $$
+declare n int;
+begin
+  perform public.ffm_require_owner();
+  if not exists (select 1 from public.ffm_outreach_gate where id = 1 and expected_hash is not null) then raise exception 'import refused: no checkpoint is staged'; end if;
+  insert into public.ffm_suppression_hashes (kind, mac, source) select kind, mac, 'restore_import' from public.ffm_suppression_expected on conflict do nothing;
+  get diagnostics n = row_count;
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_suppression_hashes_imported', 'gate/1', jsonb_build_object('imported', n));
+  return n;
+end $$;
+create or replace function public.ffm_verify_suppression(p_by text) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare g public.ffm_outreach_gate; fp text; have int; exp_n int; exp_h text; missing int; cur int; raw int; why text; mode text;
+begin
+  perform public.ffm_require_owner();
+  select * into g from public.ffm_outreach_gate where id = 1;
+  fp := public.ffm_key_fingerprint('suppression_hmac_key');
+  if g.id is null or g.expected_hash is null then why := 'no checkpoint is staged (ffm_stage_suppression_checkpoint)';
+  elsif fp is null then why := 'the suppression key is not set';
+  elsif g.expected_key_check is distinct from fp then why := 'the suppression key differs from the one that made the checkpoint';
+  else
+    select count(*), encode(sha256(convert_to(coalesce(string_agg(kind || ':' || mac, E'\n' order by (kind || ':' || mac) collate "C"), ''), 'UTF8')), 'hex') into exp_n, exp_h from public.ffm_suppression_expected;
+    if exp_n <> g.expected_count or exp_h <> g.expected_hash then why := 'the staged checkpoint was altered after staging';
+    else
+      create temporary table if not exists pg_temp.ffm_live_set (kind text, mac text) on commit drop;
+      truncate pg_temp.ffm_live_set;
+      insert into pg_temp.ffm_live_set select * from public.ffm_suppression_set();   -- one pass of keyed hashing, not one per expected entry
+      select count(*) into missing from public.ffm_suppression_expected e where not exists (select 1 from pg_temp.ffm_live_set s where s.kind = e.kind and s.mac = e.mac);
+      select count(*) into cur from pg_temp.ffm_live_set;
+      if missing > 0 then why := 'incomplete: ' || missing || ' of ' || exp_n || ' expected suppression entries are not in the live list';
+      else mode := case when cur = exp_n then 'exact' else 'superset' end; end if;
+    end if;
+  end if;
+  if why is not null then
+    perform public.ffm_close_outreach_gate('verification failed: ' || why, p_by);
+    return jsonb_build_object('verified', false, 'reason', why);
+  end if;
+  raw := (select count(*) from public.contact_suppressions) + (select count(*) from public.ffm_phone_suppressions) + (select count(*) from public.ffm_suppression_hashes);
+  if not exists (select 1 from public.ffm_epoch where id = 1) then
+    perform public.ffm_close_outreach_gate('verification failed: the suppression epoch row is missing', p_by);
+    return jsonb_build_object('verified', false, 'reason', 'the suppression epoch row is missing');
+  end if;
+  update public.ffm_epoch set epoch = epoch + 1, updated_at = clock_timestamp() where id = 1;
+  update public.ffm_outreach_gate set state = 'verified', reason = 'verified against checkpoint (' || mode || ')', verified_raw_count = raw, verified_at = clock_timestamp(),
+         verified_by = coalesce(nullif(btrim(p_by), ''), 'owner'), verified_epoch = (select epoch from public.ffm_epoch where id = 1), verified_marker_id = (select coalesce(max(id), 0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(),
+         attested_at = clock_timestamp(), updated_at = clock_timestamp() where id = 1;     -- the owner's own verification is a fresh attestation; afterwards the SENDER must keep it fresh
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_suppression_verified', 'gate/1', jsonb_build_object('mode', mode, 'expected', exp_n, 'current', cur));
+  return jsonb_build_object('verified', true, 'mode', mode, 'expected', exp_n, 'current', cur);
+end $$;
+
+-- 8b. CHANNEL POLICY (v3). One immutable function, compiled into the database: changing it needs a reviewed migration, never a data write (the bot cannot flip it).
+-- A person-directed outbound is allowed ONLY on a channel that has a durable suppression identifier AND a check in this file:
+--   email -> normalised address (contact_suppressions + hashes); text/sms and call/phone -> normalised number (ffm_phone_suppressions + hashes).
+-- telegram (a handle is not stable, not unique, and nothing here records it), post/mail (a postal address has no normaliser or list here) and whatsapp/signal/other (a phone-based
+-- identity this schema does not model) are PROHIBITED. Anything else is unknown. Both give a reason code; neither is ever allowed. Owner-directed Telegram (owner_messages) is not outreach
+-- and does not pass through here.
+create or replace function public.outreach_channel_problem(p_channel text) returns text
+language sql immutable set search_path to 'public' as $$
+  select case
+    when p_channel in ('email', 'text', 'call', 'sms', 'phone') then null
+    when p_channel in ('telegram', 'post', 'mail', 'whatsapp', 'signal', 'other') then 'channel_prohibited'
+    else 'unknown_channel' end $$;
+-- text / call (sms / phone) are DISABLED until the owner enables them (ffm_set_phone_outreach). Reason: every consumer of the DB gate (owner approval, manual text/call, outbox insert) trusts DB state that a
+-- same-instance restore brings back, and only the email sender (hq_mail.deliver_approved) attests against the outside high-water mark. No sender exists for text/call, so nothing external can vouch for them.
+create or replace function public.outreach_channel_disabled(p_channel text) returns text
+language sql stable security definer set search_path to 'public' as $$
+  select case when p_channel in ('text', 'call', 'sms', 'phone') and not coalesce((select phone_outreach_enabled from public.ffm_gate_config where id = 1), false) then 'channel_disabled' else null end $$;
+create or replace function public.ffm_set_phone_outreach(p_enabled boolean, p_by text) returns void
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  perform public.ffm_require_owner();
+  if p_enabled is null then raise exception 'p_enabled must be true or false'; end if;
+  update public.ffm_gate_config set phone_outreach_enabled = p_enabled, updated_at = clock_timestamp() where id = 1;
+  insert into public.audit_log (actor, action, target, detail) values (coalesce(nullif(btrim(p_by), ''), 'owner'), 'ffm_phone_outreach_set', 'gate/1', jsonb_build_object('enabled', p_enabled));
+  perform public.ffm_close_outreach_gate('phone outreach setting changed: re-verify', coalesce(nullif(btrim(p_by), ''), 'owner'));    -- any change of what may be contacted re-opens only through a fresh verification
+end $$;
+
+-- 9. the decision, replaced: gate first, then withdrawal, then address/number suppression, then consent ---------------------------------------------------------------------
+create or replace function public.ffm_contact_status(p_lead uuid, p_channel text) returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+declare l public.ws_leads; wstatus text; e public.ffm_consent_log; i public.ffm_consent_log; win integer;
+begin
+  p_channel := case p_channel when 'text' then 'sms' when 'call' then 'phone' else p_channel end;     -- the outbox names (text, call) map to the consent log's (sms, phone) BEFORE any check
+  if p_channel is null or public.outreach_channel_problem(p_channel) is not null then      -- v3: only channels with a durable suppression identifier (email, sms, phone) can ever be allowed
+    return jsonb_build_object('allowed', false, 'reason', case public.outreach_channel_problem(p_channel) when 'channel_prohibited' then 'channel_prohibited' else 'invalid_channel' end);
+  end if;
+  if public.outreach_channel_disabled(p_channel) is not null then return jsonb_build_object('allowed', false, 'reason', 'channel_disabled'); end if;
+  if not public.ffm_outreach_gate_open() then return jsonb_build_object('allowed', false, 'reason', 'suppression_unverified'); end if;
+  select * into l from public.ws_leads where id = p_lead;
+  if l.id is null then return jsonb_build_object('allowed', false, 'reason', 'unknown_lead'); end if;
+  select status into wstatus from public.client_workspaces where id = l.workspace_id;
+  if wstatus is null or wstatus not in ('draft', 'active') then return jsonb_build_object('allowed', false, 'reason', 'workspace_not_open'); end if;
+  if exists (select 1 from public.ffm_consent_log where lead_id = p_lead and basis = 'withdrawn' and channel in (p_channel, 'all')) then
+    return jsonb_build_object('allowed', false, 'reason', 'withdrawn');
+  end if;
+  if p_channel = 'email' then
+    if l.email is null then return jsonb_build_object('allowed', false, 'reason', 'no_address'); end if;
+    if public.normalize_addr(l.email) is null then return jsonb_build_object('allowed', false, 'reason', 'address_unusable'); end if;
+    if public.is_suppressed(l.email) then return jsonb_build_object('allowed', false, 'reason', 'suppressed'); end if;
+  elsif p_channel in ('sms', 'phone') then
+    if l.phone is null then return jsonb_build_object('allowed', false, 'reason', 'no_phone'); end if;
+    if public.normalize_phone(l.phone) is null then return jsonb_build_object('allowed', false, 'reason', 'phone_unusable'); end if;
+    if public.ffm_is_phone_suppressed(l.phone) then return jsonb_build_object('allowed', false, 'reason', 'suppressed'); end if;
+  end if;
+  select * into e from public.ffm_consent_log where lead_id = p_lead and basis = 'express' and capture_id is not null and channel = p_channel
+     and exists (select 1 from public.ffm_consent_captures c where c.id = capture_id and c.erased_at is null)
+     order by captured_at desc, created_at desc limit 1;
+  if e.id is not null then return jsonb_build_object('allowed', true, 'reason', 'express', 'consent', e.id, 'captured_at', e.captured_at, 'wording_version', e.wording_version); end if;
+  select * into i from public.ffm_consent_log where lead_id = p_lead and basis = 'implied' and channel = p_channel order by captured_at desc, created_at desc limit 1;
+  if i.id is not null then
+    select implied_window_days into win from public.ffm_consent_settings where workspace_id = l.workspace_id;
+    if win is null then return jsonb_build_object('allowed', false, 'reason', 'implied_not_accepted'); end if;
+    if i.captured_at + make_interval(days => win) <= clock_timestamp() then return jsonb_build_object('allowed', false, 'reason', 'implied_expired', 'captured_at', i.captured_at); end if;
+    return jsonb_build_object('allowed', true, 'reason', 'implied', 'consent', i.id, 'captured_at', i.captured_at, 'expires_at', i.captured_at + make_interval(days => win));
+  end if;
+  if exists (select 1 from public.ffm_consent_log where lead_id = p_lead and basis = 'unverified' and channel = p_channel) then
+    return jsonb_build_object('allowed', false, 'reason', 'evidence_unverified');
+  end if;
+  return jsonb_build_object('allowed', false, 'reason', 'no_consent');
+end $$;
+
+create or replace function public.ffm_can_contact(p_lead uuid, p_channel text) returns boolean
+language plpgsql stable security definer set search_path to 'public' as $$
+begin
+  return coalesce((public.ffm_contact_status(p_lead, p_channel) ->> 'allowed')::boolean, false);
+exception when others then
+  return false;   -- fail closed: any error is a no
+end $$;
+
+-- 9b. routing preview, replaced (v3): refuses while the gate is closed (with that reason, not a vague one) and counts ONLY channels that can be contacted at all (email, sms, phone; never mail).
+-- Still a dry run: sends nothing, logs only field names.
+create or replace function public.ffm_route_preview(p_ws uuid, p_lead uuid) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare l public.ws_leads; r public.ffm_routing_rules; src jsonb; pay jsonb; out_ jsonb := '[]'::jsonb; f text;
+begin
+  perform public.ffm_open_ws(p_ws);
+  select * into l from public.ws_leads where id = p_lead and workspace_id = p_ws;
+  if l.id is null then raise exception 'lead not found in this workspace'; end if;
+  if not public.ffm_outreach_gate_open() then raise exception 'routing refused: the outreach gate is closed (suppression list not verified, or a restore was detected)'; end if;
+  if not (public.ffm_can_contact(p_lead, 'email') or public.ffm_can_contact(p_lead, 'sms') or public.ffm_can_contact(p_lead, 'phone')) then
+    raise exception 'routing refused: no current consent on a channel that can be contacted (email, sms, phone) for this lead';
+  end if;
+  src := jsonb_build_object('name', l.name, 'email', l.email, 'phone', l.phone, 'source', l.source, 'campaign_id', l.campaign_id, 'stage', l.stage, 'created_at', l.created_at);
+  for r in select * from public.ffm_routing_rules where workspace_id = p_ws and status = 'approved' and dry_run order by created_at loop
+    pay := '{}'::jsonb;
+    foreach f in array r.allowed_fields loop pay := pay || jsonb_build_object(f, src -> f); end loop;
+    if cardinality(r.allowed_fields) = 0 then continue; end if;
+    if array_length(public.ws_sensitive_hits((select string_agg(value #>> '{}', ' ') from jsonb_each(pay) where key not in ('campaign_id', 'created_at'))), 1) > 0 then
+      raise exception 'routing refused: payload for rule % looks sensitive', r.name;
+    end if;
+    insert into public.ffm_route_log (workspace_id, rule_id, lead_id, fields) values (p_ws, r.id, p_lead, r.allowed_fields);
+    out_ := out_ || jsonb_build_array(jsonb_build_object('rule', r.name, 'destination_kind', r.destination_kind, 'dry_run', true, 'payload', pay));
+  end loop;
+  return out_;
+end $$;
+
+-- 10. withdrawal and erasure also suppress the PHONE ---------------------------------------------------------------------------------------------------------------------
+-- WHICH WITHDRAWALS PROPAGATE (v3, decided and tested): 'all' -> the address AND the number; email -> the address only; sms / phone (also 'text' / 'call') -> the number only, and a number-based
+-- withdrawal blocks every phone-based channel (sms AND voice). Channel-specific withdrawals persist on THEIR channel by durable identifier; they are not propagated to the other identifier.
+-- A withdrawal on a channel WITHOUT a durable identifier (telegram, post/mail, whatsapp, signal, other) cannot be stored by identifier, and nothing can be sent on those channels anyway;
+-- but the person has objected, so it is treated as 'all' (fail closed): it is logged as channel 'all' with the original channel in the source, and suppresses the lead's address and number.
+create or replace function public.ffm_withdraw_consent(p_ws uuid, p_lead uuid, p_channel text, p_source text, p_evidence_ref text, p_by text) returns uuid
+language plpgsql security definer set search_path to 'public' as $$
+declare v_id uuid; ch text; l public.ws_leads; src text := coalesce(nullif(btrim(p_source), ''), 'unspecified');
+begin
+  if p_channel is null or p_channel not in ('email', 'sms', 'phone', 'mail', 'all', 'text', 'call', 'post', 'telegram', 'whatsapp', 'signal', 'other') then
+    raise exception 'withdrawal refused: channel must be one of email, sms, phone, text, call, mail, post, telegram, whatsapp, signal, other, all';
+  end if;
+  ch := case p_channel when 'text' then 'sms' when 'call' then 'phone' when 'post' then 'all' when 'mail' then 'all' when 'telegram' then 'all' when 'whatsapp' then 'all' when 'signal' then 'all' when 'other' then 'all' else p_channel end;
+  if ch = 'all' and p_channel <> 'all' then src := left('via ' || p_channel || ': ' || src, 300); end if;
+  perform pg_advisory_xact_lock(hashtextextended('ffm_consent:' || p_lead::text, 0));
+  select * into l from public.ws_leads where id = p_lead and workspace_id = p_ws;
+  if l.id is null then raise exception 'lead not found in this workspace'; end if;
+  -- a withdrawal that would store NOTHING durable (no usable address for email, no usable number for sms/phone) is widened to 'all' and logged as such: the person objected, and the
+  -- identifier trigger on ws_leads (ffm_lead_identifier_guard) suppresses any identifier that is added to this lead later.
+  if (ch = 'email' and public.normalize_addr(l.email) is null) or (ch in ('sms', 'phone') and public.normalize_phone(l.phone) is null) then
+    src := left('no usable identifier for ' || ch || ': ' || src, 300); ch := 'all';
+  end if;
+  insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, wording_version, source, captured_at, evidence_ref, recorded_by)
+    values (p_ws, p_lead, ch, 'withdrawn', null, src, clock_timestamp(), nullif(btrim(p_evidence_ref), ''), coalesce(nullif(btrim(p_by), ''), 'unknown')) returning id into v_id;
+  if ch in ('email', 'all') then
+    insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+      select public.normalize_addr(email), 'ffm consent withdrawn', coalesce(nullif(btrim(p_by), ''), 'unknown'), null from public.ws_leads where id = p_lead and public.normalize_addr(email) is not null
+      on conflict do nothing;   -- a withdrawal follows the ADDRESS, not only the lead id: a re-added duplicate lead is still refused ('suppressed')
+  end if;
+  if ch in ('sms', 'phone', 'all') then
+    insert into public.ffm_phone_suppressions (phone, reason, recorded_by, source_lead)
+      select public.normalize_phone(phone), 'ffm consent withdrawn (' || p_channel || ')', coalesce(nullif(btrim(p_by), ''), 'unknown'), null from public.ws_leads where id = p_lead and public.normalize_phone(phone) is not null
+      on conflict do nothing;   -- the same for the NUMBER, in any written format; a number-based withdrawal blocks every phone-based channel (sms and voice)
+  end if;
+  insert into public.audit_log (actor, action, target, detail) values ('ffm', 'ffm_consent_withdrawn', 'workspace/' || p_ws, jsonb_build_object('lead', p_lead, 'channel', p_channel, 'recorded_as', ch, 'consent', v_id));
+  return v_id;
+end $$;
+
+-- 10b. an identifier added or changed on a lead that has WITHDRAWN is suppressed at once (v3). Without this, withdraw-then-add-email on a lead with no address stored nothing durable.
+-- A withdrawal on 'email' covers the address; on 'sms'/'phone' the number; on 'all' both. Runs as the table owner (security definer) so a plain lead edit cannot skip it.
+create or replace function public.ffm_lead_identifier_guard() returns trigger
+language plpgsql security definer set search_path to 'public' as $$
+declare a text; ph text;
+begin
+  if tg_op = 'UPDATE' and new.email is not distinct from old.email and new.phone is not distinct from old.phone then return new; end if;
+  a := public.normalize_addr(new.email); ph := public.normalize_phone(new.phone);
+  if a is not null and exists (select 1 from public.ffm_consent_log where lead_id = new.id and basis = 'withdrawn' and channel in ('email', 'all')) then
+    insert into public.contact_suppressions (address, reason, recorded_by, source_lead) values (a, 'ffm consent withdrawn (identifier added later)', 'ffm', null) on conflict do nothing;
+  end if;
+  if ph is not null and exists (select 1 from public.ffm_consent_log where lead_id = new.id and basis = 'withdrawn' and channel in ('sms', 'phone', 'all')) then
+    insert into public.ffm_phone_suppressions (phone, reason, recorded_by, source_lead) values (ph, 'ffm consent withdrawn (identifier added later)', 'ffm', null) on conflict do nothing;
+  end if;
+  return new;
+end $$;
+drop trigger if exists ws_leads_identifier_guard on public.ws_leads;
+create trigger ws_leads_identifier_guard after insert or update of email, phone on public.ws_leads for each row execute function public.ffm_lead_identifier_guard();
+
+create or replace function public.ffm_erase_lead(p_ws uuid, p_lead uuid, p_reason text) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare n_ev integer; n_cap integer := 0; k text := (select value from public.ffm_secrets where name = 'capture_signing_key'); l public.ws_leads;
+begin
+  perform public.ffm_require_owner();
+  if p_reason is null or p_reason not in ('erasure_request', 'withdrawal', 'retention_expired', 'other') then raise exception 'erasure refused: reason must be erasure_request, withdrawal, retention_expired or other'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('ffm_consent:' || p_lead::text, 0));
+  select * into l from public.ws_leads where id = p_lead and workspace_id = p_ws;
+  if l.id is null then raise exception 'lead not found in this workspace'; end if;
+  insert into public.ffm_consent_log (workspace_id, lead_id, channel, basis, source, captured_at, recorded_by)
+    values (p_ws, p_lead, 'all', 'withdrawn', 'erasure:' || p_reason, clock_timestamp(), 'owner');
+  insert into public.contact_suppressions (address, reason, recorded_by, source_lead)
+    select public.normalize_addr(l.email), 'ffm erasure/withdrawal', 'owner', null where public.normalize_addr(l.email) is not null
+    on conflict do nothing;   -- the address stays blocked after the lead row is redacted, so re-adding the same person cannot restore contact
+  insert into public.ffm_phone_suppressions (phone, reason, recorded_by, source_lead)
+    select public.normalize_phone(l.phone), 'ffm erasure/withdrawal', 'owner', null where public.normalize_phone(l.phone) is not null
+    on conflict do nothing;   -- and the number
+  perform set_config('app.ffm_erasure', 'on', true);
+  update public.ws_leads set name = '[erased]', email = null, phone = null, source = null, note = null where id = p_lead;
+  update public.ffm_consent_log set evidence_ref = null, source = '[erased]', evidence_erased_at = clock_timestamp() where lead_id = p_lead and (evidence_ref is not null or source <> '[erased]');
+  get diagnostics n_ev = row_count;
+  -- captures bound to this person (by lead id, or by the keyed hash of the contact they used) lose the hash that could re-identify them; the opaque capture_ref stays
+  update public.ffm_consent_captures set contact_mac = null, erased_at = clock_timestamp()
+    where erased_at is null and (lead_id = p_lead
+       or (k is not null and contact_mac is not null and contact_mac in (
+            select public.ffm_contact_mac(k, 'email', public.normalize_addr(l.email)) where public.normalize_addr(l.email) is not null
+            union select public.ffm_contact_mac(k, 'phone', public.normalize_phone(l.phone)) where public.normalize_phone(l.phone) is not null)));
+  get diagnostics n_cap = row_count;
+  perform set_config('app.ffm_erasure', 'off', true);
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ffm_lead_erased', 'workspace/' || p_ws, jsonb_build_object('lead', p_lead, 'reason', p_reason, 'evidence_refs_blanked', n_ev, 'captures_unlinked', n_cap));
+  return jsonb_build_object('lead', p_lead, 'evidence_refs_blanked', n_ev, 'captures_unlinked', n_cap, 'note', 'copies in external backups are handled by key rotation or expiry, see DATA_CLASSIFICATION_AND_BACKUP_POLICY.md');
+end $$;
+
+-- 11. the legacy send path (review finding 2). ONE decision function, used by the trigger, by the RPC the Python senders call, and by the owner approval check.
+-- NULL = nothing against it; otherwise a reason code. It fails closed: the gate closed, a do-not-contact lead, an unusable or suppressed address / number, or any error is a "no".
+-- email: is_suppressed (plaintext list AND hash-only entries). text / call: the PHONE suppression list (plaintext AND hash-only). telegram / post: the gate and the lead flag only.
+create or replace function public.outreach_recipient_problem(p_channel text, p_to text, p_lead uuid) returns text
+language plpgsql stable security definer set search_path to 'public' as $$
+declare dnc boolean := false;
+begin
+  -- an unknown, differently-cased or NULL channel is a "no" (fail closed). The five channels are exactly outbox_channel_check in production (read-only check Nov 15 2026): email, text, call, post, telegram.
+  -- post and telegram have no address list to consult (a postal address or a chat handle is not on contact_suppressions), so for them the gate and the lead flag are the whole check.
+  -- v3: the CHANNEL comes first. outbox_channel_check still allows post and telegram, but they have no durable suppression identifier, so they are refused whatever the gate says.
+  if p_channel is null then return 'unknown_channel'; end if;
+  if public.outreach_channel_problem(p_channel) is not null then return public.outreach_channel_problem(p_channel); end if;
+  if p_channel not in ('email', 'text', 'call') then return 'unknown_channel'; end if;      -- the outbox vocabulary; sms / phone are the consent log's names for text / call
+  if public.outreach_channel_disabled(p_channel) is not null then return 'channel_disabled'; end if;
+  if not public.ffm_outreach_gate_open() then return 'suppression_unverified'; end if;
+  if p_lead is not null then select do_not_contact into dnc from public.leads where id = p_lead; end if;
+  if coalesce(dnc, false) then return 'lead_do_not_contact'; end if;
+  if p_channel = 'email' then
+    if p_to is null or public.normalize_addr(p_to) is null then return 'address_unusable'; end if;
+    if public.is_suppressed(p_to) then return 'suppressed'; end if;
+  elsif p_channel in ('text', 'call') then
+    if p_to is null or public.normalize_phone(p_to) is null then return 'phone_unusable'; end if;
+    if public.ffm_is_phone_suppressed(p_to) then return 'suppressed'; end if;
+  end if;
+  return null;
+exception when others then
+  return 'error';
+end $$;
+
+-- What the senders (hq_mail._claim / deliver_approved, hq_venture_ops.dnc_problem) ask BEFORE claiming and again IMMEDIATELY before the provider call. Only {"allowed": true} is a yes.
+create or replace function public.outreach_send_allowed(p_outbox uuid) returns jsonb
+language plpgsql stable security definer set search_path to 'public' as $$
+declare o public.outbox; why text;
+begin
+  select * into o from public.outbox where id = p_outbox;
+  if o.id is null then return jsonb_build_object('allowed', false, 'reason', 'unknown_outbox'); end if;
+  if o.status not in ('draft', 'qa_passed', 'approved') then return jsonb_build_object('allowed', false, 'reason', 'not_sendable_status'); end if;
+  why := public.outreach_recipient_problem(o.channel, o.to_ref, o.lead_id);
+  if why is not null then return jsonb_build_object('allowed', false, 'reason', why); end if;
+  return jsonb_build_object('allowed', true, 'reason', 'ok');
+exception when others then
+  return jsonb_build_object('allowed', false, 'reason', 'error');
+end $$;
+
+-- The trigger. A row that is, or becomes, approved / sent, or that carries a claim (sent_at set), is DELIVERY-BOUND: it needs the gate open and an allowed recipient, EVERY time it is written
+-- (the old early return let a claim, which only sets sent_at, through with the gate closed). The one write that is always allowed is releasing a claim (sent_at back to null, nothing else changed).
+create or replace function public.outbox_dnc_guard() returns trigger
+language plpgsql set search_path to 'public' as $$
+declare dnc boolean := false; bound boolean; why text;
+begin
+  if new.status not in ('draft','qa_passed','approved','sent') then return new; end if;
+  if tg_op = 'UPDATE' and new.status is not distinct from old.status
+     and new.to_ref is not distinct from old.to_ref and new.channel is not distinct from old.channel and new.lead_id is not distinct from old.lead_id then
+    if new.sent_at is not distinct from old.sent_at then return new; end if;     -- nothing that decides WHO is contacted or WHETHER it advances changed
+    if new.sent_at is null then return new; end if;                                -- releasing a claim only reduces what happens
+  end if;
+  bound := new.status in ('approved', 'sent') or new.sent_at is not null;
+  -- v3: a person-directed telegram / post / whatsapp / unknown-channel row cannot be created, approved, claimed or sent AT ALL (not even as a draft): there is no durable suppression identifier.
+  -- (A row that already exists and changes nothing that decides who is contacted returned above; moving it to rejected is not guarded.)
+  if new.channel in ('sms', 'phone') then      -- explicit: these are the consent log's names, not outbox channels (the outbox vocabulary is text / call); never rely on the CHECK constraint to keep them out
+    raise exception 'Channel prohibited (invalid_outbox_channel): % is not an outbox channel; use text or call, which are disabled until the owner enables them.', new.channel;
+  end if;
+  if public.outreach_channel_disabled(new.channel) is not null then
+    raise exception 'Channel prohibited (channel_disabled): % outreach is disabled until the owner enables it (ffm_set_phone_outreach). No draft, approval, claim or send is allowed.', new.channel;
+  end if;
+  if public.outreach_channel_problem(new.channel) is not null then
+    raise exception 'Channel prohibited (%): no person-directed outreach on %. There is no durable suppression identifier for it, so no draft, approval, claim or send is allowed.', public.outreach_channel_problem(new.channel), coalesce(new.channel, 'NULL') using errcode = 'P0001';
+  end if;
+  if bound and not public.ffm_outreach_gate_open() then
+    raise exception 'Outreach gate closed: the suppression list has not been verified (default-deny after a restore or on a fresh database). No approval, claim or send is allowed.' using errcode = 'P0001';
+  end if;
+  if new.lead_id is not null then
+    select do_not_contact into dnc from public.leads where id = new.lead_id;
+  end if;
+  if new.channel = 'email' and new.to_ref ~ '[;,]' then
+    raise exception 'One recipient per email: a list of addresses is not allowed.' using errcode = 'P0001';
+  end if;
+  if new.channel = 'email' and new.to_ref is not null and public.normalize_addr(new.to_ref) is null then
+    raise exception 'The recipient is not one clean email address (CASL check cannot be done). Fix the address first.' using errcode = 'P0001';
+  end if;
+  if new.channel in ('text', 'call') and public.normalize_phone(new.to_ref) is not null and public.ffm_is_phone_suppressed(new.to_ref) then   -- (an unusable number is refused below, once the row is delivery-bound)
+    raise exception 'Do-not-contact: this phone number has opted out. No draft, approval or send is allowed.' using errcode = 'P0001';
+  end if;
+  if coalesce(dnc, false) or (new.channel = 'email' and public.is_suppressed(new.to_ref)) then
+    raise exception 'Do-not-contact: this lead or address has opted out (CASL). No draft, approval or send is allowed.' using errcode = 'P0001';
+  end if;
+  if bound then   -- the single shared decision (also what outreach_send_allowed answers): unusable phone numbers, hash-only entries, any error
+    why := public.outreach_recipient_problem(new.channel, new.to_ref, new.lead_id);
+    if why is not null then
+      raise exception 'Do-not-contact or unusable recipient (%): no approval, claim or send is allowed.', why using errcode = 'P0001';
+    end if;
+  end if;
+  return new;
+end $$;
+
+-- 12. grants ----------------------------------------------------------------------------------------------------------------------------------------------------------
+revoke all on function public.ffm_gate_no_delete() from public, anon, authenticated;
+revoke all on function public.ffm_sup_message(text, text) from public, anon, authenticated;
+revoke all on function public.outreach_recipient_problem(text, text, uuid) from public, anon, authenticated;
+revoke all on function public.outreach_send_allowed(uuid) from public, anon, authenticated;
+revoke all on function public.is_suppressed(text) from public, anon, authenticated;
+revoke all on function public.ffm_is_phone_suppressed(text) from public, anon, authenticated;
+revoke all on function public.ffm_outreach_gate_open() from public, anon, authenticated;
+revoke all on function public.ffm_outreach_gate_status() from public, anon, authenticated;
+revoke all on function public.ffm_close_outreach_gate(text, text) from public, anon, authenticated;
+revoke all on function public.ffm_suppression_set() from public, anon, authenticated;   -- returns keyed hashes only
+revoke all on function public.ffm_suppression_digest() from public, anon, authenticated;
+revoke all on function public.backup_suppression_export() from public, anon, authenticated;
+revoke all on function public.ffm_stage_suppression_checkpoint(jsonb) from public, anon, authenticated;
+revoke all on function public.ffm_import_suppression_hashes() from public, anon, authenticated;
+revoke all on function public.ffm_verify_suppression(text) from public, anon, authenticated;
+revoke all on function public.ffm_contact_status(uuid, text) from public, anon, authenticated;
+revoke all on function public.ffm_can_contact(uuid, text) from public, anon, authenticated;
+revoke all on function public.ffm_withdraw_consent(uuid, uuid, text, text, text, text) from public, anon, authenticated;
+revoke all on function public.ffm_erase_lead(uuid, uuid, text) from public, anon, authenticated;
+revoke all on function public.outbox_dnc_guard() from public, anon, authenticated;
+revoke all on function public.ffm_epoch_guard() from public, anon, authenticated;
+revoke all on function public.ffm_epoch_bump() from public, anon, authenticated;
+revoke all on function public.ffm_instance_fp() from public, anon, authenticated;
+revoke all on function public.ffm_gate_core_ok() from public, anon, authenticated;
+revoke all on function public.outreach_channel_disabled(text) from public, anon, authenticated;
+revoke all on function public.ffm_set_phone_outreach(boolean, text) from public, anon, authenticated;
+revoke all on function public.ffm_owner_record_restore(text) from public, anon, authenticated;
+revoke all on function public.ffm_lead_identifier_guard() from public, anon, authenticated;
+revoke all on function public.ffm_gate_state() from public, anon, authenticated;
+revoke all on function public.ffm_sender_attest(bigint, bigint, text) from public, anon, authenticated;
+revoke all on function public.ffm_set_gate_config(integer, integer, text) from public, anon, authenticated;
+revoke all on function public.outreach_channel_problem(text) from public, anon, authenticated;
+revoke all on function public.ffm_route_preview(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.ffm_gate_no_delete() to service_role;
+grant execute on function public.ffm_sup_message(text, text) to service_role;
+grant execute on function public.outreach_recipient_problem(text, text, uuid) to service_role;
+grant execute on function public.outreach_send_allowed(uuid) to service_role;
+grant execute on function public.ffm_suppression_set() to service_role;
+grant execute on function public.is_suppressed(text) to service_role;
+grant execute on function public.ffm_is_phone_suppressed(text) to service_role;
+grant execute on function public.ffm_outreach_gate_open() to service_role;
+grant execute on function public.ffm_outreach_gate_status() to service_role;
+grant execute on function public.ffm_close_outreach_gate(text, text) to service_role;
+grant execute on function public.ffm_suppression_digest() to service_role;
+grant execute on function public.backup_suppression_export() to service_role;   -- until PR #16's post-lockdown file moves it to backup_reader (see section 7)
+grant execute on function public.ffm_stage_suppression_checkpoint(jsonb) to service_role;
+grant execute on function public.ffm_import_suppression_hashes() to service_role;
+grant execute on function public.ffm_verify_suppression(text) to service_role;
+grant execute on function public.ffm_contact_status(uuid, text) to service_role;
+grant execute on function public.ffm_can_contact(uuid, text) to service_role;
+grant execute on function public.ffm_withdraw_consent(uuid, uuid, text, text, text, text) to service_role;
+grant execute on function public.ffm_erase_lead(uuid, uuid, text) to service_role;
+grant execute on function public.outbox_dnc_guard() to service_role;
+grant execute on function public.ffm_instance_fp() to service_role;
+grant execute on function public.ffm_gate_core_ok() to service_role;
+grant execute on function public.outreach_channel_disabled(text) to service_role;
+grant execute on function public.ffm_set_phone_outreach(boolean, text) to service_role;
+grant execute on function public.ffm_owner_record_restore(text) to service_role;
+grant execute on function public.ffm_lead_identifier_guard() to service_role;
+grant execute on function public.ffm_gate_state() to service_role;
+grant execute on function public.ffm_sender_attest(bigint, bigint, text) to service_role;
+grant execute on function public.ffm_set_gate_config(integer, integer, text) to service_role;
+grant execute on function public.outreach_channel_problem(text) to service_role;
+grant execute on function public.ffm_route_preview(uuid, uuid) to service_role;
+
+-- 13. app_owners (review finding 3). In production service_role could INSERT into app_owners and so mint an owner (is_app_owner() trusts that table). Verified read-only on Nov 15 2026:
+-- service_role holds every privilege, anon/authenticated none, RLS on with no policy, no trigger, and NO code in this repository writes it (owners are added by hand in the SQL editor,
+-- which runs as postgres and is unaffected). The bot only reads it (hq_backup). So the writes are taken away; select stays.
+revoke insert, update, delete, truncate, references, trigger on public.app_owners from public, anon, authenticated, service_role;
+revoke all on public.app_owners from anon, authenticated;
+grant select on public.app_owners to service_role;
+
+-- ===== 20261122_insurance_classifier_v1.sql =====
+-- Insurance content classification v1 (FENDEZY priority 3, Nov 2026). UNRELEASED: edited in place after independent review (PR #17). Additive: 4 tables (ws_approved_terms, ws_marketing_vocab, ws_place_catalog, ws_fixed_phrases), new functions (classifier, deny lists, owner management, ws_onboarding_value_check, ws_structural_value; all pin search_path = pg_catalog), 2 replaced functions (ws_guard, ffm_guard). Seed rows are vocabulary, fixed phrases and the municipality catalog only; no existing row is changed.
+--   PROBLEM: the 'health' detector (20261119) refuses ordinary insurance PRODUCT wording ("health insurance", "disability insurance", "critical illness cover",
+--   "Medicine Hat"), so Client 2 (insurance) could not write marketing. It also missed French, accents, look-alike letters and leetspeak.
+--   MODEL (default-deny on the residual): insurance PRODUCT MARKETING is allowed only as exact OWNER-APPROVED terms plus an OWNER-MANAGED generic vocabulary.
+--   Everything else in insurance-context text is refused. A deny-list of "personal" words was the first design and it failed review (any health word not on the list passed in
+--   third person); the allow-list below fails closed instead: an unknown word blocks, whatever it means.
+--   * ws_approved_terms: owner-managed, scoped to ONE workspace or (with an explicit confirm flag) a VERTICAL. Ships EMPTY. Kinds:
+--       product  a product NAME ("health insurance", "income protection"): every word must be generic vocabulary or a product-name word; no condition, person or targeting word
+--       feature  a generic coverage description that may name conditions ("heart attack, stroke and cancer"), never a person or a targeting phrase; matters only next to a product term or an insurance word
+--       place    a Canadian municipality chosen from the fixed catalog ws_place_catalog (no free text)
+--     Terms are added/removed only by ws_add_approved_term / ws_remove_approved_term (owner-only, audit logged WITHOUT the term text). Rows are never deleted.
+--   * ws_marketing_vocab: owner-managed generic marketing words (en/fr), seeded here with non-sensitive function words and marketing words ONLY. Owner-only add/remove
+--     (ws_add_vocab_word / ws_remove_vocab_word, soft removal, audit logged without the word); the bot cannot. A hard deny list inside ws_vocab_denied (person references,
+--     narrative words, anything the health/condition detectors flag) means such a word can never be added.
+--   * ws_classify_text(text, workspace) -> {"allowed": bool, "reasons": [codes]}. It NEVER echoes the text. Order of decision (workspace given):
+--       1. every previous category (SIN, card, account, identity, banking, credit) still blocks on the original text AND on a normalised view AND on two leetspeak views.
+--       2. 'health' and 'income' are the ONLY categories a term can waive: the approved terms are cut out of the folded token stream (whole words, never re-joined),
+--          'your income' is waived only when no currency amount appears, and the detectors run again on what is left.
+--       3. INSURANCE CONTEXT = the WORKSPACE is not of a known non-insurance vertical, or holds an approved product term (ws_insurance_context; the words of the text decide nothing).
+--          In that context the residual may contain ONLY vocabulary words, numbers and simple punctuation. Any other token => 'unknown_word'. Non-Latin scripts,
+--          mixed scripts, '&', '=' and percent-encoding => blocked. Phone, email, postal code, street address and 4+ digit numbers => 'identifier' (whatever the health words).
+--       4. non-insurance text behaves exactly as before (strict screen; a place term only waives its own health-looking name).
+--   * ws_guard / ffm_guard (replaced) call the classifier. Approved-term waivers apply ONLY on non-person tables (ws_campaigns, ws_ledger, ffm_ad_sets, ffm_creatives, ffm_approvals,
+--     ffm_onboarding_items). Person tables (ws_leads, client_workspaces, ffm_routing_rules, ffm_consent_*) keep the old screen as the first test and, in an insurance workspace,
+--     get the insurance screen on top of it (round 4, ws_person_column_check).
+--   * ROUND 4 (independent review RV17-C): money / pay / debt fail closed (ws_financial_hit); a feature phrase can never state a fact about a person (ws_feature_context_ok);
+--     the insurance screen applies to every workspace whose vertical is not exactly 'mortgage' (ws_vertical_insurance: NULL / unknown / misspelled fail closed); person tables as above;
+--     spelled digit groups across columns, vocabulary-word names, form labels and answers, onboarding values and owner validation tightened. See the policy document, section 5a.
+--   * ROUND 5 (independent review RV17-D, integration S7): a consent withdrawal / erasure is never refused for wording in any column of any workspace (fixed tags instead, ffm_guard);
+--     PR #20's machine consent columns are accepted exactly; money next to a period word, "over N", a ceiling followed by anything, benefit / savings / receive words, payment trouble,
+--     spelled-out and paired ages and split amounts fail closed (ws_financial_hit); actor tags, routing rule names and the vertical normalisation tightened / documented.
+--   * ws_fixed_phrases (round 3): owner-managed en/fr fixed phrases ("contact us", "our team", "notre equipe", "Mon-Fri" ...), cut in pass 1 like an approved term; owner-only, soft removal, PII-free audit, immutable.
+--   * ws_onboarding_value_check / ws_structural_value (round 3): onboarding VALUES are list-screened (no vocabulary test, no waiver); structural columns skip the vocabulary test only when they really are a template title, a plain date or a short token.
+--   * ws_sensitive_hits is NOT changed (other callers, the Python wrapper and ffm_route_preview keep the strict result). Regular expressions and word lists have stated limits: see the policy document.
+
+-- 1. approved terms (owner-managed; ships empty)
+create table if not exists public.ws_approved_terms (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid references public.client_workspaces(id) on delete restrict,
+  vertical text check (vertical is null or vertical ~ '^[a-z0-9][a-z0-9-]{1,40}$'),
+  kind text not null check (kind in ('product', 'place', 'feature')),
+  term text not null check (length(term) between 3 and 120),
+  term_norm text not null check (length(term_norm) between 3 and 120) check (term_norm ~ '^[a-z]+([ ''][a-z]+)*$'),   -- two separate checks: one AND-chain with BETWEEN is re-rendered differently after a schema dump/restore (backup drill, schema identity)
+  vertical_confirmed boolean not null default false,
+  created_by text not null default 'owner',
+  created_at timestamptz not null default clock_timestamp(),
+  removed_at timestamptz,
+  removed_by text,
+  check ((workspace_id is null) <> (vertical is null)),
+  check (workspace_id is not null or vertical_confirmed)
+);
+create unique index if not exists ws_approved_terms_active_uidx
+  on public.ws_approved_terms ((coalesce(workspace_id::text, 'v:' || vertical)), kind, term_norm) where removed_at is null;
+alter table public.ws_approved_terms enable row level security;
+revoke all on public.ws_approved_terms from public, anon, authenticated;
+grant select on public.ws_approved_terms to service_role;
+revoke insert, update, delete, truncate, trigger, references on public.ws_approved_terms from service_role;
+
+-- 1b. owner-managed generic marketing vocabulary (per language). Soft removal only.
+create table if not exists public.ws_marketing_vocab (
+  id uuid primary key default gen_random_uuid(),
+  lang text not null check (lang in ('en', 'fr')),
+  word text not null check (word ~ '^[a-z0-9]{1,30}$'),
+  created_by text not null default 'owner',
+  created_at timestamptz not null default clock_timestamp(),
+  removed_at timestamptz,
+  removed_by text
+);
+create unique index if not exists ws_marketing_vocab_active_uidx on public.ws_marketing_vocab (lang, word) where removed_at is null;
+create index if not exists ws_marketing_vocab_word_idx on public.ws_marketing_vocab (word) where removed_at is null;
+alter table public.ws_marketing_vocab enable row level security;
+revoke all on public.ws_marketing_vocab from public, anon, authenticated;
+grant select on public.ws_marketing_vocab to service_role;
+revoke insert, update, delete, truncate, trigger, references on public.ws_marketing_vocab from service_role;
+
+-- 1c. fixed catalog of Canadian municipalities an owner may approve as 'place' terms (no free text). Never edited by anyone: rows only arrive with this migration.
+create table if not exists public.ws_place_catalog (
+  name_norm text primary key check (name_norm ~ '^[a-z]+([ ''][a-z]+)*$'),
+  display_name text not null,
+  province text not null check (province ~ '^[A-Z]{2}$')
+);
+alter table public.ws_place_catalog enable row level security;
+revoke all on public.ws_place_catalog from public, anon, authenticated;
+grant select on public.ws_place_catalog to service_role;
+revoke insert, update, delete, truncate, trigger, references on public.ws_place_catalog from service_role;
+
+-- 1d. owner-managed FIXED PHRASES (en/fr): short whole phrases that contain a word the vocabulary hard-denies on its own ("contact us", "our team", "notre equipe", "mon fri").
+--     Cut out of the token stream in pass 1 like an approved term, only in insurance context. Owner-only management, soft removal, PII-free audit, never edited.
+create table if not exists public.ws_fixed_phrases (
+  id uuid primary key default gen_random_uuid(),
+  lang text not null check (lang in ('en', 'fr')),
+  phrase text not null check (length(phrase) between 5 and 60),
+  phrase_norm text not null check (phrase_norm ~ '^[a-z]+( [a-z]+){1,4}$'),
+  created_by text not null default 'owner',
+  created_at timestamptz not null default clock_timestamp(),
+  removed_at timestamptz,
+  removed_by text
+);
+create unique index if not exists ws_fixed_phrases_active_uidx on public.ws_fixed_phrases (phrase_norm) where removed_at is null;
+alter table public.ws_fixed_phrases enable row level security;
+revoke all on public.ws_fixed_phrases from public, anon, authenticated;
+grant select on public.ws_fixed_phrases to service_role;
+revoke insert, update, delete, truncate, trigger, references on public.ws_fixed_phrases from service_role;
+
+-- rows are never deleted; the only allowed update is the one-way soft removal done by the owner functions (terms and vocabulary share this trigger)
+create or replace function public.ws_terms_immutable() returns trigger
+language plpgsql set search_path to 'pg_catalog' as $$
+begin
+  if tg_op = 'UPDATE' and old.removed_at is null and new.removed_at is not null
+     and (to_jsonb(new) - 'removed_at' - 'removed_by') = (to_jsonb(old) - 'removed_at' - 'removed_by') then
+    return new;
+  end if;
+  raise exception 'approved terms cannot be edited or deleted: remove the term (soft) and add a new one' using errcode = 'P0001';
+end $$;
+drop trigger if exists ws_terms_immutable on public.ws_approved_terms;
+create trigger ws_terms_immutable before update or delete on public.ws_approved_terms for each row execute function public.ws_terms_immutable();
+drop trigger if exists ws_terms_no_truncate on public.ws_approved_terms;
+create trigger ws_terms_no_truncate before truncate on public.ws_approved_terms for each statement execute function public.ws_terms_immutable();
+drop trigger if exists ws_vocab_immutable on public.ws_marketing_vocab;
+create trigger ws_vocab_immutable before update or delete on public.ws_marketing_vocab for each row execute function public.ws_terms_immutable();
+drop trigger if exists ws_vocab_no_truncate on public.ws_marketing_vocab;
+create trigger ws_vocab_no_truncate before truncate on public.ws_marketing_vocab for each statement execute function public.ws_terms_immutable();
+drop trigger if exists ws_phrases_immutable on public.ws_fixed_phrases;
+create trigger ws_phrases_immutable before update or delete on public.ws_fixed_phrases for each row execute function public.ws_terms_immutable();
+drop trigger if exists ws_phrases_no_truncate on public.ws_fixed_phrases;
+create trigger ws_phrases_no_truncate before truncate on public.ws_fixed_phrases for each statement execute function public.ws_terms_immutable();
+
+create or replace function public.ws_place_catalog_immutable() returns trigger
+language plpgsql set search_path to 'pg_catalog' as $$
+begin
+  raise exception 'the place catalog is fixed: it is changed only by a migration' using errcode = 'P0001';
+end $$;
+drop trigger if exists ws_place_catalog_immutable on public.ws_place_catalog;
+create trigger ws_place_catalog_immutable before update or delete on public.ws_place_catalog for each row execute function public.ws_place_catalog_immutable();
+drop trigger if exists ws_place_catalog_no_truncate on public.ws_place_catalog;
+create trigger ws_place_catalog_no_truncate before truncate on public.ws_place_catalog for each statement execute function public.ws_place_catalog_immutable();
+
+-- 2. normalisation. zero-width / bidi / variation selectors out, NFKC (fullwidth, circled, squared, mathematical letters), NFD + combining marks out (accents), lower case, ligatures,
+--    Cyrillic / Greek / Latin-extended look-alikes to Latin, Arabic-Indic digits to ASCII, typographic apostrophes and dashes to ASCII, whitespace squeezed.
+create or replace function public.ws_fold_text(p_text text) returns text
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare t text := coalesce(p_text, '');
+begin
+  t := regexp_replace(t, '[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0]', '', 'g');
+  t := regexp_replace(t, '[\U000e0001\U000e0020-\U000e007f\U000e0100-\U000e01ef]', '', 'g');
+  t := normalize(t, NFKC);
+  t := normalize(t, NFD);
+  t := regexp_replace(t, '[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]', '', 'g');
+  -- capital look-alikes BEFORE lower-casing: Greek capital Eta/Nu/Mu/Upsilon would otherwise lower-case to letters that look like n, v, u (not H, N, M, Y)
+  t := translate(t, 'ΗΝΜΥΖΒΕΚΟΡΤΧΑΙАВЕКМНОРСТХУІЈЅ', 'HNMYZBEKOPTXAIABEKMHOPCTXYIJS');
+  t := lower(t);
+  t := replace(replace(replace(replace(replace(replace(t, 'œ', 'oe'), 'æ', 'ae'), 'ß', 'ss'), 'ø', 'o'), 'ł', 'l'), 'đ', 'd');
+  t := translate(t, 'ıавекмнорстухіїјѕԁԛԝһӏүѡɑɡαβγεικνορτυχωϲϳςμη', 'iabekmhopctyxiijsdqwhlywagabyeikvoptuxwcjcun');
+  t := translate(t, '٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹’‘`´ʼ′‐‑‒–—−', '01234567890123456789''''''''''''------');
+  t := regexp_replace(t, '[[:space:]]+', ' ', 'g');
+  return btrim(t);
+end $$;
+
+-- leetspeak views (for DETECTION of obfuscated words only, never used for the number detectors, never used to match approved terms or vocabulary).
+-- Review fix: digits and symbols are folded ONLY inside a token that contains a letter. A lone "1", "#1", "|", "@", "$25" or "!" stands for itself.
+create or replace function public.ws_leet_text(p_fold text, p_variant integer) returns text
+language sql immutable set search_path to 'pg_catalog' as $$
+  select coalesce(string_agg(case when m[1] ~ '[a-z]'
+                                  then case when p_variant = 2 then translate(m[1], '013457$@!|', 'oleastsail') else translate(m[1], '013457$@!|', 'oieastsaii') end
+                                  else m[1] end, '' order by ord), '')
+  from regexp_matches(coalesce(p_fold, ''), '[a-z0-9$@!|]+|[^a-z0-9$@!|]+', 'g') with ordinality as t(m, ord);
+$$;
+
+-- 3. extra health wording the old detector did not know (French, and a few English gaps). Input is an already folded (ASCII, lower case) view.
+create or replace function public.ws_health_extra_hit(p_fold text) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare k text := coalesce(p_fold, ''); kc text; w text;
+begin
+  kc := regexp_replace(k, '[^a-z0-9]', '', 'g');
+  if kc ~ '(maladie|malade|tumeur|chimio|hopita|medecin|medicament|ordonnance|invalidit|incapacit|handicap|cardiaque|infarctus|greffe|dialyse|enceinte|grossesse|faussecouche|avortement|chirurg|blessure|anxie|asthm|leucemi|sclerose|demence|alcooli|surdite|symptome|infirmi|psycholog|ambulanc|preexist|amputat|bedridden|disabled|disabling|terminallyill|fracture|remission|pills|santemental|cancereu|diabetique|epilepsie)'
+  then return true; end if;
+  foreach w in array array['sante', 'avc', 'sida', 'vih', 'coeur', 'flu', 'cough', 'invalide', 'invalides', 'rhume', 'fievre', 'douleur', 'douleurs', 'toux', 'cancer', 'diabete'] loop
+    if k ~ ('(^|[^a-z])' || array_to_string(regexp_split_to_array(w, ''), case when length(w) <= 4 then '[._\-]?' else '[ ._\-]?' end) || '([^a-z]|$)') then return true; end if;
+  end loop;
+  return false;
+end $$;
+
+-- 3b. condition / medication / body-part words that neither detector knows. Used ONLY to validate owner input (vocabulary, feature phrases): a word on this list is never
+--     generic vocabulary. NOT used on stored text: unknown words there are refused by the vocabulary test, which is the real defence.
+create or replace function public.ws_condition_hit(p_fold text) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare k text := coalesce(p_fold, '');
+begin
+  return k ~ ('(^|[^a-z])(lupus|odsp|wsib|aish|herpes|hepatit[a-z]*|std|stds|sti|stis|chlamydia|syphilis|gonorrh[a-z]*|sciatica|burnout|palsy|cerebral|metasta[a-z]*|carcinoma|sarcoma|leprosy|tubercul[a-z]*|malaria|measles|polio|scolios[a-z]*|an[a]?emi[a-z]*|hernia|eczema|psoriasis|acne|rash|fever|lipitor|ozempic|xanax|metformin|viagra|prozac|zoloft|codeine|morphine|oxycodone|ibuprofen|tylenol|aspirin|'
+              || 'leg|legs|arm|arms|knee|knees|hip|hips|shoulder|shoulders|chest|head|neck|eye|eyes|ear|ears|liver|brain|breast|breasts|bone|bones|skin|teeth|tooth|stomach|colon|prostate|pain|pains|ache|aches|sore|dizzy|nausea|vomit[a-z]*|bleed[a-z]*|blind[a-z]*|paraly[a-z]*|dying|a1c|bp|tspt|bpco|kanser|krebs|ms|als|copd|chf|dvt|cirrhosis|gout|shingles|ibs|uti|seropositi[a-z]*|fumeurs?|fumeuse|fumeuses|tabac|tabagisme|hysterectomy|mastectomy|stents?|bypass|limp|lame|crippled|handicap[a-z]*|wound[a-z]*|ulcers?|tumou?rs?|lesions?|polyps?|cysts?|nodules?|infected|infection|virus|viral|bacteria[a-z]*|sepsis|pneumonia|bronchitis|emphysema|stroke|strokes|aneurysm|embol[a-z]*|thromb[a-z]*|angina|arrhythm[a-z]*|murmur|palpitations?)([^a-z]|$)');
+end $$;
+
+-- 4. first-person / narrative context ("I have diabetes", "my husband's cancer", "j'ai", "ma mere", "diagnosed", "claim for", "passed away", "policy number").
+--    Used when the old-style waiver of a PLACE name needs it, and to validate owner input (a term is never personal wording). Input: folded view.
+create or replace function public.ws_personal_context_hit(p_fold text) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare k text := coalesce(p_fold, '');
+begin
+  if k ~ '(^|[^a-z0-9])(i|im|ive|me|my|mine|myself|je|moi|moimeme|mien|miens|mienne|miennes|mes|ma|suis)([^a-z0-9]|$)' then return true; end if;
+  if k ~ '(^|[^a-z0-9])(j|m)''' then return true; end if;
+  if k ~ '(^|[^a-z0-9])mon[ ]+(?!(to|through|thru|and|et|au|a|fri|ven)([^a-z]|$))[a-z]' then return true; end if;
+  if k ~ ('(^|[^a-z0-9])(passed away|passed on|has died|have died|died|deceased|late (husband|wife|father|mother|spouse|partner)|funeral|widow|widower|veuve|veuf|decede|decedee|est mort|est morte|'
+          || 'suffer|suffers|suffered|suffering|souffre|souffrant|souffert|atteint|atteinte|atteints|atteintes|undergo|underwent|undergoing|admitted|hospitali[sz]ed|recover(ed|ing)? from|treated for|treatment for|'
+          || 'claim for|claimed for|claim on behalf|filed (a|an|his|her|their|my) claim|filed for|applied for|(was|were|got|been|being|get) (denied|declined|rejected|turned down|refused)|denied coverage|declined coverage|(claim|claims|coverage|application|request|policy|demande|reclamation) (was |were |has been |is |got )?(denied|declined|rejected|refused|refusee|refuse|rejetee|turned down)|'
+          || 'test results|lab results|(policy|claim|member|certificate|case|file|group) ?(number|no|num|nr|id|#)|numero de (police|reclamation|certificat|membre|dossier|contrat)|no de police|'
+          || 'born|dob|years old|yrs old|ne le|nee le|date de naissance|demande de (reclamation|prestation|indemnite)|reclamation pour|votre dossier medical)([^a-z0-9]|$)') then return true; end if;
+  return false;
+end $$;
+
+-- 5. identifiers that must not appear in insurance-context text. Prices ($25/month, 100%), years (1995..2099) and age ranges (18-65) are allowed. Input: folded view.
+--    Review fix: a lone " @ " is a separator ("Health insurance @ $25/mo"); an @ touching a letter or digit is an email or handle.
+create or replace function public.ws_identifier_hit(p_fold text) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare x text := coalesce(p_fold, '');
+begin
+  if x ~ '[a-z0-9._-]@|@[a-z0-9._-]' or x ~ '[a-z0-9._-]+ ?(\[at\]|\(at\)|\sat\s|arobase) ?[a-z0-9-]+( ?(\[dot\]|\(dot\)|\sdot\s|\spoint\s|\.) ?)[a-z]{2,}' then return true; end if;
+  if x ~ '(^|[^a-z0-9])[a-z][0-9][a-z][ -]?[0-9][a-z][0-9]([^a-z0-9]|$)' then return true; end if;
+  if x ~ '(^|[^0-9])[0-9]{1,6} +[a-z]+( [a-z]+)? +(street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln|rue|chemin|court|crescent|way|place|terrace)([^a-z]|$)' then return true; end if;
+  x := regexp_replace(x, '\$ ?[0-9]([0-9,. ]*[0-9])?', ' ', 'g');
+  x := regexp_replace(x, '[0-9]([0-9,.]*[0-9])? ?(\$|%|dollars?|cad|usd|euros?)', ' ', 'g');
+  x := regexp_replace(x, '(^|[^0-9])(19|20)[0-9]{2}([^0-9]|$)', '\1 \3', 'g');
+  x := regexp_replace(x, '(^|[^0-9])(19|20)[0-9]{2}([^0-9]|$)', '\1 \3', 'g');
+  x := regexp_replace(x, '(^|[^0-9])[0-9]{1,2} ?(-|to|a) ?[0-9]{1,3}([^0-9]|$)', '\1 \3', 'g');
+  if x ~ '[0-9]{4,}' then return true; end if;
+  if x ~ '[0-9]{2,}[ .\-/][0-9]{2,}[ .\-/][0-9]{2,}' then return true; end if;
+  if x ~ '[0-9]{1,4}[/.\-][0-9]{1,2}[/.\-][0-9]{1,4}' then return true; end if;
+  if x ~ '[0-9]{3}[ .\-)/]+[0-9]{3}' then return true; end if;
+  return false;
+end $$;
+
+-- 6. stem matching (a generic helper: no sensitive word in it). A stem matches the word, or any of its trimmed forms (plural, -ed, -ing, final -e, -ies), exactly; a stem of
+--    5+ letters also as a PREFIX of the word, a stem of 7+ letters anywhere inside it. Input: one folded word and the stems.
+create or replace function public.ws_stem_match(p_word text, p_stems text[]) returns boolean
+language sql immutable set search_path to 'pg_catalog' as $$
+  select exists (select 1 from unnest(p_stems) s
+                 cross join lateral unnest(array[p_word, regexp_replace(p_word, '(ies)$', 'y'), regexp_replace(p_word, '(es|s|ed|d|ing|e)$', ''), regexp_replace(p_word, '(ies|es|s|ed|ing)$', ''), regexp_replace(p_word, 'e$', '')]) c
+                 where s <> '' and (c = s or (length(s) >= 5 and left(c, length(s)) = s) or (length(s) >= 7 and position(s in c) > 0)));
+$$;
+
+-- 6a. relations, nicknames, common given names and surnames (en, fr) and person-sensitive stems (probate, debt, custody, visa, prison ...). Always denied. The list is stored
+--     ROT13-encoded: the backup schema export carries function source, and a readable list of names would put those names into the off-site file.
+create or replace function public.ws_name_word_hit(p_word text) returns boolean
+language sql immutable set search_path to 'pg_catalog' as $$
+  select public.ws_stem_match(public.ws_fold_text(p_word), string_to_array(translate(
+       'nneba novtnvy nqnz nqnzf nuzrq nyna nyoregb nyrknaqre nyv nyvffn nyyra nznaqn nzryvn nzl naqrefba naqer naqern naqerj natryn naan nagubal nagbvar ' ||
+       'neernef neerfg neguhe nfuyrl nhfgva onxre onaxehcg oneevr ornh-crer ornhyvrh orynatre oryyr-zrer orawnzva orernirq oretreba orggl ovyyl obhpuneq ' ||
+       'obhpure oblsevraq oenaqba oeraqn oevna oeb oebja oehpr oelna pnzcoryy pney pneby pnebyla pneba pnegre pngurevar punagny puneyrf puneybggr pura purely ' ||
+       'puybr puevfgvna puevfgvan puevfgvar puevfgbcure pynex pybhgvre pbgr pbhegranl pbhfva pbhfvar phfgbql plaguvn qnqql qnavry qnivq qnivf qrobenu qroen ' ||
+       'qrog qraavf qvnar qvibepr qbaan qbhtynf qlyna rqjneq rzvyl rzzn revp rfgngr rguna rgvraar riryla sngvzn srybal svnapr svnaprr syberf sberpybfher ' ||
+       'sbegva sbheavre senaprf senapbvf shareny tnoevry tntar tntaba tnzoyvat tnepvn tneavfu tnel tnhguvre trbetr trenyq tveneq tveysevraq tybevn tbamnyrf ' ||
+       'tbamnyrm tenaqzrer tenaqcrer tenaavr tenaal tertbel thvyynhzr unaanu unebyq unecre urngure uryra urael ureanaqrm uhool vzzvtenag vfnoryyn vfnoryyr ' ||
+       'wnpx wnpxfba wnpbo wnpdhrf wnvy wnzrf wnarg wnavpr wnfba wrna wrnaar wrsserl wraavsre wrerzl wreel wrffr wrffvpn wbna wbua wbuafba wbanguna wbarf ' ||
+       'wbeqna wnar qbr wbfr wbfrcu wbfuhn wblpr whna whqvgu whyvr whfgva xnera xngurevar xnguyrra xnguela xrvgu xryyl xraargu xriva xuna xvz xhzne xlyr yncbvagr yneel ' ||
+       'ynhen ynhera ynibvr ynjerapr ynjfhvg yroynap yrpyrep yrsroier yrirfdhr yrjvf yvaqn yvfn ybtna ybcrm ybhvf znqvfba znzn znzvr znzzn znzl znevn znevr ' ||
+       'zneenvar znegun znegva znegvarm znel znguvrh znggurj znkvzr zrtna zryvffn zvpunry zvpury zvpuryyr zvyyre zvgpuryy zbunzrq zbunzzrq zbzzvrf zbzzl zbber ' ||
+       'zbeva zhzzl anan anapl angunyvr anguna aryfba arcurj arirh arjobea athlra avpubynf avpbyr avrpr abnu abaan byvivn bapyr bhryyrg cnzryn cncn cncv cncl ' ||
+       'cndhrggr cneenva cngry cngevpvn cngevpx cnhy cryyrgvre crerm crgre cuvyvccr cvreer cbvevre cevfba cevln cebongr enpury enzverm erorppn ershtrr ertvan ' ||
+       'evpuneq eviren eboreg eboregf ebovafba ebqevthrm ebtre ebanyq elna fnznagun fnzzl fnzhry fnapurm fnaqen fnen fnenu fpbgg frna funeba fvzneq fvatu fvf ' ||
+       'fzvgu fbsvn fbcuvn fbcuvr fgrcqnhtugre fgrcsngure fgrcunavr fgrcura fgrczbgure fgrcfba fgrira fhfna flqarl flyivr gnagr gnlybe grerfn greel gubznf ' ||
+       'gubzcfba gvzbgul gbeerf gerzoynl glyre ireaba ivpgbevn ivfn jnyxre jnygre jnat jnlar jrv jvqbjrq jvsrl jvyyvnz jvyyvnzf jvyyvr jvyfba jevtug mnpunel ' ||
+       'munat ',
+       'nopqrstuvwxyzabcdefghijklm', 'abcdefghijklmnopqrstuvwxyz'), ' '));
+$$;
+
+-- 6b0. conditions, drugs, body parts and other health stems, plus every detector of this system. Used on owner input (vocabulary, terms) and on onboarding values; never needed on
+--      stored marketing text, where unknown words are refused anyway.
+create or replace function public.ws_health_word_hit(p_word text) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare w text := public.ws_fold_text(p_word);
+begin
+  if w is null or w = '' then return false; end if;
+  if w ~ '^(pregnan|medicat|prescri|surg|cancer|diabet|dement|alzheim|tumou?r|chemo|radiat|dialys|transplant)' then return true; end if;
+  if public.ws_stem_match(w, array[
+         'arm', 'avc', 'ear', 'eye', 'hip', 'hiv', 'leg', 'lup', 'std', 'sti', 'adhd', 'aids', 'bras', 'coma', 'copd', 'dose', 'feet', 'foie', 'foot', 'gout', 'hand', 'knee', 'lung',
+         'lupu', 'main', 'oeil', 'pied', 'pill', 'rein', 'sida', 'skin', 'yeux', 'blood', 'bowel', 'brain', 'chemo', 'chest', 'coeur', 'colon', 'covid', 'crohn', 'faint', 'genou', 'heart',
+         'herpe', 'jambe', 'liver', 'lupus', 'obese', 'ovary', 'rehab', 'renal', 'spine', 'stent', 'sugar', 'teeth', 'tooth', 'tumor', 'ulcer', 'xanax', 'addict', 'anemia', 'asthma',
+         'autism', 'biopsy', 'breast', 'cancer', 'cardio', 'celiac', 'diabet', 'eczema', 'epaule', 'hernia', 'heroin', 'herpes', 'kidney', 'opioid', 'oxygen', 'poumon', 'prozac', 'schizo',
+         'smoker', 'sprain', 'statin', 'stroke', 'throat', 'tumour', 'uterus', 'zoloft', 'amnesia', 'amputee', 'anaemia', 'anxiety', 'anxious', 'aspirin', 'bipolar', 'bladder', 'cardiac',
+         'cerveau', 'cocaine', 'codeine', 'colitis', 'dentist', 'diabete', 'glucose', 'insulin', 'kneecap', 'lipitor', 'malaria', 'nursing', 'obesity', 'ozempic', 'seizure', 'stomach',
+         'stutter', 'suicide', 'thyroid', 'tobacco', 'tylenol', 'vaccine', 'vertigo', 'abortion', 'aneurysm', 'autistic', 'cannabis', 'cataract', 'catheter', 'collapse', 'crutches',
+         'dementia', 'dialysis', 'dyslexia', 'embolism', 'epilepsy', 'fentanyl', 'fracture', 'glaucoma', 'impaired', 'insomnia', 'leukemia', 'lymphoma', 'melanoma', 'migraine', 'morphine',
+         'nicotine', 'overdose', 'poitrine', 'pregnant', 'pressure', 'prostate', 'sciatica', 'shingles', 'shoulder', 'suicidal', 'syphilis', 'testicle', 'thyroide', 'tinnitus', 'warfarin',
+         'whiplash', 'addiction', 'alcoholic', 'alzheimer', 'arthritic', 'arthritis', 'cancereux', 'chlamydia', 'colostomy', 'depressed', 'depressif', 'gonorrhea', 'hepatitis',
+         'ibuprofen', 'infarctus', 'influenza', 'leukaemia', 'mammogram', 'marijuana', 'menopause', 'metformin', 'methadone', 'oxycodone', 'pacemaker', 'paralysis', 'paralyzed',
+         'parkinson', 'pneumonia', 'pregnancy', 'psoriasis', 'psychosis', 'psychotic', 'radiation', 'sclerosis', 'scoliosis', 'vasectomy', 'alcoholism', 'amputation', 'antibiotic',
+         'arrhythmia', 'bronchitis', 'concussion', 'depression', 'mastectomy', 'meningitis', 'prednisone', 'prosthesis', 'thrombosis', 'transplant', 'ventilator', 'wheelchair',
+         'cholesterol', 'colonoscopy', 'infertility', 'miscarriage', 'neurologist', 'seropositif', 'fibromyalgia', 'hypertension', 'hysterectomy', 'incontinence', 'osteoporosis',
+         'seropositive', 'tuberculosis', 'contraceptive']) then return true; end if;
+  return cardinality(public.ws_sensitive_hits(w)) > 0 or public.ws_health_extra_hit(w) or public.ws_condition_hit(w)
+         or cardinality(public.ws_sensitive_hits(public.ws_leet_text(w, 1))) > 0 or cardinality(public.ws_sensitive_hits(public.ws_leet_text(w, 2))) > 0;
+end $$;
+
+-- 6b. hard deny list for the vocabulary and for terms: person references, relations, titles, narrative words (events that happened to someone), claim/underwriting wording,
+--    French equivalents, names, and (p_health) anything the health / condition detectors or any earlier category flag. NEVER echoes. Input: one word, any case/accents.
+create or replace function public.ws_vocab_denied(p_word text, p_health boolean default true) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare w text := public.ws_fold_text(p_word);
+begin
+  if w is null or w = '' then return true; end if;
+  if w = any (array[
+    'client', 'clients', 'cliente', 'clientes', 'patient', 'patients', 'patiente', 'patientes', 'customer', 'customers', 'he', 'she', 'him', 'her', 'hers', 'his', 'himself', 'herself',
+    'they', 'them', 'their', 'theirs', 'themselves', 'i', 'me', 'my', 'mine', 'myself', 'am', 'mother', 'mothers', 'mom', 'moms', 'mum', 'father', 'fathers', 'dad', 'dads', 'wife', 'wives',
+    'husband', 'husbands', 'spouse', 'spouses', 'son', 'sons', 'daughter', 'daughters', 'sister', 'sisters', 'brother', 'brothers', 'sibling', 'siblings', 'aunt', 'uncle', 'cousin',
+    'nephew', 'niece', 'grandmother', 'grandfather', 'grandma', 'grandpa', 'grandson', 'granddaughter', 'grandchild', 'baby', 'babies', 'infant', 'toddler', 'teen', 'teenager', 'child',
+    'boy', 'boys', 'girl', 'girls', 'man', 'men', 'woman', 'women', 'lady', 'ladies', 'guy', 'guys', 'person', 'persons', 'mr', 'mrs', 'ms', 'miss', 'mme', 'mlle', 'monsieur', 'madame',
+    'mademoiselle', 'dr', 'doctor', 'doctors', 'nurse', 'nurses', 'name', 'named', 'widow', 'widower', 'orphan',
+    'il', 'elle', 'ils', 'elles', 'lui', 'leur', 'leurs', 'son', 'sa', 'ses', 'mon', 'ma', 'mes', 'ton', 'ta', 'tes', 'je', 'j', 'm', 't', 'tu', 'moi', 'toi', 'mere', 'meres', 'pere', 'peres',
+    'femme', 'femmes', 'mari', 'maris', 'epoux', 'epouse', 'fils', 'fille', 'filles', 'soeur', 'soeurs', 'frere', 'freres', 'enfant', 'bebe', 'bebes', 'garcon', 'garcons', 'homme', 'hommes',
+    'dame', 'dames', 'veuve', 'veuf', 'personne', 'personnes',
+    'has', 'had', 'having', 'was', 'were', 'been', 'being', 'did', 'takes', 'took', 'taken', 'taking', 'lost', 'lose', 'loses', 'broke', 'broken', 'break', 'diagnosed', 'diagnosis', 'diagnose',
+    'suffer', 'suffers', 'suffered', 'suffering', 'passed', 'died', 'dies', 'die', 'dying', 'dead', 'death', 'deceased', 'born', 'birth', 'married', 'divorced', 'admitted', 'treated', 'treatment',
+    'treatments', 'claim', 'claims', 'claimed', 'claimant', 'claimants', 'approved', 'approval', 'denied', 'declined', 'rejected', 'refused', 'pending', 'lapsed', 'lapse', 'rated', 'underwriting',
+    'underwritten', 'underwriter', 'table', 'off', 'absent', 'leave', 'laid', 'fired', 'injured', 'injury', 'hurt', 'fell', 'cannot', 'cant', 'unable', 'unwell', 'sick', 'ill', 'weak', 'blind',
+    'deaf', 'paralyzed', 'paralysed', 'walk', 'walks', 'walked', 'walking', 'drink', 'drinks', 'drank', 'drinker', 'tested', 'test', 'tests',
+    'result', 'results', 'positive', 'negative', 'stage', 'chronic', 'terminal', 'terminally', 'recovering', 'recovered', 'recovery', 'condition', 'conditions', 'answered', 'answer', 'answers',
+    'ai', 'ont', 'avait', 'avais', 'etait', 'etais', 'fut', 'ete', 'mort', 'morte', 'decede', 'decedee', 'malade', 'souffre', 'souffrant', 'souffrants', 'atteint', 'atteinte', 'atteints',
+    'atteintes', 'enceinte', 'prend', 'pris', 'perdu', 'casse', 'diagnostique', 'refuse', 'refusee', 'accepte', 'approuve', 'approuvee', 'rejete', 'rejetee', 'reclamation', 'reclamations',
+    'sinistre', 'sinistres', 'accidente', 'blesse', 'blessee', 'hospitalise', 'income', 'incomes', 'revenu', 'revenus', 'salary', 'wage', 'wages',
+    'we', 'us', 'our', 'ours', 'ourselves', 'nous', 'notre', 'nos', 'one', 'ones', 'someone', 'anyone', 'everyone', 'somebody', 'anybody', 'everybody', 'nobody', 'none', 'parents', 'parent', 'children', 'kids',
+    'people', 'couples', 'gens', 'enfants', 'proches', 'family members', 'relatives', 'relative', 'friend', 'friends', 'neighbour', 'neighbours', 'neighbor', 'neighbors', 'colleague', 'colleagues',
+    -- round 4 (S8): age, body measure, habit, pay / debt and applicant words an owner could still add
+    'aged', 'old', 'older', 'elderly', 'yes', 'weight', 'weights', 'weighs', 'height', 'tall', 'lbs', 'lb', 'kg', 'pounds', 'overweight', 'underweight', 'bmi', 'sober', 'sobriety', 'expecting', 'expectant', 'shrink',
+    'therapist', 'therapy', 'owes', 'owe', 'owed', 'owing', 'dui', 'dwi', 'earns', 'earn', 'earned', 'earning', 'earnings', 'figures', 'figure', 'applicant', 'applicants', 'smoke', 'smokes', 'smoked', 'smoking',
+    'vape', 'vapes', 'vaping', 'fume', 'fumer', 'fumes', 'gagne', 'gagnes', 'salaried', 'unemployed', 'jobless', 'bankrupt', 'arrears', 'overdue', 'gender', 'sex', 'sexe', 'race', 'religion', 'ethnicity', 'citizenship', 'ssn', 'nas']) then return true; end if;
+  if w ~ '^(diagnos|suffer|claim|underwrit)' then return true; end if;
+  if public.ws_name_word_hit(w) then return true; end if;
+  if p_health and public.ws_health_word_hit(w) then return true; end if;
+  return false;
+end $$;
+
+-- 6b. capitalised names. A vocabulary word that is also a given name or surname ("Will", "Page", "Sam", "Summer") is vocabulary when written in lower case, but a CAPITALISED
+--     occurrence is treated as a name and fails closed. p_strict (term management): hard names in any case, soft names whenever capitalised. Text: hard names whenever
+--     capitalised; soft names when capitalised in mid-sentence (not at the start of the text or of a sentence) or when the whole text has no lower-case letter.
+--     Round 4 (S5), text only: any vocabulary word can be a surname ("the Price family", "quote for Tailor", "call Day"), so three POSITIONS fail closed whatever the word is:
+--       * "<word> family" unless the word is a determiner / plain adjective (your, the, every, whole, new ...), and "famille <Capitalised word>";
+--       * "for <word>" / "pour <word>" closing a clause, unless the word is a plural or one of a short list (you, free, less, life, business, home ...);
+--       * a Capitalised word right after for / to / of / from / by / with / call / contact / ask / meet / email / text / tell / see (pour / de / avec / appelez / contactez), unless it is a
+--         place of the catalog, a province, a month, a weekday, a platform or a product-name word (Life, Insurance, Term ...), or the whole text is written In Title Case
+--         (then the two rules above are the only defence: a stated limit).
+create or replace function public.ws_capitalised_name(p_text text, p_strict boolean default false) returns boolean
+language plpgsql stable set search_path to 'pg_catalog' as $$
+declare lt text; caps_mid integer := 0; lower_long integer := 0; bad boolean := false; starts boolean; prevw text := '';
+        hard text[] := array['will', 'may', 'page', 'sam', 'don'];
+        soft text[] := array['star', 'stars', 'summer', 'spring', 'winter', 'sun', 'sat', 'wed', 'long', 'young', 'best', 'bill', 'bills', 'mo', 'fall'];
+        m text[]; w text; t text; lower_present boolean; toks text[] := '{}'; ntok integer; i integer;
+begin
+  -- the same normalisation as ws_fold_text, but case-preserving (zero-width and combining characters out, fullwidth / mathematical letters and look-alikes to Latin)
+  t := coalesce(p_text, '');
+  t := regexp_replace(t, '[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0]', '', 'g');
+  t := regexp_replace(t, '[\U000e0001\U000e0020-\U000e007f\U000e0100-\U000e01ef]', '', 'g');
+  t := normalize(t, nfkc);
+  t := normalize(t, nfd);
+  t := regexp_replace(t, '[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]', '', 'g');
+  t := translate(t, 'ΗΝΜΥΖΒΕΚΟΡΤΧΑΙАВЕКМНОРСТХУІЈЅ', 'HNMYZBEKOPTXAIABEKMHOPCTXYIJS');
+  t := translate(t, 'ıавекмнорстухіїјѕԁԛԝһӏүѡɑɡαβγεικνορτυχωϲϳςμη', 'iabekmhopctyxiijsdqwhlywagabyeikvoptuxwcjcun');
+  lower_present := t ~ '[a-z]';
+  for m in select g from regexp_matches(t, '(^|[.!?][ \t\n]+|[^A-Za-z])([A-Za-z]+)(?![A-Za-z])(?![''’]t(?![A-Za-z]))', 'g') as r(g) loop
+    w := lower(m[2]);
+    if p_strict and w = any (hard) then return true; end if;
+    if m[2] !~ '^[A-Z]' then continue; end if;
+    if w = any (hard) then return true; end if;
+    if w = any (soft) and (p_strict or not lower_present or not (m[1] = '' or m[1] ~ '^[.!?]')) then return true; end if;
+  end loop;
+  -- positions that are never modal or ordinary use, in ANY case: first or last word of the text, or right after for / to / of / from / beneficiary / named / by / with
+  for m in select g from regexp_matches(lower(t), '(^|[^a-z])([a-z]+)(?![a-z])(?![''’]t(?![a-z]))', 'g') as r(g) loop toks := toks || m[2]; end loop;
+  ntok := coalesce(cardinality(toks), 0);
+  for i in 1..ntok loop
+    if toks[i] = any (array['will', 'may', 'don', 'sam', 'bill', 'sun', 'sat', 'wed']) and (i = 1 or i = ntok) then return true; end if;     -- (seasons at an edge stay allowed: "Spring promo", "Summer sale")
+    if toks[i] = any (array['will', 'may', 'don', 'sam', 'bill', 'page', 'mo', 'sun', 'sat', 'wed', 'summer', 'spring', 'mark', 'rose', 'grace']) and i > 1 and toks[i - 1] = any (array['for', 'to', 'of', 'from', 'beneficiary', 'named', 'by', 'with']) then return true; end if;
+  end loop;
+  if p_strict then return false; end if;
+  lt := lower(t);
+  for m in select g from regexp_matches(lt, '(^|[^a-z])([a-z]+) +(family|famille)(?![a-z])', 'g') as r(g) loop
+    if m[2] <> all (array['your', 'the', 'a', 'an', 'every', 'each', 'whole', 'entire', 'new', 'for', 'of', 'to', 'and', 'or', 'with', 'by', 'from', 'as', 'protect', 'protects', 'protecting', 'canadian', 'local', 'growing',
+                          'big', 'small', 'large', 'busy', 'modern', 'working', 'single', 'this', 'that', 'any', 'all', 'no', 'more', 'votre', 'la', 'une', 'chaque', 'toute', 'pour', 'de', 'et', 'protegez', 'en']) then return true; end if;
+  end loop;
+  if t ~ '(^|[^A-Za-z])[Ff][Aa][Mm][Ii][Ll][Ll][Ee] +[A-Z][a-z]' then return true; end if;
+  for m in select g from regexp_matches(lt, '(^|[^a-z])(for|pour) +([a-z]+) *($|[.,;:!?])', 'g') as r(g) loop
+    if m[3] !~ 's$' and m[3] <> all (array['you', 'free', 'less', 'life', 'business', 'home', 'travel', 'work', 'sale', 'today', 'now', 'more', 'all', 'it', 'this', 'that', 'canada', 'ontario', 'quebec', 'alberta', 'manitoba',
+                                          'saskatchewan', 'retirement', 'everything', 'coverage', 'protection', 'insurance', 'security', 'auto', 'car', 'real', 'sure', 'good', 'vous', 'tous', 'toutes', 'moins', 'tout', 'toujours', 'vrai']) then return true; end if;
+  end loop;
+  if lower_present then
+    for m in select g from regexp_matches(t, '(^|[.!?:;][ \t\n]+|["(\n•*-] ?|[^A-Za-z])([A-Za-z]+)', 'g') as r(g) loop
+      starts := m[1] = '' or m[1] ~ '^[.!?:;"(\n•*-]';
+      w := lower(m[2]);
+      if m[2] ~ '^[A-Z]' and not starts then
+        if m[2] ~ '^[A-Z]{2,}$' then prevw := w; continue; end if;
+        caps_mid := caps_mid + 1;
+        if prevw = any (array['for', 'to', 'of', 'from', 'by', 'with', 'call', 'contact', 'ask', 'meet', 'email', 'text', 'tell', 'see', 'pour', 'de', 'avec', 'appelez', 'contactez'])
+           and w <> all (array['canada', 'canadian', 'canadians', 'canadien', 'canadiens', 'canadienne', 'canadiennes', 'ontario', 'quebec', 'alberta', 'british', 'columbia', 'manitoba', 'saskatchewan', 'newfoundland', 'labrador',
+                           'nova', 'scotia', 'brunswick', 'territories', 'january', 'february', 'march', 'april', 'june', 'july', 'august', 'september', 'october', 'november', 'december', 'janvier', 'fevrier', 'mars', 'avril',
+                           'mai', 'juin', 'juillet', 'aout', 'septembre', 'octobre', 'novembre', 'decembre', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'mon', 'tue', 'thu', 'fri',
+                           'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche', 'meta', 'google', 'facebook', 'instagram', 'tiktok', 'linkedin', 'youtube', 'i', 'faq',
+                           'insurance', 'insurances', 'assurance', 'assurances', 'life', 'term', 'whole', 'universal', 'health', 'dental', 'disability', 'critical', 'illness', 'travel', 'home', 'auto', 'car', 'mortgage',
+                           'group', 'benefits', 'coverage', 'protection', 'plan', 'plans', 'policy', 'vie', 'invalidite', 'sante', 'maladie', 'maladies', 'grave', 'graves', 'dentaire', 'voyage', 'collective', 'temporaire', 'permanente',
+                           'habitation', 'hypothecaire', 'accident', 'income', 'medical', 'exam', 'care', 'long', 'final', 'expense', 'key', 'person', 'business', 'pet', 'tenant', 'condo', 'commercial', 'liability', 'cyber'])
+           and not exists (select 1 from public.ws_place_catalog c where w = any (string_to_array(c.name_norm, ' '))) then bad := true; end if;
+      elsif m[2] ~ '^[a-z]' and length(m[2]) >= 4 then lower_long := lower_long + 1;
+      end if;
+      prevw := case when starts and m[1] <> '' then '' else w end;
+    end loop;
+    if bad and not (caps_mid >= 2 and lower_long = 0) then return true; end if;
+  end if;
+  return false;
+end $$;
+
+-- 6c. spelled-out number words (en, fr), as one regular-expression alternation. One place, so every rule counts the same words.
+create or replace function public.ws_number_words() returns text
+language sql immutable set search_path to 'pg_catalog' as $$
+  select 'zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|deux|trois|quatre|cinq|sept|huit|neuf|dix|onze|douze|treize|quatorze|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent|cents|mille|milles|millions'::text;
+$$;
+
+-- 6d. FINANCIAL AND APPLICATION DETAIL (review round 4, B1 / S6; round 5, RV17-D B1). Fails closed: in insurance-context text an amount of money is refused unless it is one of two marketing forms:
+--       a PRICE PER MONTH    "from $18 a month", "only $25/month", "des 25 $ par mois", "$25/month"   (lead word, at most 3 digits, per month only; never per day, week, hour or year)
+--       a COVERAGE CEILING   "up to $500,000", "jusqu'a 1 000 000 $"                              (the words "up to" / "jusqu'a", a round number of thousands, then the end of the clause or the
+--                                                                                                 word coverage / couverture / protection: nothing else, never a period word)
+--     Refused whatever the other words are: any other currency amount ("$85,000", "45000 $", "85k", "$30/hour"), a spelled-out magnitude (hundred, thousand, million, mille, cent),
+--     a number word next to a period ("fifty a year", "six monthly"), a spelled-out age ("age forty five", "you are forty five", any "forty five"-style compound), payment-trouble wording
+--     (late on, behind on / with, fell behind, in default, missed payments, unemployed, bankrupt, "no savings", "a large loan", "makes less than", "a good living"), and
+--     round 5: ANY number (no currency sign needed, any grouping, '#' or '+' included) next to a period, either order ("85,000 a year", "6,500 monthly", "4,200 every two weeks", "85 000 par an");
+--     (p_strict, a single value) a pay / debt / benefit / savings / receive word (pay, makes, earns, salary, paycheque, mortgage, loan, debt, tax, cash, rent, job, budget, savings, benefits,
+--     pension, retirement, "you get", receives, take home ...) in the same value as ANY amount or number; (not p_strict: the all-columns scan of a row) a period in one column and a
+--     number in another ("you get more than 85,000" + "a year"), and "your / votre ..." + a pay / debt word with any amount in the row ("your mortgage" + "from $999 a month").
+--     Input: a folded view (approved terms already cut out). Never echoes. The joined all-columns scan passes p_strict = false (a product price in one column next to "mortgage" in another is normal ad copy).
+create or replace function public.ws_financial_hit(p_fold text, p_strict boolean default true) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare n text; m text; nw text := '(?:' || public.ws_number_words() || ')';
+        amt text := '(?:\$ ?[0-9]{1,3}(?:[.,][0-9]{2})?|[0-9]{1,3}(?:[.,][0-9]{2})? ?\$)';
+        num text := '[0-9#](?:[0-9 ,.]*[0-9])?\+?';
+        per text := '(?:(?:(?:a|an|per|par|each|every|/|de l|l) ?(?:years?|yrs?|months?|mos?|weeks?|wks?|days?|an|ans|annees?|mois|semaines?|jours?|heures?|hours?|hrs?)'
+                    || '|monthly|yearly|annually|annual|weekly|daily|biweekly|bi-weekly|fortnightly|hourly|mensuel[a-z]*|annuel[a-z]*|hebdomadaire[a-z]*|quotidien[a-z]*'
+                    || '|every (?:two|2|other|second|few) (?:weeks?|months?)|toutes les (?:deux|2) semaines)(?![a-z]))';
+        tens text := 'twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|vingt|trente|quarante|cinquante|soixante';
+        units text := '(?:one|two|three|four|five|six|seven|eight|nine|un|une|deux|trois|quatre|cinq|six|sept|huit|neuf)';
+        payw text := '(?:pay|pays|paid|paying|payez|paye|payes|payer|make|makes|made|making|earn[a-z]*|gagne[a-z]*|salar[a-z]*|wages?|paycheques?|paychecks?|paystubs?|mortgages?|hypothe[a-z]*|'
+                     || 'loans?|prets?|debts?|dettes?|owe[sd]?|owing|doit|tax|taxes|impots?|cash|rent|loyer|job|jobs|emploi|worth|net|gross|brut|hourly|income|incomes|revenus?|'
+                     || 'budget|budgets|savings|saved|epargnes?|economies|benefits?|prestations?|pensions?|retirement|retraite|allowances?|allocations?|inheritance|heritage|assets|actifs|'
+                     || 'gets|receives?|received|receiving|recevez|recoi[st]|recevoir|touchez|touche|touches|take home|takes home|took home|you get|you ll get|you will get|you re getting|vous obtenez)';
+begin
+  n := ' ' || translate(coalesce(p_fold, ''), '€£¥', repeat(chr(36), 3)) || ' ';
+  n := regexp_replace(replace(n, '''', ' '), '[[:space:]]+', ' ', 'g');
+  n := replace(n, ' pour cent', ' %');
+  -- the two allowed forms become placeholders (round 5: a price is per MONTH only)
+  n := regexp_replace(n, '([^a-z0-9$])(from|only|just|at|for|as low as|starting at|starts at|under|less than|about|des|a partir de|pour|seulement|moins de) ' || amt
+                         || ' ?(?:(?:/|per|a|an|par|each|every) ?)?(?:mo|month|mois|monthly)(?![a-z0-9])', '\1 zzprice ', 'g');
+  n := regexp_replace(n, '([^a-z0-9$,.])\$ ?[0-9]{1,3}(?:[.,][0-9]{2})? ?/ ?(?:mo|month|mois)(?![a-z0-9])', '\1 zzprice ', 'g');
+  n := regexp_replace(n, '([^a-z0-9$])(up to|jusqu a|jusqu au) (?:\$ ?[1-9][0-9]{0,2}(?:,000){1,2}|[1-9][0-9]{0,2}(?: 000){1,2} ?\$)(?![0-9k]|[,.][0-9])', '\1 zzcov ', 'g');
+  if n ~ '\$|[0-9] ?(?:dollars?|cad|usd|euros?|bucks|piastres?|grand|k)(?![a-z0-9])' then return true; end if;
+  -- round 5: a coverage ceiling is followed by the end of the clause or by a coverage word, nothing else ("up to $85,000 a year", "up to $412,000 on the home": refused)
+  if n ~ 'zzcov(?! *(?:[.,;:!?)]|$)| (?:in |of |de |en |d )?(?:coverage|couverture|protection)(?![a-z]))' then return true; end if;
+  -- round 5: ANY number next to a period, either order, no currency sign needed ("85,000 a year", "6,500 monthly", "#850 weekly", "4 200 par mois", "annually: over 85,000")
+  if n ~ ('(?:^|[^0-9a-z])' || num || ' ?[.,:;-]? ?' || per)
+     or n ~ ('[^a-z]' || per || ' ?(?:[:=]|is|of|de|est) ?(?:over |more than |plus de |about |around |at least |au moins )?' || num || '(?![0-9])') then return true; end if;
+  -- a spelled-out COUNT of things ("over ten thousand families", "plus de mille clients"): the words over / more than, number words, then a plural noun that is not money or time
+  n := regexp_replace(n, '([^a-z])(over|more than|plus de) ' || nw || '(?: ' || nw || ')* (?!dollars|bucks|years|months|weeks|hours|days|piastres|euros|ans|mois|cents)(?=[a-z]+s[^a-z])', '\1\2 zzcount ', 'g');
+  if n ~ '[^a-z](?:hundred|thousand|million|billion|mille|milles|millions|millier|milliers|cent|cents)(?![a-z])' then return true; end if;
+  if n ~ ('[^a-z]' || nw || '(?:[ -]+' || nw || ')*[ -]+(?:(?:a|an|per|par|each|every|de l|l) )?(?:year|yr|month|week|hour|an|annee|mois|semaine|heure)(?![a-z])(?! (?:term|terme|plan|guarantee|garantie|renewable|renouvelable))')
+     or n ~ ('[^a-z]' || nw || ' (?:yearly|monthly|weekly|annually|hourly|biweekly)(?![a-z])') then return true; end if;
+  if n ~ ('[^a-z](?:age|aged|ages|agee|agees)[^a-z0-9]{0,3}(?:de )?' || nw || '(?![a-z])')
+     or n ~ ('[^a-z]' || nw || '(?:[ -]+' || nw || ')?[ -]+(?:years?|yrs?|ans)[ -]+(?:old|olds)(?![a-z])') then return true; end if;
+  -- round 5: a spelled-out age without the word "age": a compound ("forty five", "quarante-cinq"), or a tens / teens word after "you are" / "is" / "turning" / "vous avez"
+  if n ~ ('[^a-z](?:' || tens || ')[ -]+(?:et )?' || units || '(?![a-z])')
+     or n ~ ('[^a-z](?:you are|you re|youre|is|turning|turned|vous avez|tu as|il a|elle a|j ai) (?:ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|' || tens || ')(?![a-z])') then return true; end if;
+  if n ~ ('[^a-z](?:(?:months?|weeks?|days?|payments?|mois|semaines?|paiements?) (?:late|behind|overdue|en retard)|late on|behind on|overdue|en retard|past due|arrears|arrerages|'
+          || 'missed (?:[a-z]+ ){0,2}payments?|laid off|out of work|unemployed|sans emploi|chomage|bankrupt[a-z]*|faillite|foreclos[a-z]*|garnish[a-z]*|collections agency)(?![a-z])') then return true; end if;
+  -- round 5: payment trouble and money circumstances without an amount ("behind with the mortgage", "the mortgage is behind", "no savings", "a large loan", "makes less than", "a good living")
+  if n ~ ('[^a-z](?:behind (?:with|in|on)|(?:is|are|am|was|were|be|been|fell|falling|fall|falls|get|gets|got|getting) behind|(?:is|are|am|was|were) late|late (?:with|paying|payments?|on)|in default|default(?:ed|ing|s)? on|'
+          || 'delinquen[a-z]*|en defaut|retard de paiement|missed (?:a |the |your |their |his |her |my )?(?:payments?|rent|installments?)|'
+          || '(?:no|zero|little|without|sans|pas d|aucune?|not much|any) (?:savings|epargnes?|economies|income|revenus?|pension|retirement savings|job|emploi|benefits|assets)|'
+          || '(?:large|big|huge|massive|heavy|small|giant|gros|grosse|grosses|lourde?s?) (?:loans?|debts?|mortgages?|prets?|dettes?|hypotheques?)|'
+          || '(?:make|makes|made|making|earn[a-z]*|gagne[a-z]*) (?:less|more) than|(?:make|makes|made|making|earn[a-z]*) a (?:good|decent|great|modest|comfortable|nice|solid|small|low|high) (?:living|salary|wage|income))(?![a-z])') then return true; end if;
+  m := regexp_replace(n, '([^0-9])24 ?/ ?7([^0-9])', '\1 \2', 'g');
+  m := regexp_replace(m, '([^0-9])(?:19|20)[0-9]{2}([^0-9])', '\1 \2', 'g');
+  m := regexp_replace(m, '[0-9]+ ?-? ?(?:minutes?|mins?|hours?|heures?|days?|jours?|seconds?|secondes?|steps?|etapes?|reasons?|raisons?|stars?|etoiles?|tips?|conseils?)(?![a-z])', ' ', 'g');
+  if not p_strict then
+    -- the all-columns scan of a row (round 5): a period in one column and a money-sized number in another ("you get more than 85,000" + "a year"), and a possessive pay / debt word next to any
+    -- amount in the row ("your mortgage" + "from $999 a month")
+    if m ~ ('[^a-z]' || per) and m ~ '[0-9]{3}|[0-9][ ,.][0-9]{3}|zzcov|[^a-z](?:hundred|thousand|million|mille|cent)' then return true; end if;     -- (a money-sized number: a short date or count is not)
+    if n ~ ('[^a-z](?:your|you|votre|vos|ton|ta|tes|his|her|their|leur|leurs|son|sa|ses) (?:[a-z]+ )?' || payw || '(?![a-z])') and m ~ 'zzprice|zzcov|zzcount|[0-9]{3}|[0-9][ ,.][0-9]{3}|%' then return true; end if;
+  elsif n ~ ('[^a-z]' || payw || '(?![a-z])') then
+    if m ~ ('zzprice|zzcov|zzcount|%|[0-9]|[^a-z]' || replace(nw, '|one|', '|') || '(?![a-z])') then return true; end if;      -- ("one" alone is a pronoun far more often than a number)
+  end if;
+  return false;
+end $$;
+
+-- 6e. APPROVED FEATURE PHRASES can never state a fact about a person (review round 4, B2). Input: the folded residual, where a feature phrase that names a condition is the token
+--     <marker>c and any other feature phrase ("no medical exam") is <marker>f. Returns false (= refuse) when
+--       * any feature phrase touches (over punctuation only) a second-person, possessive, family, having, negation, affirmation or answer word, or a check mark / star / arrow / thumb
+--         ("sans" / "without" may touch a plain feature such as "examen medical", never a condition-naming one);
+--       * a CONDITION-NAMING phrase stands in a value that is not a plain coverage template: besides product terms and the phrase itself only the words
+--         covers / coverage / protection / against / in case of / and / or / plus / including (fr: couvre / couverture / contre / en cas de / et / ou / y compris) and , . : ; - may appear;
+--       * (p_joined: the all-columns scan of a row) a condition-naming phrase shares the ROW with such a word, a symbol, a digit or a number word in any other column.
+create or replace function public.ws_feature_context_ok(p_r text, p_marker text, p_joined boolean) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare v text := replace(coalesce(p_r, ''), '''', ' '); fc text := p_marker || 'c'; fm text := p_marker || 'f'; mk text; n integer;
+        deny text := '(?:you|your|yours|yourself|u|ur|vous|votre|vos|tu|ton|ta|tes|toi|have|has|had|having|got|avez|avoir|ai|as|family|families|famille|familles|familial|familiaux|no|not|non|none|never|pas|aucun|aucune|'
+                     || 'jamais|yes|oui|yep|yeah|true|false|vrai|faux|zero|nil|free|any|all|some|both|neither|either|first|age|aged|ages|n|y|ok|today|now|current|currently|since|depuis|last|ago|history|historique|antecedents|who|qui|is|are|was|were|est|sont|x)';
+        -- the words that make a statement about someone wherever they stand in the ROW (the generic ones above, such as free / any / today, only count when they touch the phrase)
+        deny_row text := '(?:you|your|yours|yourself|u|ur|vous|votre|vos|tu|ton|ta|tes|toi|have|has|had|having|got|avez|avoir|ai|family|families|famille|familles|familial|familiaux|without|sans|no|not|non|none|never|pas|aucun|aucune|'
+                     || 'jamais|yes|oui|yep|yeah|true|false|vrai|faux|zero|nil|neither|age|aged|ages|n|y|ok|since|depuis|ago|history|historique|antecedents)';
+        decor text := '[✅⭐✔✓★→✨☑✗✘❌❎' || chr(128077) || chr(128078) || ']';
+        tmpl text[] := array['covers', 'cover', 'covered', 'coverage', 'protection', 'protects', 'against', 'and', 'or', 'plus', 'including', 'includes', 'include', 'in', 'case', 'of', 'the', 'a', 'an',
+                             'couvre', 'couvrent', 'couverture', 'contre', 'et', 'ou', 'y', 'compris', 'inclus', 'inclut', 'en', 'cas', 'de', 'd', 'le', 'la', 'les', 'l', 'un', 'une'];
+begin
+  mk := '(?:' || fc || '|' || fm || ')(?![a-z0-9])';
+  if v !~ ('(^|[^a-z0-9])' || mk) then return true; end if;
+  if v ~ ('(^|[^a-z0-9])' || fc || '(?![a-z0-9])[^a-z0-9]*(?:without|sans)(?![a-z0-9])') or v ~ ('(^|[^a-z0-9])(?:without|sans)[^a-z0-9]*' || fc || '(?![a-z0-9])') then return false; end if;
+  if v ~ ('(^|[^a-z0-9])' || mk || '[^a-z0-9✅⭐✔✓★→✨☑✗✘❌❎' || chr(128077) || chr(128078) || ']*(?:' || decor || '|' || deny || '(?![a-z0-9]))')
+     or v ~ ('(?:' || decor || '|(?:^|[^a-z0-9])' || deny || ')[^a-z0-9✅⭐✔✓★→✨☑✗✘❌❎' || chr(128077) || chr(128078) || ']*' || mk) then return false; end if;
+  if v !~ ('(^|[^a-z0-9])' || fc || '(?![a-z0-9])') then return true; end if;
+  if p_joined then
+    return not (v ~ decor or v ~ '[0-9]' or v ~ ('(^|[^a-z0-9])' || deny_row || '(?![a-z0-9])') or v ~ ('(^|[^a-z])(?:' || public.ws_number_words() || ')(?![a-z])'));
+  end if;
+  select count(*) into n from regexp_matches(v, '[a-z0-9]+|[^a-z0-9 ]', 'g') as m(g)
+   where not (m.g[1] = p_marker or m.g[1] = fc or m.g[1] = fm or m.g[1] = any (tmpl) or m.g[1] ~ '^[.,;:-]$');
+  return n = 0;
+end $$;
+
+-- 7. the default-deny vocabulary test. Input: the folded residual (approved terms already cut out and replaced by p_marker, never re-joined). Returns the reason codes
+--    (empty array = every token is vocabulary, an allowed number FORM, or simple punctuation). Never echoes the text.
+--    Numbers: a bare number is NOT vocabulary. Only these forms are allowed: an amount of money in one of the two forms of ws_financial_hit, a percentage, #N, "in N minutes", N in M, 24/7, N days/hours (a fixed
+--    list of marketing numbers), "30 year term", "20 years of experience", an age RANGE ("ages 18 to 65", at least 15 years wide).
+--    Spelled-out numbers: 4+ number words anywhere, or 3 in a row ("zero four six"), fail. A yes/no/none answer straight after an approved term ("cancer: no") fails.
+--    Round 4: an application-form shape fails whatever its words are: a one-word label and a colon ("beneficiary: ...", "age: ...", "family: ..."), and a bare answer after a colon,
+--    question mark or dash ("exam: no", "have life insurance: no"). A month and a day is a number form only as a deadline ("before December 31"), never as "policy date march 3".
+create or replace function public.ws_residual_check(p_r text, p_marker text) returns text[]
+language plpgsql stable set search_path to 'pg_catalog' as $$
+declare v text := coalesce(p_r, ''); codes text[] := '{}'; n integer; tmp text; m text[]; hrs boolean; fm text := p_marker || 'f'; pm text := p_marker || 'p'; cm text := p_marker || 'c';
+        nw text := public.ws_number_words();
+        neg text := 'no|not|non|oui|yes|pas|none|never|nope';
+        mon text := 'january|february|march|april|june|july|august|september|october|november|december|janvier|fevrier|mars|avril|juin|juillet|aout|septembre|octobre|novembre|decembre|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec';
+begin
+  v := translate(translate(v, '«»“”„•·‣', '"""""   '), '€£', chr(36) || chr(36));
+  -- application-form shapes: a one-word field label and a colon / equals sign at the start of the text or of a clause; a bare answer after a colon, question mark or dash
+  if v ~ ('(^|[.;,!?] *)(beneficiary|beneficiaries|beneficiaire|beneficiaires|insurer|insured|assureur|assure|exam|examen|age|ages|family|famille|plan|premium|prime|coverage|couverture|term|terme|policy|police|amount|montant|'
+          || 'pay|mortgage|loan|budget|job|date|renewal|application|payment|paiement|rate|taux|home|car|auto|status|cash|tax|owner|employer|employeur|smoker|height|weight|gender|sex|sexe|dob|income|revenu) *[:=]')
+     or v ~ '[:=?] *(no|non|none|not|never|pas|aucun|aucune|yes|oui|n|y|true|false|zero|nil|nope|ok|n/a|na) *([.,;!)]|$)'
+     or v ~ ' - *(no|non|none|yes|oui|n|y|true|false|zero|nil|nope|ok) *([.,;!)]|$)' then
+    codes := codes || array['unknown_word'];
+  end if;
+  -- a short whitelist of purely decorative symbols (check mark, star, sparkles, thumbs up, arrow); every other symbol or emoji is refused
+  v := regexp_replace(translate(v, '✅⭐✔✓★→✨', '       '), chr(128077), ' ', 'g');
+  -- negated ability and need ("can't work", "can not pay bills", "needs care"): narrative about a person, never marketing. Checked before apostrophes are split off.
+  if v ~ '(^|[^a-z])(can ?not|cannot|can['' ]?t|could ?not|couldn[''’ ]?t|unable to|not able to|won[''’ ]?t|will not)( +[a-z]+)? +(work|walk|pay|afford|move|see|hear|speak|breathe|stand|drive|eat|sleep|care|cope|bills)([^a-z]|$)'
+     or v ~ '(^|[^a-z])needs? +(care|surgery|treatment|dialysis|medication|assistance|a doctor)([^a-z]|$)' then
+    codes := codes || array['unknown_word'];
+  end if;
+  v := regexp_replace(v, '(^|[^a-z0-9])(l|d|c|n|s|qu|jusqu|lorsqu|puisqu)''(?=[a-z0-9])', '\1\2 ', 'g');   -- French elision: l'assurance -> l assurance
+  v := regexp_replace(v, '([a-z])''(s|t|ll|re|ve|d)(?![a-z0-9])', '\1 ', 'g');                              -- Canada's, don't
+  v := replace(v, '''', ' ');                                                                                -- any other apostrophe (j'ai) just splits the word
+  if v ~ '[^ -~]' then
+    codes := codes || array['unknown_word', 'non_latin_script'];
+    if v ~ '[a-z]' then codes := codes || array['mixed_script']; end if;
+  end if;
+  if v like '%zznum%' then codes := codes || array['unknown_word']; end if;
+  tmp := regexp_replace(v, '(^|[^0-9])24 ?/ ?7([^0-9]|$)', '\1 \2', 'g');
+  if v ~ '[a-z0-9]@|@[a-z0-9]' or v ~ '[a-z0-9&]&|&[a-z0-9#]' or v ~ '(^|[^0-9 ])%' or v ~ '(^|[^0-9]) +%' or v ~ '%[0-9a-f]{2}' or v ~ '(^|[^0-9])\+'
+     or tmp ~ '(^|[^0-9a-z.,])[0-9]+ ?/ ?[0-9]+([^0-9a-z]|$)' then
+    codes := codes || array['unknown_word', 'encoded_text'];
+  end if;
+  -- allowed number forms become the placeholder token zznum; anything numeric that is left is an unknown word
+  if v ~ '[0-9]' then
+    hrs := v ~ '(^|[^a-z])(hours?|heures?|open|opening|ouverts?|ouverture|monday|friday|lundi|vendredi|weekdays|saturday|samedi)([^a-z]|$)' or position(pm in v) > 0;
+    v := regexp_replace(v, '(^|[^0-9])24 ?/ ?7([^0-9]|$)', '\1 zznum \2', 'g');
+    -- (an amount of money that reaches this point is one of the two allowed forms: ws_financial_hit refused every other amount before this function was called)
+    v := regexp_replace(v, '(^|[^0-9,.])[0-9]{1,3}( 000){1,2} ?\$', '\1 zznum ', 'g');
+    v := regexp_replace(v, '\$ ?[0-9][0-9,.]*k?', ' zznum ', 'g');
+    v := regexp_replace(v, '[0-9][0-9,.]*k? ?\$', ' zznum ', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]{1,3}\+? +(insurers|assureurs|providers|companies|carriers|compagnies|plans|options|quotes|soumissions)([^a-z]|$)', '\1 zznum \2\3', 'g');
+    v := regexp_replace(v, '[0-9][0-9,.]* ?%', ' zznum ', 'g');
+    v := regexp_replace(v, '#[0-9]+', ' zznum ', 'g');
+    v := regexp_replace(v, '(^|[^a-z0-9])(in|within|under|than|en|dans|sous|de) +[0-9]+ ?(minutes?|mins?|hours?|hrs?|heures?|days?|jours?|seconds?|secondes?)([^a-z]|$)', '\1\2 zznum \4', 'g');
+    v := regexp_replace(v, '(^|[^a-z0-9])(24|48|72|7|14|15|21|30|60|90|365) ?-? ?(days?|jours?|hours?|heures?|hrs?)([^a-z]|$)', '\1 zznum \4', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]+ in [0-9]+([^0-9a-z]|$)', '\1 zznum \2', 'g');
+    v := regexp_replace(v, '(^|[^a-z])(before|until|till|by|ends|ending|avant) +(' || mon || ') +([1-9]|[12][0-9]|3[01])([^0-9a-z]|$)', '\1\2 \3 zznum \5', 'g');
+    v := regexp_replace(v, '(^|[^a-z])(avant le|jusqu au|d ici le) +([1-9]|[12][0-9]|3[01]) +(' || mon || ')([^a-z]|$)', '\1\2 zznum \4\5', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]{1,3} ?-? ?(minutes?|mins?|seconds?|secs?|secondes?) ', '\1 zznum ', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]+ ?-? ?(years?|yrs?|ans?|annees?) ?(term|terme|plan|coverage|couverture|renewable|renouvelable|guarantee|garantie|level)([^a-z]|$)', '\1 zznum \3\4', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])(5|10|15|20|25|30|35|40) ?-? ?(years?|yrs?|ans?) +(' || p_marker || ')([^a-z]|$)', '\1 zznum \4\5', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]+ ?\+? ?(years?|ans) (of experience|d experience|in business|of service|de service|serving)', '\1 zznum \3', 'g');
+    v := regexp_replace(v, '(^|[^a-z])(top|meilleurs?) +[0-9]{1,2}([^0-9a-z]|$)', '\1 zznum \3', 'g');
+    v := regexp_replace(v, '(^|[^0-9a-z])[0-9]{1,2} +(reasons?|raisons?|stars?|etoiles?|steps?|etapes?|tips?|conseils?|astuces?|ways|mistakes|myths|questions?)([^a-z]|$)', '\1 zznum \2\3', 'g');
+    -- round 5 (RV17-D B1): "over / more than / plus de N" is a number form only as a COUNT of customers ("over 5,000 families"); "savings over 250,000", "over 85,000 on the house" stay numbers
+    v := regexp_replace(v, '(^|[^a-z])(over|more than|plus de|plus d|plus que) +([0-9]{1,3}([, ][0-9]{3})+|[0-9]{3,})\+? +(families|clients|customers|canadians|policyholders|members|businesses|households|reviews|familles|canadiens|membres|entreprises|avis)([^a-z]|$)', '\1\2 zznum \5\6', 'g');
+    v := regexp_replace(v, '(^|[^a-z])(since|depuis) +(19|20)[0-9]{2}([^0-9]|$)', '\1\2 zznum \4', 'g');
+    -- an age RANGE: "ages 18 to 65" (round 5: "and" / "et" join two ages, not a range, and both bounds are round: 18, 19, 21 or a multiple of 5)
+    for m in select g from regexp_matches(v, '((?:ages?|aged) +([0-9]{1,2}) ?(?:-|to|a) ?([0-9]{1,2}))(?![0-9])', 'g') as r(g) loop
+      if abs(m[3]::integer - m[2]::integer) >= 15 and m[2]::integer >= 18 and m[3]::integer > m[2]::integer
+         and (m[2]::integer in (18, 19, 21) or m[2]::integer % 5 = 0) and m[3]::integer % 5 = 0 then v := replace(v, m[1], ' zznum '); end if;
+    end loop;
+    if hrs then   -- opening hours: "9 to 5", "9am - 5pm", "9h a 17h", only next to an hours word or a fixed phrase such as Mon-Fri
+      v := regexp_replace(v, '(^|[^0-9a-z])([0-9]|1[0-9]|2[0-4])(:[0-5][0-9])? ?(am|pm|h)? ?(-|to|a|et|and) ?([0-9]|1[0-9]|2[0-4])(:[0-5][0-9])? ?(am|pm|h)?([^0-9a-z]|$)', '\1 zznum \9', 'g');
+      v := regexp_replace(v, '(^|[^0-9a-z])([0-9]|1[0-9]|2[0-4])(:[0-5][0-9])? ?(am|pm|h)([^a-z]|$)', '\1 zznum \5', 'g');
+    end if;
+  end if;
+  -- spelled-out numbers: four or more number words anywhere in the text (also across punctuation: "nine nine nine, nine nine nine")
+  select count(*) into n from regexp_matches(v, '(^|[^a-z])(' || nw || ')(?![a-z])', 'g');
+  if n >= 4 or v ~ ('(^|[^a-z])(' || nw || ')([ ,.;:/-]+(' || nw || ')){2}(?![a-z])') then codes := codes || array['unknown_word']; end if;
+  -- yes / no / none next to an approved feature phrase, on either side, over any punctuation ("cancer? no", "(no)", "no heart attack")
+  if v ~ ('(' || fm || '|' || cm || ')[^a-z0-9]*(' || neg || ')([^a-z]|$)') or v ~ ('(^|[^a-z])(' || neg || ')[^a-z0-9]*(' || fm || '|' || cm || ')') then codes := codes || array['unknown_word']; end if;
+  select count(*) into n from regexp_matches(v, '[a-z0-9]+(?:[.,][0-9]+)*|[^a-z0-9 ]', 'g') as m(g)
+   where not (m.g[1] = p_marker or m.g[1] = fm or m.g[1] = pm or m.g[1] = cm
+              or m.g[1] = 'zznum'
+              or m.g[1] ~ '^[.,;:!?"()/%$|#+&@-]$'
+              or exists (select 1 from public.ws_marketing_vocab w where w.word = m.g[1] and w.removed_at is null));
+  if n > 0 then codes := codes || array['unknown_word']; end if;
+  select coalesce(array_agg(distinct c order by c), '{}') into codes from unnest(codes) c;
+  return codes;
+end $$;
+
+-- 8. insurance-context helpers. A word that marks the text as insurance-related (any obfuscation view), and the row-level test the guards use.
+create or replace function public.ws_text_insurance_word(p_fold text, p_l1 text, p_l2 text) returns boolean
+language plpgsql immutable set search_path to 'pg_catalog' as $$
+declare x text; kc text;
+begin
+  foreach x in array array[coalesce(p_fold, ''), coalesce(p_l1, ''), coalesce(p_l2, '')] loop
+    kc := regexp_replace(x, '[^a-z0-9]', '', 'g');
+    if kc ~ '(insur|assuranc|underwrit|beneficiar|annuit|indemnit|versicher|seguro|assicura|sigorta)' then return true; end if;
+  end loop;
+  return false;
+end $$;
+
+-- S3 (review round 4): the insurance screen no longer depends on what a free-text, nullable label happens to say. A workspace gets the insurance screen UNLESS its vertical is exactly
+-- one of the verticals this system knows to be something else (today: 'mortgage', the only other vertical with an onboarding template). NULL, blank, misspelled, unknown, new: insurance
+-- screen (fail closed). A new non-insurance vertical is added here, by a migration, never by naming a workspace.
+-- Round 5 (N1), the documented normalisation, and the only one: lower() and trimming of ASCII spaces at both ends. So 'mortgage', 'Mortgage', 'MORTGAGE' and ' mortgage ' are the mortgage
+-- vertical; everything else is compared EXACTLY: no Unicode folding, so a tab, a newline, a non-breaking space, a Cyrillic look-alike, fullwidth letters, a soft hyphen, 'mortgages' or
+-- 'mortgage-broker' are not 'mortgage' and get the insurance screen (fail closed).
+create or replace function public.ws_vertical_insurance(p_vertical text) returns boolean
+language sql immutable set search_path to 'pg_catalog' as $$
+  select lower(btrim(coalesce(p_vertical, ''), ' ')) <> all (array['mortgage']);
+$$;
+
+create or replace function public.ws_insurance_context(p_text text, p_ws uuid) returns boolean
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare vert text; hit boolean;
+begin
+  -- WORKSPACE level (p_text is not consulted): every free-text column of a row in a workspace whose vertical is not a known non-insurance vertical, or in a workspace that holds
+  -- an approved product term, is insurance context, whatever the words are. A workspace id that does not exist is insurance context too (fail closed).
+  -- No workspace at all (the strict screen of ws_classify_text(text)) is not: that caller asked for the old screen.
+  if p_ws is null then return false; end if;
+  select true, vertical into hit, vert from public.client_workspaces where id = p_ws;
+  if hit is not true then return true; end if;
+  if public.ws_vertical_insurance(vert) then return true; end if;
+  return exists (select 1 from public.ws_approved_terms where removed_at is null and kind = 'product' and (workspace_id = p_ws or (vert is not null and vertical = vert)));
+end $$;
+
+-- 9. THE classifier core. Never echoes the text. Reasons are fixed codes: the old category names, plus
+--    health:no_approved_term / health:residual / health:personal_context / identifier / insurance_identifier / unknown_word / non_latin_script / mixed_script / encoded_text /
+--    financial_detail / approved_product_term / approved_feature / approved_place / insurance_vocabulary.
+--    p_row_ctx: the guards pass true for every free-text column of a row when ANY column of that row is insurance-context. p_joined: the all-columns-joined scan (split values):
+--    categories, health, identifiers, amounts, feature-phrase context and spelled-out digit groups, no vocabulary test (the columns were each tested on their own).
+--    p_person: the row belongs to a PERSON table (leads, routing, consent) of an insurance workspace: same default-deny screen, but no feature-phrase waiver and no 'your income' waiver.
+drop function if exists public.ws_classify_core(text, uuid, boolean, boolean);   -- the 4-argument version of earlier review rounds, if a scratch database has it
+create or replace function public.ws_classify_core(p_text text, p_ws uuid, p_row_ctx boolean, p_joined boolean, p_person boolean default false) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare
+  f text; l1 text; l2 text; r text; r1 text; r2 text; prev text; rx text; tr record; vert text; marker text; before_r text; fx text; ct text; cf text; mk text;
+  cats_s text[] := '{}'; allc text[]; hh text[]; health boolean := false; health0 boolean; inc boolean := false; x text; res text[];
+  n_prod integer := 0; n_place integer := 0; n_feat integer := 0; n_phr integer := 0; ctx boolean := false; cut boolean := false; pass integer; word_ctx boolean; views text[]; ex text[]; nm boolean; is_cond boolean;
+  prodwords text[] := array['health', 'medical', 'dental', 'disability', 'disabilities', 'critical', 'illness', 'illnesses', 'accident', 'accidental', 'dismemberment', 'death', 'sante', 'invalidite', 'maladie', 'maladies', 'grave', 'graves', 'dentaire', 'medicale', 'income', 'revenu', 'revenus'];
+begin
+  if p_text is null or btrim(p_text) = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb); end if;
+  f := public.ws_fold_text(p_text);
+  -- context (waivers and the vocabulary test) is a property of the WORKSPACE (see ws_insurance_context); the guards pass p_row_ctx for a row they already know the answer for
+  word_ctx := p_ws is not null and (coalesce(p_row_ctx, false) or public.ws_insurance_context(p_text, p_ws));
+  -- a COVERAGE CEILING of a round million or more ("up to $1,000,000", "jusqu'a 1 000 000 $") is seven digits, which the old account-number rule refuses. In insurance context
+  -- only, that one form (the words, then 1-3 digits and nothing but groups of 000) is masked for the category scan. It cannot carry an account number: every other digit is a zero.
+  ct := p_text;
+  if word_ctx then
+    ct := regexp_replace(p_text, '(up to|jusqu[''’ ]?[aà]) +(\$ ?[1-9][0-9]{0,2}(,000){2}|[1-9][0-9]{0,2}([ \u00a0\u202f]000){2} ?\$)(?![0-9]|[,.][0-9])', '\1 zzcov ', 'gi');
+  end if;
+  cf := case when ct = p_text then f else public.ws_fold_text(ct) end;
+  l1 := public.ws_leet_text(cf, 1);
+  l2 := public.ws_leet_text(cf, 2);
+  -- every previous category, on the original text and on the folded and leetspeak views. Union: a hit in ANY view is a hit.
+  -- (identical views are scanned once: the union is the same, the work is not repeated)
+  views := array[ct];
+  if cf <> ct then views := views || cf; end if;
+  if l1 <> cf then views := views || l1; end if;
+  if l2 <> l1 then views := views || l2; end if;
+  foreach x in array views loop
+    hh := public.ws_sensitive_hits(x);
+    if 'health' = any(hh) then health := true; end if;
+    if 'application_or_income' = any(hh) then inc := true; end if;
+    cats_s := cats_s || array_remove(array_remove(hh, 'health'), 'application_or_income');
+  end loop;
+  ex := array[cf];
+  if l1 <> cf then ex := ex || l1; end if;
+  if l2 <> l1 then ex := ex || l2; end if;
+  foreach x in array ex loop
+    if public.ws_health_extra_hit(x) then health := true; end if;
+  end loop;
+  -- insurance identifiers tied to a person: "policy number 1234567", "claim no. 998877", "numero de police 123456"
+  if cf ~ '(polic[ey]|claim|reclamation|member|membre|certificate|certificat|contrat|contract)[ _.\-]*(no|nr|num|number|numero|nbr|id|#)?[ _.:#\-]*[a-z]{0,4}[ \-]?[0-9]([ \-]?[0-9]){4,}' then
+    cats_s := cats_s || array['insurance_identifier'];
+  end if;
+  -- date of birth next to a number
+  if cf ~ '(^|[^a-z])(born|dob|birthday|birth|naissance|ne le|nee le)[^0-9a-z]{0,15}[0-9]' then cats_s := cats_s || array['identity_document']; end if;
+  health0 := health;
+
+  -- strict screen (no workspace): exactly the previous behaviour
+  if p_ws is null then
+    allc := cats_s || case when inc then array['application_or_income'] else '{}'::text[] end;
+    select coalesce(array_agg(distinct c order by c), '{}') into allc from unnest(allc) c;
+    if cardinality(allc) > 0 then return jsonb_build_object('allowed', false, 'reasons', to_jsonb(allc || case when health then array['health'] else '{}'::text[] end)); end if;
+    if not health then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb); end if;
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:no_approved_term'));
+  end if;
+
+  -- workspace given. An insurance WORD in the text changes nothing here (a mortgage workspace keeps the previous behaviour; only policy / claim numbers and dates of birth
+  -- are refused everywhere, see above).
+  ctx := word_ctx;
+  marker := 'zzqx';
+  while position(marker in f) > 0 loop marker := marker || 'x'; end loop;
+  select vertical into vert from public.client_workspaces where id = p_ws;
+  r := f;
+  -- cut approved terms out of the TOKEN STREAM: whole words only, replaced by a marker that keeps the neighbours apart (no re-joining, so a splice
+  -- such as "dia health insurance betes" leaves the two halves as separate unknown words). Pass 1: products and places, pass 2: feature phrases (only next to insurance context).
+  if ctx then
+    -- owner-managed FIXED PHRASES ("contact us", "our team", "notre equipe"): whole phrase only, cut like an approved term, so its pronoun is never vocabulary on its own
+    for tr in select phrase_norm as term_norm from public.ws_fixed_phrases where removed_at is null and position(split_part(phrase_norm, ' ', 1) in r) > 0      -- cheap pre-filter: skip phrases whose first word is absent
+                 order by length(phrase_norm) desc, phrase_norm loop
+      rx := '(^|[^a-z0-9])' || replace(tr.term_norm, ' ', '[ ,\-]+') || '([^a-z0-9]|$)';
+      prev := null;
+      while r ~ rx and prev is distinct from r loop
+        prev := r;
+        r := regexp_replace(r, rx, '\1 ' || marker || 'p \2', 'g');
+        n_phr := n_phr + 1;
+      end loop;
+    end loop;
+  end if;
+  for pass in 1..2 loop
+    if pass = 2 then
+      ctx := ctx or n_prod > 0;
+      -- PERSON tables (lead notes, routing, consent): a feature phrase is never waived there. "non smokers" in a lead note is a statement about that lead.
+      if not ctx or p_person then exit; end if;
+    end if;
+    for tr in select term_norm, kind from public.ws_approved_terms
+              where removed_at is null and (workspace_id = p_ws or (vert is not null and vertical = vert))
+                and ((pass = 1 and kind in ('product', 'place')) or (pass = 2 and kind = 'feature'))
+              order by length(term_norm) desc, term_norm loop
+      rx := '(^|[^a-z0-9])' || replace(tr.term_norm, ' ', '[ ,\-]+') || '([^a-z0-9]|$)';
+      if r !~ rx then continue; end if;
+      -- a feature phrase NAMES A CONDITION when one of its words is neither generic vocabulary nor a product-name word ("heart attack, stroke and cancer": yes; "no medical exam": no)
+      is_cond := tr.kind = 'feature' and exists (select 1 from unnest(string_to_array(replace(tr.term_norm, '''', ' '), ' ')) w
+                                                  where w <> '' and w <> all (prodwords) and not exists (select 1 from public.ws_marketing_vocab v where v.word = w and v.removed_at is null));
+      mk := case when tr.kind <> 'feature' then marker when is_cond then marker || 'c' else marker || 'f' end;
+      prev := null;
+      while r ~ rx and prev is distinct from r loop
+        prev := r;
+        r := regexp_replace(r, rx, '\1 ' || mk || ' \2', 'g');
+        if tr.kind = 'product' then n_prod := n_prod + 1; elsif tr.kind = 'place' then n_place := n_place + 1; else n_feat := n_feat + 1; end if;
+      end loop;
+    end loop;
+  end loop;
+  ctx := ctx or n_prod > 0;
+  -- 'your income' is generic marketing; any other 'income' stays the mortgage-income category. Never when a currency amount (other than a product price per period) is present,
+  -- and never on a person table.
+  if ctx and not p_person then
+    -- a PRICE OF THE PRODUCT ("from $25/month", "dès 25 $ par mois") is not an amount of income; "up to $4,500 a month" next to 'income' is
+    fx := regexp_replace(f, '(^|[^a-z])(from|at|only|just|for|des|de|low as|starting|starts) +\$ ?[0-9][0-9,.]*[0-9]? *(/| per | a | par )? *(mo|month|mois|year|an|yr|week|day|jour|semaine|annee)([^a-z]|$)', '\1 \5', 'g');
+    fx := regexp_replace(fx, '(^|[^a-z])(from|at|only|just|for|des|de|low as|starting|starts) +[0-9][0-9,.]*[0-9]? ?\$ ?(/| per | a | par )? *(mo|month|mois|year|an|yr|week|day|jour|semaine|annee)([^a-z]|$)', '\1 \5', 'g');
+    fx := regexp_replace(fx, '(^|[^0-9])(19|20)[0-9]{2}([^0-9]|$)', '\1 \3', 'g');
+    if fx !~ '[$]|[0-9] ?(dollars?|cad|usd|euros?|k)([^a-z]|$)|[0-9]{4,}'
+       and f !~ ('(^|[^a-z])(' || public.ws_number_words() || ')([^a-z]|$)') then
+      before_r := r;
+      r := regexp_replace(r, '(^|[^a-z0-9])((your|votre) +)income(?![a-z0-9])', '\1\2 ' || marker || ' ', 'g');
+      r := regexp_replace(r, '(^|[^a-z0-9])((votre|vos) +)revenus?(?![a-z0-9])', '\1\2 ' || marker || ' ', 'g');
+      if r is distinct from before_r then cut := true; end if;
+    end if;
+  end if;
+  cut := cut or (n_prod + n_place + n_feat + n_phr) > 0;
+  if cut then
+    -- health and income are decided on what is LEFT; every other category was decided on the whole text above
+    health := false; inc := false;
+    r1 := public.ws_leet_text(r, 1);
+    r2 := public.ws_leet_text(r, 2);
+    views := array[r];
+    if r1 <> r then views := views || r1; end if;
+    if r2 <> r1 then views := views || r2; end if;
+    foreach x in array views loop
+      hh := public.ws_sensitive_hits(x);
+      if 'health' = any(hh) then health := true; end if;
+      if 'application_or_income' = any(hh) then inc := true; end if;
+      if public.ws_health_extra_hit(x) then health := true; end if;
+    end loop;
+  end if;
+  allc := cats_s || case when inc then array['application_or_income'] else '{}'::text[] end;
+  select coalesce(array_agg(distinct c order by c), '{}') into allc from unnest(allc) c;
+  if cardinality(allc) > 0 then return jsonb_build_object('allowed', false, 'reasons', to_jsonb(allc || case when health0 then array['health'] else '{}'::text[] end)); end if;
+  if health then
+    if (n_prod + n_place + n_feat) = 0 then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:no_approved_term')); end if;
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual'));
+  end if;
+  -- mixed Latin + Cyrillic/Greek letters: an obfuscation signature, never waived (only where a waiver or the vocabulary test applies)
+  if (ctx or (health0 and n_place > 0)) and p_text ~ '[Ͱ-ϿЀ-ԯ]' and p_text ~ '[A-Za-z]' then
+    return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['mixed_script', 'unknown_word']));
+  end if;
+  if ctx then
+    -- B1: money, pay, debt, spelled-out amounts and ages (fail closed; only a price per period and a coverage ceiling are amounts a marketing text may carry)
+    if public.ws_financial_hit(r, not p_joined) then
+      return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['financial_detail']));
+    end if;
+    if public.ws_identifier_hit(r) then
+      return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['identifier']));
+    end if;
+    -- B2: an approved feature phrase may only stand where it cannot state a fact about a person (also checked on the joined row: "you have" in one column, the phrase in another)
+    if n_feat > 0 and not public.ws_feature_context_ok(r, marker, p_joined) then
+      return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual'));
+    end if;
+    if not p_joined then
+      res := public.ws_residual_check(r, marker);
+      if cardinality(res) = 0 and public.ws_capitalised_name(p_text, false) then res := array['unknown_word']; end if;
+      if cardinality(res) > 0 then
+        return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || res));
+      end if;
+    elsif (select count(*) from regexp_matches(r, '(^|[^a-z])(' || public.ws_number_words() || ')(?![a-z])', 'g')) >= 4
+          or r ~ ('(^|[^a-z])(' || public.ws_number_words() || ')([ ,.;:/-]+(' || public.ws_number_words() || ')){2}(?![a-z])') then
+      -- S4: spelled-out digit groups split across the columns of one row
+      return jsonb_build_object('allowed', false, 'reasons', to_jsonb(case when health0 then array['health'] else '{}'::text[] end || array['unknown_word']));
+    end if;
+    return jsonb_build_object('allowed', true, 'reasons', jsonb_build_array(case when n_prod > 0 then 'approved_product_term' when n_feat > 0 then 'approved_feature' when n_place > 0 then 'approved_place' else 'insurance_vocabulary' end));
+  end if;
+  if health0 then
+    -- no insurance context: only an approved PLACE name could have waived the health-looking word. Same rules as before: nothing personal or identifying may remain.
+    if public.ws_personal_context_hit(r) or public.ws_personal_context_hit(r1) or public.ws_personal_context_hit(r2) then
+      return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:personal_context'));
+    end if;
+    if public.ws_identifier_hit(r) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'identifier')); end if;
+    return jsonb_build_object('allowed', true, 'reasons', jsonb_build_array('approved_place'));
+  end if;
+  return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb);
+end $$;
+
+-- the public classifier: same two-argument signature as before (hq_workspace.classify_text calls it)
+create or replace function public.ws_classify_text(p_text text, p_ws uuid default null) returns jsonb
+language sql stable security definer set search_path to 'pg_catalog' as $$
+  select public.ws_classify_core(p_text, p_ws, false, false, false);
+$$;
+
+-- 10. owner-only term management. The audit row carries ids, kinds and counts only: never the term text.
+drop function if exists public.ws_add_approved_term(uuid, text, text, text);
+create or replace function public.ws_add_approved_term(p_ws uuid, p_vertical text, p_kind text, p_term text, p_confirm_vertical boolean default false) returns uuid
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare v_term text; v_norm text; v_id uuid; v_words integer; v_scope text; n_active integer; w text; prodwords text[] := array[
+          'health', 'medical', 'dental', 'disability', 'disabilities', 'critical', 'illness', 'illnesses', 'accident', 'accidental', 'dismemberment', 'death', 'sante', 'invalidite', 'maladie', 'maladies', 'grave', 'graves', 'dentaire', 'medicale', 'income', 'revenu', 'revenus'];
+        ptdeny text[] := array['with', 'who', 'whom', 'people', 'persons', 'personnes', 'individuals', 'those', 'patients', 'sufferers', 'survivors', 'victims', 'suffering', 'living', 'having', 'atteint', 'atteinte', 'atteints',
+          'atteintes', 'souffrant', 'souffrants', 'ceux', 'celles', 'gens', 'anyone', 'everyone', 'someone', 'women', 'men', 'femmes', 'hommes', 'pregnant', 'enceinte'];
+        featdeny text[] := array['you', 'your', 'yours', 'yourself', 'vous', 'votre', 'vos', 'tu', 'ton', 'ta', 'tes', 'toi', 'have', 'had', 'got', 'avez', 'avoir', 'family', 'families', 'famille', 'familles', 'without', 'sans', 'free',
+          'age', 'ages', 'aged', 'old', 'yes', 'oui', 'true', 'false', 'any', 'all', 'some', 'never', 'jamais', 'history', 'today', 'now', 'current', 'currently', 'since', 'depuis', 'is', 'are', 'est', 'sont'];
+        negw text[] := array['no', 'not', 'non', 'nor', 'neither', 'none', 'pas', 'ni', 'aucun', 'aucune'];
+        hits text[]; ws_words text[]; names_cond boolean;
+begin
+  perform public.ffm_require_owner();
+  if (p_ws is null) = (p_vertical is null) then raise exception 'term refused: give exactly one of a workspace or a vertical'; end if;
+  if p_kind is null or p_kind not in ('product', 'place', 'feature') then raise exception 'term refused: kind must be product, place or feature'; end if;
+  if p_ws is not null and not exists (select 1 from public.client_workspaces where id = p_ws) then raise exception 'term refused: workspace not found'; end if;
+  if p_vertical is not null and p_vertical !~ '^[a-z0-9][a-z0-9-]{1,40}$' then raise exception 'term refused: vertical must be lower-case letters, digits and hyphens'; end if;
+  if p_vertical is not null and coalesce(p_confirm_vertical, false) is not true then raise exception 'term refused: a vertical-wide approval needs confirm_vertical = true (it applies to every workspace of that vertical)'; end if;
+  v_term := btrim(regexp_replace(coalesce(p_term, ''), '[[:space:]]+', ' ', 'g'));
+  if length(v_term) < 3 or length(v_term) > 120 then raise exception 'term refused: length must be 3 to 120 characters'; end if;
+  if v_term !~ '^[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff\u0152\u0153\u2019'' ,-]+$' or (p_kind <> 'feature' and position(',' in v_term) > 0) then raise exception 'term refused: letters, spaces, hyphens and apostrophes only (commas in a feature phrase); no digits or symbols'; end if;
+  v_norm := btrim(replace(replace(public.ws_fold_text(v_term), '-', ' '), ',', ' '));
+  v_norm := regexp_replace(v_norm, ' +', ' ', 'g');
+  if v_norm !~ '^[a-z]+([ ''][a-z]+)*$' then raise exception 'term refused: could not be normalised to plain letters'; end if;
+  v_words := cardinality(regexp_split_to_array(v_norm, ' '));
+  -- words (apostrophe splits: assurance d'invalidite -> assurance, d, invalidite)
+  ws_words := regexp_split_to_array(regexp_replace(v_norm, '''', ' ', 'g'), ' ');
+  if p_kind = 'product' and (v_words < 2 or v_words > 6) then raise exception 'term refused: a product term is 2 to 6 words'; end if;
+  if p_kind = 'feature' and (v_words < 2 or v_words > 12) then raise exception 'term refused: a feature phrase is 2 to 12 words'; end if;
+  if p_kind = 'place' and v_words > 5 then raise exception 'term refused: a place name is at most 5 words'; end if;
+  if public.ws_personal_context_hit(v_norm) then raise exception 'term refused: personal wording (first person or narrative) is not a product name'; end if;
+  if public.ws_capitalised_name(v_term, true) then raise exception 'term refused: it contains a word that is also a given name or surname (write ordinary words in lower case)'; end if;
+  hits := public.ws_sensitive_hits(v_norm) || public.ws_sensitive_hits(v_term);
+  -- the only non-health category an owner may approve is the word 'income' inside a product or feature phrase (income protection, disability income)
+  if exists (select 1 from unnest(hits) h where h not in ('health', 'application_or_income')) then raise exception 'term refused: it contains wording this system never allows (identity, banking, credit)'; end if;
+  if 'application_or_income' = any(hits) then
+    if p_kind = 'place' or 'application_or_income' = any(public.ws_sensitive_hits(regexp_replace(v_norm, '(^| )income( |$)', ' ', 'g'))) then
+      raise exception 'term refused: income wording is accepted only as the whole word "income" inside a product or feature phrase';
+    end if;
+  end if;
+  if p_kind = 'place' then
+    if not exists (select 1 from public.ws_place_catalog where name_norm = v_norm) then raise exception 'term refused: a place must be chosen from the fixed municipality catalog (ws_place_catalog)'; end if;
+  else
+    -- no person, relation, title, narrative, claim or underwriting word, no targeting phrase ("for people with", "pour les personnes atteintes"), in ANY kind
+    foreach w in array ws_words loop
+      if (public.ws_vocab_denied(w, false) and not (w = any (prodwords))) or w = any (ptdeny) then raise exception 'term refused: it contains a person, narrative or targeting word'; end if;
+    end loop;
+    if p_kind = 'product' then
+      if v_norm !~ '(^| )(insurance|assurance|assurances|coverage|cover|protection|benefit|benefits|plan|plans|policy|policies|couverture|garantie|garanties|annuity|rente)( |$)' then
+        raise exception 'term refused: a product term must name a product (insurance, assurance, coverage, cover, protection, plan, benefit, policy ...)';
+      end if;
+      -- default deny: every word is generic vocabulary or a product-name word. No condition, medication, body part or name can pass.
+      foreach w in array ws_words loop
+        if not (w = any (prodwords)) and not exists (select 1 from public.ws_marketing_vocab v where v.word = w and v.removed_at is null) then
+          raise exception 'term refused: every word of a product term must be generic marketing vocabulary or a product-name word (ask the owner to add the word to the vocabulary first)';
+        end if;
+      end loop;
+    else
+      -- feature phrase: vocabulary words, product-name words, and words the health detectors recognise ONE BY ONE as a coverage subject ("heart", "stroke", "cancer") plus a few companions ("attack").
+      -- Word by word, never as a run: a name before a condition must fail on the name.
+      foreach w in array ws_words loop
+        if not (w = any (prodwords) or w = any (array['attack', 'attacks', 'failure', 'arrest', 'loss', 'bypass', 'replacement', 'crise', 'cardiaque', 'avc']) or exists (select 1 from public.ws_marketing_vocab v where v.word = w and v.removed_at is null)
+                or public.ws_health_extra_hit(w) or public.ws_condition_hit(w) or 'health' = any(public.ws_sensitive_hits(w))) then
+          raise exception 'term refused: a feature phrase may name only recognised coverage subjects and vocabulary words';
+        end if;
+        -- round 4 (S8): a feature phrase never addresses, owns, counts or dates anything ("you have ...", "family history of ...", "... free")
+        if w = any (featdeny) then raise exception 'term refused: a feature phrase describes coverage; it cannot contain a second-person, possessive, family, having, affirmation or time word'; end if;
+      end loop;
+      -- a NEGATION next to a named condition is a statement about someone ("no <condition>", "non smokers"); a negated plain feature ("no medical exam") is fine
+      names_cond := exists (select 1 from unnest(ws_words) x where x <> '' and x <> all (prodwords) and not exists (select 1 from public.ws_marketing_vocab v where v.word = x and v.removed_at is null));
+      if names_cond and ws_words && negw then raise exception 'term refused: a feature phrase that names a condition cannot be negated (it would state a fact about a person)'; end if;
+    end if;
+  end if;
+  v_scope := case when p_ws is not null then 'workspace/' || p_ws else 'vertical/' || p_vertical end;
+  select count(*) into n_active from public.ws_approved_terms where removed_at is null and coalesce(workspace_id::text, 'v:' || vertical) = coalesce(p_ws::text, 'v:' || p_vertical);
+  if n_active >= 100 then raise exception 'term refused: at most 100 active terms per scope'; end if;
+  if exists (select 1 from public.ws_approved_terms where removed_at is null and coalesce(workspace_id::text, 'v:' || vertical) = coalesce(p_ws::text, 'v:' || p_vertical) and kind = p_kind and term_norm = v_norm) then
+    raise exception 'term already approved in this scope';
+  end if;
+  insert into public.ws_approved_terms (workspace_id, vertical, kind, term, term_norm, vertical_confirmed) values (p_ws, p_vertical, p_kind, v_term, v_norm, p_vertical is not null) returning id into v_id;
+  insert into public.audit_log (actor, action, target, detail)
+    values ('owner', 'ws_approved_term_added', v_scope, jsonb_build_object('term_id', v_id, 'kind', p_kind, 'words', v_words, 'vertical_wide', p_vertical is not null));
+  return v_id;
+end $$;
+
+create or replace function public.ws_remove_approved_term(p_term_id uuid) returns void
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare t public.ws_approved_terms;
+begin
+  perform public.ffm_require_owner();
+  select * into t from public.ws_approved_terms where id = p_term_id and removed_at is null for update;
+  if t.id is null then raise exception 'approved term not found or already removed'; end if;
+  update public.ws_approved_terms set removed_at = clock_timestamp(), removed_by = 'owner' where id = p_term_id;
+  insert into public.audit_log (actor, action, target, detail)
+    values ('owner', 'ws_approved_term_removed', case when t.workspace_id is not null then 'workspace/' || t.workspace_id else 'vertical/' || t.vertical end, jsonb_build_object('term_id', p_term_id, 'kind', t.kind, 'vertical_wide', t.vertical is not null));
+end $$;
+
+-- 11. owner-only vocabulary management. The audit row carries ids and the language only: never the word. A word on the hard deny list can never be added.
+create or replace function public.ws_add_vocab_word(p_lang text, p_word text) returns uuid
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare v_norm text; v_id uuid;
+begin
+  perform public.ffm_require_owner();
+  if p_lang is null or p_lang not in ('en', 'fr') then raise exception 'word refused: language must be en or fr'; end if;
+  if p_word is null or btrim(p_word) !~ '^[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u00ff\u0152\u0153]{2,30}$' then raise exception 'word refused: one word of 2 to 30 letters (no digits, spaces, hyphens or symbols)'; end if;
+  v_norm := public.ws_fold_text(btrim(p_word));
+  if v_norm !~ '^[a-z]{2,30}$' then raise exception 'word refused: could not be normalised to plain letters'; end if;
+  if public.ws_vocab_denied(v_norm, true) then raise exception 'word refused: it is on the hard deny list (people, events, wording about a case, or anything medical) and can never be vocabulary'; end if;
+  if p_lang = 'fr' and v_norm = 'on' then raise exception 'word refused: it is on the hard deny list (people, events, wording about a case, or anything medical) and can never be vocabulary'; end if;
+  if public.ws_capitalised_name(initcap(v_norm), true) then raise exception 'word refused: it is also a common given name or surname; it stays out of the vocabulary unless the owner decides otherwise in a migration'; end if;
+  if exists (select 1 from public.ws_marketing_vocab where lang = p_lang and word = v_norm and removed_at is null) then raise exception 'word already in the vocabulary'; end if;
+  insert into public.ws_marketing_vocab (lang, word) values (p_lang, v_norm) returning id into v_id;
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ws_vocab_word_added', 'vocab/' || p_lang, jsonb_build_object('word_id', v_id, 'lang', p_lang));
+  return v_id;
+end $$;
+
+create or replace function public.ws_remove_vocab_word(p_word_id uuid) returns void
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare t public.ws_marketing_vocab;
+begin
+  perform public.ffm_require_owner();
+  select * into t from public.ws_marketing_vocab where id = p_word_id and removed_at is null for update;
+  if t.id is null then raise exception 'vocabulary word not found or already removed'; end if;
+  update public.ws_marketing_vocab set removed_at = clock_timestamp(), removed_by = 'owner' where id = p_word_id;
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ws_vocab_word_removed', 'vocab/' || t.lang, jsonb_build_object('word_id', p_word_id, 'lang', t.lang));
+end $$;
+
+-- 11b. owner-only fixed-phrase management. A phrase is 2-4 words; every word is vocabulary or one of a short list of pronouns / possessives that only make sense inside a fixed phrase
+--      (we, us, our, ours, nous, notre, nos, one, ones); a health, name or relation word, a first-person word and a narrative word are refused. Audit rows carry ids and the language only.
+create or replace function public.ws_add_fixed_phrase(p_lang text, p_phrase text) returns uuid
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare v_term text; v_norm text; v_id uuid; w text; ws_words text[];
+begin
+  perform public.ffm_require_owner();
+  if p_lang is null or p_lang not in ('en', 'fr') then raise exception 'phrase refused: language must be en or fr'; end if;
+  v_term := btrim(regexp_replace(coalesce(p_phrase, ''), '[[:space:]]+', ' ', 'g'));
+  if v_term !~ '^[A-Za-zÀ-ÖØ-öø-ÿŒœ’'' -]{5,60}$' then raise exception 'phrase refused: letters, spaces, hyphens and apostrophes only (5 to 60 characters)'; end if;
+  if public.ws_capitalised_name(v_term, true) then raise exception 'phrase refused: it contains a word that is also a given name or surname (write ordinary words in lower case)'; end if;
+  v_norm := btrim(regexp_replace(replace(public.ws_fold_text(v_term), '-', ' '), ' +', ' ', 'g'));
+  if v_norm !~ '^[a-z]+( [a-z]+){1,4}$' then raise exception 'phrase refused: 2 to 5 plain words'; end if;
+  ws_words := regexp_split_to_array(v_norm, ' ');
+  foreach w in array ws_words loop
+    if public.ws_name_word_hit(w) or public.ws_health_word_hit(w) then raise exception 'phrase refused: it contains a person, name, relation or health word'; end if;
+    if w = any (array['we', 'us', 'our', 'ours', 'nous', 'notre', 'nos', 'one', 'ones']) then continue; end if;
+    if public.ws_vocab_denied(w, false) then raise exception 'phrase refused: it contains a person, narrative or first-person word'; end if;
+    if not exists (select 1 from public.ws_marketing_vocab v where v.word = w and v.removed_at is null) then raise exception 'phrase refused: every other word must be marketing vocabulary'; end if;
+  end loop;
+  if exists (select 1 from public.ws_fixed_phrases where removed_at is null and phrase_norm = v_norm) then raise exception 'phrase already approved'; end if;
+  insert into public.ws_fixed_phrases (lang, phrase, phrase_norm) values (p_lang, v_term, v_norm) returning id into v_id;
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ws_fixed_phrase_added', 'phrase/' || p_lang, jsonb_build_object('phrase_id', v_id, 'lang', p_lang, 'words', cardinality(ws_words)));
+  return v_id;
+end $$;
+
+create or replace function public.ws_remove_fixed_phrase(p_phrase_id uuid) returns void
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare t public.ws_fixed_phrases;
+begin
+  perform public.ffm_require_owner();
+  select * into t from public.ws_fixed_phrases where id = p_phrase_id and removed_at is null for update;
+  if t.id is null then raise exception 'fixed phrase not found or already removed'; end if;
+  update public.ws_fixed_phrases set removed_at = clock_timestamp(), removed_by = 'owner' where id = p_phrase_id;
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'ws_fixed_phrase_removed', 'phrase/' || t.lang, jsonb_build_object('phrase_id', p_phrase_id, 'lang', t.lang));
+end $$;
+
+-- 12. seed data. VOCABULARY: generic function and marketing words only (no person, relation, narrative, claim, underwriting or health word; the DO block below proves it
+--     with the same deny function the owner functions use, and fails the migration otherwise). Terms ship EMPTY. A word the owner removed stays removed on re-apply.
+insert into public.ws_marketing_vocab (lang, word, created_by)
+select 'en', w, 'seed' from (select distinct unnest(regexp_split_to_array($v$
+a an the and or but nor so yet if then than as at by for from in into of on onto out over per plus to under up upon via with within without about above across against along among around
+behind below beside between beyond during except inside near since through throughout toward towards until while whether because both either neither each every all any some no not only just
+also even more most much many less least other another such same own very too now today tomorrow here there where when what which who how why can could will would should may might must shall
+do does don doesn isn aren be is are
+you your yours yourself it its this that these those
+protect protects protected cover covers covered pay pays paying paid save saves saving savings get gets learn compare comparing apply quote start choose find ask talk speak contact book schedule
+visit see read discover build grow plan prepare secure safeguard insure insures enjoy feel stay keep give help helps support guide review check explore join click tap send request receive access
+manage customize customise tailor simplify switch renew upgrade enroll sign buy shop reduce lower increase replace replaces replacing include includes including offer offers provide provides
+let allows allow need needs want look looking take make makes worry trust rely begin
+family families business businesses price prices pricing month months monthly year years yearly annual annually week weeks weekly day days daily hour hours minute minutes second seconds
+coverage coverages protection protections plans quotes free benefit benefits policy policies insurance insurances insurer broker brokers agent agents advisor advisors adviser advisers advice
+expert experts team service services online phone call text chat email rate rates premium premiums deductible lump sum payout payouts payment payments cost costs budget value option options
+choice choices solution solutions program programs product products package packages deal deals discount discounts peace mind security future life lives home homes house car auto travel trip
+trips vacation work worker workers employee employees employer employers owner owners self employed freelancer freelancers professional professionals entrepreneur entrepreneurs student
+students senior seniors retirement retirees canada canadian canadians ontario quebec alberta british columbia manitoba saskatchewan newfoundland labrador
+scotia brunswick territories north south east west province provinces nationwide national local coast mortgage mortgages
+affordable simple easy fast quick flexible personal personalized best top trusted licensed independent leading reliable safe strong smart clear transparent complete comprehensive extra
+additional new real true better good great perfect right ready available guaranteed limited full whole term permanent universal group individual extended long short high low fair
+competitive tax
+two three four five six seven eight nine ten twenty thirty forty fifty hundred thousand million zero first
+tue wed thu fri sat sun monday tuesday wednesday thursday friday saturday sunday spring summer fall winter holiday holidays open office offices location locations appointment consultation
+meeting obligation commitment fee fees hidden instantly instant anytime cancel cancellation renewal renewable renews application applications beneficiary beneficiaries exam care level levels tier
+tiers amount amounts lifetime forever rider riders non lowest highest reviews stars star
+small large big medium mo yr yrs part parts starting starts next fits fit ages age deserves deserve works grows grow groups individuals add bills young thousands insurers made follows follow place wait comes come lifestyle
+meta google facebook instagram tiktok linkedin youtube sms seo ads ad campaign campaigns creative creatives landing page pages form forms lead leads audience audiences headline copy draft
+worth reasons reason guide guides webinar webinars planning explained freelancers contractors contractor convert loan loans download downloads paycheque paycheck become becomes waiver promo promotion promotions
+spend retargeting remarketing tips checklist education experience serving money back
+step steps way ways mistakes mistake myths myth questions question faq faqs blog article articles video videos newsletter subscribe ebook calculator estimate estimates digital mobile app apps website site sites link links
+homepage banner banners button buttons image images photo photos logo logos brand brands color colour colors colours font template templates report reports summary overview comparison worksheet handbook toolkit resources resource
+library course courses training workshop workshops event events seminar seminars partner partners partnership licence license licences certified certification accredited award awards winning recognized experienced dedicated
+friendly knowledgeable caring honest unbiased objective neutral evening evenings morning mornings noon weekend weekends closed january february march july september october november december cheap cheaper cheapest bundle bundles
+bundled multi countrywide wide stars star reasons reason top plans quotes hours hour opening open
+20s 30s 40s 50s 60s 70s 80s 90s
+acceptance accepting act annuities annuity asked before brokerage builds buying callback changes commercial community company condo current cyber date decision equipment expense expenses file final frequently fully getting going growing happens have insured keeps key know landlord landlords language legacy liability lock love market matters member owned paperless paperwork pet plain proud really say select side soon special started something tenant thank thanks time tools understanding unexpected use watch sale sales prepared prepare overpaying overpay teams team holiday holidays protecting homeowners portable professional consultants consultant works expire expires expiry qualify qualifies qualified payment payments rate rates book books booked schedule schedules meeting meetings consultation consultations
+$v$, '[[:space:]]+')) w) s where w <> '' and not exists (select 1 from public.ws_marketing_vocab v where v.lang = 'en' and v.word = s.w);
+insert into public.ws_marketing_vocab (lang, word, created_by)
+select 'fr', w, 'seed' from (select distinct unnest(regexp_split_to_array($v$
+le la les l un une des du de d au aux et ou mais donc or ni car que qu quel quelle quels quelles qui quoi dont ce cet cette ces ca celui
+dans en sur sous avec sans pour par chez vers entre contre depuis pendant jusque jusqu plus moins tres trop assez aussi encore deja toujours jamais ne n pas non oui si tout tous toute toutes
+chaque autre autres meme tel
+vous votre vos se s c y
+protegez protegeons proteger obtenez obtenir appelez appeler comparez comparer economisez economiser profitez profiter decouvrez decouvrir demandez soumettez contactez choisissez trouvez
+apprenez planifiez assurez assurer couvrir couvre couvrent payer paye payez beneficier beneficiez commencez reservez visitez simplifiez preparez securisez rassurez peut peuvent pouvez
+pouvons est sont soit etre avez avons avoir faire faites aller veut voulez cherchez
+famille familles entreprise entreprises prix mois an ans annee annees semaine semaines jour jours heure heures minute minutes couverture couvertures protection protections plan plans soumission
+soumissions devis gratuit gratuite gratuits avantage avantages courtier courtiers agent agents conseiller conseillers conseillere equipe service services soutien aide ligne telephone taux prime
+primes somme montant montants paiement paiements cout couts budget valeur option options choix solution solutions programme programmes produit produits forfait forfaits offre offres rabais
+economie economies paix esprit securite avenir vie vies maison maisons auto voiture voyage voyages vacances travail travailleurs travailleur autonome autonomes employes employeur employeurs
+proprietaire proprietaires etudiants etudiant retraite retraites canada canadien canadiens canadiennes ontario quebec alberta manitoba saskatchewan
+assurance assurances assure assures assureur
+abordable simple facile rapide flexible personnalise meilleur meilleure meilleurs fiable securitaire complet complete complets exclusif nouveau nouvelle grand grande vrai bon bonne parfait
+pret prete disponible garanti terme temporaire permanente collective collectif individuelle individuel appel suffit suffisent ici maintenant aujourd hui demain
+un deux trois quatre cinq six sept huit neuf dix vingt trente cent mille million
+lundi mardi mercredi jeudi vendredi samedi dimanche lun mar mer jeu ven sam dim printemps automne hiver ouvert ouverts bureau bureaux rendez consultation sans obligation gratuitement
+quelques partir prochain endroit compte aucune aucun petite petites petit petits merite budgets grandit grandir forfaitaire examen examens tarif tarifs mieux
+beneficiaire beneficiaires niveau niveaux montant duree toujours vie
+respecte raisons acheter nouveaux aines entiere habitation sejour telechargez agrees
+etoiles etoile etapes etape conseils conseil astuces questions question guide guides blogue article articles video videos infolettre abonnez calculateur estimation estimations
+numerique mobile application site web lien liens image images photo photos logo logos marque marques couleur couleurs modele modeles rapport rapports sommaire apercu comparaison
+ressources ressource formation atelier ateliers evenement evenements seminaire partenaire partenaires partenariat licence licences certifie accredite prix gagnant experimente
+dedie sympathique honnete objectif neutre soir soirs matin matins midi weekend ferme janvier fevrier mars juillet septembre octobre novembre decembre
+acceptons accumule achat actuelle aider assureurs autorise avant cabinet certains ceux cher choisir combien comparent comptent courtage coute decision engagement equipes familial immobilier imprevisible inscrivez instantanee lisez limitee marche parce parlez participez partie poser pourquoi premier prenez rachat rappel regimes regroupez remplace requis responsabilite revisez revision savoir seul simplement successorale tardez tranquillite utilisez venir verse webinaire police planification expliquee note notez choix soumission soumissions salaire locataire locataires hypothecaire pret proprietaires professionnelle quebecoises consultants protegees protegee proteges heritage
+$v$, '[[:space:]]+')) w) s where w <> '' and not exists (select 1 from public.ws_marketing_vocab v where v.lang = 'fr' and v.word = s.w);
+insert into public.ws_fixed_phrases (lang, phrase, phrase_norm, created_by)
+select l, p, regexp_replace(replace(public.ws_fold_text(p), '-', ' '), ' +', ' ', 'g'), 'seed'
+from (values
+ ('en', 'contact us'), ('en', 'call us'), ('en', 'email us'), ('en', 'text us'), ('en', 'reach us'), ('en', 'talk to us'), ('en', 'our team'), ('en', 'our advisors'), ('en', 'our brokers'),
+ ('en', 'our experts'), ('en', 'our guide'), ('en', 'our free guide'), ('en', 'our checklist'), ('en', 'one call'), ('en', 'one plan'), ('en', 'one place'), ('en', 'mon fri'), ('en', 'mon to fri'),
+ ('fr', 'notre equipe'), ('fr', 'nos conseillers'), ('fr', 'nos courtiers'), ('fr', 'notre guide'), ('fr', 'contactez nous'), ('fr', 'appelez nous'), ('fr', 'joignez nous'), ('fr', 'lun ven'),
+ ('en', 'we can help'), ('en', 'we are here to help'), ('en', 'our free checklist'), ('en', 'our video'), ('en', 'our short video'), ('en', 'our free webinar'), ('en', 'our free seminar'), ('en', 'here to help'), ('en', 'about us'), ('en', 'who we are'), ('en', 'meet our team'), ('en', 'our services'), ('en', 'our process'), ('en', 'our story'), ('en', 'our mission'), ('en', 'our partners'),
+ ('en', 'our insurers'), ('en', 'our plans'), ('en', 'our products'), ('en', 'our offices'), ('en', 'our newsletter'), ('en', 'our blog'), ('en', 'our website'), ('en', 'our free calculator'), ('en', 'join us'), ('en', 'visit us'),
+ ('fr', 'nos services'), ('fr', 'notre mission'), ('fr', 'nos partenaires'), ('fr', 'nos assureurs'), ('fr', 'notre infolettre'), ('fr', 'notre blogue'), ('fr', 'qui sommes nous'), ('fr', 'a propos de nous'),
+ ('fr', 'nous sommes la'), ('fr', 'visitez nous'), ('fr', 'notre calculateur gratuit'), ('fr', 'notre webinaire gratuit'), ('fr', 'notre webinaire')) as v(l, p)
+where not exists (select 1 from public.ws_fixed_phrases f where f.phrase_norm = regexp_replace(replace(public.ws_fold_text(v.p), '-', ' '), ' +', ' ', 'g'));
+do $$ declare bad text; begin
+  select string_agg(f.phrase, ', ') into bad from public.ws_fixed_phrases f
+   where f.created_by = 'seed' and f.removed_at is null
+     and exists (select 1 from unnest(string_to_array(f.phrase_norm, ' ')) w
+                 where public.ws_name_word_hit(w) or public.ws_health_word_hit(w)
+                    or (public.ws_vocab_denied(w, false) and w <> all (array['we', 'us', 'our', 'ours', 'nous', 'notre', 'nos', 'one', 'ones', 'mon'])));
+  if bad is not null then raise exception 'seed fixed phrases contain denied words: %', bad; end if;
+end $$;
+do $$ declare bad text; begin
+  select string_agg(word, ', ') into bad from public.ws_marketing_vocab where created_by = 'seed' and removed_at is null and public.ws_vocab_denied(word, true);
+  if bad is not null then raise exception 'seed vocabulary contains denied words: %', bad; end if;
+end $$;
+
+-- PLACE CATALOG: municipalities an owner may approve (fixed; no free text). Only unambiguous names (no common nouns, no first names: Victoria, Regina, Sydney, Brandon, Barrie, Vernon and Courtenay are deliberately NOT here). Never edited after this migration.
+insert into public.ws_place_catalog (name_norm, display_name, province)
+select public.ws_fold_text(split_part(e, '|', 1)), split_part(e, '|', 1), split_part(e, '|', 2)
+from unnest(array[
+ 'Toronto|ON', 'Ottawa|ON', 'Mississauga|ON', 'Brampton|ON', 'Hamilton|ON', 'London|ON', 'Markham|ON', 'Vaughan|ON', 'Kitchener|ON', 'Windsor|ON', 'Richmond Hill|ON', 'Oakville|ON', 'Burlington|ON',
+ 'Oshawa|ON', 'St Catharines|ON', 'Guelph|ON', 'Cambridge|ON', 'Whitby|ON', 'Kingston|ON', 'Ajax|ON', 'Waterloo|ON', 'Pickering|ON', 'Niagara Falls|ON', 'Peterborough|ON',
+ 'Sudbury|ON', 'Thunder Bay|ON', 'Cornwall|ON', 'Belleville|ON', 'Sarnia|ON', 'North Bay|ON', 'Brantford|ON', 'Kanata|ON', 'Barrhaven|ON', 'Nepean|ON', 'Orleans|ON', 'Stittsville|ON',
+ 'Montreal|QC', 'Quebec City|QC', 'Laval|QC', 'Gatineau|QC', 'Longueuil|QC', 'Sherbrooke|QC', 'Saguenay|QC', 'Levis|QC', 'Trois Rivieres|QC', 'Terrebonne|QC', 'Drummondville|QC', 'Granby|QC', 'Brossard|QC',
+ 'Vancouver|BC', 'Burnaby|BC', 'Kelowna|BC', 'Abbotsford|BC', 'Kamloops|BC', 'Nanaimo|BC', 'Chilliwack|BC', 'Prince George|BC', 'Penticton|BC',
+ 'Calgary|AB', 'Edmonton|AB', 'Red Deer|AB', 'Lethbridge|AB', 'Medicine Hat|AB', 'Airdrie|AB', 'Grande Prairie|AB', 'St Albert|AB', 'Fort McMurray|AB', 'Cochrane|AB', 'Lloydminster|AB',
+ 'Winnipeg|MB', 'Saskatoon|SK', 'Moose Jaw|SK', 'Prince Albert|SK', 'Swift Current|SK',
+ 'Halifax|NS', 'Truro|NS', 'Moncton|NB', 'Fredericton|NB', 'Saint John|NB', 'Charlottetown|PE', 'St Johns|NL', 'Corner Brook|NL', 'Gander|NL', 'Mount Pearl|NL',
+ 'Whitehorse|YT', 'Yellowknife|NT', 'Iqaluit|NU']) e
+on conflict (name_norm) do nothing;
+
+-- 9b. structural columns. A value in an enum-like column skips only the vocabulary test, and only when it really looks like one: a short token (letters, digits, _ : . -), no health word, no
+--     name; onboarding `title` only when it IS a template title; onboarding `blocked_until` only when it is a date; `provided_by` only when it is an actor tag. Anything else in these
+--     columns is free text and gets the full screen. Never echoes the value.
+create or replace function public.ws_structural_value(p_table text, p_col text, p_value text) returns boolean
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare v text := btrim(coalesce(p_value, '')); w text;
+begin
+  if v = '' then return true; end if;
+  if p_col = 'title' then return p_table = 'ffm_onboarding_items' and exists (select 1 from public.ffm_onboarding_templates t where t.title = p_value); end if;
+  if p_col = 'blocked_until' then
+    if p_table <> 'ffm_onboarding_items' then return false; end if;
+    if lower(v) ~ '^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]* [0-9]{1,2}(, [0-9]{4})?$' then return true; end if;       -- a plain date (ISO dates are refused by the old account-number rule, as before)
+  elsif p_col <> all (array['status', 'stage', 'kind', 'provider', 'template_key', 'approved_by', 'provided_by', 'destination_kind', 'channel', 'basis', 'wording_version', 'recorded_by', 'set_by', 'evidence_ref']) then
+    return false;
+  end if;
+  if p_col = any (array['approved_by', 'recorded_by', 'set_by', 'provided_by']) and v ~* '^[a-z0-9._%+-]{1,60}@[a-z0-9.-]{3,60}\.[a-z]{2,10}$' then v := split_part(v, '@', 1);          -- an actor e-mail: its local part gets the same word checks
+  elsif p_col = 'evidence_ref' then
+    if v !~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' then return false; end if;                                -- the capture-reference shape (PR #20), up to 100 characters
+  elsif v !~ '^[A-Za-z0-9_:.-]{1,60}$' then return false; end if;
+  -- round 5 (S6): an ACTOR tag names who acted, nothing else: a word of a short fixed list of insurer-decision, care, pregnancy, status and claim words makes it free text
+  -- (and, below, for every structural column: a run of number words such as "fortyfive") ("insurer_declined", "needs_daily_care", "expecting_wk20"). (Not the whole vocabulary hard-deny list: it holds 'client' and 'test', real actor tags.)
+  if p_col = any (array['approved_by', 'recorded_by', 'set_by', 'provided_by']) then
+    if v !~ '[A-Za-z]' then return false; end if;                                                           -- a bare number ("45") is not an actor
+    foreach w in array regexp_split_to_array(regexp_replace(lower(v), '([a-z])([0-9])|([0-9])([a-z])', '\1\3_\2\4', 'g'), '[_:.+-]+') loop
+      if w = any (array['needs', 'need', 'needed', 'care', 'declined', 'decline', 'denied', 'refused', 'expecting', 'pregnant', 'wk', 'weeks', 'week', 'insurer', 'insured', 'claim', 'claims',
+                        'sick', 'ill', 'daily', 'smoker', 'smokes', 'widow', 'widowed', 'divorced', 'retired', 'unemployed', 'disabled', 'senior', 'junior', 'm', 'mm', 'mil', 'b', 'bn']) then return false; end if;
+    end loop;
+  end if;
+  -- round 4 (N5): a token is split at separators AND between letters and digits ("age45" -> age, 45); a pay / age / number word makes it free text ("makes_85k", "fifty_thousand")
+  foreach w in array regexp_split_to_array(regexp_replace(lower(v), '([a-z])([0-9])|([0-9])([a-z])', '\1\3_\2\4', 'g'), '[_:.-]+') loop
+    if length(w) >= 2 and w ~ '[a-z]' and (public.ws_name_word_hit(w) or public.ws_health_word_hit(w)) then return false; end if;
+    if w ~ ('^((?:' || public.ws_number_words() || ')+|age|aged|ages|dob|born|old|makes|make|earns|earn|pay|paid|pays|salary|income|owes|owe|debt|mortgage|loan|rent|k|yrs|yr|yo)$') then return false; end if;
+  end loop;
+  return true;
+end $$;
+
+-- 9c. onboarding VALUES in an insurance workspace (ffm_onboarding_items.value_text). Not marketing copy: it holds business contacts, links, wording and agreements, so the vocabulary test
+--     does not apply; instead: every earlier category and the health screen (no waiver), every word of the value checked against the health / condition / drug / body lists (URL and
+--     e-mail parts included), no narrative or first-person personal context (consent wording may say "I agree"), no person name (except for the compliance contact), and no identifier
+--     (phone, postal code, street address, date, long number), except: e-mail addresses and links are accepted for the business-contact / CRM / booking / brand / sign-off keys, a phone
+--     for the compliance contact, and dates for the deadline and licence keys. Round 4: third-person and euphemistic wording about one person, an insurer's decision, body measures and
+--     habits are refused; so is every amount of money, pay / debt wording and spelled-out number (ws_financial_hit), except that the monthly budget may be an amount and nothing else.
+--     Still a LIST screen: wording that uses none of the listed words passes (stated limit). Never echoes the value.
+create or replace function public.ws_onboarding_value_check(p_key text, p_value text) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare k text := coalesce(p_key, ''); f text; v text; ident text; w text; res jsonb;
+        contact_keys text[] := array['crm_destination', 'booking_link', 'brand_assets', 'compliance_contact', 'ad_review_signoff', 'lead_fields_agreed', 'ad_account_access', 'consent_wording'];
+        name_keys text[] := array['compliance_contact', 'workspace_name'];      -- a person or business NAME is the point of these values (workspace_name: client_workspaces.name, see ws_person_column_check)
+        plain_keys text[] := array['launch_deadline', 'monthly_budget', 'licensing_status', 'licence_details'];
+begin
+  if p_value is null or btrim(p_value) = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb); end if;
+  res := public.ws_classify_core(p_value, null, false, false, false);             -- earlier categories + health, strict (no workspace, no waiver)
+  if not (res ->> 'allowed')::boolean then return res; end if;
+  f := public.ws_fold_text(p_value);
+  for w in select m[1] from regexp_matches(f, '[a-z0-9]{3,}', 'g') as m loop        -- (letters and digits: a lab value such as "a1c" is one token)
+    if w ~ '[a-z]' and public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual')); end if;
+  end loop;
+  -- round 4 (S7): wording about one person that carries no word of the health lists: third-person pronouns, euphemisms, body measures, habits, an insurer's decision
+  if f ~ '(^|[^a-z])(she|he|her|hers|his|him|elle|lui)([^a-z]|$)'
+     or f ~ ('(^|[^a-z])(expecting|expectant|shrink|therap[a-z]*|sober|sobriety|rehab|detox|opere|operee|operes|operation|hanche|doctor|docteur|weight|weighs|height|lbs|kg|pounds|bmi|dui|dwi|smok[a-z]*|vape|vapes|vaping|'
+             || 'drinks|drinking|drunk|(declined|denied|refused|rejected|postponed|rated|turned down|refuse|refusee|rejete|rejetee) (by|par)|(beneficiary|beneficiaries|beneficiaire|beneficiaires) *(is|are|est|sont|:|=|-))([^a-z]|$)') then
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:personal_context'));
+  end if;
+  -- round 4 (S7 / B1): money, pay, debt, spelled-out amounts and ages. The monthly budget may be an amount, and nothing else.
+  if k = 'monthly_budget' and f ~ '[0-9$]' then
+    if regexp_replace(regexp_replace(f, '\$ ?[0-9][0-9,.]*k?|[0-9][0-9,. ]*k? ?(\$|dollars?|cad)', ' ', 'g'), '(^|[^a-z])(per|a|month|monthly|mo|cad|budget|ad|ads|spend|max|maximum|up|to|about|approx|total|par|mois|mensuel|environ)(?![a-z])', ' ', 'g') ~ '[a-z0-9]' then
+      return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('financial_detail'));
+    end if;
+  elsif public.ws_financial_hit(f, true) then
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('financial_detail'));
+  end if;
+  v := f; ident := f;
+  if k = any (contact_keys) then
+    -- an e-mail address or link is allowed for these keys (not for an identifier check), but its WORDS (local part, host, path) still get the name and health checks above and below
+    ident := regexp_replace(ident, '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}', ' ', 'g');
+    ident := regexp_replace(ident, '(https?://|www\.)[^ ]+', ' ', 'g');
+    ident := regexp_replace(ident, '[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}(/[^ ,;]*)?', ' ', 'g');
+  end if;
+  if k = 'compliance_contact' then ident := regexp_replace(ident, '[0-9]{3}[ .)/-]*[0-9]{3}[ .-]?[0-9]{4}', ' ', 'g'); end if;
+  if (k <> 'consent_wording' and public.ws_personal_context_hit(v))                  -- consent wording may say "I agree"; nothing else may be first-person or about a person
+     or v ~ '(^|[^a-z])(can ?not|cannot|can['' ]?t|could ?not|unable to|not able to|won[''’ ]?t|will not)( +[a-z]+)? +(work|walk|pay|afford|move|see|hear|speak|breathe|stand|drive|eat|sleep|care|cope|bills)([^a-z]|$)'
+     or v ~ '(^|[^a-z])needs? +(care|surgery|treatment|dialysis|medication|assistance|a doctor)([^a-z]|$)' then
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:personal_context'));
+  end if;
+  if not (k = any (contact_keys)) and f ~ '(@|https?:|www\.|[a-z0-9-]+\.(com|ca|org|net|io|co|app|info|biz|me)([^a-z]|$))' then      -- an e-mail address or link only where the key takes one
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('identifier'));
+  end if;
+  if not (k = any (name_keys)) then
+    for w in select m[1] from regexp_matches(v, '[a-z]{3,}', 'g') as m loop
+      if public.ws_name_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word')); end if;
+    end loop;
+  end if;
+  if not (k = any (plain_keys)) and public.ws_identifier_hit(ident) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('identifier')); end if;
+  return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb);
+end $$;
+
+-- 9d. PERSON TABLES in an insurance workspace (review round 4, S2): ws_leads, client_workspaces, ffm_routing_rules, ffm_consent_log, ffm_consent_settings. Until round 4 these had the old
+--     deny-list only, so "takes <drug> daily", an age, a date of birth in words, a beneficiary or an insurer's decision was stored in a lead note. Now, column by column:
+--       lead name               a NAME: letters only, at most 5 words, no health / relation / narrative / number / sentence word (ws_person_name_check). Not a vocabulary test: names are not vocabulary.
+--       lead e-mail, phone      an address / a number of that shape: the old screen, plus the health lists on the words of the address. Any other content: the insurance screen.
+--       workspace name          a business name: list screen (ws_onboarding_value_check: health lists, personal wording, amounts, identifiers), no vocabulary test.
+--       destination / evidence  a reference without spaces (e-mail, link, id): list screen. With spaces: the insurance screen.
+--       source                  a tag of one or two plain words that are on no deny list ("web form", "referral"); anything else: the insurance screen.
+--       enum / actor columns    a short token (ws_structural_value): every category, identifiers and amounts; no vocabulary test.
+--       everything else (note, source, rule name ...): the INSURANCE screen (default-deny vocabulary, no feature-phrase waiver).
+--     Returns {"allowed", "reasons", "free"}; free = the value is free text and belongs in the joined insurance scan of the row. Never echoes the value.
+create or replace function public.ws_person_name_check(p_value text) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare f text; w text; n integer := 0; res jsonb;
+begin
+  if p_value is null or btrim(p_value) = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb); end if;
+  res := public.ws_classify_core(p_value, null, false, false, false);
+  if not (res ->> 'allowed')::boolean then return res; end if;
+  f := public.ws_fold_text(p_value);
+  if f !~ '^[a-z][a-z'' .,-]{0,79}$' then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word')); end if;
+  for w in select m[1] from regexp_matches(f, '[a-z]+', 'g') as m loop
+    n := n + 1;
+    if length(w) >= 2 and public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual')); end if;
+    if (public.ws_vocab_denied(w, false) and not public.ws_name_word_hit(w))
+       or w ~ ('^(' || public.ws_number_words() || ')$')
+       or w = any (array['is', 'are', 'the', 'a', 'an', 'for', 'of', 'on', 'in', 'by', 'with', 'to', 'from', 'and', 'or', 'not', 'no', 'at', 'as', 'this', 'that', 'it', 'you', 'your', 'have', 'who', 'whose', 'but', 'if',
+                         'beneficiary', 'beneficiaries', 'beneficiaire', 'insured', 'insurer', 'policy', 'insurance', 'assurance', 'coverage', 'quote', 'plan', 'premium', 'smoker', 'age', 'years', 'year', 'since', 'last',
+                         'daily', 'weekly', 'monthly', 'yearly', 'takes', 'makes', 'needs', 'wants', 'called', 'call', 'interested', 'est', 'sont', 'les', 'un', 'une', 'pour', 'avec', 'sans', 'sur', 'dans', 'par', 'et', 'ou',
+                         'depuis', 'ans', 'annuel', 'vous', 'votre', 'en', 'arret', 'travail', 'opere', 'operee', 'hanche', 'tension', 'elevee', 'recently', 'currently', 'formerly', 'widowed', 'separated', 'single',
+                         'retired', 'unemployed', 'family', 'famille', 'probate', 'debt', 'debts', 'custody', 'visa', 'prison', 'jail', 'divorce', 'funeral', 'lawsuit', 'gambling', 'arrears', 'bankrupt', 'immigrant', 'refugee',
+                         'felony', 'estate', 'foreclosure', 'bereaved', 'arrest', 'arrested', 'newborn', 'fiance', 'fiancee', 'boyfriend', 'girlfriend', 'hubby', 'wifey', 'daddy', 'mommy', 'mummy', 'mama', 'papa', 'granny',
+                         'grannie', 'nana', 'nonna', 'oncle', 'tante', 'mamie', 'papi', 'cousine', 'neveu', 'bro', 'sis']) then
+      return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word'));
+    end if;
+  end loop;
+  if n > 5 then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word')); end if;
+  return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb);
+end $$;
+
+create or replace function public.ws_person_column_check(p_table text, p_col text, p_value text, p_ws uuid) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare v text := btrim(coalesce(p_value, '')); res jsonb; w text; nofree jsonb := jsonb_build_object('free', false);
+begin
+  if v = '' then return jsonb_build_object('allowed', true, 'reasons', '[]'::jsonb, 'free', false); end if;
+  res := public.ws_classify_core(p_value, null, false, false, false);            -- the old screen first, always: nothing it refused is ever accepted here
+  if not (res ->> 'allowed')::boolean then return res || nofree; end if;
+  -- values the erasure functions write themselves (ffm_erase_lead): never refused, or an erasure in an insurance workspace would fail
+  -- (round 5, N5: the 'erasure:<reason>' source of an erasure row is accepted by ffm_guard on the withdrawal path only, never here)
+  if p_col in ('name', 'source') and v = '[erased]' then return res || nofree; end if;
+  -- round 5 (N8): a routing rule NAME may be one of a few fixed structural names ("Main rule", "Default route", "Backup CRM route"): no free word, at most one digit, so no personal data
+  if p_table = 'ffm_routing_rules' and p_col = 'name'
+     and public.ws_fold_text(v) ~ '^(main|default|primary|secondary|backup|fallback|first|second|third|new|crm|email|webhook)( (lead|leads))?( (crm|email|webhook))?( (rule|route|routing|routing rule))?( [1-9])?$' then
+    return res || nofree;
+  end if;
+  if p_table = 'ws_leads' and p_col = 'name' then return public.ws_person_name_check(p_value) || nofree; end if;
+  -- (round 5, integration: the import shapes normalize_addr accepts, '<a@b.ca>' and a trailing dot, are e-mail addresses too)
+  if p_table = 'ws_leads' and p_col = 'email' and v ~* '^<?[a-z0-9._%+-]{1,64}@[a-z0-9.-]{3,80}\.[a-z]{2,10}\.?>?$' then
+    for w in select m[1] from regexp_matches(public.ws_fold_text(v), '[a-z]{3,}', 'g') as m loop
+      if public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual'), 'free', false); end if;
+    end loop;
+    return res || nofree;
+  end if;
+  if p_table = 'ws_leads' and p_col = 'phone' and v ~ '^[+]?[0-9() .x-]{7,25}$' then return res || nofree; end if;
+  if p_table = 'client_workspaces' then
+    if p_col = 'name' then return public.ws_onboarding_value_check('workspace_name', p_value) || nofree; end if;
+    if p_col = any (array['slug', 'vertical']) and v ~ '^[A-Za-z0-9 _-]{1,60}$' then
+      for w in select m[1] from regexp_matches(public.ws_fold_text(v), '[a-z]{3,}', 'g') as m loop
+        if public.ws_health_word_hit(w) then return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('health', 'health:residual'), 'free', false); end if;
+      end loop;
+      return res || nofree;
+    end if;
+  end if;
+  if ((p_table = 'ffm_routing_rules' and p_col = 'destination_ref') or (p_table = 'ffm_consent_log' and p_col = 'evidence_ref')) and v !~ '[[:space:]]' then
+    -- a reference id ("form-submission-1001", "crm-main"): letters and separators, then at most ONE group of up to 6 digits; its words get the name / health / pay / number checks
+    -- an e-mail address or a link: list screen (its words get the name and health checks). Anything else without spaces must be such a reference id, or it is refused.
+    if v ~ '[@/]' then return public.ws_onboarding_value_check('crm_destination', p_value) || nofree; end if;
+    if v ~ '^[A-Za-z][A-Za-z_:.-]{0,50}[0-9]{0,6}[A-Za-z]{0,3}$' and public.ws_structural_value(p_table, 'kind', v) then return res || nofree; end if;
+    -- round 5 (integration S7): a consent evidence reference in the capture-reference shape of PR #20 (^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$, an opaque form-submission id): no vocabulary test,
+    -- but every word gets the name / health / pay / age / number checks and every earlier category applies (the old screen above already ran)
+    -- (at least one letter, and no phone-number shape: the old screen removes phone-shaped numbers before its digit rules, so "613-555-0199" would otherwise pass)
+    if p_table = 'ffm_consent_log' and v ~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,99}$' and v ~ '[A-Za-z]' and v !~ '[0-9]{3}[._-]?[0-9]{3}[._-]?[0-9]{4}'
+       and public.ws_structural_value(p_table, 'evidence_ref', v) then return res || nofree; end if;
+    return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word'), 'free', false);
+  end if;
+  -- a lead / consent SOURCE tag ("web form", "referral", "meta_ad"): one or two plain words, each of them clear of every deny list (people, narrative, health, names, numbers, pay / debt).
+  -- Not a vocabulary test (a tag is not marketing copy); anything longer is free text and gets the insurance screen below.
+  if p_col = 'source' and public.ws_fold_text(v) ~ '^[a-z]{3,20}([ _-][a-z]{2,20})?$' then
+    for w in select m[1] from regexp_matches(public.ws_fold_text(v), '[a-z]+', 'g') as m loop
+      if public.ws_vocab_denied(w, true) or w ~ ('^(' || public.ws_number_words() || '|age|ages|dob|makes|make|pay|paid|pays|salary|owes|debt|mortgage|loan|rent|smoker|non|no|not|yes|ex|former|single|retired|pregnant|expecting|late|behind)$') then
+        return jsonb_build_object('allowed', false, 'reasons', jsonb_build_array('unknown_word'), 'free', false);
+      end if;
+    end loop;
+    return res || nofree;
+  end if;
+  if public.ws_structural_value(p_table, p_col, v) then
+    if v ~* '^[a-z0-9._%+-]{1,60}@[a-z0-9.-]{3,60}\.[a-z]{2,10}$' then return res || nofree; end if;       -- an actor e-mail (its words were checked by ws_structural_value)
+    return public.ws_classify_core(p_value, p_ws, true, true, true) || nofree;
+  end if;
+  -- free text: the insurance screen. A source tag such as "meta_ad" is read as its words.
+  return public.ws_classify_core(case when p_col = 'source' then translate(p_value, '_', ' ') else p_value end, p_ws, true, false, true) || jsonb_build_object('free', true);
+end $$;
+
+-- 13. guards, replaced. Same exclusions and messages as before; the classifier decides. Approved-term waivers only on non-person tables; in an insurance workspace the person
+--     tables get the insurance screen too (round 4, S2: ws_person_column_check). A workspace of a known non-insurance vertical (mortgage) behaves exactly as before on every table.
+--     "Structural" columns (enums, template keys, actor tags) are exempt from the vocabulary test only: every category and the health screen still apply to them.
+create or replace function public.ws_guard() returns trigger
+language plpgsql set search_path to 'pg_catalog' as $$
+declare k text; v text; t text; e record; res jsonb; allv text := ''; freev text := ''; j jsonb := to_jsonb(new); jo jsonb; v_ws uuid; c_ws uuid; ctx boolean := false; person boolean; n_vals integer := 0; n_free integer := 0;
+begin
+  person := tg_table_name <> all (array['ws_campaigns', 'ws_ledger']);
+  if tg_op = 'UPDATE' then
+    jo := to_jsonb(old);
+    -- a row that MOVES to another workspace (or a workspace that changes vertical) is screened in full, like a new row
+    if (jo -> 'workspace_id') is distinct from (j -> 'workspace_id') or (tg_table_name = 'client_workspaces' and (jo -> 'vertical') is distinct from (j -> 'vertical')) then jo := null; end if;
+  end if;
+  -- insurance screen: decided by the workspace (for a workspace row: by its own vertical). Fails closed, see ws_insurance_context.
+  if tg_table_name = 'client_workspaces' then
+    v_ws := nullif(j ->> 'id', '')::uuid;
+    ctx := public.ws_vertical_insurance(j ->> 'vertical');
+  else
+    v_ws := nullif(j ->> 'workspace_id', '')::uuid;
+    ctx := v_ws is not null and public.ws_insurance_context(null, v_ws);
+  end if;
+  c_ws := case when person then null else v_ws end;        -- person tables: the old strict screen (no waiver) stays the first test for every value
+  -- a value split across columns (name / phone / note) is caught by also scanning every scanned column joined together (only when there is more than one value to join)
+  for e in select key, value from jsonb_each(j - array['id', 'workspace_id', 'campaign_id', 'created_at', 'status', 'stage', 'amount_cents', 'monthly_budget_cents']) loop
+    v := e.value #>> '{}';
+    if v is not null and btrim(v) <> '' and jsonb_typeof(e.value) <> 'boolean' then allv := allv || ' ' || v; n_vals := n_vals + 1; end if;
+  end loop;
+  if n_vals > 1 then
+    res := public.ws_classify_core(allv, c_ws, ctx and not person, true, false);
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
+  end if;
+  for e in select key, value from jsonb_each(j - array['id', 'workspace_id', 'campaign_id', 'created_at', 'status', 'stage', 'amount_cents', 'monthly_budget_cents']) loop
+    v := e.value #>> '{}'; t := jsonb_typeof(e.value);
+    continue when v is null or btrim(v) = '' or t = 'boolean';
+    if person and ctx and t = 'string' and (jo is null or (jo -> e.key) is distinct from e.value) then
+      -- S2: a person table of an insurance workspace gets the insurance screen, column by column (ws_person_column_check). On UPDATE only the values that CHANGE get it
+      -- (an unchanged value keeps the old screen below, exactly as before, so a stage change or an erasure of a row stored earlier is never blocked by its old note).
+      res := public.ws_person_column_check(tg_table_name, e.key, v, v_ws);
+      if (res ->> 'free')::boolean then freev := freev || ' ' || v; n_free := n_free + 1; end if;
+    else
+      -- numbers and other non-text values: every category still applies, the vocabulary test does not (a number column is not wording)
+      res := public.ws_classify_core(v, c_ws, ctx and not person, t <> 'string', false);
+    end if;
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, e.key, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ')
+        using errcode = 'P0001';
+    end if;
+  end loop;
+  if n_free > 1 then
+    res := public.ws_classify_core(freev, v_ws, true, true, true);      -- the free-text columns of a person row, joined (insurance screen)
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
+  end if;
+  return new;
+end $$;
+
+create or replace function public.ffm_guard() returns trigger
+language plpgsql set search_path to 'pg_catalog' as $$
+declare k text; v text; res jsonb; allv text := ''; freev text := ''; j jsonb := to_jsonb(new); jo jsonb; v_ws uuid; c_ws uuid; ctx boolean := false; person boolean; structural boolean; n_vals integer := 0; n_free integer := 0;
+        prot boolean := false; pre text; body text; protv text := ''; n_prot integer := 0; src_pre text := '';
+        wd_source constant text := 'withdrawal (wording not stored)'; wd_actor constant text := 'unknown (not stored)';
+begin
+  person := tg_table_name <> all (array['ffm_ad_sets', 'ffm_creatives', 'ffm_approvals', 'ffm_onboarding_items']);
+  -- ROUND 5 (RV17-D S4, integration S7): a consent WITHDRAWAL or ERASURE row (basis 'withdrawn': only ffm_withdraw_consent and ffm_erase_lead write it; the bot has no INSERT grant) is NEVER
+  -- refused or lost for the wording of any column, in any workspace. A column that fails the screen is replaced by a fixed tag (source: 'withdrawal (wording not stored)', keeping a generated
+  -- 'via <channel>: ' / 'no usable identifier for <channel>: ' prefix; recorded_by: 'unknown (not stored)'; evidence_ref and wording_version: NULL). The text is not stored; the withdrawal is.
+  prot := tg_table_name = 'ffm_consent_log' and tg_op = 'INSERT' and j ->> 'basis' = 'withdrawn';
+  if tg_op = 'UPDATE' then
+    jo := to_jsonb(old);
+    -- a row that MOVES to another workspace (or a workspace that changes vertical) is screened in full, like a new row
+    if (jo -> 'workspace_id') is distinct from (j -> 'workspace_id') or (tg_table_name = 'client_workspaces' and (jo -> 'vertical') is distinct from (j -> 'vertical')) then jo := null; end if;
+  end if;
+  v_ws := nullif(j ->> 'workspace_id', '')::uuid;
+  ctx := v_ws is not null and public.ws_insurance_context(null, v_ws);
+  c_ws := case when person then null else v_ws end;        -- person tables: the old strict screen (no waiver) stays the first test for every value
+  for k, v in select e.key, e.value #>> '{}' from jsonb_each(j) e
+              where jsonb_typeof(e.value) = 'string'
+                and not exists (select 1 from pg_attribute a where a.attrelid = tg_relid and a.attname = e.key and a.attnum > 0 and not a.attisdropped
+                                  and a.atttypid in ('uuid'::regtype, 'timestamptz'::regtype)) loop
+    continue when btrim(v) = '';
+    if tg_table_name = 'ffm_consent_log' then
+      -- machine-written consent columns (PR #20 shapes, CHECK-constrained): never screened and never joined. verification is set by ffm_record_consent from a closed list.
+      continue when (k = 'verification' and v = any (array['not_applicable', 'ok', 'no_capture', 'capture_erased', 'channel_mismatch', 'wording_mismatch', 'lead_mismatch', 'unbound',
+                                                             'capture_key_missing', 'no_contact', 'contact_mismatch']))
+                 or (k = 'basis' and v = any (array['express', 'implied', 'withdrawn', 'unverified']))
+                 or (k = 'channel' and v = any (array['email', 'sms', 'phone', 'mail', 'all']))
+                 or (k = 'source' and v = '[erased]');                                 -- written by ffm_erase_lead (the immutability trigger allows it only during an erasure)
+      if prot then
+        pre := '';
+        body := v;
+        if k = 'source' then
+          -- literals the consent functions write themselves: an erasure row ('erasure:<one of four reasons>', channel all, by the owner) and the default 'unspecified'
+          continue when v = 'unspecified'
+                     or (v ~ '^erasure:(erasure_request|withdrawal|retention_expired|other)$' and j ->> 'channel' = 'all' and j ->> 'recorded_by' = 'owner');
+          pre := coalesce(substring(v from '^(?:via (?:telegram|post|mail|whatsapp|signal|other): |no usable identifier for (?:email|sms|phone): )'), '');
+          body := substr(v, length(pre) + 1);
+          src_pre := pre;
+        end if;
+        if btrim(body) = '' then
+          res := jsonb_build_object('allowed', length(v) <= 120);
+        elsif ctx then
+          res := public.ws_person_column_check(tg_table_name, k, body, v_ws);
+        else
+          res := public.ws_classify_core(body, null, false, public.ws_structural_value(tg_table_name, k, body), false);
+        end if;
+        if (res ->> 'allowed')::boolean and (k <> 'source' or length(v) <= 120) then
+          protv := protv || ' ' || body; n_prot := n_prot + 1;
+        elsif k = 'source' then new.source := pre || wd_source;
+        elsif k = 'recorded_by' then new.recorded_by := wd_actor;
+        elsif k = 'evidence_ref' then new.evidence_ref := null;
+        elsif k = 'wording_version' then new.wording_version := null;
+        else
+          raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+        end if;
+        continue;
+      end if;
+    end if;
+    if ctx and tg_table_name = 'ffm_onboarding_items' and k = 'value_text' then
+      res := public.ws_onboarding_value_check(j ->> 'template_key', v);       -- onboarding values are business contacts and wording, not marketing copy (see ws_onboarding_value_check)
+      if not (res ->> 'allowed')::boolean then
+        raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+      end if;
+      continue;                                                                -- already screened as a whole: not joined with the other columns (an e-mail / link here is legitimate)
+    elsif person and ctx and (jo is null or (jo ->> k) is distinct from v) then
+      -- S2: a person table (routing, consent) of an insurance workspace gets the insurance screen, column by column (ws_person_column_check); on UPDATE only for the values that change
+      res := public.ws_person_column_check(tg_table_name, k, v, v_ws);
+      if (res ->> 'free')::boolean then freev := freev || ' ' || v; n_free := n_free + 1; end if;
+    else
+      -- a structural column (enum, template key, actor tag, template title, date) skips only the vocabulary test, and only when the value really looks like one
+      structural := public.ws_structural_value(tg_table_name, k, v);
+      res := public.ws_classify_core(v, c_ws, ctx and not person, structural, false);
+    end if;
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in %.% (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, k, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
+    allv := allv || ' ' || v; n_vals := n_vals + 1;
+  end loop;
+  if n_vals > 1 then
+    res := public.ws_classify_core(allv, c_ws, ctx and not person, true, false);   -- a value split across columns
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
+  end if;
+  if n_free > 1 then
+    res := public.ws_classify_core(freev, v_ws, true, true, true);      -- the free-text columns of a person row, joined (insurance screen)
+    if not (res ->> 'allowed')::boolean then
+      raise exception 'Sensitive data refused in % (%). Applications, banking, credit, ID and sensitive financial data must never be stored here.', tg_table_name, array_to_string(array(select jsonb_array_elements_text(res -> 'reasons')), ', ') using errcode = 'P0001';
+    end if;
+  end if;
+  if n_prot > 1 then
+    -- the kept columns of a withdrawal / erasure row, joined (a value split across them): on a hit every caller-supplied column becomes its fixed tag; the row is still stored
+    res := case when ctx then public.ws_classify_core(protv, v_ws, true, true, true) else public.ws_classify_core(protv, null, false, true, false) end;
+    if not (res ->> 'allowed')::boolean then
+      if new.source is distinct from 'unspecified' and new.source !~ '^erasure:' then new.source := src_pre || wd_source; end if;
+      if new.recorded_by is distinct from 'owner' and new.recorded_by is distinct from 'unknown' then new.recorded_by := wd_actor; end if;
+      new.evidence_ref := null;
+      new.wording_version := null;
+    end if;
+  end if;
+  return new;
+end $$;
+
+-- 14. grants: service_role only. The term and vocabulary management functions additionally require the owner (ffm_require_owner refuses the bot).
+revoke all on function public.ws_terms_immutable() from public, anon, authenticated;
+revoke all on function public.ws_place_catalog_immutable() from public, anon, authenticated;
+revoke all on function public.ws_fold_text(text) from public, anon, authenticated;
+revoke all on function public.ws_leet_text(text, integer) from public, anon, authenticated;
+revoke all on function public.ws_health_extra_hit(text) from public, anon, authenticated;
+revoke all on function public.ws_condition_hit(text) from public, anon, authenticated;
+revoke all on function public.ws_personal_context_hit(text) from public, anon, authenticated;
+revoke all on function public.ws_identifier_hit(text) from public, anon, authenticated;
+revoke all on function public.ws_vocab_denied(text, boolean) from public, anon, authenticated;
+revoke all on function public.ws_residual_check(text, text) from public, anon, authenticated;
+revoke all on function public.ws_capitalised_name(text, boolean) from public, anon, authenticated;
+revoke all on function public.ws_text_insurance_word(text, text, text) from public, anon, authenticated;
+revoke all on function public.ws_insurance_context(text, uuid) from public, anon, authenticated;
+revoke all on function public.ws_classify_core(text, uuid, boolean, boolean, boolean) from public, anon, authenticated;
+revoke all on function public.ws_classify_text(text, uuid) from public, anon, authenticated;
+revoke all on function public.ws_add_approved_term(uuid, text, text, text, boolean) from public, anon, authenticated;
+revoke all on function public.ws_remove_approved_term(uuid) from public, anon, authenticated;
+revoke all on function public.ws_add_vocab_word(text, text) from public, anon, authenticated;
+revoke all on function public.ws_remove_vocab_word(uuid) from public, anon, authenticated;
+revoke all on function public.ws_guard() from public, anon, authenticated;
+revoke all on function public.ffm_guard() from public, anon, authenticated;
+revoke all on function public.ws_stem_match(text, text[]) from public, anon, authenticated;
+revoke all on function public.ws_name_word_hit(text) from public, anon, authenticated;
+revoke all on function public.ws_health_word_hit(text) from public, anon, authenticated;
+revoke all on function public.ws_add_fixed_phrase(text, text) from public, anon, authenticated;
+revoke all on function public.ws_remove_fixed_phrase(uuid) from public, anon, authenticated;
+revoke all on function public.ws_structural_value(text, text, text) from public, anon, authenticated;
+revoke all on function public.ws_onboarding_value_check(text, text) from public, anon, authenticated;
+revoke all on function public.ws_number_words() from public, anon, authenticated;
+revoke all on function public.ws_financial_hit(text, boolean) from public, anon, authenticated;
+revoke all on function public.ws_feature_context_ok(text, text, boolean) from public, anon, authenticated;
+revoke all on function public.ws_vertical_insurance(text) from public, anon, authenticated;
+revoke all on function public.ws_person_name_check(text) from public, anon, authenticated;
+revoke all on function public.ws_person_column_check(text, text, text, uuid) from public, anon, authenticated;
+grant execute on function public.ws_terms_immutable() to service_role;
+grant execute on function public.ws_place_catalog_immutable() to service_role;
+grant execute on function public.ws_fold_text(text) to service_role;
+grant execute on function public.ws_leet_text(text, integer) to service_role;
+grant execute on function public.ws_health_extra_hit(text) to service_role;
+grant execute on function public.ws_condition_hit(text) to service_role;
+grant execute on function public.ws_personal_context_hit(text) to service_role;
+grant execute on function public.ws_identifier_hit(text) to service_role;
+grant execute on function public.ws_vocab_denied(text, boolean) to service_role;
+grant execute on function public.ws_residual_check(text, text) to service_role;
+grant execute on function public.ws_capitalised_name(text, boolean) to service_role;
+grant execute on function public.ws_text_insurance_word(text, text, text) to service_role;
+grant execute on function public.ws_insurance_context(text, uuid) to service_role;
+grant execute on function public.ws_classify_core(text, uuid, boolean, boolean, boolean) to service_role;
+grant execute on function public.ws_classify_text(text, uuid) to service_role;
+grant execute on function public.ws_add_approved_term(uuid, text, text, text, boolean) to service_role;
+grant execute on function public.ws_remove_approved_term(uuid) to service_role;
+grant execute on function public.ws_add_vocab_word(text, text) to service_role;
+grant execute on function public.ws_remove_vocab_word(uuid) to service_role;
+grant execute on function public.ws_guard() to service_role;
+grant execute on function public.ffm_guard() to service_role;
+grant execute on function public.ws_stem_match(text, text[]) to service_role;
+grant execute on function public.ws_name_word_hit(text) to service_role;
+grant execute on function public.ws_health_word_hit(text) to service_role;
+grant execute on function public.ws_add_fixed_phrase(text, text) to service_role;
+grant execute on function public.ws_remove_fixed_phrase(uuid) to service_role;
+grant execute on function public.ws_structural_value(text, text, text) to service_role;
+grant execute on function public.ws_onboarding_value_check(text, text) to service_role;
+grant execute on function public.ws_number_words() to service_role;
+grant execute on function public.ws_financial_hit(text, boolean) to service_role;
+grant execute on function public.ws_feature_context_ok(text, text, boolean) to service_role;
+grant execute on function public.ws_vertical_insurance(text) to service_role;
+grant execute on function public.ws_person_name_check(text) to service_role;
+grant execute on function public.ws_person_column_check(text, text, text, uuid) to service_role;
+
 -- ===== 20261112_lockdown_v1.sql =====
 -- Security lockdown (found on first live apply): functions made with plain CREATE FUNCTION are executable by anon/authenticated by default.
 -- Several take a caller-supplied "p_by" string, so an anonymous caller could have passed 'owner'. Close everything except the

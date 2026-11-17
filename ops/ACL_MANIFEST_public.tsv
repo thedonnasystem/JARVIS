@@ -78,6 +78,7 @@ function	backup_snapshot(text[])	-	-	-	security_definer	backup identity: backup_
 function	backup_snapshot_cost()	-	-	-	security_definer	backup identity: backup_reader only	execute
 function	backup_snapshot_page(text,integer,integer,uuid)	-	-	-	security_definer	backup identity: backup_reader only	execute
 function	backup_stopwords()	-	-	-	invoker	internal: owner only	-
+function	backup_suppression_export()	-	-	-	security_definer	backup identity: backup_reader only	execute
 function	backup_table_digest(text)	-	-	-	security_definer	backup identity: backup_reader only	execute
 function	backup_table_expr(text,jsonb)	-	-	-	invoker	internal: owner only	-
 function	backup_topic_core(text,text)	-	-	-	invoker	internal: owner only	-
@@ -126,27 +127,61 @@ function	ffm_add_ad_set(uuid,uuid,text,text,integer)	-	-	execute	security_define
 function	ffm_add_campaign(uuid,text,text)	-	-	execute	security_definer		-
 function	ffm_add_creative(uuid,uuid,uuid,text,text,text)	-	-	execute	security_definer		-
 function	ffm_add_routing_rule(uuid,text,text,text,text[])	-	-	execute	security_definer		-
+function	ffm_append_only()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	ffm_block_input(uuid,text,text)	-	-	execute	security_definer		-
 function	ffm_can_contact(uuid,text)	-	-	execute	security_definer	read-only decision	-
+function	ffm_capture_canonical(uuid,text,text,text,text,timestamp with time zone,text,text)	-	-	execute	invoker		-
+function	ffm_capture_immutable()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	ffm_cc_len(text)	-	-	execute	invoker		-
+function	ffm_close_outreach_gate(text,text)	-	-	execute	security_definer	bot-callable BY DESIGN: it can only close (fail-closed); audited	-
 function	ffm_consent_immutable()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	ffm_contact_mac(text,text,text)	-	-	execute	invoker		-
 function	ffm_contact_status(uuid,text)	-	-	execute	security_definer	read-only decision	-
+function	ffm_epoch_bump()	-	-	execute	security_definer	trigger function (inlined update of the epoch row): cannot be called directly	-
+function	ffm_epoch_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	ffm_erase_lead(uuid,uuid,text)	-	-	execute	security_definer		-
 function	ffm_funnel(uuid,timestamp with time zone,timestamp with time zone)	-	-	execute	security_definer		-
+function	ffm_gate_core_ok()	-	-	execute	security_definer	read-only decision	-
+function	ffm_gate_no_delete()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	ffm_gate_state()	-	-	execute	security_definer	read-only, no key and no list	-
 function	ffm_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	ffm_hmac_sha256(text,text)	-	-	execute	invoker		-
+function	ffm_import_suppression_hashes()	-	-	execute	security_definer		-
+function	ffm_ingest_capture(uuid,text,text,text,text,timestamp with time zone,text,text,text)	-	-	execute	security_definer		-
+function	ffm_instance_fp()	-	-	execute	security_definer	read-only	-
 function	ffm_instantiate_onboarding(uuid)	-	-	execute	security_definer		-
+function	ffm_is_phone_suppressed(text)	-	-	execute	security_definer		-
+function	ffm_key_fingerprint(text)	-	-	execute	security_definer		-
+function	ffm_key_problem(text,text)	-	-	execute	invoker		-
 function	ffm_lead_booked_rate(uuid,timestamp with time zone,timestamp with time zone)	-	-	execute	security_definer		-
+function	ffm_lead_identifier_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	ffm_lp(text)	-	-	execute	invoker		-
 function	ffm_open_ws(uuid)	-	-	execute	security_definer		-
+function	ffm_outreach_gate_open()	-	-	execute	security_definer	read-only decision	-
+function	ffm_outreach_gate_status()	-	-	execute	security_definer	read-only, no key and no list	-
 function	ffm_owner_approve(uuid,text,uuid,text)	-	-	execute	security_definer		-
+function	ffm_owner_record_restore(text)	-	-	execute	security_definer	owner only (ffm_require_owner in the body)	-
 function	ffm_provide_input(uuid,text,text,text)	-	-	execute	security_definer		-
 function	ffm_readiness(uuid)	-	-	execute	security_definer		-
 function	ffm_record_consent(uuid,uuid,text,text,text,text,timestamp with time zone,text,text)	-	-	execute	security_definer		-
+function	ffm_register_capture_owner(uuid,text,text,text,text,timestamp with time zone,uuid,text,text)	-	-	execute	security_definer		-
+function	ffm_register_wording(uuid,text,text,text)	-	-	execute	security_definer		-
 function	ffm_require_owner()	-	-	execute	security_definer		-
 function	ffm_revoke_approval(uuid)	-	-	execute	security_definer		-
 function	ffm_route_preview(uuid,uuid)	-	-	execute	security_definer	dry run only	-
+function	ffm_sender_attest(bigint,bigint,text)	-	-	execute	security_definer	bot-callable BY DESIGN: monotonic against ffm_sender_mark, cannot open a closed gate, anchor needs an unconsumed owner marker	-
 function	ffm_set_budget(uuid,integer)	-	-	execute	security_definer		-
 function	ffm_set_creative_status(uuid,uuid,text)	-	-	execute	security_definer		-
+function	ffm_set_gate_config(integer,integer,text)	-	-	execute	security_definer	owner only (ffm_require_owner in the body)	-
 function	ffm_set_implied_window(uuid,integer)	-	-	execute	security_definer		-
+function	ffm_set_key(text,text,text)	-	-	execute	security_definer		-
+function	ffm_set_phone_outreach(boolean,text)	-	-	execute	security_definer	owner only (ffm_require_owner in the body)	-
 function	ffm_spend_report(uuid)	-	-	execute	security_definer		-
+function	ffm_stage_suppression_checkpoint(jsonb)	-	-	execute	security_definer		-
+function	ffm_sup_message(text,text)	-	-	execute	invoker		-
+function	ffm_suppression_digest()	-	-	execute	security_definer		-
+function	ffm_suppression_set()	-	-	execute	security_definer		-
+function	ffm_verify_suppression(text)	-	-	execute	security_definer	owner only (ffm_require_owner in the body)	-
 function	ffm_weekly_report(uuid,timestamp with time zone,timestamp with time zone)	-	-	execute	security_definer		-
 function	ffm_withdraw_consent(uuid,uuid,text,text,text,text)	-	-	execute	security_definer	bot-callable BY DESIGN: it can only ADD a withdrawal and suppressions	-
 function	flag_underperformers()	-	-	execute	invoker		-
@@ -156,7 +191,7 @@ function	guard_bank_balance()	-	-	execute	invoker	trigger function: cannot be ca
 function	guard_capital_policy()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	holding_pnl(integer)	-	-	execute	invoker		-
 function	is_app_owner()	-	execute	execute	security_definer		-
-function	is_suppressed(text)	-	-	execute	invoker		-
+function	is_suppressed(text)	-	-	execute	security_definer		-
 function	lead_funnel(text)	-	-	execute	invoker		-
 function	leads_dnc_cascade()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	leads_suppression_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-
@@ -169,12 +204,17 @@ function	missions_brief_text()	-	-	execute	invoker		-
 function	needs_you(integer)	-	-	execute	security_definer		-
 function	night_shift_report(timestamp with time zone)	-	-	execute	invoker		-
 function	normalize_addr(text)	-	-	execute	invoker		-
+function	normalize_phone(text)	-	-	execute	invoker		-
 function	office_data()	-	-	execute	security_definer		-
 function	office_function_of(text,text)	-	-	execute	invoker		-
 function	ops_alerts()	-	-	execute	security_definer		-
 function	org_scorecard_text()	-	-	execute	invoker		-
 function	outbox_dnc_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	outbox_send_policy()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	outreach_channel_disabled(text)	-	-	execute	security_definer	read-only decision (text/call disabled until the owner enables them)	-
+function	outreach_channel_problem(text)	-	-	execute	invoker	immutable policy function	-
+function	outreach_recipient_problem(text,text,uuid)	-	-	execute	security_definer	read-only decision	-
+function	outreach_send_allowed(uuid)	-	-	execute	security_definer	read-only decision	-
 function	owner_seen()	-	-	execute	invoker		-
 function	payments_text()	-	-	execute	security_definer		-
 function	post_daily_brief()	-	-	execute	invoker		-
@@ -229,14 +269,47 @@ function	venture_over_budget_id(uuid)	-	-	execute	invoker		-
 function	venture_workspace(text)	-	-	execute	invoker		-
 function	waterfall(integer)	-	-	execute	invoker		-
 function	waterfall_policy_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	ws_add_approved_term(uuid,text,text,text,boolean)	-	-	execute	security_definer		-
+function	ws_add_fixed_phrase(text,text)	-	-	execute	security_definer		-
 function	ws_add_lead(uuid,uuid,text,text,text,text,text)	-	-	execute	security_definer		-
+function	ws_add_vocab_word(text,text)	-	-	execute	security_definer		-
+function	ws_capitalised_name(text,boolean)	-	-	execute	invoker		-
+function	ws_classify_core(text,uuid,boolean,boolean,boolean)	-	-	execute	security_definer		-
+function	ws_classify_text(text,uuid)	-	-	execute	security_definer		-
+function	ws_condition_hit(text)	-	-	execute	invoker		-
+function	ws_feature_context_ok(text,text,boolean)	-	-	execute	invoker		-
+function	ws_financial_hit(text,boolean)	-	-	execute	invoker		-
+function	ws_fold_text(text)	-	-	execute	invoker		-
 function	ws_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	ws_health_extra_hit(text)	-	-	execute	invoker		-
+function	ws_health_word_hit(text)	-	-	execute	invoker		-
+function	ws_identifier_hit(text)	-	-	execute	invoker		-
+function	ws_insurance_context(text,uuid)	-	-	execute	security_definer		-
+function	ws_leet_text(text,integer)	-	-	execute	invoker		-
+function	ws_name_word_hit(text)	-	-	execute	invoker		-
+function	ws_number_words()	-	-	execute	invoker		-
+function	ws_onboarding_value_check(text,text)	-	-	execute	security_definer		-
+function	ws_person_column_check(text,text,text,uuid)	-	-	execute	security_definer		-
+function	ws_person_name_check(text)	-	-	execute	security_definer		-
+function	ws_personal_context_hit(text)	-	-	execute	invoker		-
+function	ws_place_catalog_immutable()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	ws_record_spend(uuid,uuid,integer,text)	-	-	execute	security_definer		-
+function	ws_remove_approved_term(uuid)	-	-	execute	security_definer		-
+function	ws_remove_fixed_phrase(uuid)	-	-	execute	security_definer		-
+function	ws_remove_vocab_word(uuid)	-	-	execute	security_definer		-
+function	ws_residual_check(text,text)	-	-	execute	invoker		-
 function	ws_sensitive_hits(text)	-	-	execute	invoker		-
+function	ws_stem_match(text,text[])	-	-	execute	invoker		-
+function	ws_structural_value(text,text,text)	-	-	execute	security_definer		-
 function	ws_summary(uuid)	-	-	execute	security_definer		-
+function	ws_terms_immutable()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	ws_text_insurance_word(text,text,text)	-	-	execute	invoker		-
+function	ws_vertical_insurance(text)	-	-	execute	invoker		-
+function	ws_vocab_denied(text,boolean)	-	-	execute	invoker		-
 sequence	action_log_id_seq	-	-	-			-
 sequence	audit_log_id_seq	-	-	-			-
 sequence	ffm_redaction_epoch_seq	-	-	-			-
+sequence	ffm_restore_markers_id_seq	-	-	-			-
 sequence	leads_short_id_seq	-	-	-			-
 table	account_requests	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	accounts_registry	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
@@ -245,7 +318,7 @@ table	action_policy	delete,insert,references,select,trigger,truncate,update	dele
 table	agent_runs	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	agents	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	alert_state	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
-table	app_owners	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	app_owners	-	-	select	rls=true		-
 table	approval_requests	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	audit_log	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	bank_accounts	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
@@ -266,16 +339,27 @@ table	executor_registry	-	-	select	rls=true		-
 table	executor_runs	-	-	select	rls=true		-
 table	ffm_ad_sets	-	-	select	rls=true		-
 table	ffm_approvals	-	-	select	rls=true		-
+table	ffm_consent_captures	-	-	select	rls=true		-
 table	ffm_consent_log	-	-	select	rls=true		-
 table	ffm_consent_settings	-	-	select	rls=true		-
+table	ffm_consent_wordings	-	-	select	rls=true		-
 table	ffm_creatives	-	-	select	rls=true		-
+table	ffm_epoch	-	-	select	rls=true		-
+table	ffm_gate_config	-	-	select	rls=true		-
 table	ffm_onboarding_items	-	-	select	rls=true		-
 table	ffm_onboarding_templates	-	-	select	rls=true		-
+table	ffm_outreach_gate	-	-	select	rls=true		-
+table	ffm_phone_suppressions	-	-	select	rls=true		-
 table	ffm_redaction_denylist	-	-	-	rls=true		-
 table	ffm_redaction_found	-	-	-	rls=true		-
 table	ffm_redaction_keys	-	-	-	rls=true		-
+table	ffm_restore_markers	-	-	select	rls=true		-
 table	ffm_route_log	-	-	select	rls=true		-
 table	ffm_routing_rules	-	-	select	rls=true		-
+table	ffm_secrets	-	-	-	rls=true		-
+table	ffm_sender_mark	-	-	select	rls=true		-
+table	ffm_suppression_expected	-	-	-	rls=true		-
+table	ffm_suppression_hashes	-	-	-	rls=true		-
 table	handbook	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	human_handoffs	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	ideas	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
@@ -312,9 +396,13 @@ table	venture_procedures	delete,insert,references,select,trigger,truncate,update
 table	ventures	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	waterfall_policy	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	web_messages	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	ws_approved_terms	-	-	select	rls=true		-
 table	ws_campaigns	-	-	select	rls=true		-
+table	ws_fixed_phrases	-	-	select	rls=true		-
 table	ws_leads	-	-	select	rls=true		-
 table	ws_ledger	-	-	select	rls=true		-
+table	ws_marketing_vocab	-	-	select	rls=true		-
+table	ws_place_catalog	-	-	select	rls=true		-
 view	agent_scorecard	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 view	ffm_funnel_v	-	-	select	rls=false		-
 view	ffm_spend_v	-	-	select	rls=false		-

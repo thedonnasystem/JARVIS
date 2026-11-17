@@ -310,7 +310,8 @@ begin
   if not (select guarded from public.backup_acl_catalogue() where name = 'public.backup_suppression_export()') then raise exception 'S1x the export did not get the reader guard'; end if;
   if not exists (select 1 from pg_proc p where p.oid = 'public.backup_suppression_export()'::regprocedure and p.proconfig @> array['search_path=pg_catalog']) then raise exception 'S1x the export keeps a search_path with public in it'; end if;
   set local role backup_reader;
-  if (public.backup_suppression_export() ->> 'ok') is distinct from 'true' then reset role; raise exception 'S1x backup_reader could not run the export'; end if;
+  -- rc1 integration fix-up F1: with PR #20 merged the REAL export runs here (it answers {version, included, ...}, not the stand-in's {ok: true}); either shape proves backup_reader can run it
+  if not (coalesce(public.backup_suppression_export() ->> 'ok', '') = 'true' or public.backup_suppression_export() ? 'included') then reset role; raise exception 'S1x backup_reader could not run the export'; end if;
   reset role;
 end $$;
 
