@@ -819,7 +819,7 @@ async def hq_decision_callback(update, context) -> None:
     except Exception as e:
         logger.exception("HQ decision failed")
         result = f"Could not save the decision: {str(e)[:150]}"
-    await query.answer(result[:190])
+    await query.answer(hq_core.popup_for(getattr(query.from_user, "id", None), result))      # addressed, then cut (SF7)
     try:
         await query.edit_message_reply_markup(reply_markup=None)
         await hq_core.reply_to(query.message, result)
@@ -1249,7 +1249,7 @@ async def hq_answer_callback(update, context) -> None:
     except Exception as e:
         logger.exception("HQ answer failed")
         result = f"Could not save the answer: {str(e)[:150]}"
-    await query.answer(result[:190])
+    await query.answer(hq_core.popup_for(getattr(query.from_user, "id", None), result))      # addressed, then cut (SF7)
     try:
         await query.edit_message_reply_markup(reply_markup=None)
         await hq_core.reply_to(query.message, result)

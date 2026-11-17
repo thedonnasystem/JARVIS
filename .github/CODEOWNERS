@@ -66,3 +66,28 @@ usercustomize.py                     @thedonnasystem
 *.pth                                @thedonnasystem
 __init__.py                          @thedonnasystem
 conftest.py                          @thedonnasystem
+# RVJC2 B3 / B4 (Nov 17 2026): every top-level runtime module (present or new), the web app (it runs in the Chairman's signed-in app), the skills
+# (until they run isolated and are reviewed) and every deploy / start config
+/*.py                                @thedonnasystem
+/webapp/                             @thedonnasystem
+/jarvis_skills/                      @thedonnasystem
+railpack.json                        @thedonnasystem
+nixpacks.json                        @thedonnasystem
+render.yaml                          @thedonnasystem
+render.yml                           @thedonnasystem
+fly.toml                             @thedonnasystem
+docker-compose*                      @thedonnasystem
+compose.y*ml                         @thedonnasystem
+heroku.yml                           @thedonnasystem
+app.json                             @thedonnasystem
+package.json                         @thedonnasystem
+.env*                                @thedonnasystem
+*.sh                                 @thedonnasystem
+Procfile*                            @thedonnasystem
+requirements*.txt                    @thedonnasystem
+Pipfile*                             @thedonnasystem
+pytest.ini                           @thedonnasystem
+tox.ini                              @thedonnasystem
+Makefile                             @thedonnasystem
+/.nixpacks/                          @thedonnasystem
+/.railway/                           @thedonnasystem

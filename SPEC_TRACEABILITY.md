@@ -87,7 +87,7 @@ Tests are scratch-Postgres and mocked providers: nothing here is production proo
 | Requirement | Status | Where / note |
 |---|---|---|
 | A Never-edit list (7 categories) + CI check, rename/copy/symlink aware, owner approval marker | BUILT-DORMANT | `ops/PROTECTED_PATHS.json`, `scripts/check_protected_paths.py` (+22 tests), step in the `unit` CI job, CODEOWNERS. Enforced only once you add branch protection (owner action). Pattern checks are a tripwire, not proof |
-| A Approval from Telegram in one tap | PARTLY | GitHub review on the head commit, or the `owner-approved-<sha12>` label by your account. A DB-recorded Telegram approval was rejected (CI cannot read it; the bot could forge it) |
+| A Approval from Telegram in one tap | PARTLY | GitHub review on the head commit, or the `owner-ok-<full 40-character sha>` label by your account. A DB-recorded Telegram approval was rejected (CI cannot read it; the bot could forge it) |
 | B Durable queue, worker, retries/backoff/leases, per-division queues | BUILT-DORMANT | `jarvis_jobs`, `jarvis_job_events` (append-only), `jarvis_lease/finish`, `hq_core.worker_once`; sqltest J3-J5 |
 | B Only Jarvis always on; agents woken per job with a reason, sleep on empty queue / no progress | BUILT-DORMANT | `jarvis_agent_wakes` (append-only), `jarvis_wake_agent/sleep_agent`; J16 + unit tests. The existing engine tick (`hq_engine.tick`, 5 min) is unchanged and still processes the task board |
 | B Quiet hours (22-07 emergencies only, weekdays 8-17 urgent only) | BUILT-DORMANT | `hq_core.notify_allowed/send_owner` (held via `deliver_after`). Existing owner-message delivery keeps its own 22-07 rule |

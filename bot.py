@@ -719,12 +719,12 @@ async def approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     _, decision, request_id = query_cb.data.split(":", 2)
     future = pending_approvals.get(request_id)
     if future is None or future.done():
-        await query_cb.edit_message_text("This request is no longer active.")
+        await hq_core.edit_callback(query_cb, "This request is no longer active.")
         return
 
     approved = decision == "yes"
     future.set_result(approved)
-    await query_cb.edit_message_text("✅ Approved." if approved else "❌ Denied.")
+    await hq_core.edit_callback(query_cb, "✅ Approved." if approved else "❌ Denied.")
 
 
 # Bash commands /build will always refuse, even after you've approved a plan.
@@ -2166,8 +2166,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await hq_core.reply_to(update.message, NON_OWNER_REPLY)
         return
     reply_text = await jarvis_reply(update.effective_chat.id, update.message.text, context)
-    for chunk in split_for_telegram(reply_text):
-        await hq_core.reply_to(update.message, chunk)
+    await hq_core.reply_to(update.message, reply_text)      # addressed once, then split (R1)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2199,8 +2198,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     await hq_core.reply_to(update.message, "Heard: " + text[:500])
     reply_text = await jarvis_reply(update.effective_chat.id, text, context)
-    for chunk in split_for_telegram(reply_text):
-        await hq_core.reply_to(update.message, chunk)
+    await hq_core.reply_to(update.message, reply_text)      # addressed once, then split (R1)
 
 
 def _is_owner(user_id: int) -> bool:
@@ -2325,8 +2323,7 @@ async def run_plan_phase(
     state["session_id"] = session_id
     state["plan_cents"] = plan_cents
 
-    for chunk in split_for_telegram(plan_text):
-        await hq_core.send_to(context.bot, chat_id, chunk)
+    await hq_core.send_to(context.bot, chat_id, plan_text)      # addressed once, then split (R1)
 
     keyboard = InlineKeyboardMarkup(
         [
@@ -2357,16 +2354,16 @@ async def build_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     state = build_sessions.get(chat_id)
     if not state or state.get("status") != "awaiting_approval":
-        await query_cb.edit_message_text("This request is no longer active.")
+        await hq_core.edit_callback(query_cb, "This request is no longer active.")
         return
 
     if action == "cancel":
         build_sessions.pop(chat_id, None)
-        await query_cb.edit_message_text("Cancelled - no changes were made.")
+        await hq_core.edit_callback(query_cb, "Cancelled - no changes were made.")
         return
 
     state["status"] = "building"
-    await query_cb.edit_message_text("🛠 Building now...")
+    await hq_core.edit_callback(query_cb, "🛠 Building now...")
     asyncio.create_task(run_build_phase(chat_id, context, state))
 
 
@@ -2383,7 +2380,7 @@ async def run_build_phase(
             return
         last_edit = now
         try:
-            await status_message.edit_text(text[:TELEGRAM_MESSAGE_LIMIT])
+            await hq_core.edit_to(status_message, chat_id, text)      # addressed, then cut to the limit (SF7)
         except Exception:
             pass  # text unchanged or rate-limited - not worth failing over
 
@@ -2485,10 +2482,9 @@ async def run_build_phase(
             "workspace (which I block) or hit an error. Here's what it said:\n\n"
             f"{final_text or '(no explanation given)'}"
         )
-        await update_status(message_text[:TELEGRAM_MESSAGE_LIMIT])
-        if len(message_text) > TELEGRAM_MESSAGE_LIMIT:
-            for chunk in split_for_telegram(message_text[TELEGRAM_MESSAGE_LIMIT:]):
-                await hq_core.send_to(context.bot, chat_id, chunk)
+        parts = hq_core.parts_for(chat_id, message_text)      # addressed once, then split: nothing lost, no piece over the limit (R1)
+        await update_status(message_text)                   # edit_to shows exactly parts[0]
+        await hq_core.send_rest(context.bot, chat_id, parts[1:])
         return
 
     changes = [f"- created {p}" for p in created] + [f"- modified {p}" for p in modified]

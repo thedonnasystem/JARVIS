@@ -23,7 +23,7 @@ class Repo:
         self.g("init", "-q", "-b", "main")
         self.g("config", "user.email", "t@example.invalid"); self.g("config", "user.name", "t")
         self.write("hq_meter.py", "def reserve():\n    return 1\n" * 20)
-        self.write("hq_ideas_extra.py", "x = 1\n")
+        self.write("extras/ideas_extra.py", "x = 1\n")
         self.write("migrations/APPLY_ORDER.txt", "a.sql\n")
         self.g("add", "-A"); self.g("commit", "-qm", "base"); self.g("branch", "base")
 
@@ -52,7 +52,7 @@ class ScanTests(unittest.TestCase):
         self.r.close()
 
     def test_unprotected_edit_passes(self):
-        self.r.write("hq_ideas_extra.py", "x = 2\nprint('hello')\n")
+        self.r.write("extras/ideas_extra.py", "x = 2\nprint('hello')\n")
         self.assertEqual(self.r.commit(), [])
 
     def test_protected_modify_is_found(self):
@@ -87,7 +87,7 @@ class ScanTests(unittest.TestCase):
         self.assertTrue(any(p == ".github/workflows/x.yml" and cat == "judges" for cat, p, _ in f), f)
 
     def test_sql_writes_in_unprotected_code(self):
-        self.r.write("hq_ideas_extra.py", "x = 1\ncur.execute(\"update system_state set kill_switch = false\")\nq = 'select 1 from system_state'\n")
+        self.r.write("extras/ideas_extra.py", "x = 1\ncur.execute(\"update system_state set kill_switch = false\")\nq = 'select 1 from system_state'\n")
         f = self.r.commit()
         self.assertEqual([c for c, _, _ in f], ["kill_switch_and_mode"], f)      # the read-only line is not a finding
 
@@ -119,14 +119,15 @@ class PathTests(unittest.TestCase):
             self.assertIsNotNone(C.path_category(CFG, p), p)
 
     def test_path_findings(self):
-        f = C.path_findings(CFG, ["../x.py", "hq_ideas.py", "./hq_capital.py", "a/../../b"])
-        self.assertEqual([p for _, p, _ in f], ["../x.py", "hq_capital.py", "a/../../b"])
+        f = C.path_findings(CFG, ["../x.py", "extras/ideas.py", "hq_ideas.py", "./hq_capital.py", "a/../../b"])
+        self.assertEqual([p for _, p, _ in f], ["../x.py", "hq_ideas.py", "hq_capital.py", "a/../../b"])      # every top-level module is locked (B3)
 
     def test_every_category_from_the_brief_exists(self):
         self.assertEqual(set(CFG["categories"]), {"money", "kill_switch_and_mode", "jarvis_permissions", "legal_privacy", "judges", "audit_history", "database"})
 
     def test_cli_paths_mode(self):
-        self.assertEqual(C.main(["--paths", "hq_ideas.py"]), 0)
+        self.assertEqual(C.main(["--paths", "extras/ideas.py"]), 0)
+        self.assertEqual(C.main(["--paths", "hq_ideas.py"]), 1)
         self.assertEqual(C.main(["--paths", "hq_policy.py"]), 1)
 
 
@@ -161,14 +162,14 @@ class ApprovalTests(unittest.TestCase):
         self.assertFalse(C.approval(ACFG, "o/r", 5, SHA, self.fetch([self.rv("chairman-second", "APPROVED"), self.rv("chairman-second", "CHANGES_REQUESTED")]))[0])
 
     def test_owner_label_for_this_head(self):
-        lab = "owner-approved-" + SHA[:12]
+        lab = "owner-ok-" + SHA
         self.assertTrue(C.approval(ACFG, "o/r", 5, SHA, self.fetch(events=[self.ev("chairman-second", "labeled", lab)], labels=[lab]))[0])
 
     def test_label_by_other_account_or_removed_or_stale(self):
-        lab = "owner-approved-" + SHA[:12]
+        lab = "owner-ok-" + SHA
         self.assertFalse(C.approval(ACFG, "o/r", 5, SHA, self.fetch(events=[self.ev("jarvis-bot", "labeled", lab)], labels=[lab]))[0])
         self.assertFalse(C.approval(ACFG, "o/r", 5, SHA, self.fetch(events=[self.ev("chairman-second", "labeled", lab), self.ev("chairman-second", "unlabeled", lab)], labels=[]))[0])
-        old = "owner-approved-" + OLD[:12]
+        old = "owner-ok-" + OLD
         self.assertFalse(C.approval(ACFG, "o/r", 5, SHA, self.fetch(events=[self.ev("chairman-second", "labeled", old)], labels=[old]))[0])
 
     def test_ci_fails_closed_without_context(self):
@@ -199,7 +200,7 @@ class IdentityTests(unittest.TestCase):
         return f
 
     def test_shipped_config_fails_closed_today(self):
-        lab = "owner-approved-" + SHA[:12]
+        lab = "owner-ok-" + SHA
         ev = [{"actor": {"login": "thedonnasystem"}, "event": "labeled", "label": {"name": lab}}]
         ok, how = C.approval(CFG, "o/r", 5, SHA, self.fetch(events=ev, labels=[lab]))
         self.assertFalse(ok); self.assertIn("FAIL CLOSED", how); self.assertIn("second GitHub account", how)
@@ -211,7 +212,7 @@ class IdentityTests(unittest.TestCase):
         self.assertFalse(ok); self.assertIn("author", how)
 
     def test_label_must_be_applied_by_owner_not_agent(self):
-        lab = "owner-approved-" + SHA[:12]
+        lab = "owner-ok-" + SHA
         ev = [{"actor": {"login": "chairman-second"}, "event": "labeled", "label": {"name": lab}},
               {"actor": {"login": "thedonnasystem"}, "event": "unlabeled", "label": {"name": lab}},
               {"actor": {"login": "thedonnasystem"}, "event": "labeled", "label": {"name": lab}}]
@@ -220,7 +221,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_label_method_can_be_switched_off(self):
         cfg = copy.deepcopy(ACFG); cfg["approval"]["methods"] = ["review"]
-        lab = "owner-approved-" + SHA[:12]
+        lab = "owner-ok-" + SHA
         ev = [{"actor": {"login": "chairman-second"}, "event": "labeled", "label": {"name": lab}}]
         self.assertFalse(C.approval(cfg, "o/r", 5, SHA, self.fetch(events=ev, labels=[lab]))[0])
 
@@ -270,7 +271,7 @@ class BypassTests(unittest.TestCase):
         self.assertTrue({"hq_helpers.py", "sitecustomize.py", "lib/usercustomize.py", "lib/evil.pth"} <= paths, f)
 
     def test_monkey_patch_line_in_existing_module(self):
-        self.r.write("hq_ideas_extra.py", "x = 1\nimport hq_meter\nhq_meter._reserve_cents = lambda *a: 1\nsetattr(hq_llm, 'eligible', None)\n")
+        self.r.write("extras/ideas_extra.py", "x = 1\nimport hq_meter\nhq_meter._reserve_cents = lambda *a: 1\nsetattr(hq_llm, 'eligible', None)\n")
         f = self.r.commit()
         self.assertGreaterEqual(sum(1 for c, _, w in f if c == "jarvis_permissions" and "patches" in w), 2, f)
 
@@ -291,7 +292,7 @@ class BypassTests(unittest.TestCase):
             self.assertIsNotNone(C.path_category(CFG, p), p)
 
     def test_double_plus_line(self):
-        self.r.write("hq_ideas_extra.py", "x = 1\n++sb.table('system_state').update({'kill_switch': False})\n")
+        self.r.write("extras/ideas_extra.py", "x = 1\n++sb.table('system_state').update({'kill_switch': False})\n")
         f = self.r.commit()
         self.assertIn("kill_switch_and_mode", self.cats(f), f)
 
@@ -321,12 +322,12 @@ class BypassTests(unittest.TestCase):
         self.assertNotIn("docs/readme.md", hit)
 
     def test_zone_only_flags_everything_outside_the_zone(self):
-        self.r.write("jarvis_skills/greet.py", "def run(p):\n    return {}\n")
+        self.r.write("prompts/greet.txt", "hello\n")
         self.r.write("docs/a.md", "x\n")
-        self.r.write("hq_ideas_extra.py", "x = 3\n")
+        self.r.write("extras/ideas_extra.py", "x = 3\n")
         self.r.g("add", "-A"); self.r.g("commit", "-qm", "c")
         f = C.scan(CFG, "base", "HEAD", root=self.r.d, zone_only=True)
-        self.assertEqual({p for c, p, _ in f if c == "self_edit_zone"}, {"hq_ideas_extra.py"}, f)
+        self.assertEqual({p for c, p, _ in f if c == "self_edit_zone"}, {"extras/ideas_extra.py"}, f)
 
 
 class ModeTests(unittest.TestCase):
@@ -343,8 +344,77 @@ class ModeTests(unittest.TestCase):
         self.assertTrue(C.path_findings(CFG, ["hq_ideas.py"], selfedit=True, mode="allowlist"))
         self.assertFalse(C.path_findings(CFG, ["tools/ideas.py"], selfedit=True, mode="denylist"))
         self.assertTrue(C.path_findings(CFG, ["tools/ideas.py"], selfedit=True, mode="allowlist"))
-        for ok in ("jarvis_skills/greet.py", "docs/notes.md", "prompts/brief.txt", "webapp/hq/view.js"):
+        for ok in ("docs/notes.md", "prompts/brief.txt", "docs/a/b.md"):
             self.assertEqual(C.path_findings(CFG, [ok], selfedit=True, mode="allowlist"), [], ok)
+        for bad in ("jarvis_skills/greet.py", "webapp/hq/view.js", "webapp/index.html", "webapp/sw.js"):      # B4: out of the zone and locked
+            self.assertTrue(C.path_findings(CFG, [bad], selfedit=True, mode="allowlist"), bad)
+            self.assertIsNotNone(C.path_category(CFG, bad), bad)
+
+
+class RVJC2Tests(unittest.TestCase):
+    """RVJC2 B3 / B4 / S5: every top-level module locked, more deploy configs, agents.status, built REST table names, SQL comments, more patch forms,
+    zone on every Jarvis PR, full-SHA label."""
+    def setUp(self):
+        self.r = Repo()
+
+    def test_every_top_level_module_is_locked(self):
+        for p in ("hq_missions.py", "hq_briefing.py", "hq_verify.py", "hq_wholesale.py", "brand_new.py", "HQ_Org.py"):
+            self.assertIsNotNone(C.path_category(CFG, p), p)
+        self.assertIsNone(C.path_category(CFG, "extras/ideas.py"))
+        self.r.write("hq_missions.py", "x = 1\n"); self.r.g("add", "-A"); self.r.g("commit", "-qm", "b2"); self.r.g("branch", "-f", "base")
+        self.r.write("hq_missions.py", "x = 2\n")
+        self.assertEqual({p for _, p, _ in self.r.commit()}, {"hq_missions.py"})
+
+    def test_directory_named_like_any_top_level_module(self):
+        self.r.write("hq_ideas2.py", "x = 1\n"); self.r.g("add", "-A"); self.r.g("commit", "-qm", "b2"); self.r.g("branch", "-f", "base")
+        self.r.write("hq_ideas2/x.py", "y = 1\n")
+        self.assertTrue(any("named like protected module" in w for _, _, w in self.r.commit()))
+
+    def test_deploy_and_start_configs(self):
+        for p in ("railpack.json", "nixpacks.json", "render.yaml", "fly.toml", "docker-compose.yml", "docker-compose.prod.yaml", "compose.yaml", "heroku.yml",
+                  "app.json", "package.json", ".env", ".env.local", "pytest.ini", "tox.ini", "start.sh", "ops/start.sh", "Procfile.dev", "deploy/Procfile",
+                  "sub/railway.json", "Makefile"):
+            self.assertIsNotNone(C.path_category(CFG, p), p)
+
+    def _lines(self, path, text):
+        return C.line_findings(CFG, path, text) + C.window_findings(CFG, path, text.split("\n"))
+
+    def test_agents_status_and_built_table_names(self):
+        for path, text in (("tools/a.sql", "update public.agents set status='active' where slug='jarvis-core';"),
+                           ("tools/a.py", "hq._request('PATCH', '/rest/v1/agents?slug=eq.jarvis-core', {'status': 'active'})"),
+                           ("tools/a.py", "hq._request('PATCH', '/rest/v1/' + '_'.join(['system', 'state']) + '?id=eq.1', {'kill_switch': False})"),
+                           ("tools/a.py", "hq._request('POST', f'/rest/v1/{name}', row)"),
+                           ("tools/a.py", "sb.table(t).update({})"),
+                           ("tools/a.sql", "delete/**/from public.leads;"),
+                           ("tools/a.sql", "delete /* x */ from public.leads;"),
+                           ("tools/a.sql", "delete -- hidden\nfrom public.leads;")):
+            self.assertTrue(self._lines(path, text), text)
+        self.assertFalse(self._lines("tools/a.py", "rows = hq._request('GET', '/rest/v1/missions?select=id')"))
+
+    def test_more_patch_forms(self):
+        for text in ("import hq_meter as _m", "from hq_meter import _reserve_cents as _rc", "hq_meter.__dict__.update(x=1)", "vars(m)['_reserve_cents'] = f",
+                     "mock.patch('hq_meter._reserve_cents', f).start()", "setattr(_m, 'x', 1)", "getattr(builtins, 'set' + 'attr')",
+                     "f.__code__ = g.__code__", "from importlib import import_module as _im", "types.FunctionType(code, {})", "compile(src, 'x', 'exec')",
+                     "subprocess.run(['python3', '-c', src])", "os.system('python3 x.py')"):
+            self.assertTrue(C.line_findings(CFG, "tools/a.py", text), text)
+
+    def test_zone_on_every_jarvis_pr(self):
+        cfg = C.load()
+        self.assertEqual(cfg["self_edit"]["auto_ship_zone"], ["docs/**", "prompts/**"])
+        self.assertTrue(C.zone_branch(cfg, "jarvis/auto-x-1"))
+        self.assertTrue(C.zone_branch(cfg, "jarvis/integration", "overnight-build"))      # the release PR
+        self.assertTrue(C.zone_branch(cfg, "feature/x", "jarvis/integration"))
+        self.assertFalse(C.zone_branch(cfg, "build/jarvis-core", "overnight-build"))
+
+    def test_symlinked_directories(self):
+        os.symlink(".", os.path.join(self.r.d, "lib"))
+        os.symlink("extras", os.path.join(self.r.d, "pkg"))
+        f = self.r.commit()
+        self.assertEqual({p for _, p, w in f if "symlink to the directory" in w}, {"lib", "pkg"}, f)
+
+    def test_label_is_the_full_sha(self):
+        self.assertEqual(C.load()["approval"]["label_prefix"], "owner-ok-")
+        self.assertLessEqual(len("owner-ok-" + SHA), 50)
 
 
 if __name__ == "__main__":

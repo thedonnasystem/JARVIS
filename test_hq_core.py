@@ -284,3 +284,104 @@ class AiJobRoutingTests(unittest.TestCase):
         self.assertEqual(slept.call_count, 2)
         bodies = [a[2] for a in posted if a[1] == "/rest/v1/owner_messages"]
         self.assertTrue(any(b.get("needs_decision") and "d" * 12 in b["body"] for b in bodies), posted)
+
+
+class TelegramLimitTests(unittest.TestCase):
+    """R1: "Sir, " is added once, before splitting, so no piece exceeds Telegram's 4,096 characters; only the first piece carries it.
+    SF7: status edits and button pop-ups are addressed too and stay inside their limits."""
+    def _send(self, text):
+        import asyncio
+
+        class Msg:
+            def __init__(self):
+                self.chat, self.sent, self.kws = type("C", (), {"id": 42})(), [], []
+
+            async def reply_text(self, t, **kw):
+                self.sent.append(t); self.kws.append(kw)
+                return len(self.sent)
+
+        class Bot:
+            def __init__(self):
+                self.sent, self.kws = [], []
+
+            async def send_message(self, cid, t, **kw):
+                self.sent.append(t); self.kws.append(kw)
+        with mock.patch.dict("os.environ", {"JARVIS_OWNER_ID": "42"}):
+            m, b = Msg(), Bot()
+            first = asyncio.run(C.reply_to(m, text, reply_markup="KB"))
+            asyncio.run(C.send_to(b, 42, text, reply_markup="KB"))
+        self.assertEqual(first, 1)
+        self.assertEqual(m.sent, b.sent)
+        self.assertEqual([bool(k) for k in m.kws], [False] * (len(m.sent) - 1) + [True])     # buttons only on the last piece
+        return m.sent
+
+    def test_lengths(self):
+        for n in (4095, 4096, 5000, 9000):
+            for body in ("x" * n, "Sir, " + "y" * (n - 5)):
+                sent = self._send(body)
+                self.assertTrue(all(len(p) <= 4096 for p in sent), (n, [len(p) for p in sent]))
+                self.assertEqual("".join(sent), C.address(body))                      # nothing lost, nothing added twice
+                self.assertTrue(sent[0].startswith("Sir, "))
+                self.assertEqual(sum(p.startswith("Sir, ") for p in sent), 1, n)      # only the first piece is prefixed
+        self.assertEqual([len(p) for p in self._send("x" * 4095)], [4096, 4])
+        self.assertEqual([len(p) for p in self._send("x" * 5000)], [4096, 909])
+        self.assertEqual([len(p) for p in self._send("x" * 9000)], [4096, 4096, 813])
+        self.assertEqual([len(p) for p in self._send("x" * 4091)], [4096])
+
+    def test_not_owner_chat_is_split_but_not_addressed(self):
+        self.assertEqual([len(p) for p in C.parts_for(7, "z" * 9000)], [4096, 4096, 808])
+
+    def test_status_edits_and_popups(self):
+        import asyncio
+
+        class Status:
+            async def edit_text(self, t, **kw):
+                self.t = t
+
+        class Query:
+            def __init__(self):
+                self.message = type("M", (), {"chat": type("C", (), {"id": 42})()})()
+
+            async def edit_message_text(self, t, **kw):
+                self.t = t
+        with mock.patch.dict("os.environ", {"JARVIS_OWNER_ID": "42"}):
+            s, q = Status(), Query()
+            asyncio.run(C.edit_to(s, 42, "Starting..."))
+            self.assertEqual(s.t, "Sir, Starting...")
+            asyncio.run(C.edit_to(s, 42, "w" * 5000))
+            self.assertEqual(len(s.t), 4096)
+            asyncio.run(C.edit_callback(q, "Cancelled - no changes were made."))
+            self.assertEqual(q.t, "Sir, Cancelled - no changes were made.")
+            self.assertEqual(C.popup_for(42, "Saved."), "Sir, Saved.")
+            self.assertEqual(len(C.popup_for(42, "p" * 400)), C.POPUP_LIMIT)
+            self.assertEqual(C.popup_for(7, "Saved."), "Saved.")
+
+    def test_no_per_chunk_prefix_left_in_the_bot(self):
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent
+        bot = (root / "bot.py").read_text()
+        self.assertNotRegex(bot, r"for chunk in split_for_telegram\([^)]*\):\s*\n\s*await hq_core\.(reply_to|send_to)")
+        self.assertNotIn("query_cb.edit_message_text(", bot)
+        self.assertNotIn("status_message.edit_text(", bot)
+        self.assertNotIn("query.answer(result", (root / "hq_commands.py").read_text())
+
+
+class DryRunHoldTests(unittest.TestCase):
+    """N10: external-effect jobs do nothing in dry_run (or when the mode cannot be read); internal jobs still run."""
+    def test_hold(self):
+        ran = []
+        C.HANDLERS["test.send.email"] = lambda j: ran.append("send") or {}
+        C.HANDLERS["test.tally"] = lambda j: ran.append("tally") or {}
+        try:
+            for mode in (lambda: "dry_run", lambda: None, lambda: "weird", lambda: 1 / 0):
+                ok, err, _, _ = C.run_job({"id": "j", "kind": "test.send.email"}, mode=mode)
+                self.assertFalse(ok); self.assertIn("held", err)
+            self.assertEqual(ran, [])
+            self.assertTrue(C.run_job({"id": "j", "kind": "test.send.email"}, mode=lambda: "approve_first")[0])
+            self.assertTrue(C.run_job({"id": "j", "kind": "test.tally"}, mode=lambda: "dry_run")[0])
+            self.assertFalse(C.run_job({"id": "j", "kind": "test.tally", "payload": {"recipient": "x"}}, mode=lambda: "dry_run")[0])
+            with mock.patch.object(C, "core_status", return_value={"error": "down"}):
+                self.assertIn("held", C.run_job({"id": "j", "kind": "release.check"})[1])
+            self.assertEqual(ran, ["send", "tally"])
+        finally:
+            C.HANDLERS.pop("test.send.email"); C.HANDLERS.pop("test.tally")

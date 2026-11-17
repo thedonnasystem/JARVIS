@@ -7,7 +7,7 @@ import hq_selfedit as E
 
 ON = {"JARVIS_SELFEDIT": "1", "JARVIS_GITHUB_TOKEN": "t", "GITHUB_REPO": "o/r"}
 GREEN = [{"name": n, "status": "completed", "conclusion": "success"} for n in ("unit", "migrations", "protected-paths")]
-SKILL = "jarvis_skills/report_summary.py"
+SKILL = "prompts/report_summary.txt"        # B4 (Nov 17 2026): the zone is docs/** and prompts/** only
 
 
 class FakeGH:
@@ -63,9 +63,17 @@ class SetupTests(unittest.TestCase):
         self.assertIn("separate machine account", str(c.exception))
         self.assertIsNotNone(E.setup(env=ON, status=lambda: {"config": {"self_edit_enabled": True}}, opener=FakeGH()))
 
+    def test_rvjc2_zone_is_text_only(self):
+        """B4: webapp/hq/** (runs in the Chairman's signed-in app) and jarvis_skills/** are out of the auto-ship zone."""
+        for path, content in (("webapp/hq/hq.js", "const f = ['app','set','kill'].join('_');\n"), ("jarvis_skills/x.py", "def run(p):\n    return {}\n")):
+            with self.assertRaises(E.SelfEditRefused, msg=path):
+                E.screen([{"path": path, "content": content}])
+        self.assertEqual(len(E.screen([{"path": "docs/notes.md", "content": "notes\n"}])), 1)
+
     def test_base_branch_rules(self):
         self.assertEqual(E.base_branch({}), "jarvis/integration")
-        for b in ("overnight-build", "claude/telegram-claude-bot-59nusk", "main", "feature/x"):
+        for b in ("overnight-build", "claude/telegram-claude-bot-59nusk", "main", "feature/x", "jarvis/../overnight-build", "jarvis/", "jarvis//x",
+                  "jarvis/x/", "jarvis/x.lock", "jarvis/.x", "jarvis/auto-x", "jarvis/x y", "JARVIS/integration"):      # N9
             with self.assertRaises(E.SelfEditRefused):
                 E.base_branch({"JARVIS_SELFEDIT_BASE": b})
 
@@ -204,8 +212,12 @@ class FlowTests(unittest.TestCase):
             self.assertTrue(E.is_protected_class(cls), cls)
             with self.assertRaises(E.SelfEditRefused):
                 E.draft_automation({"task_class": cls}, gh=gh(FakeGH()), complete=lambda s, m: self.fail("model called"))
+        # B4: a skill draft (jarvis_skills/*.py) is out of the zone and locked now, so the pipeline refuses it (owner approval)
+        with self.assertRaises(E.SelfEditRefused):
+            E.draft_automation({"task_class": "report.summary", "runs": 40, "cost_cents": 0}, gh=gh(FakeGH()),
+                               complete=lambda s, m: {"text": "FILE: jarvis_skills/report_summary.py\ndef run(p):\n    return {}\nEND FILE", "provider": "groq", "model": "m"})
         url = E.draft_automation({"task_class": "report.summary", "runs": 40, "cost_cents": 0}, gh=gh(FakeGH()),
-                                 complete=lambda s, m: {"text": f"FILE: {SKILL}\ndef run(p):\n    return {{}}\nEND FILE", "provider": "groq", "model": "m"})
+                                 complete=lambda s, m: {"text": f"FILE: {SKILL}\nSummarise the report in three lines.\nEND FILE", "provider": "groq", "model": "m"})
         self.assertEqual(url, "https://example.invalid/pull/7")
 
 

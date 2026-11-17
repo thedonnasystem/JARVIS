@@ -8,8 +8,8 @@
       "label"
     ],
     "review": "an APPROVED pull-request review by owner_login whose commit_id equals the PR head SHA (CODEOWNERS names owner_login; branch rules should require code-owner review)",
-    "label_prefix": "owner-approved-",
-    "label_rule": "a label named owner-approved-<first 12 characters of the head SHA>, still on the PR, whose latest 'labeled' issue event was by owner_login",
+    "label_prefix": "owner-ok-",
+    "label_rule": "a label named owner-ok-<the FULL 40-character head SHA> (49 characters, inside GitHub's 50-character label limit), still on the PR, whose latest 'labeled' issue event was by owner_login",
     "fail_closed": "no approval counts when owner_login is empty, is one of agent_logins, or is the PR author; a label counts only when its actor is owner_login, is not an agent login and is not the PR author"
   },
   "categories": {
@@ -58,7 +58,7 @@
       ]
     },
     "jarvis_permissions": {
-      "about": "executor registry, roles / grants / RLS, app_owners, auth, key and secret handling, the self-edit pipeline and the core switches; owner checks (hq_core), the emergency-call criteria and quiet hours (hq_core, hq_channels), the seed import, the skill loader, deploy configs and anything Python loads automatically",
+      "about": "executor registry, roles / grants / RLS, app_owners, auth, key and secret handling, the self-edit pipeline and the core switches; owner checks (hq_core), the emergency-call criteria and quiet hours (hq_core, hq_channels), the seed import, the skill loader, deploy configs and anything Python loads automatically; B3 (Chairman decision via the coordinator, Nov 17 2026): EVERY top-level *.py runtime module, present or new, is locked (core engine changes need owner approval), as are every deploy / start config, webapp/ (it runs in the Chairman's signed-in app) and jarvis_skills/ (until skills run isolated)",
       "paths": [
         "hq.py",
         "bot.py",
@@ -95,7 +95,54 @@
         "**/conftest.py",
         "**/__init__.py",
         "**/.gitattributes",
-        "**/.gitmodules"
+        "**/.gitmodules",
+        "*.py",
+        "webapp/",
+        "jarvis_skills/",
+        "**/railpack.json",
+        "**/nixpacks.json",
+        "**/render.yaml",
+        "**/render.yml",
+        "**/fly.toml",
+        "**/docker-compose*",
+        "**/compose.yaml",
+        "**/compose.yml",
+        "**/heroku.yml",
+        "**/app.json",
+        "**/app.yaml",
+        "**/package.json",
+        "**/package-lock.json",
+        "**/.env*",
+        "*.sh",
+        "**/start*.sh",
+        "**/entrypoint*.sh",
+        "**/boot*.sh",
+        "**/run*.sh",
+        "**/Procfile*",
+        "**/Makefile",
+        "**/pytest.ini",
+        "**/tox.ini",
+        "**/.python-version",
+        "**/runtime.txt",
+        "**/Aptfile",
+        "**/.buildpacks",
+        "**/project.toml",
+        "**/vercel.json",
+        "**/netlify.toml",
+        "**/wsgi.py",
+        "**/asgi.py",
+        "**/gunicorn*.py",
+        "**/supervisord*.conf",
+        "**/requirements*.txt",
+        "**/requirements*.in",
+        "**/constraints*.txt",
+        "**/Pipfile*",
+        "**/poetry.lock",
+        "**/uv.lock",
+        "**/.nixpacks/",
+        "**/.railway/",
+        "**/.nixpacks/**",
+        "**/.railway/**"
       ],
       "sql": [
         "executor_registry",
@@ -344,7 +391,7 @@
   "jarvis_logins": [],
   "owner_identity_note": "owner_login must be a GitHub account that NO agent session can use. Today the agents and the owner share the account in agent_logins, so the gate FAILS CLOSED (no approval can count) until the Chairman creates a second GitHub account, puts its login here and in .github/CODEOWNERS, and removes nothing else. Owner decision.",
   "trusted": {
-    "about": "CI runs scripts/check_protected_paths.py and this file from the PR's BASE branch (pull_request_target workflow protected-paths.yml, and a separate trusted checkout in tests.yml)",
+    "about": "CI runs scripts/check_protected_paths.py and this file from the PR's BASE branch. ONLY the pull_request_target job protected-paths (protected-paths.yml) is relied on: it runs no PR code. The copy inside tests.yml's unit job runs after the PR's own tests in the same job, so a PR can switch it off (S6): it is an early warning, never the control.",
     "protected_branches": [
       "overnight-build",
       "main",
@@ -361,12 +408,13 @@
     ],
     "default_mode": "allowlist",
     "branch_prefix": "jarvis/auto-",
-    "about": "allowlist: Jarvis's self-edits may auto-ship ONLY inside auto_ship_zone; everything else needs owner approval. denylist: anything not protected may auto-ship. The deny rules apply in both modes.",
+    "about": "allowlist: Jarvis's self-edits may auto-ship ONLY inside auto_ship_zone (docs/** and prompts/**: text, nothing that runs). webapp/hq/** (runs in the Chairman's signed-in app) and jarvis_skills/** were removed from the zone (Nov 17 2026) and now need owner approval, until skills run in an isolated subprocess with an empty environment and no access to app modules and the web zone cannot reach owner functions. The zone is enforced on EVERY pull request whose head or base branch starts with a zone_branch_prefixes entry (the auto-* PRs AND the jarvis/integration release PR). denylist: anything not protected may auto-ship. The deny rules apply in both modes.",
     "auto_ship_zone": [
-      "jarvis_skills/*.py",
-      "webapp/hq/**",
       "docs/**",
       "prompts/**"
+    ],
+    "zone_branch_prefixes": [
+      "jarvis/"
     ]
   },
   "data_extensions": [
@@ -386,5 +434,20 @@
     ".dockerignore",
     "LICENSE",
     "CODEOWNERS"
-  ]
+  ],
+  "write_patterns": {
+    "about": "B3: writes that are protected whatever file they are in: the dormancy control agents.status, and REST writes whose table name is built at run time (the object cannot be read from the diff)",
+    "agents_status": [
+      "\\b(public\\.)?agents\\b[^\\n]{0,120}\\bstatus\\b",
+      "/rest/v1/agents\\b[^\\n]{0,160}\\bstatus\\b"
+    ],
+    "rest_dynamic": [
+      "/rest/v1/\\s*['\"]\\s*(\\+|%|\\.format\\b|\\.join\\b)",
+      "/rest/v1/\\{",
+      "/rest/v1/%s",
+      "/rest/v1/['\"]?\\s*\\)?\\s*\\+",
+      "\\.table\\s*\\(\\s*(?!['\"])[A-Za-z_]",
+      "\\.from_\\s*\\(\\s*(?!['\"])[A-Za-z_]"
+    ]
+  }
 }

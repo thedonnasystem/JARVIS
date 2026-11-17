@@ -84,7 +84,14 @@ create or replace function auth.uid() returns uuid language sql as $$ select nul
 create or replace function auth.jwt() returns jsonb language sql as $$ select jsonb_build_object('email', current_setting('app.email', true)) $$;
 create or replace function auth.email() returns text language sql as $$ select current_setting('app.email', true) $$;
 create schema if not exists cron; create table if not exists cron.job (jobid serial, jobname text, schedule text, command text);
-create or replace function cron.schedule(n text, s text, c text) returns int language sql as $$ insert into cron.job(jobname, schedule, command) values (n, s, c) returning jobid $$;
+-- like pg_cron: scheduling an existing job name updates that job (N10: a second apply does not duplicate rows)
+create or replace function cron.schedule(n text, s text, c text) returns int language plpgsql as $$
+declare j int;
+begin
+  update cron.job set schedule = s, command = c where jobname = n returning jobid into j;
+  if j is null then insert into cron.job(jobname, schedule, command) values (n, s, c) returning jobid into j; end if;
+  return j;
+end $$;
 create or replace function cron.unschedule(j int) returns boolean language sql as $$ delete from cron.job where jobid = j; select true $$;
 create extension if not exists pgcrypto;
 -- seed agents the migrations expect

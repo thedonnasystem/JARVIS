@@ -10316,7 +10316,7 @@ returns int language sql stable set search_path to 'public' as $$
                      where t.mission_id = p_mission and c.status in ('reserved','done')), 0)
         + coalesce((select sum(coalesce(c.actual_cents, c.reserved_cents))
                       from public.llm_calls c
-                     where c.purpose like 'jarvis:%:' || p_mission::text || ':%' and c.status in ('reserved','done')), 0))::int;
+                     where lower(c.purpose) like 'jarvis:%:' || p_mission::text || ':%' and c.status in ('reserved','done')), 0))::int;   -- S4: any case
 $$;
 revoke all on function public.mission_spent_cents(uuid) from public, anon, authenticated;   -- unchanged ACL (service_role keeps execute)
 
@@ -10327,9 +10327,12 @@ begin
   select focus_mission into v_focus from public.system_state where id = 1;
   if p_purpose ~ '^task [0-9a-fA-F-]{36}$' then
     select mission_id into v_mission from public.tasks where id = substr(p_purpose, 6)::uuid;
-  elsif p_purpose ~ '^jarvis:[a-z0-9-]+:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:' then
-    v_mission := split_part(p_purpose, ':', 3)::uuid;
+  elsif p_purpose ~* '^jarvis:[^:]*:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:' then
+    -- S4: any case and any division text (the same purposes mission_spent_cents counts)
+    v_mission := lower(split_part(p_purpose, ':', 3))::uuid;
     if not exists (select 1 from public.missions where id = v_mission) then raise exception 'Unknown mission % in the purpose.', left(v_mission::text, 8); end if;
+  elsif p_purpose ~* '^jarvis:' and split_part(p_purpose, ':', 3) <> '-' then
+    raise exception 'A jarvis purpose must name a mission uuid or -.';
   end if;
   -- The owner talking to Jarvis (chat) is never backlog and is not a mission task; it stays metered by the normal daily caps.
   -- Two narrow exemptions from focus mode, both tiny and both needed to keep control: owner chat (not backlog), and the

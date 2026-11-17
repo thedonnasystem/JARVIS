@@ -59,18 +59,72 @@ def for_chat(chat_id, text):
     return address(text) if _is_owner_chat(chat_id) else text
 
 
-async def reply_to(message, text, **kw):
-    """THE reply helper for every bot reply (bot.py, hq_commands.py, hq_core): in the Chairman's chat it is addressed to "sir"."""
+TELEGRAM_LIMIT = 4096          # Telegram refuses a message over 4,096 characters
+POPUP_LIMIT = 190              # button pop-ups (answerCallbackQuery) allow 200; keep a margin
+
+
+def split_text(text, limit: int = TELEGRAM_LIMIT) -> list[str]:
+    """Cut text into pieces of at most `limit` characters (an empty text is one empty piece)."""
+    t = "" if text is None else str(text)
+    return [t[i:i + limit] for i in range(0, len(t), limit)] or [t]
+
+
+def parts_for(chat_id, text, limit: int = TELEGRAM_LIMIT) -> list[str]:
+    """R1: "Sir, " is added ONCE, to the whole text, BEFORE it is split, so no piece exceeds Telegram's limit and only the first piece carries it."""
+    return split_text(for_chat(chat_id, text), limit)
+
+
+def _chat_of(message):
     chat = getattr(message, "chat", None)
-    chat_id = getattr(chat, "id", None) if chat is not None else getattr(message, "chat_id", None)
-    return await message.reply_text(for_chat(chat_id, text), **kw)
+    return getattr(chat, "id", None) if chat is not None else getattr(message, "chat_id", None)
+
+
+async def reply_to(message, text, **kw):
+    """THE reply helper for every bot reply (bot.py, hq_commands.py, hq_core): in the Chairman's chat it is addressed to "sir".
+    Long text: addressed once, then split at 4,096; buttons (reply_markup) go on the last piece. Returns the first message sent."""
+    parts = parts_for(_chat_of(message), text)
+    first = None
+    for i, part in enumerate(parts):
+        extra = kw if i == len(parts) - 1 else {k: v for k, v in kw.items() if k != "reply_markup"}
+        m = await message.reply_text(part, **extra)
+        first = m if first is None else first
+    return first
 
 
 async def send_to(bot, chat_id, text=None, **kw):
-    """THE send helper for bot-initiated messages (context.bot.send_message): in the Chairman's chat it is addressed to "sir"."""
+    """THE send helper for bot-initiated messages (context.bot.send_message): in the Chairman's chat it is addressed to "sir". Long text as reply_to."""
     if text is None and "text" in kw:
         text = kw.pop("text")
-    return await bot.send_message(chat_id, for_chat(chat_id, text), **kw)
+    parts = parts_for(chat_id, text)
+    first = None
+    for i, part in enumerate(parts):
+        extra = kw if i == len(parts) - 1 else {k: v for k, v in kw.items() if k != "reply_markup"}
+        m = await bot.send_message(chat_id, part, **extra)
+        first = m if first is None else first
+    return first
+
+
+async def send_rest(bot, chat_id, parts: list[str], **kw):
+    """Send pieces that parts_for() already addressed (no second "Sir, "): the continuation after a status edit showed parts[0]."""
+    for part in parts:
+        await bot.send_message(chat_id, part, **kw)
+
+
+async def edit_to(message, chat_id, text, **kw):
+    """Status edits (edit_text / edit_message_text) in the Chairman's chat are addressed too; cut to the limit AFTER addressing."""
+    return await message.edit_text(parts_for(chat_id, text)[0], **kw)
+
+
+async def edit_callback(query, text, **kw):
+    """query.edit_message_text for a button press: addressed in the Chairman's chat, never over the limit."""
+    msg = getattr(query, "message", None)
+    chat_id = _chat_of(msg) if msg is not None else getattr(getattr(query, "from_user", None), "id", None)
+    return await query.edit_message_text(parts_for(chat_id, text)[0], **kw)
+
+
+def popup_for(user_id, text) -> str:
+    """Button pop-up text (query.answer): addressed for the Chairman, cut to POPUP_LIMIT after addressing."""
+    return for_chat(user_id, text)[:POPUP_LIMIT]
 
 
 async def reply(update, text, **kw):
@@ -132,11 +186,40 @@ def handler(kind: str):
     return deco
 
 
-def run_job(job: dict) -> tuple[bool, str | None, int, bool]:
-    """-> (ok, error, cost_cents, used_ai). Unknown kinds go to the generic AI handler only when the payload carries a prompt."""
+# N10: jobs with an effect outside HQ (sending, calling, posting, publishing, paying, deploying, merging, opening a revert) are HELD while the system is
+# in dry-run mode (system_state.mode), and when the mode cannot be read or is unknown (fail closed). They fail with a 'held' error, so the queue retries them later.
+EXTERNAL_WORDS = frozenset({"send", "sms", "text", "email", "mail", "call", "phone", "whatsapp", "dm", "post", "publish", "tweet", "outreach", "contact",
+                            "notify", "pay", "payment", "payout", "transfer", "wire", "refund", "invoice", "order", "purchase", "buy", "book", "deploy",
+                            "release", "merge", "revert", "push", "webhook", "external"})
+
+
+LIVE_MODES = frozenset({"approve_first", "auto_in_caps", "exceptions_only"})      # system_state.mode values other than dry_run (permissions_v1)
+
+
+def external_effect(job: dict) -> bool:
+    words = {w for w in re.split(r"[._\-:]+", str(job.get("kind") or "").lower()) if w}
+    p = job.get("payload") or {}
+    return bool(words & EXTERNAL_WORDS) or bool(p.get("external") or p.get("recipient") or p.get("to"))
+
+
+def _mode() -> str:
+    st = core_status()
+    return str(st.get("mode") or "dry_run") if not st.get("error") else "dry_run"
+
+
+def run_job(job: dict, mode=None) -> tuple[bool, str | None, int, bool]:
+    """-> (ok, error, cost_cents, used_ai). Unknown kinds go to the generic AI handler only when the payload carries a prompt.
+    mode(): the system mode; an external-effect job is held in dry_run or an unreadable / unknown mode (N10)."""
     fn = HANDLERS.get(job.get("kind")) or (_ai_job if (job.get("payload") or {}).get("prompt") else None)
     if fn is None:
         return False, f"no handler for job kind {job.get('kind')}", 0, False
+    if external_effect(job):
+        try:
+            m = (mode or _mode)()
+        except Exception:
+            m = "dry_run"
+        if m not in LIVE_MODES:
+            return False, f"held: {job.get('kind')} has an external effect and the system is in {m or 'unknown'} mode (nothing was done)", 0, False
     try:
         out = fn(job) or {}
         return True, None, int(out.get("cents") or 0), bool(out.get("ai"))
@@ -157,8 +240,8 @@ def extend_lease(job: dict) -> None:
 
 
 def _ai_job(job: dict) -> dict:
-    """Generic model job. Routing is decided by hq_llm from the SOURCES, not by the payload: the prompt is 'job:<kind>' (public only for kinds on
-    hq_llm.PUBLIC_SOURCES), retrieved memory brings its kinds (the private profile never comes back for an external destination), and the text is
+    """Generic model job. Routing is decided by hq_llm from the SOURCES, not by the payload: the prompt is 'job:<kind>', which is ALWAYS private (B5: no
+    job kind is public by name, so a queued prompt goes only to the self-hosted model or is refused), retrieved memory brings its kinds (the private profile never comes back for an external destination), and the text is
     scanned for personal data. Tier via choose_tier; the large tier needs the owner's single-use approval (consumed in hq_llm.complete)."""
     import hq_llm
     p = job.get("payload") or {}

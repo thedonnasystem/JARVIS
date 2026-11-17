@@ -356,5 +356,74 @@ class MoneyHoleTests(Base):
             self.assertTrue(p.problems(), url)
 
 
+class RVJC2RoutingTests(Base):
+    """RVJC2 B5: no job kind is public by name; the personal-data scan also finds names next to client fields, postal codes, addresses, policy /
+    account numbers, medical terms, income / financial amounts and dates of birth. Reviewer repros. N4-N6, S4 (purpose)."""
+    E = {"GROQ_API_KEY": "a"}
+    SELF = {"GROQ_API_KEY": "a", "JARVIS_SELFHOST_BASE_URL": "http://localhost:8080/v1", "JARVIS_SELFHOST_API_KEY": "s"}
+    REPROS = ["Client Jane Roe, policy 12345, diagnosed with type 2 diabetes, 12 Main Street",
+              "Jane Roe, 12 Main Street, date of birth 1980-01-01, mortgage balance $250,000",
+              "Jane Roe earns $85,000 a year", "Send the renewal to K2J 0A1", "Mr Smith wants a call back", "account 99887766 is overdue",
+              "name: Bob Stone", "she is 47 years old", "income 85000", "he takes insulin daily"]
+
+    def test_no_job_kind_is_public(self):
+        self.assertFalse([s for s in L.PUBLIC_SOURCES if s.startswith("job:")])
+        for kind in ("mission.plan", "research.public", "content.public", "code.write", "code.review", "system.toolcheck", "lead.followup"):
+            with self.assertRaises(L.ClientDataRefused, msg=kind):
+                L.complete("s", [{"role": "user", "content": "plain public text"}], division="ffm", task_class=kind, env=self.E,
+                           post=lambda *a: self.fail("sent to a free provider"), tracker=L.RateTracker(), sources=["identity", f"job:{kind}"])
+            r = L.complete("s", [{"role": "user", "content": "plain public text"}], division="ffm", task_class=kind, env=self.SELF,
+                           post=lambda *a: ok_resp(), tracker=L.RateTracker(), sources=["identity", f"job:{kind}"])
+            self.assertEqual((r["provider"], r["route"]), ("selfhost", "private"))
+
+    def test_reviewer_repros_never_reach_a_free_provider(self):
+        for text in self.REPROS:
+            self.assertTrue(L.has_personal_data(text), text)
+            self.assertEqual(L.route_class(["identity", "public_web"], ["x", text]), "private", text)
+            with self.assertRaises(L.ClientDataRefused, msg=text):
+                L.complete("s", [{"role": "user", "content": text}], division="ffm", task_class="research", env=self.E,
+                           post=lambda *a: self.fail("sent to groq"), tracker=L.RateTracker(), sources=["identity", "public_web"])
+
+    def test_private_tables_and_memory_stay_private(self):
+        for src in ("leads", "lead:123", "clients", "client_files", "workspace:acme", "ws_docs", "ffm_leads", "insurance_policies", "realestate_deals",
+                    "wholesale_leads", "memory:owner_profile", "table:public_news"):
+            self.assertEqual(L.route_class(["identity", src], ["plain"]), "private", src)
+
+    def test_public_text_still_public(self):
+        import hq_core
+        self.assertIsNone(L.pii_hit(hq_core.IDENTITY))
+        for text in ("Write a Python function that sorts a list of numbers.", "Summarize public news about Ottawa housing starts.",
+                     "Draft a blog post about the Rideau Canal", "Fix the bug where the meter balance is negative"):
+            self.assertEqual(L.route_class(["identity", "repo_code", "public_web"], [hq_core.IDENTITY, text]), "public", text)
+
+    def test_small_tier_cannot_select_a_large_model(self):
+        p = [x for x in L.load_providers({"ANTHROPIC_API_KEY": "k", "JARVIS_ANTHROPIC_MODEL_SMALL": "claude-opus-5-5",
+                                          "JARVIS_ANTHROPIC_MODEL_MEDIUM": "claude-opus-4-1"}) if x.name == "anthropic"][0]
+        self.assertEqual((p.model("small"), p.model("medium")), ("claude-haiku-5-5", "claude-sonnet-5-5"))
+        o = [x for x in L.load_providers({"JARVIS_OPENROUTER_MODEL_SMALL": "openai/gpt-5"}) if x.name == "openrouter"][0]
+        self.assertTrue(o.model("small").endswith(":free"))
+        o = [x for x in L.load_providers({"JARVIS_OPENROUTER_MODEL_SMALL": "meta/llama:free"}) if x.name == "openrouter"][0]
+        self.assertEqual(o.model("small"), "meta/llama:free")
+
+    def test_more_paid_hosts(self):
+        for host in ("api.novita.ai", "api.hyperbolic.xyz", "api.sambanova.ai", "x.runpod.net", "api.together.ai"):
+            self.assertIn("paid vendor", L.extra_problem({"name": "cheap", "base_url": f"https://{host}/v1", "key_env": "K"}, {}) or "", host)
+
+    def test_metadata_addresses_in_every_spelling(self):
+        for url in ("https://[::ffff:169.254.169.254]/v1", "https://0xa9fea9fe/v1", "https://2852039166/v1", "https://0251.0376.0251.0376/v1",
+                    "https://169.254.43518/v1", "https://[fe80::1]/v1", "https://[::a9fe:a9fe]/v1", "https://[fd00:ec2::254]/v1", "https://metadata.google.internal/v1"):
+            p = L.Provider({"name": "selfhost", "base_url_env": "U", "key_env": "K", "models": {"small": "m"}}, {"U": url, "K": "k"})
+            self.assertIn("link-local", " ".join(p.problems()), url)
+        p = L.Provider({"name": "selfhost", "base_url_env": "U", "key_env": "K", "models": {"small": "m"}}, {"U": "https://10.0.0.5/v1", "K": "k"})
+        self.assertEqual(p.problems(), [])
+
+    def test_purpose_is_lower_case_and_needs_a_uuid(self):
+        u = "0F8FAD5B-D9CB-469F-A165-70867728950E"
+        self.assertEqual(L.purpose("Wolf_Squad", u, "chat", "groq"), f"jarvis:wolf-squad:{u.lower()}:chat:groq")
+        self.assertEqual(L.purpose("donna", None, "chat"), "jarvis:donna:-:chat:")
+        with self.assertRaises(ValueError):
+            L.purpose("donna", "not-a-uuid", "chat")
+
+
 if __name__ == "__main__":
     unittest.main()

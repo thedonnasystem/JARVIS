@@ -3,10 +3,16 @@ name: protected-paths
 # pull request's BASE branch; the PR's commits are fetched as data and only read with `git diff` / `git cat-file`. No PR code is executed, no secret is used,
 # the token is read-only. A PR cannot weaken its own judge. Make the `protected-paths` check required in the branch ruleset (owner setting).
 # Bootstrap: on the one PR that introduces this file, the base has no copy yet, so this job does not run there; tests.yml's unit step covers it (fail closed).
+# S1: the owner's Review -> Approve re-runs this check (pull_request_review). GitHub runs THIS FILE from the PR's merge ref for that event, so the step below
+# still checks out the BASE branch and runs the base's checker and list; a PR that edits this file is itself a locked change (.github/), which needs the
+# owner's code-owner review in the ruleset anyway. ONLY this job is relied on (S6): the copy in tests.yml's unit job runs after the PR's own tests.
 on:
   pull_request_target:
     # edited: a base retarget re-runs the check against the NEW base; labeled / unlabeled: the owner's approval label
     types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
+  pull_request_review:
+    # the owner's review re-runs the trusted check (S1); the judge is still the base branch's checker (checkout below)
+    types: [submitted, dismissed]
   push:
     # pushes to protected branches FAIL when they carry unapproved protected changes (an approved PR merge passes)
     branches: ["overnight-build", "main", "master", "claude/telegram-claude-bot-59nusk", "jarvis/integration"]
@@ -25,8 +31,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          # pull_request_target: the base branch tip (trusted). push: the pushed commit; the judge then comes from the commit BEFORE the push (below).
-          ref: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '' }}
+          # pull_request_target: the base branch tip (trusted). pull_request_review: the base branch tip, named explicitly (the default would be the PR's
+          # merge commit). push: the commit BEFORE the push.
+          ref: ${{ github.event_name == 'pull_request_review' && github.event.pull_request.base.ref || (github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || '' }}
           fetch-depth: 0
           persist-credentials: false
       - name: Fetch the commits to judge (as data)
@@ -37,7 +44,7 @@ jobs:
           PUSH_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ] || [ "${GITHUB_EVENT_NAME}" = "pull_request_review" ]; then
             git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
           else
             git fetch --no-tags origin "+refs/heads/${PUSH_REF}:refs/remotes/origin/${PUSH_REF}" "+refs/heads/overnight-build:refs/remotes/origin/overnight-build"

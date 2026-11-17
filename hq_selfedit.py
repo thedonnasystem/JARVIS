@@ -101,11 +101,15 @@ def setup(env=None, status=None, opener=None) -> GitHub:
     return gh
 
 
+BASE_RX = re.compile(r"jarvis/[a-z0-9][a-z0-9_-]{0,60}(?:/[a-z0-9][a-z0-9_-]{0,60}){0,3}")
+
+
 def base_branch(env=None) -> str:
+    """N9: a plain jarvis/<name> branch only: no '..', '.', '//', trailing '/', '.lock', 'jarvis/' alone or anything git would reject."""
     e = os.environ if env is None else env
     b = (e.get("JARVIS_SELFEDIT_BASE") or "jarvis/integration").strip()
-    if b in FORBIDDEN_BASES or not b.startswith("jarvis/"):
-        raise SelfEditRefused(f"refusing to target {b!r}: Jarvis merges only into a jarvis/ integration branch")
+    if b in FORBIDDEN_BASES or not BASE_RX.fullmatch(b) or b.startswith(CPP.load().get("self_edit", {}).get("branch_prefix", "jarvis/auto-")):
+        raise SelfEditRefused(f"refusing to target {b!r}: Jarvis merges only into a plain jarvis/ integration branch")
     return b
 
 

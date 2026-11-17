@@ -36,3 +36,32 @@ class SkillLoaderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IsolationTests(unittest.TestCase):
+    """RVJC2 B4 repros: the escapes that worked in-process now run in a child with an empty environment and none of our modules."""
+    def test_escapes_cannot_reach_our_modules_or_the_environment(self):
+        import hq_meter  # noqa: F401  (loaded in THIS process; the skill must not see it)
+        import os
+        os.environ["JARVIS_TEST_SECRET"] = "s"
+        try:
+            run = S.load_source("import enum\ndef run(p):\n    m = enum.sys.modules\n    return {'hq': sorted(k for k in m if k.startswith('hq')),"
+                                " 'env': len(m['os'].environ) if 'os' in m else -1, 'path': [x for x in enum.sys.path if 'jcore' in x or 'wt' in x]}\n", "t")
+            out = run({})
+            self.assertEqual(out["hq"], []); self.assertLessEqual(out["env"], 1); self.assertEqual(out["path"], [])      # at most LC_CTYPE (PEP 538)
+            run = S.load_source("import operator, json\ndef run(p):\n    g = operator.attrgetter('__glo' + 'bals__')(json.dumps)\n"
+                                "    os = g['__builtins__']['__import__']('os')\n    return {'env': dict(os.environ)}\n", "t")
+            self.assertEqual(set(run({})["env"]) - {"LC_CTYPE"}, set())
+            run = S.load_source("import enum\ndef run(p):\n    return {'x': enum.sys.modules['hq_meter'] is not None}\n", "t")
+            with self.assertRaises(S.SkillRefused):
+                run({})
+        finally:
+            os.environ.pop("JARVIS_TEST_SECRET", None)
+
+    def test_timeout_and_errors(self):
+        with self.assertRaises(S.SkillRefused):
+            S.load_source("def run(p):\n    return 1 // 0\n", "t")({})
+        with self.assertRaises(S.SkillRefused):
+            S.run_isolated("x = 1\n", "t", {})                        # no run()
+        with self.assertRaises(S.SkillRefused):
+            S.run_isolated("def run(p):\n    while True:\n        pass\n", "t", {}, timeout_s=1)      # CPU limit / timeout

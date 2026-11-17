@@ -309,6 +309,27 @@ begin
   begin perform public.reserve_llm_budget('jarvis-core', 0, 'claude-haiku-5-5', 'jarvis:donna:' || gen_random_uuid() || ':x:groq'); raise exception 'J17 unknown mission accepted';
   exception when others then if sqlerrm not like '%Unknown mission%' then raise; end if; end;
 end $$;
+-- J18 RVJC2 S4: mission matching is case-insensitive and accepts any division text, exactly like the spend counting (the 4 x 3-cent bypass)
+do $$
+declare m uuid; n int := 0; i int;
+begin
+  if public.capital_mode() <> 'normal' then raise notice 'J18 skipped: capital mode is %', public.capital_mode(); return; end if;
+  insert into public.missions (title, objective, budget_cents) values ('jc synthetic mission 2', 'synthetic objective for the case test', 5) returning id into m;
+  for i in 1..4 loop
+    begin perform public.reserve_llm_budget('jarvis-core', 3, 'claude-haiku-5-5', 'jarvis:donna:' || upper(m::text) || ':x:anthropic'); n := n + 1;
+    exception when others then if sqlerrm not like '%Mission budget would be exceeded%' then raise; end if; end;
+  end loop;
+  if n <> 1 then raise exception 'J18 % upper-case 3-cent reservations passed a 5-cent budget', n; end if;
+  if public.mission_spent_cents(m) <> 3 then raise exception 'J18 spend counting %', public.mission_spent_cents(m); end if;
+  foreach i in array array[1, 2, 3] loop
+    begin perform public.reserve_llm_budget('jarvis-core', 50, 'claude-haiku-5-5',
+                                            (array['jarvis:wolf_squad:', 'jarvis:Donna:', 'JARVIS:donna:'])[i] || m || ':x:anthropic');
+      raise exception 'J18 division / prefix variant % passed the budget', i;
+    exception when others then if sqlerrm not like '%Mission budget would be exceeded%' then raise; end if; end;
+  end loop;
+  begin perform public.reserve_llm_budget('jarvis-core', 1, 'claude-haiku-5-5', 'jarvis:donna:not-a-uuid:x:anthropic'); raise exception 'J18 bad mission text accepted';
+  exception when others then if sqlerrm not like '%must name a mission uuid%' then raise; end if; end;
+end $$;
 rollback;
 
 -- J14 nothing above changed the controls in data (outside the rolled-back transaction)

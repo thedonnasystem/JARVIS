@@ -13,11 +13,13 @@ Fails when a change between BASE and HEAD
     U&"..." identifiers), so split or concatenated statements count too,
 UNLESS the pull request carries a valid owner approval marker for the exact head commit:
   (a) an APPROVED review by owner_login whose commit_id is the head SHA, or
-  (b) the label  owner-approved-<first 12 chars of the head SHA>  whose latest 'labeled' event is by owner_login, still on the PR.
+  (b) the label  owner-ok-<the full 40-character head SHA>  whose latest 'labeled' event is by owner_login, still on the PR.
   owner_login must be an identity NO agent can use: when it is one of agent_logins or the PR author, nothing counts (fail closed).
 A new push changes the head SHA, so every approval is void after any later commit.
-Self-edit PRs (head branch self_edit.branch_prefix, or authored by a jarvis_logins account) in allowlist mode (ops/SELF_EDIT_MODE) also fail for ANY path
-outside self_edit.auto_ship_zone.
+Self-edit PRs (head OR base branch starting with a self_edit.zone_branch_prefixes entry, e.g. jarvis/auto-* and the jarvis/integration release PR, or
+authored by a jarvis_logins account) in allowlist mode (ops/SELF_EDIT_MODE) also fail for ANY path outside self_edit.auto_ship_zone.
+LIMIT (stated plainly): the line rules are a TRIPWIRE. No pattern list can enumerate every way code in the same process can change another module;
+that is why every top-level runtime module is a locked path, and why the control is the independent review plus the owner's approval of the exact commit.
 
   python3 scripts/check_protected_paths.py --base origin/overnight-build          local: list findings, exit 1 if any
   python3 scripts/check_protected_paths.py --ci [--repo DIR]                     CI: findings without approval fail (pull requests AND pushes to protected branches)
@@ -44,7 +46,15 @@ MONKEY = [re.compile(r"(?<![\w.])(hq\w*|bot|check_protected_paths|builtins|impor
           re.compile(r"\bsetattr\s*\(\s*(hq\w*|bot|sys|builtins|importlib|check_protected_paths)\b"),
           re.compile(r"\bsys\s*\.\s*(modules|meta_path|path_hooks|path_importer_cache)\b"),
           re.compile(r"\bsys\s*\.\s*path\s*\.\s*(insert|append|extend)\b|\bsys\s*\.\s*path\s*(\[[^\]]*\])?\s*\+?="),
-          re.compile(r"\b__import__\s*\(|\bimportlib\s*\.\s*(import_module|reload|util)\b|\bexec\s*\(|\beval\s*\(")]
+          re.compile(r"\b__import__\s*\(|\bimportlib\s*\.\s*(import_module|reload|util)\b|\bexec\s*\(|\beval\s*\("),
+          # RVJC2 B3 variants (a tripwire, not a proof: see the owner guide): aliases of our modules, namespace dicts, mock.patch, code objects,
+          # builtins reached by name, import_module under any name, compile + FunctionType, a second interpreter
+          re.compile(r"\bimport\s+(hq\w*|bot|builtins|importlib)\s+as\b|\bfrom\s+(hq\w*|bot)\s+import\b[^#\n]*\bas\b|\bfrom\s+importlib\b"),
+          re.compile(r"\b__dict__\b|\bvars\s*\(|\b__code__\b|\b__globals__\b|\b__builtins__\b|\b__closure__\b|\b__defaults__\b|\b__kwdefaults__\b"),
+          re.compile(r"\bmock\s*\.\s*patch\b|\bpatch\s*(\.\s*object\s*)?\(\s*['\"](hq|bot)|\bmonkeypatch\b|\bimport_module\b|\bFunctionType\b|\bCodeType\b"),
+          re.compile(r"(?<![\w.])compile\s*\(|\bbuiltins\s*\.\s*compile\b|\bgetattr\s*\(\s*(builtins|__builtins__|sys|importlib|hq\w*)\b|\bsetattr\s*\(|\bdelattr\s*\(|\bglobals\s*\(\s*\)"),
+          re.compile(r"\b(subprocess|os\s*\.\s*(system|popen|exec\w*|spawn\w*)|pty\s*\.\s*spawn|runpy)\b|['\"]python3?['\"]|sys\s*\.\s*executable")]
+COMMENT_SQL = re.compile(r"/\*.*?\*/", re.S)
 DYNAMIC_SQL = [re.compile(r"\bexecute\s+(format\s*\(|'|\$|E'|[A-Za-z_][\w.]*\s*(\|\||;|using\b|$))", re.I),
                re.compile(r"\bU&\s*['\"]", re.I),
                re.compile(r"\.execute\s*\(\s*(f['\"]|[^)]*(\+|%\s*\(|\.format\s*\())")]
@@ -79,6 +89,10 @@ def load(path=CONFIG):
         patterns += [(re.compile(p, re.I), name) for p in c.get("sql_patterns", [])]
     cfg["_paths"], cfg["_sql"], cfg["_prefixes"], cfg["_patterns"] = paths, sql, prefixes, patterns
     cfg["_destructive"] = [re.compile(p, re.I) for p in cfg.get("destructive_patterns", [])]
+    wp = cfg.get("write_patterns") or {}
+    cfg["_agents_status"] = [re.compile(p, re.I) for p in wp.get("agents_status", [])]
+    cfg["_rest_dynamic"] = [re.compile(p) for p in wp.get("rest_dynamic", [])]
+    cfg["_zone_prefixes"] = tuple((cfg.get("self_edit") or {}).get("zone_branch_prefixes") or [])
     cfg["_stems"] = sorted({p[:-3].casefold() for p, _, rx in paths if rx is None and "/" not in p and p.lower().endswith(".py")})
     cfg["_zone"] = [_glob_rx(z) for z in (cfg.get("self_edit") or {}).get("auto_ship_zone", [])]
     cfg["_root"] = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), ".."))
@@ -135,13 +149,14 @@ def ext_problem(cfg, path):
 
 
 def shadow_problem(cfg, path, added):
-    """New modules that could replace or patch a protected one."""
+    """New modules that could replace or patch a protected one. Every top-level module of the base or head tree counts as protected (B3)."""
     p = norm(path)
     first = p.split("/", 1)[0].casefold()
     stem = first[:-3] if first.endswith(".py") else first.split(".", 1)[0]
-    if "/" in p and (first in cfg["_stems"] or stem in cfg["_stems"]):
+    stems = set(cfg["_stems"]) | set(cfg.get("_tree_stems") or ())
+    if "/" in p and (first in stems or stem in stems):
         return f"path named like protected module {first}"
-    if "/" not in p and stem in cfg["_stems"] and not p.casefold().endswith(".py"):
+    if "/" not in p and stem in stems and not p.casefold().endswith(".py"):
         return f"file named like protected module {stem} (could be imported instead of it)"
     if added and "/" not in p and p.lower().endswith(".py"):
         return "new top-level module (Python imports it from the repo root: it could shadow or monkey-patch a protected module)"
@@ -164,9 +179,53 @@ def joined(text):
     return STRING_JOIN.sub("", text)
 
 
+SQL_EXTS = (".sql", ".psql", ".pgsql")
+
+
+def uncomment(path, text):
+    """Text with SQL comments removed: /* ... */ anywhere, and (SQL files) '--' to the end of the line when it is outside a '...' string."""
+    t = COMMENT_SQL.sub(" ", text)
+    if os.path.splitext(path)[1].lower() in SQL_EXTS:
+        out, q, i = [], False, 0
+        while i < len(t):
+            ch = t[i]
+            if ch == "'":
+                q = not q
+            elif not q and t.startswith("--", i):
+                j = t.find("\n", i)
+                i = len(t) if j < 0 else j
+                out.append(" ")
+                continue
+            out.append(ch); i += 1
+        t = "".join(out)
+    return t
+
+
 def line_findings(cfg, path, line):
-    """Findings for one ADDED line of a non-protected file."""
-    out, low, ext = [], line.lower(), os.path.splitext(path)[1].lower()
+    """Findings for one ADDED line of a non-protected file. Judged twice, as written and with SQL comments removed (delete/**/from reads as
+    delete from), so a comment can neither hide a statement nor be used to hide one inside a string."""
+    clean = uncomment(path, line)
+    if clean == line:
+        return _line_findings(cfg, path, line)
+    seen, out = set(), []
+    for f in _line_findings(cfg, path, line) + _line_findings(cfg, path, clean):
+        if f not in seen:
+            seen.add(f); out.append(f)
+    return out
+
+
+def _line_findings(cfg, path, line):
+    ext = os.path.splitext(path)[1].lower()
+    raw = line
+    out, low = [], line.lower()
+    for rx in cfg.get("_agents_status") or []:
+        if rx.search(line) and (WRITE_VERB.search(line) or re.search(r"\b(POST|PUT|PATCH)\b|\bset\b", line, re.I)):
+            out.append(("jarvis_permissions", "writes agents.status (a dormancy control: the paused agents stay paused without the owner)"))
+            break
+    for rx in cfg.get("_rest_dynamic") or []:
+        if rx.search(raw) or rx.search(line):
+            out.append(("jarvis_permissions", "REST / table access with a table name built at run time (treated as protected: the object cannot be read from the diff)"))
+            break
     for rx in cfg["_destructive"]:
         if rx.search(line):
             out.append(("destructive", f"destructive data statement ({rx.pattern})"))
@@ -198,11 +257,12 @@ def line_findings(cfg, path, line):
 
 
 def window_findings(cfg, path, lines, width=4):
-    """Statements split over lines or built from string pieces: join each run of `width` added lines (and the string pieces in it) and look again."""
+    """Statements split over lines or built from string pieces: join each run of `width` added lines (and the string pieces in it) and look again.
+    The run is also judged with its SQL comments removed."""
     out = []
     for i in range(len(lines)):
         chunk = lines[i:i + width]
-        for text in {joined(" ".join(chunk)), joined(chunk[0])}:
+        for text in {joined(" ".join(chunk)), joined(uncomment(path, "\n".join(chunk)).replace("\n", " ")), joined(chunk[0])}:
             for c, why in line_findings(cfg, path, text):
                 out.append((c, why + " (assembled across lines / string pieces)"))
     return out
@@ -254,6 +314,7 @@ def scan(cfg, base, head, root=ROOT, zone_only=False):
     """All findings: [(category, path, reason)]. zone_only: also report every path outside the auto-ship zone (self-edit PRs in allowlist mode)."""
     found = []
     exts = tuple(cfg.get("code_extensions", []))
+    cfg["_tree_stems"] = tree_stems(base, head, root)
     for status, old, new, old_mode, new_mode, blob in changes(base, head, root):
         label = {"D": "deleted", "A": "added", "M": "modified", "T": "type changed", "R": "renamed", "C": "copied"}.get(status, status)
         if status in "RC" and path_category(cfg, old):
@@ -274,6 +335,8 @@ def scan(cfg, base, head, root=ROOT, zone_only=False):
                 found.append(("jarvis_permissions", new, f"symlink to {target!r} leaves the repository"))
             elif path_category(cfg, r):
                 found.append((path_category(cfg, r), new, f"symlink into protected path {r}"))
+            elif r == "" or _is_tree(head, r, root):
+                found.append(("jarvis_permissions", new, f"symlink to the directory {r or '.'!r} (could expose locked modules under a new import name)"))
             continue
         if new_mode == "160000":
             found.append(("jarvis_permissions", new, "submodule added or changed"))
@@ -308,6 +371,31 @@ def scan(cfg, base, head, root=ROOT, zone_only=False):
         if f not in seen:
             seen.add(f); out.append(f)
     return out
+
+
+def _is_tree(ref, path, root=ROOT):
+    try:
+        return git("cat-file", "-t", f"{ref}:{path}", root=root).decode().strip() == "tree"
+    except subprocess.CalledProcessError:
+        return False
+
+
+def tree_stems(base, head, root=ROOT):
+    """Names of every top-level Python module in the base and head trees (a directory named like one could shadow it)."""
+    out = set()
+    for ref in (base, head):
+        try:
+            names = git("ls-tree", "--name-only", ref, root=root).decode("utf-8", "replace").split("\n")
+        except subprocess.CalledProcessError:
+            continue
+        out |= {n[:-3].casefold() for n in names if n.lower().endswith(".py") and "/" not in n}
+    return out
+
+
+def zone_branch(cfg, head_ref, base_ref=""):
+    """B4: every pull request from or into a Jarvis branch (auto-* PRs AND the jarvis/integration release PR) is zone-checked."""
+    pre = cfg.get("_zone_prefixes") or ((cfg.get("self_edit") or {}).get("branch_prefix", "jarvis/auto-"),)
+    return any((head_ref or "").startswith(p) or (base_ref or "").startswith(p) for p in pre if p)
 
 
 def path_findings(cfg, paths, selfedit=False, mode=None):
@@ -396,8 +484,8 @@ def approval(cfg, repo, pr, head_sha, fetch, pr_info=None):
             if ((r.get("user") or {}).get("login") or "").casefold() == owner and r.get("commit_id") == head_sha and r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
                 latest = r.get("state")
         if latest == "APPROVED":
-            return True, f"owner review APPROVED on {head_sha[:12]}"
-    label = cfg["approval"]["label_prefix"] + head_sha[:12]
+            return True, f"owner review APPROVED on {head_sha}"
+    label = cfg["approval"]["label_prefix"] + head_sha          # S5: the FULL 40-character SHA (a 12-character prefix could be collided)
     if "label" in methods:
         applied = False
         for e in _pages(fetch, f"{api}/issues/{int(pr)}/events"):
@@ -475,7 +563,9 @@ def main(argv=None):
         return 1
     se = cfg.get("self_edit") or {}
     jl = {x.casefold() for x in cfg.get("jarvis_logins") or []}
-    zone = a.zone or (a.ci and self_edit_mode(cfg) == "allowlist" and (env.get("HEAD_REF", "").startswith(se.get("branch_prefix", "jarvis/auto-")) or env.get("PR_AUTHOR", "").casefold() in jl))
+    zone = a.zone or (a.ci and self_edit_mode(cfg) == "allowlist" and (zone_branch(cfg, env.get("HEAD_REF", ""), env.get("BASE_REF", ""))
+                                                                       or env.get("HEAD_REF", "").startswith(se.get("branch_prefix", "jarvis/auto-"))
+                                                                       or env.get("PR_AUTHOR", "").casefold() in jl))
     found = scan(cfg, base, head, root=repo_root, zone_only=bool(zone))
     for cat, p, why in found:
         print(f"PROTECTED [{cat}] {p}: {why}")

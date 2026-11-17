@@ -32,10 +32,13 @@ Environment (names only; values live in Railway Variables, never in the repo). F
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import math
 import os
+import re
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -85,11 +88,20 @@ CATALOG_NAMES = frozenset(s["name"] for s in CATALOG)
 # Hosts of vendors that charge per token. An extra provider may never point at one (it would be a paid call declared free).
 PAID_HOSTS = ("anthropic.com", "openai.com", "openai.azure.com", "googleapis.com", "mistral.ai", "cohere.ai", "cohere.com", "together.xyz", "together.ai",
               "fireworks.ai", "deepseek.com", "x.ai", "perplexity.ai", "groq.com", "cerebras.ai", "openrouter.ai", "nvidia.com", "github.ai", "replicate.com",
-              "deepinfra.com", "anyscale.com", "ai21.com", "voyageai.com", "bedrock", "amazonaws.com")
+              "deepinfra.com", "anyscale.com", "ai21.com", "voyageai.com", "bedrock", "amazonaws.com", "novita.ai", "hyperbolic.xyz", "sambanova.ai",
+              "lambdalabs.com", "lambda.ai", "runpod.io", "runpod.net", "baseten.co", "modal.run", "octo.ai", "octoai.run", "lepton.ai", "featherless.ai",
+              "nebius.ai", "nebius.com", "scaleway.com", "siliconflow.cn", "siliconflow.com", "moonshot.cn", "moonshot.ai", "minimax", "aliyuncs.com",
+              "volces.com", "bigmodel.cn", "zhipuai", "writer.com", "upstage.ai", "reka.ai", "inference.net", "chutes.ai", "kluster.ai", "avian.io",
+              "friendli.ai", "predibase.com", "azure.com", "huggingface.co", "hf.space", "vertexai", "databricks.com", "snowflakecomputing.com",
+              "ibm.com", "cloudflare.com", "workers.dev", "fal.ai", "cerebrium.ai", "parasail.io", "targon.com", "inferencenet")
 # Prompt sources that may go to a FREE third-party provider. Anything else (or nothing declared) is private. Code-only (protected file).
-PUBLIC_SOURCES = frozenset({"identity", "system", "repo_code", "public_web", "task_stats", "memory:lesson", "memory:decision", "memory:outcome", "memory:fact",
-                            "job:research.public", "job:content.public", "job:code.write", "job:code.review", "job:mission.plan", "job:system.toolcheck"})
+# B5: NO job kind is public by name: a job row's kind is chosen by whoever enqueued it, so 'job:<kind>' is never on this list (always private).
+PUBLIC_SOURCES = frozenset({"identity", "system", "repo_code", "public_web", "task_stats", "memory:lesson", "memory:decision", "memory:outcome", "memory:fact"})
 PRIVATE_MEMORY_KINDS = frozenset({"owner_profile"})
+# Sources that are private whatever else is declared (documentation: anything off PUBLIC_SOURCES is private anyway). Client, lead, workspace, insurance and
+# real-estate tables and private memory go only to the self-hosted model or to plain code.
+PRIVATE_SOURCE_PREFIXES = ("job:", "table:", "client", "lead", "workspace", "ws_", "ffm", "insurance", "realestate", "real_estate", "wholesale", "property",
+                           "memory:owner_profile", "owner", "inbox", "mail", "contact")
 
 
 class BrainOffline(Exception):
@@ -123,9 +135,53 @@ def _texts(system: str, messages: list, tools: list | None = None) -> list[str]:
     return out
 
 
+_CLIENT_FIELD = r"(?:client|customer|lead|prospect|insured|policy\s*holder|policyholder|borrower|co-?borrower|applicant|patient|homeowner|seller|buyer|tenant|landlord|" \
+                r"contact|beneficiary|claimant|member|spouse|name|full\s+name|first\s+name|last\s+name|mr|mrs|ms|miss|dr)"
+_NAME = r"[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+(?:[-'][A-Z]?[a-z]+)?"
+PII_PATTERNS = [
+    # a capitalised First Last name next to a client field ("Client Jane Roe", "name: Jane Roe", "Jane Roe, policy ...", "Jane Roe's mortgage")
+    re.compile(r"(?i:\b" + _CLIENT_FIELD + r"\b\.?)[\s:,=\-\"']{1,4}(?:is\s+|named\s+|called\s+)?" + _NAME),
+    re.compile(r"(?i:\b(?:mr|mrs|ms|miss|dr|mme|mlle)\b\.?)\s+[A-Z][a-z]+"),
+    re.compile(_NAME + r"(?:'s|\s*,|\s+\()\s*(?i:policy|account|mortgage|loan|claim|income|salary|diagnos|date\s+of\s+birth|dob|born|address|phone|age)"),
+    # Canadian postal code; US ZIP next to a state or the word zip
+    re.compile(r"\b[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z][ -]?\d[ABCEGHJ-NPRSTV-Z]\d\b", re.I),
+    re.compile(r"(?i:\bzip(?:\s*code)?\b)\s*[:#]?\s*\d{5}(?:-\d{4})?\b|\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b"),
+    # street address
+    re.compile(r"\b\d{1,6}\s+(?:[A-Z][a-z]+\s+){1,3}(?i:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|court|ct|crescent|cres|way|place|pl|"
+               r"terrace|circle|cir|parkway|pkwy|highway|hwy|trail|private|gate|row)\b\.?"),
+    # policy / account / claim / member / loan numbers
+    re.compile(r"(?i)\b(?:policy|account|acct|claim|member|loan|mortgage|certificate|contract|card|health\s*card|ohip|sin|ssn|file|case|customer|client|"
+               r"invoice|reference|ref)\s*(?:no\.?|number|num|#|id)?\s*[:#=]?\s*(?=[A-Z0-9-]*\d)[A-Z0-9][A-Z0-9-]{3,}\b"),
+    # medical / diagnosis
+    re.compile(r"(?i)\b(?:diagnos\w*|diabet\w*|cancer|tumou?r|hiv|aids|hepatitis|pregnan\w*|depress\w*|anxiety\s+disorder|bipolar|schizo\w*|"
+               r"dementia|alzheimer\w*|stroke|heart\s+attack|cardiac|asthma|epilep\w*|prescri\w*|medication|chemo\w*|surgery|disabilit\w*|"
+               r"chronic\s+\w+|terminal(?:ly)?\s+ill|medical\s+(?:condition|history|record)|mental\s+health|addiction|rehab\w*|smoker|blood\s+pressure|"
+               r"cholesterol|insulin|physician|patient)\b"),
+    # income / financial amounts
+    re.compile(r"(?i)\b(?:income|salary|wages?|earn(?:s|ed|ings)?|net\s+worth|balance|debts?|owes?|owed|owing|arrears|credit\s+score|beacon|"
+               r"down\s*payment|savings|assets|liabilit\w*|bankrupt\w*|consumer\s+proposal|mortgage|loan|tax\s+return|t4|noa|paystub|pay\s+stub)\b"
+               r"[^.\n]{0,40}?(?:[$€£]\s?\d|\d[\d,.]*\s*(?:k|K|thousand|million|dollars|cad|usd)\b|\d{1,3}(?:,\d{3})+|\b\d{3,}\b)"),
+    re.compile(r"(?i)[$€£]\s?\d[\d,.]*\s*(?:k\b)?[^.\n]{0,30}?\b(?:income|salary|a\s+year|per\s+year|/yr|annually|balance|owing|owed|debt|mortgage|loan)\b"),
+    # date of birth / age
+    re.compile(r"(?i)\b(?:date\s+of\s+birth|d\.?o\.?b\.?|born\s+(?:on|in))\b|\baged?\s*[:=]?\s*\d{1,3}\b|\b\d{1,3}[\s-]years?[\s-]old\b"),
+]
+
+
+def pii_hit(text: str) -> str | None:
+    """The first personal-data pattern found in text (names next to client fields, postal codes, addresses, policy / account numbers, medical terms,
+    income / financial amounts, dates of birth), or None. A tripwire on top of hq_scrub's detector (phones, emails, ids, cards)."""
+    for rx in PII_PATTERNS:
+        m = rx.search(text or "")
+        if m:
+            return m.group(0)[:60]
+    return None
+
+
 def has_personal_data(text: str) -> bool:
     try:
-        return "[redacted" in (hq_scrub.scrub(text) or "")
+        if "[redacted" in (hq_scrub.scrub(text) or ""):
+            return True
+        return pii_hit(text) is not None
     except Exception:
         return True          # the detector failed: treat as personal (fail closed)
 
@@ -134,7 +190,7 @@ def route_class(sources, texts) -> str:
     """'public' only when every declared source is on PUBLIC_SOURCES and no text holds personal data; otherwise 'private' (default deny)."""
     if not sources:
         return "private"
-    if any(str(s) not in PUBLIC_SOURCES for s in sources):
+    if any(str(s) not in PUBLIC_SOURCES or str(s).lower().startswith(PRIVATE_SOURCE_PREFIXES) for s in sources):
         return "private"
     if any(has_personal_data(t) for t in texts if t):
         return "private"
@@ -150,7 +206,7 @@ class Provider:
         self.base_url = (env.get(spec["base_url_env"], "") if spec.get("base_url_env") else spec.get("base_url", "")).strip().rstrip("/")
         self.key = (env.get(spec["key_env"]) or "").strip()
         self.paid, self.trains, self.client_data_ok = bool(spec.get("paid")), bool(spec.get("trains")), bool(spec.get("client_data_ok"))
-        self.models = {t: (env.get(f"JARVIS_{self.name.upper()}_MODEL_{t.upper()}") or spec.get("models", {}).get(t) or "").strip() for t in TIERS}
+        self.models = {t: _model_for(self.name, spec, env, t) for t in TIERS}
         self.limits = dict(spec.get("limits") or {})
         self.metering = spec.get("metering", "tokens")
         self.extra_body = spec.get("extra_body") or {}
@@ -177,7 +233,7 @@ class Provider:
                 out.append(f"{self.name}: endpoint must use https (plain http only for localhost)")
             if u.username or u.password or "@" in (u.netloc or ""):
                 out.append(f"{self.name}: endpoint must not carry credentials in the URL")
-            if host.startswith("169.254.") or host.startswith("fe80:") or host in ("metadata.google.internal", "metadata", "100.100.100.200") or host.startswith("[fe80"):
+            if metadata_host(host):
                 out.append(f"{self.name}: link-local / cloud metadata endpoints are refused")
         if not self.key:
             out.append(f"{self.name}: {self.spec['key_env']} not set")
@@ -189,6 +245,55 @@ class Provider:
 
     def model(self, tier: str) -> str:
         return self.models.get(tier) or (self.models.get("medium") if tier == "large" else "") or self.models.get("small") or ""
+
+
+LARGE_MODELS = frozenset(m for c in CATALOG for t, m in (c.get("models") or {}).items() if t == "large")
+
+
+def _model_for(name: str, spec: dict, env: dict, tier: str) -> str:
+    """The model id for a tier. N4: an override on the small / medium tier may not name a large-tier model (that would buy the large model without the
+    owner's approval); an OpenRouter override must be a ':free' model. A refused override falls back to the catalog's id."""
+    default = (spec.get("models", {}).get(tier) or "").strip()
+    o = (env.get(f"JARVIS_{name.upper()}_MODEL_{tier.upper()}") or "").strip()
+    if not o:
+        return default
+    if tier != "large" and (o in LARGE_MODELS or "opus" in o.lower()):
+        logger.warning("JARVIS_%s_MODEL_%s names a large-tier model: ignored", name.upper(), tier.upper())
+        return default
+    if name == "openrouter" and not o.endswith(":free"):
+        logger.warning("JARVIS_OPENROUTER_MODEL_%s is not a ':free' model: ignored", tier.upper())
+        return default
+    return o
+
+
+_METADATA_IPS = {ipaddress.ip_address(a) for a in ("100.100.100.200", "fd00:ec2::254", "169.254.169.254", "169.254.170.2")}
+
+
+def metadata_host(host: str) -> bool:
+    """N6: link-local and cloud metadata endpoints in any spelling: names, dotted, decimal (2852039166), hex (0xa9fea9fe), octal, short forms,
+    IPv4-mapped / compatible IPv6 ([::ffff:169.254.169.254]), IPv6 link-local."""
+    h = (host or "").strip().strip("[]").rstrip(".").lower()
+    if not h:
+        return False
+    if h in ("metadata.google.internal", "metadata", "metadata.goog", "instance-data", "instance-data.ec2.internal") or h.endswith(".internal"):
+        return True
+    ips = []
+    try:
+        ips.append(ipaddress.ip_address(h.split("%", 1)[0]))
+    except ValueError:
+        try:
+            ips.append(ipaddress.ip_address(socket.inet_aton(h)))         # legacy forms: 2852039166, 0xa9fea9fe, 0251.0376.0251.0376, 169.254.43518
+        except (OSError, ValueError):
+            pass
+    for ip in list(ips):
+        if isinstance(ip, ipaddress.IPv6Address):
+            if ip.ipv4_mapped:
+                ips.append(ip.ipv4_mapped)
+            if ip.sixtofour:
+                ips.append(ip.sixtofour)
+            if int(ip) >> 32 == 0 and int(ip) > 1:                          # IPv4-compatible ::a.b.c.d
+                ips.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    return any(ip.is_link_local or ip in _METADATA_IPS for ip in ips)
 
 
 def load_providers(env: dict | None = None) -> list[Provider]:
@@ -376,8 +481,17 @@ def actual_cents(p: Provider, model: str, in_tokens: int, out_tokens: int, secon
     return estimate_cents(p, model, in_tokens, out_tokens)
 
 
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
 def purpose(division: str, mission_id: str | None, task_class: str, provider: str = "") -> str:
-    return f"jarvis:{division}:{mission_id or '-'}:{task_class}:{provider}"[:120]
+    """'jarvis:<division>:<mission uuid or ->:<task class>:<provider>', lower-cased division and mission (S4: the database's mission_guard and
+    mission_spent_cents match the same text). A mission that is not a canonical uuid is refused, never written as a no-mission call."""
+    div = re.sub(r"[^a-z0-9-]+", "-", str(division or "").strip().lower()).strip("-") or "none"
+    m = str(mission_id).strip().lower() if mission_id else ""
+    if m and not _UUID.fullmatch(m):
+        raise ValueError("mission_id must be a uuid")
+    return f"jarvis:{div}:{m or '-'}:{task_class}:{provider}"[:120]
 
 
 # ------------------------------------------------------------------------------------------------------------------- transport
