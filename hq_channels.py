@@ -134,6 +134,14 @@ class EmergencyCall(Channel):
         return {"ok": False, "channel": self.name, "reason": "use call(event, dedupe): calls are for listed critical events only"}
 
     def call(self, event: str, dedupe: str, severity: str = "critical") -> dict:
+        try:
+            return self._call(event, dedupe, severity)
+        except Exception as e:          # documented: never raises (Telegram already carries the alert)
+            logger.warning("emergency call failed before the vendor: %s", type(e).__name__)
+            return {"ok": False, "outcome": "error", "reason": type(e).__name__}
+
+    def _call(self, event: str, dedupe: str, severity: str) -> dict:
+        """The DATABASE decides (jarvis_call_allowed checks its own copy of the criteria; criteria_ok below is only the adapter's opinion and is ignored there)."""
         ev = (self.criteria.get("events") or {}).get(event)
         criteria_ok = bool(ev) and severity == "critical" and ev.get("min_severity") == "critical"
         key = hashlib.sha256(f"{event}|{dedupe}".encode()).hexdigest()[:40]
@@ -144,6 +152,9 @@ class EmergencyCall(Channel):
             return {"ok": False, "outcome": "refused_unreachable", "reason": type(e).__name__}     # cannot record it: no call (Telegram still carries the alert)
         if not gate.get("allowed"):
             return {"ok": False, "outcome": gate.get("outcome")}
+        if not ev:                       # the database allowed an event this file does not list: the two lists differ; place no call
+            self._result(key, "failed", {"reason": "event not in ops/CRITICAL_EVENTS.json"})
+            return {"ok": False, "outcome": "failed", "reason": "criteria lists differ"}
         if not self.enabled():
             self._result(key, "dry_run", {"reason": "env not set up", "missing": self.missing()})
             return {"ok": False, "outcome": "dry_run", "missing": self.missing()}

@@ -164,10 +164,12 @@ class StaticSurface(unittest.TestCase):
 
     def test_core_provider_calls_follow_a_reservation(self):
         t = strip_comments_and_docstrings(SRC["hq_llm.py"])
-        body = t[t.index("def complete("):t.index("def complete_or_queue(")]
+        body = t[t.index("def complete("):t.index("def health(")]
         self.assertLess(body.index("hq_meter._reserve_cents("), body.index("post(url"), "hq_llm must reserve at the gateway before every provider request")
         self.assertEqual(t.count("= post(url"), 1)
-        self.assertEqual(len(re.findall(r"urllib\.request\.urlopen\(", t)), 2)       # the transport and the /models health probe (no generation)
+        self.assertEqual(len(re.findall(r"urllib\.request\.urlopen\(", t)), 0)
+        self.assertEqual(len(re.findall(r"\bOPENER\.open\(", t)), 2)       # the transport and the /models health probe (no generation), no redirects
+        self.assertIn("def redirect_request", t)
         self.assertNotIn("record_spent_usd", t)
 
     def test_meter_has_no_unmetered_fallthrough(self):

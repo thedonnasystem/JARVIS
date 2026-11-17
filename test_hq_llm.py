@@ -35,6 +35,8 @@ class Gateway:
             return None
         if path.endswith("/jarvis_self_fund_status"):
             return {"paid_allowed": False}
+        if path.endswith("/estimate_call_cents"):
+            return 7
         raise AssertionError(path)
 
 
@@ -52,6 +54,7 @@ class Base(unittest.TestCase):
             p.start(); self.addCleanup(p.stop)
 
     def call(self, e, post, **kw):
+        kw.setdefault("sources", ["system"])
         return L.complete("You are Jarvis.", [{"role": "user", "content": "hello"}], division="donna", task_class="chat", env=e, post=post,
                           tracker=L.RateTracker(), **kw)
 
@@ -86,7 +89,8 @@ class RotationTests(Base):
                 raise L.ProviderError("HTTP 429", 20, True)
             return ok_resp()
         tr = L.RateTracker()
-        r = L.complete("s", [{"role": "user", "content": "x"}], division="ffm", task_class="c", env=env(GROQ_API_KEY="a", OPENROUTER_API_KEY="b"), post=post, tracker=tr)
+        r = L.complete("s", [{"role": "user", "content": "x"}], division="ffm", task_class="c", env=env(GROQ_API_KEY="a", OPENROUTER_API_KEY="b"), post=post, tracker=tr,
+                       sources=["system"])
         self.assertEqual(r["provider"], "openrouter")
         self.assertIn("groq: HTTP 429", r["tried"][0])
         self.assertEqual(self.g.settled, [("call-1", 0, "failed"), ("call-2", 0, "done")])
@@ -98,12 +102,10 @@ class RotationTests(Base):
         def post(url, body, h, t):
             raise L.ProviderError("HTTP 429", None, True)
         e = env(GROQ_API_KEY="a")
-        with self.assertRaises(L.AllProvidersExhausted):
+        with self.assertRaises(L.AllProvidersExhausted) as c:
             self.call(e, post)
-        r = L.complete_or_queue("s", [{"role": "user", "content": "x"}], division="donna", task_class="c", payload={"q": 1}, env=e, post=post, tracker=L.RateTracker())
-        self.assertEqual(r["queued_job"], "job-1")
-        self.assertIn("queued the work", r["owner_message"])
-        self.assertIn("sir", r["owner_message"].lower())
+        self.assertIn("queued the work", str(c.exception))          # the worker leaves the job queued (retry); the Chairman is told plainly
+        self.assertIn("sir", str(c.exception).lower())
 
     def test_paid_provider_is_never_used_without_the_self_funded_budget(self):
         r = self.call(env(ANTHROPIC_API_KEY="paid", GROQ_API_KEY="free"), lambda url, b, h, t: ok_resp(), fund=lambda: {"paid_allowed": False})
@@ -149,7 +151,8 @@ class RotationTests(Base):
     def test_free_prompt_size_limit(self):
         big = "word " * 30000
         with self.assertRaises(L.AllProvidersExhausted) as c:
-            L.complete("s", [{"role": "user", "content": big}], division="donna", task_class="c", env=env(GROQ_API_KEY="a"), post=lambda *a: ok_resp(), tracker=L.RateTracker())
+            L.complete("s", [{"role": "user", "content": big}], division="donna", task_class="c", env=env(GROQ_API_KEY="a"), post=lambda *a: ok_resp(), tracker=L.RateTracker(),
+                       sources=["system"])
         self.assertIn("too big for a free tier", str(c.exception))
 
 
@@ -189,9 +192,7 @@ class PromptAndRoutingTests(unittest.TestCase):
         self.assertEqual(L.choose_tier("chat"), "small")
         self.assertEqual(L.choose_tier("chat", quality_failed=True), "medium")
         self.assertEqual(L.choose_tier("code.review"), "medium")
-        with self.assertRaises(L.LargeTierRefused):
-            L.choose_tier("chat", large_approval="a1", use_approval=lambda a, m: False)
-        self.assertEqual(L.choose_tier("chat", large_approval="a1", use_approval=lambda a, m: True), "large")
+        self.assertEqual(L.choose_tier("chat", large_approval="a1"), "large")      # the approval itself is consumed in complete()
 
     def test_prompt_caching_only_where_supported(self):
         anth = L.Provider(L.CATALOG[7], {"ANTHROPIC_API_KEY": "k"})
@@ -213,24 +214,10 @@ class PromptAndRoutingTests(unittest.TestCase):
 
 
 class GuardAndCacheTests(Base):
-    def test_mission_guard(self):
-        g = L.MissionGuard(budget_cents=10, max_steps=5, repeat_limit=2, stall_limit=2)
-        g.before_step(5); g.after_step("a", 5, True)
-        with self.assertRaises(L.MissionStopped):
-            g.before_step(6)
-        g2 = L.MissionGuard(100, repeat_limit=2)
-        g2.after_step("Same  answer", 0, True)
-        with self.assertRaises(L.MissionStopped):
-            g2.after_step("same answer", 0, True)
-        g3 = L.MissionGuard(100, stall_limit=2)
-        g3.after_step("a", 0, False)
-        with self.assertRaises(L.MissionStopped):
-            g3.after_step("b", 0, False)
-
     def test_cache_hit_makes_no_call(self):
         with mock.patch("hq._request", side_effect=lambda m, p, b=None, **k: "cached text" if p.endswith("jarvis_cache_get") else None):
             r = L.cached_complete("s", [{"role": "user", "content": "x"}], task_class="c", division="donna", env=env(GROQ_API_KEY="a"),
-                                  post=lambda *a: self.fail("model called"))
+                                  post=lambda *a: self.fail("model called"), sources=["system"])
         self.assertEqual((r["text"], r["cents"], r["cached"]), ("cached text", 0, True))
 
     def test_tool_calling_check(self):
@@ -244,6 +231,129 @@ class GuardAndCacheTests(Base):
         self.assertTrue(L.health(p, get=lambda u: {"data": [{"id": "hermes-8b-q4"}]})["ok"])
         self.assertFalse(L.health(p, get=lambda u: {"data": [{"id": "other"}]})["ok"])
         self.assertFalse(L.health(p, get=lambda u: (_ for _ in ()).throw(OSError("down")))["ok"])
+
+
+class EnforcedRoutingTests(Base):
+    """RVJC B5: client / personal data routing is decided here from the sources and the text, not by a caller flag."""
+    E = {"GROQ_API_KEY": "a", "OPENROUTER_API_KEY": "b"}
+    SELF = {"GROQ_API_KEY": "a", "JARVIS_SELFHOST_BASE_URL": "http://localhost:8080/v1", "JARVIS_SELFHOST_API_KEY": "s"}
+
+    def test_default_flag_with_client_details_is_refused_for_free_providers(self):
+        msg = [{"role": "user", "content": "Call Jane Roe at 613-555-0142 about policy AB12345678"}]
+        with self.assertRaises(L.ClientDataRefused):
+            L.complete("s", msg, division="ffm", task_class="x", env=self.E, post=lambda *a: self.fail("sent to groq"), tracker=L.RateTracker(), sources=["system"])
+        r = L.complete("s", msg, division="ffm", task_class="x", env=self.SELF, post=lambda *a: ok_resp(), tracker=L.RateTracker(), sources=["system"])
+        self.assertEqual((r["provider"], r["route"]), ("selfhost", "private"))
+
+    def test_unknown_or_missing_sources_default_deny(self):
+        for src in (None, [], ["leads"], ["memory:owner_profile"], ["workspace:acme"], ["job:lead.followup"], ["system", "something_new"]):
+            with self.assertRaises(L.ClientDataRefused, msg=src):
+                L.complete("s", [{"role": "user", "content": "plain text"}], division="donna", task_class="x", env=self.E, post=lambda *a: self.fail("sent"),
+                           tracker=L.RateTracker(), sources=src)
+
+    def test_extra_provider_cannot_take_client_data(self):
+        extra = '[{"name": "mine", "base_url": "https://mine.example/v1", "key_env": "M", "client_data_ok": true, "models": {"small": "m"}}]'
+        names = [p.name for p in L.load_providers({"M": "k", "JARVIS_LLM_EXTRA_PROVIDERS": extra})]
+        self.assertNotIn("mine", names)
+        extra = '[{"name": "mine", "base_url": "https://mine.example/v1", "key_env": "M", "models": {"small": "m"}}]'
+        with self.assertRaises(L.ClientDataRefused):
+            L.complete("s", [{"role": "user", "content": "x"}], division="d", task_class="x", env={"M": "k", "JARVIS_LLM_EXTRA_PROVIDERS": extra},
+                       post=lambda *a: self.fail("sent"), tracker=L.RateTracker(), sources=["leads"])
+
+    def test_memory_rows_carry_their_kind(self):
+        rows = [{"kind": "owner_profile", "content": "private line"}, {"kind": "fact", "content": "public fact"}]
+        with mock.patch("hq._request", side_effect=lambda m, p, b=None, **k: rows if p.endswith("jarvis_memory_search") else None) as rq:
+            texts, src = L.retrieve_memory("q", with_sources=True)
+        self.assertEqual(src, ["memory:fact", "memory:owner_profile"])
+        self.assertEqual(rq.call_args[0][2]["p_destination"], "external")
+        self.assertEqual(L.route_class(["identity"] + src, texts), "private")
+
+    def test_private_prompts_are_never_cached(self):
+        calls = []
+        with mock.patch("hq._request", side_effect=lambda m, p, b=None, **k: calls.append(p) or ({"paid_allowed": False} if "self_fund" in p else None)):
+            L.cached_complete("s", [{"role": "user", "content": "x"}], task_class="c", division="d", env=self.SELF, post=lambda *a: ok_resp(),
+                              tracker=L.RateTracker(), sources=["leads"])
+        self.assertFalse([c for c in calls if "jarvis_cache" in c])
+
+
+class MoneyHoleTests(Base):
+    """RVJC B8 / S1-S3."""
+    def test_large_tier_needs_the_single_use_approval_in_complete(self):
+        e = env(ANTHROPIC_API_KEY="paid")
+        fund = lambda: {"paid_allowed": True, "available_cents": 10000}   # noqa: E731
+        with self.assertRaises(L.LargeTierRefused):
+            self.call(e, lambda *a: self.fail("large called"), tier="large", fund=fund)
+        with self.assertRaises(L.LargeTierRefused):
+            self.call(e, lambda *a: self.fail("large called"), tier="large", large_approval="a1", use_approval=lambda a, m: False, fund=fund)
+        used = []
+        anth = {"content": [{"type": "text", "text": "ok sir"}], "usage": {"input_tokens": 10, "output_tokens": 5}}
+        r = self.call(e, lambda *a: anth, tier="large", large_approval="a1", use_approval=lambda a, m: used.append(a) or True, fund=fund)
+        self.assertEqual((r["model"], used), ("claude-opus-5-5", ["a1"]))
+
+    def test_extra_providers_cannot_redeclare_paid_vendors_or_builtins(self):
+        for extra in ('[{"name": "anthropic", "base_url": "https://api.anthropic.com", "key_env": "K", "paid": false, "models": {"small": "m"}}]',
+                      '[{"name": "cheap", "base_url": "https://api.anthropic.com/v1", "key_env": "K", "models": {"small": "m"}}]',
+                      '[{"name": "cheap", "base_url": "https://api.openai.com/v1", "key_env": "K", "models": {"small": "m"}}]',
+                      '[{"name": "cheap", "base_url": "https://x.example/v1", "key_env": "K", "paid": true, "models": {"small": "m"}}]'):
+            ps = {p.name: p for p in L.load_providers({"K": "k", "JARVIS_LLM_EXTRA_PROVIDERS": extra})}
+            self.assertFalse("cheap" in ps, extra)
+            self.assertTrue(ps["anthropic"].paid)
+            self.assertEqual(ps["anthropic"].base_url, "https://api.anthropic.com")
+
+    def test_builtin_prices_cannot_be_overridden(self):
+        p = L.Provider(L.CATALOG[7], {"ANTHROPIC_API_KEY": "k", "JARVIS_LLM_PRICES": '{"claude-opus-5-5": {"in": 0, "out": 0}, "other-model": {"in": 1, "out": 1}}'})
+        self.assertNotIn("claude-opus-5-5", p.prices); self.assertIn("other-model", p.prices)
+
+    def test_list_content_and_tools_are_counted(self):
+        big = "x" * 2_000_000
+        with self.assertRaises(L.PromptTooLarge):
+            L.complete("s", [{"role": "user", "content": [{"type": "text", "text": big}]}], division="d", task_class="c", env=env(GROQ_API_KEY="a"),
+                       post=lambda *a: self.fail("sent"), tracker=L.RateTracker(), sources=["system"])
+        tools = [{"name": "t", "description": "y" * 500_000, "parameters": {}}]
+        with self.assertRaises(L.PromptTooLarge):
+            self.call(env(GROQ_API_KEY="a"), lambda *a: self.fail("sent"), tools=tools)
+        self.assertGreaterEqual(L.estimate_tokens("\u4e2d" * 6000), 6000)       # CJK: one token per character, not 1,715
+
+    def test_anthropic_cache_creation_tokens_are_counted(self):
+        p = L.Provider(L.CATALOG[7], {"ANTHROPIC_API_KEY": "k"})
+        _, tin, _, _ = L.parse(p, {"content": [], "usage": {"input_tokens": 10, "cache_creation_input_tokens": 50000}})
+        self.assertGreaterEqual(tin, 50010)
+
+    def test_paid_timeout_and_malformed_answer_settle_at_the_estimate(self):
+        e = env(ANTHROPIC_API_KEY="paid")
+        fund = lambda: {"paid_allowed": True, "available_cents": 10000}    # noqa: E731
+
+        def timeout(*a):
+            raise L.ProviderError("TimeoutError", sent=True)
+        with self.assertRaises(L.AllProvidersExhausted):
+            self.call(e, timeout, fund=fund)
+        self.assertGreater(self.g.settled[-1][1], 0); self.assertEqual(self.g.settled[-1][2], "failed")
+        with self.assertRaises(L.AllProvidersExhausted):
+            self.call(e, lambda *a: {"weird": True}, fund=fund)
+        self.assertEqual(len(self.g.settled), len(self.g.reserved))          # every reservation settled
+        self.assertGreater(self.g.settled[-1][1], 0)
+
+    def test_no_redirects_with_the_key_and_bad_base_urls(self):
+        import http.server
+        import threading
+        hits = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                hits.append((self.path, self.headers.get("Authorization")))
+                self.send_response(302); self.send_header("Location", f"http://127.0.0.1:{srv.server_port}/stolen"); self.end_headers()
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.handle_request, daemon=True).start()
+        with self.assertRaises(L.ProviderError):
+            L._post(f"http://127.0.0.1:{srv.server_port}/v1/chat/completions", {}, {"Authorization": "Bearer secret"}, 5)
+        srv.server_close()
+        self.assertEqual([h[0] for h in hits], ["/v1/chat/completions"])     # the redirect target was never requested
+        for url in ("https://169.254.169.254/v1", "https://user:pw@vm.example/v1", "https://metadata.google.internal/v1"):
+            p = L.Provider(L.CATALOG[5], {"JARVIS_SELFHOST_BASE_URL": url, "JARVIS_SELFHOST_API_KEY": "k"})
+            self.assertTrue(p.problems(), url)
 
 
 if __name__ == "__main__":

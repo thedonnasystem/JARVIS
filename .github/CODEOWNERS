@@ -1,5 +1,8 @@
 # Review ownership for the places where a mistake is hardest to undo. Pair with "Require review from Code Owners" in branch protection
-# (owner setting, not changed here). The owner is the repository owner account.
+# (owner setting, not changed here).
+# OWNER IDENTITY (B1, Chairman decision Nov 16 2026): the approving account must be one NO agent session can use. Today the agents and the owner share
+# @thedonnasystem, so ops/PROTECTED_PATHS.json fails closed (owner_login == agent login). At activation replace @thedonnasystem below with the Chairman's
+# NEW personal GitHub account (same login as owner_login in ops/PROTECTED_PATHS.json). Steps: OWNER_GUIDE_JARVIS_V2.md section 4.
 /migrations/            @thedonnasystem
 /dist/APPLY_ALL.sql     @thedonnasystem
 /ops/                   @thedonnasystem
@@ -46,3 +49,20 @@
 /webapp/app.js                       @thedonnasystem
 /DATA_CLASSIFICATION_AND_BACKUP_POLICY.md @thedonnasystem
 /test_*.py                           @thedonnasystem
+/hq_core.py                          @thedonnasystem
+/hq_channels.py                      @thedonnasystem
+/hq_seed.py                          @thedonnasystem
+/hq_skills.py                        @thedonnasystem
+/ops/SELF_EDIT_MODE                  @thedonnasystem
+/Dockerfile*                         @thedonnasystem
+/railway.toml                        @thedonnasystem
+/railway.json                        @thedonnasystem
+/nixpacks.toml                       @thedonnasystem
+/runtime.txt                         @thedonnasystem
+.gitattributes                       @thedonnasystem
+.gitmodules                          @thedonnasystem
+sitecustomize.py                     @thedonnasystem
+usercustomize.py                     @thedonnasystem
+*.pth                                @thedonnasystem
+__init__.py                          @thedonnasystem
+conftest.py                          @thedonnasystem

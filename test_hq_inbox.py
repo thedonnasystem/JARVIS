@@ -236,25 +236,25 @@ class Delivery(unittest.TestCase):
     def test_brief_gets_the_inbox_line(self):
         sent = self.run_job([{"id": "b1", "kind": "brief", "channel": "telegram", "body": "Health: GREEN"}], [APPROVAL, QUESTION])
         self.assertEqual(len(sent), 1)
-        self.assertTrue(sent[0].startswith("Daily brief\n\nHealth: GREEN"))
+        self.assertTrue(sent[0].startswith("Sir, Daily brief\n\nHealth: GREEN"))
         self.assertIn("Needs you: 2 waiting", sent[0])
 
     def test_other_kinds_are_untouched(self):
         sent = self.run_job([{"id": "m1", "kind": "money", "channel": "telegram", "body": "Profit: $0"}], [APPROVAL])
-        self.assertEqual(sent, ["Money\n\nProfit: $0"])
+        self.assertEqual(sent, ["Sir, Money\n\nProfit: $0"])
 
     def test_malformed_inbox_rows_never_block_the_brief(self):
         sent = self.run_job([{"id": "b1", "kind": "brief", "channel": "telegram", "body": "Health: GREEN"}], [dict(APPROVAL, age_minutes="soon")])
-        self.assertEqual(sent, ["Daily brief\n\nHealth: GREEN"])
+        self.assertEqual(sent, ["Sir, Daily brief\n\nHealth: GREEN"])
 
     def test_even_a_broken_inbox_module_cannot_block_the_brief(self):
         with mock.patch.object(I, "append_to_brief", side_effect=RuntimeError("boom")):
             sent = self.run_job([{"id": "b1", "kind": "brief", "channel": "telegram", "body": "Health: GREEN"}], [APPROVAL])
-        self.assertEqual(sent, ["Daily brief\n\nHealth: GREEN"])
+        self.assertEqual(sent, ["Sir, Daily brief\n\nHealth: GREEN"])
 
     def test_inbox_failure_never_blocks_the_brief(self):
         sent = self.run_job([{"id": "b1", "kind": "brief", "channel": "telegram", "body": "Health: GREEN"}], RuntimeError("down"))
-        self.assertEqual(sent, ["Daily brief\n\nHealth: GREEN"])
+        self.assertEqual(sent, ["Sir, Daily brief\n\nHealth: GREEN"])
 
 
 if __name__ == "__main__":

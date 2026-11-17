@@ -55,6 +55,24 @@ class EmergencyCallTests(unittest.TestCase):
         self.assertFalse(log[0][1]["p_criteria_ok"])
         self.assertEqual(log[0][1]["p_event_kind"], "lunch_ready")
 
+    def test_never_raises_when_the_gate_allows_an_unlisted_event(self):
+        rpc, log = self.rpc(allowed=True, outcome="allowed")
+        r = H.EmergencyCall(env=self.ENV, http=lambda *a: self.fail("called"), rpc=rpc, criteria=CRIT).call("not_listed_here", "x")
+        self.assertFalse(r["ok"])
+        r = H.EmergencyCall(env=self.ENV, http=lambda *a: self.fail("called"), rpc=lambda *a: 1 / 0, criteria=CRIT).call("production_down", "x")
+        self.assertFalse(r["ok"])
+        r = H.EmergencyCall(env=self.ENV, http=lambda *a: self.fail("called"), rpc=rpc, criteria={}).call("production_down", "x")
+        self.assertFalse(r["ok"])
+
+    def test_database_criteria_equal_the_file(self):
+        """B7: the database enforces its own copy of the list; it must be exactly the owner-approved file."""
+        import os
+        import re
+        sql = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations", "20261123_jarvis_core_v1.sql"), encoding="utf-8").read()
+        block = sql[sql.index("insert into public.jarvis_call_criteria"):sql.index("on conflict (event_kind)")]
+        rows = dict((k, says) for k, sev, says in re.findall(r"\('([a-z_]+)', '(critical)', '([^']+)'\)", block))
+        self.assertEqual(rows, {k: v["says"] for k, v in CRIT["events"].items()})
+
     def test_database_refusal_means_no_call(self):
         rpc, _ = self.rpc(allowed=False, outcome="refused_limit")
         r = H.EmergencyCall(env=self.ENV, http=lambda *a: self.fail("called"), rpc=rpc, criteria=CRIT).call("production_down", "pd")

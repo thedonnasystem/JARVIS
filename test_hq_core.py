@@ -194,21 +194,58 @@ https://example.invalid/only-a-link
                                  {"section": "Style", "content": "Prefers short bullet answers."},
                                  {"section": "Style", "content": "Approves builds himself"}])
 
-    def test_import_sends_items_and_hash_only(self):
+    def test_import_stages_items_and_hash_only(self):
         got = {}
-        r = S.import_bytes(self.SAMPLE.encode(), rpc=lambda a: got.update(a) or {"added": 4, "duplicates": 0, "rejected": 0})
-        self.assertEqual(r["added"], 4)
+        r = S.import_bytes(self.SAMPLE.encode(), rpc=lambda a: got.update(a) or "stage-1")
+        self.assertEqual((r["stage"], r["items"], r["dropped"]), ("stage-1", 4, 0))
         self.assertRegex(got["p_file_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(len(got["p_items"]), 4)
+        self.assertNotIn("p_actor", got)                       # the bot cannot claim to be the owner: it only stages
         with self.assertRaises(ValueError):
             S.import_bytes(b"x" * (S.MAX_BYTES + 1), rpc=lambda a: {})
 
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_items_beyond_the_limit_are_reported(self):
+        raw = "\n".join(f"- synthetic item number {i}" for i in range(601)).encode()
+        r = S.import_bytes(raw, rpc=lambda a: "s")
+        self.assertEqual((r["items"], r["dropped"]), (500, 101))
 
 
 class SirEverywhereTests(unittest.TestCase):
+    """Chairman instruction: every owner-facing reply path says "sir" through ONE helper (hq_core.address via reply_to / send_to / deliver_owner_messages)."""
+    def test_no_raw_reply_paths_left(self):
+        import pathlib
+        import re
+        root = pathlib.Path(__file__).resolve().parent
+        for f in ("bot.py", "hq_commands.py", "hq_core.py"):
+            t = (root / f).read_text()
+            raw = [m.group(0) for m in re.finditer(r"(?<!def )\b(?:update|query)\.message\.reply_text\(|context\.bot\.send_message\(", t)]
+            self.assertEqual(raw, [], f)
+        self.assertIn("hq_core.address(format_owner_message(msg))", (root / "hq.py").read_text())
+
+    def test_helpers_address_only_the_owner_chat(self):
+        import asyncio
+
+        class Msg:
+            def __init__(self, cid):
+                self.chat, self.sent = type("C", (), {"id": cid})(), []
+
+            async def reply_text(self, text, **kw):
+                self.sent.append(text)
+
+        class Bot:
+            def __init__(self):
+                self.sent = []
+
+            async def send_message(self, cid, text, **kw):
+                self.sent.append((cid, text))
+        with mock.patch.dict("os.environ", {"JARVIS_OWNER_ID": "42"}):
+            m, o, b = Msg(42), Msg(7), Bot()
+            asyncio.run(C.reply_to(m, "Queue full.")); asyncio.run(C.reply_to(o, "Not for you."))
+            asyncio.run(C.send_to(b, 42, "Done.")); asyncio.run(C.send_to(b, 7, text="Hello."))
+        self.assertEqual(m.sent, ["Sir, Queue full."]); self.assertEqual(o.sent, ["Not for you."])
+        self.assertEqual(b.sent, [(42, "Sir, Done."), (7, "Hello.")])
+        self.assertEqual(C.address(""), "Sir.")
+
     def test_chat_engine_and_call_prompts_say_sir(self):
         import pathlib
         root = pathlib.Path(__file__).resolve().parent
@@ -219,3 +256,31 @@ class SirEverywhereTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AiJobRoutingTests(unittest.TestCase):
+    def test_job_sources_drive_routing_and_the_lease_is_extended(self):
+        import hq_llm
+        seen, rpcs = {}, []
+
+        def fake_cached(system, msgs, **kw):
+            seen.update(kw)
+            kw["on_attempt"]()
+            return {"text": "ok", "cents": 0}
+        with mock.patch.object(hq_llm, "retrieve_memory", return_value=(["a fact"], ["memory:fact"])), \
+                mock.patch.object(hq_llm, "cached_complete", side_effect=fake_cached), mock.patch.object(C, "_rpc", side_effect=lambda n, a=None: rpcs.append(n)):
+            C._ai_job({"id": "j1", "kind": "lead.followup", "division": "donna", "payload": {"prompt": "hi", "contains_client_data": False}})
+        self.assertEqual(seen["sources"], ["identity", "job:lead.followup", "memory:fact"])
+        self.assertEqual(seen["tier"], "small")
+        self.assertEqual(rpcs, ["jarvis_extend_lease"])
+        self.assertGreater(C.LEASE_SECONDS, 600)                  # longer than the slowest provider timeout
+
+    def test_release_check_opens_the_revert_for_the_owner(self):
+        posted = []
+        import hq_selfedit
+        with mock.patch.object(C, "core_status", return_value={"error": "down"}), mock.patch("hq._request", side_effect=lambda *a, **k: posted.append(a)), \
+                mock.patch.object(hq_selfedit.time, "sleep") as slept:
+            C.HANDLERS["release.check"]({"payload": {"previous_sha": "d" * 40}})
+        self.assertEqual(slept.call_count, 2)
+        bodies = [a[2] for a in posted if a[1] == "/rest/v1/owner_messages"]
+        self.assertTrue(any(b.get("needs_decision") and "d" * 12 in b["body"] for b in bodies), posted)

@@ -37,6 +37,7 @@ from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 from dotenv import load_dotenv
 
 import hq
+import hq_core
 import hq_engine
 import hq_executor
 import hq_commands
@@ -692,7 +693,7 @@ async def request_approval(
             ]
         ]
     )
-    await context.bot.send_message(chat_id, description, reply_markup=keyboard)
+    await hq_core.send_to(context.bot, chat_id, description, reply_markup=keyboard)
 
     try:
         return await asyncio.wait_for(future, timeout=timeout)
@@ -847,7 +848,7 @@ def split_for_telegram(text: str) -> list[str]:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     clear_history(update.effective_chat.id)
-    await update.message.reply_text(
+    await hq_core.reply_to(update.message, 
         "Hi! I'm connected to Claude. Send me a message and I'll reply.\n"
         "Our conversation is saved, so I'll still remember it if you restart me.\n"
         "Use /reset to clear our conversation history."
@@ -856,7 +857,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     clear_history(update.effective_chat.id)
-    await update.message.reply_text("Conversation history cleared.")
+    await hq_core.reply_to(update.message, "Conversation history cleared.")
 
 
 # Audit hardening (AUDIT_PATHS.md F4, F5).
@@ -1349,7 +1350,7 @@ async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not _is_owner(update.effective_user.id):
         return
     if not _google_configured():
-        await update.message.reply_text(
+        await hq_core.reply_to(update.message, 
             "Google Calendar isn't configured yet - GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET "
             "are missing from Railway's Variables."
         )
@@ -1357,7 +1358,7 @@ async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     device_resp = await google_request_device_code()
     if "device_code" not in device_resp:
-        await update.message.reply_text(f"Couldn't start Google sign-in: {device_resp}")
+        await hq_core.reply_to(update.message, f"Couldn't start Google sign-in: {device_resp}")
         return
 
     verification_url = device_resp.get("verification_url") or device_resp.get("verification_uri")
@@ -1366,7 +1367,7 @@ async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     expires_in = device_resp.get("expires_in", 1800)
     device_code = device_resp["device_code"]
 
-    await update.message.reply_text(
+    await hq_core.reply_to(update.message, 
         "To connect your Google Calendar:\n\n"
         f"1. Go to {verification_url}\n"
         f"2. Enter this code: {user_code}\n\n"
@@ -1387,7 +1388,7 @@ async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     key="google_calendar",
                     value="Google Calendar connected via device-code OAuth.",
                 )
-                await context.bot.send_message(chat_id, "✅ Google Calendar connected.")
+                await hq_core.send_to(context.bot, chat_id, "✅ Google Calendar connected.")
                 return
             error = token_resp.get("error")
             if error == "authorization_pending":
@@ -1397,16 +1398,16 @@ async def connect_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 continue
             if error in ("access_denied", "expired_token"):
                 reason = "denied" if error == "access_denied" else "expired"
-                await context.bot.send_message(
+                await hq_core.send_to(context.bot, 
                     chat_id, f"Calendar connection {reason} - run /connectcalendar again."
                 )
                 return
             logger.error("Unexpected device-token response: %s", token_resp)
-            await context.bot.send_message(
+            await hq_core.send_to(context.bot, 
                 chat_id, f"Calendar connection failed: {token_resp}. Try /connectcalendar again."
             )
             return
-        await context.bot.send_message(
+        await hq_core.send_to(context.bot, 
             chat_id, "Calendar connection timed out - run /connectcalendar again."
         )
 
@@ -1472,7 +1473,7 @@ async def vault_retrieve(secret_id: str) -> str:
 
 async def _fire_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
     job = context.job
-    await context.bot.send_message(job.chat_id, f"⏰ Reminder: {job.data['text']}")
+    await hq_core.send_to(context.bot, job.chat_id, f"⏰ Reminder: {job.data['text']}")
     if job.data.get("one_time"):
         deactivate_reminder(job.data["reminder_id"])
 
@@ -2162,26 +2163,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Security: every chat turn costs a Claude call on the owner's API key. Strangers who find the
     # bot get one line and nothing else: no model call, no history saved.
     if not _is_owner(update.effective_user.id):
-        await update.message.reply_text(NON_OWNER_REPLY)
+        await hq_core.reply_to(update.message, NON_OWNER_REPLY)
         return
     reply_text = await jarvis_reply(update.effective_chat.id, update.message.text, context)
     for chunk in split_for_telegram(reply_text):
-        await update.message.reply_text(chunk)
+        await hq_core.reply_to(update.message, chunk)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner voice notes -> text -> the same chat path as typed messages. Needs OPENAI_API_KEY; otherwise says so."""
     if not _is_owner(update.effective_user.id):
-        await update.message.reply_text(NON_OWNER_REPLY)
+        await hq_core.reply_to(update.message, NON_OWNER_REPLY)
         return
     import hq_voice
     v = update.message.voice or update.message.audio
     if not hq_voice.configured():
-        await update.message.reply_text("Voice notes are built but switched off: add OPENAI_API_KEY to the bot's environment and I'll transcribe them.")
+        await hq_core.reply_to(update.message, "Voice notes are built but switched off: add OPENAI_API_KEY to the bot's environment and I'll transcribe them.")
         return
     why = hq_voice.too_long(getattr(v, "duration", 0), getattr(v, "file_size", 0))
     if why:
-        await update.message.reply_text(why)
+        await hq_core.reply_to(update.message, why)
         return
     f = await context.bot.get_file(v.file_id)
     data = bytes(await f.download_as_bytearray())
@@ -2191,15 +2192,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             hq_meter.metered_call, hq_meter.CHAT_AGENT, est, hq_voice.MODEL_LABEL, "voice transcription",
             lambda: hq_voice.transcribe(data))
     except hq_meter.MeterBlocked as e:
-        await update.message.reply_text(hq_meter.status_reply(e))
+        await hq_core.reply_to(update.message, hq_meter.status_reply(e))
         return
     if not text:
-        await update.message.reply_text("I couldn't make out that voice note. Try again or type it.")
+        await hq_core.reply_to(update.message, "I couldn't make out that voice note. Try again or type it.")
         return
-    await update.message.reply_text("Heard: " + text[:500])
+    await hq_core.reply_to(update.message, "Heard: " + text[:500])
     reply_text = await jarvis_reply(update.effective_chat.id, text, context)
     for chunk in split_for_telegram(reply_text):
-        await update.message.reply_text(chunk)
+        await hq_core.reply_to(update.message, chunk)
 
 
 def _is_owner(user_id: int) -> bool:
@@ -2210,14 +2211,14 @@ async def build(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
 
     if not _is_owner(update.effective_user.id):
-        await update.message.reply_text(
+        await hq_core.reply_to(update.message, 
             "The /build feature isn't enabled for you. Set JARVIS_OWNER_ID in "
             ".env to your Telegram user id to enable it."
         )
         return
 
     if chat_id in build_sessions:
-        await update.message.reply_text(
+        await hq_core.reply_to(update.message, 
             "I'm already working on something in this chat. Send /cancelbuild "
             "to stop it first."
         )
@@ -2225,13 +2226,13 @@ async def build(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     task_text = " ".join(context.args) if context.args else ""
     if not task_text:
-        await update.message.reply_text("Usage: /build <what you want me to build>")
+        await hq_core.reply_to(update.message, "Usage: /build <what you want me to build>")
         return
 
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     build_sessions[chat_id] = {"status": "planning", "task": task_text, "session_id": None}
 
-    await update.message.reply_text(
+    await hq_core.reply_to(update.message, 
         "🔎 Looking into it - I'll only plan for now, no changes yet..."
     )
     asyncio.create_task(run_plan_phase(chat_id, context, task_text))
@@ -2242,9 +2243,9 @@ async def cancel_build(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not _is_owner(update.effective_user.id):
         return
     if build_sessions.pop(chat_id, None):
-        await update.message.reply_text("Okay, stopped.")
+        await hq_core.reply_to(update.message, "Okay, stopped.")
     else:
-        await update.message.reply_text("Nothing is running right now.")
+        await hq_core.reply_to(update.message, "Nothing is running right now.")
 
 
 async def run_plan_phase(
@@ -2260,7 +2261,7 @@ async def run_plan_phase(
             max(1, int(BUILD_SESSION_CENTS * BUILD_PLAN_SHARE)))
     except hq_meter.MeterBlocked as e:
         build_sessions.pop(chat_id, None)
-        await context.bot.send_message(chat_id, hq_meter.status_reply(e))
+        await hq_core.send_to(context.bot, chat_id, hq_meter.status_reply(e))
         return
 
     plan_prompt = (
@@ -2303,7 +2304,7 @@ async def run_plan_phase(
         logger.exception("Plan phase crashed")
         await asyncio.to_thread(hq_meter.end_session, sess, plan_usd)
         build_sessions.pop(chat_id, None)
-        await context.bot.send_message(
+        await hq_core.send_to(context.bot, 
             chat_id, "Sorry, I hit an error while planning. Try /build again."
         )
         return
@@ -2312,7 +2313,7 @@ async def run_plan_phase(
     plan_cents = await asyncio.to_thread(hq_meter.end_session, sess, plan_usd)
     if stopped_by_kill:
         build_sessions.pop(chat_id, None)
-        await context.bot.send_message(chat_id, hq_meter.status_reply(hq_meter.MeterBlocked("", "kill")))
+        await hq_core.send_to(context.bot, chat_id, hq_meter.status_reply(hq_meter.MeterBlocked("", "kill")))
         return
 
     state = build_sessions.get(chat_id)
@@ -2325,7 +2326,7 @@ async def run_plan_phase(
     state["plan_cents"] = plan_cents
 
     for chunk in split_for_telegram(plan_text):
-        await context.bot.send_message(chat_id, chunk)
+        await hq_core.send_to(context.bot, chat_id, chunk)
 
     keyboard = InlineKeyboardMarkup(
         [
@@ -2339,7 +2340,7 @@ async def run_plan_phase(
             ]
         ]
     )
-    await context.bot.send_message(
+    await hq_core.send_to(context.bot, 
         chat_id, "Want me to go ahead and build this?", reply_markup=keyboard
     )
 
@@ -2372,7 +2373,7 @@ async def build_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def run_build_phase(
     chat_id: int, context: ContextTypes.DEFAULT_TYPE, state: dict
 ) -> None:
-    status_message = await context.bot.send_message(chat_id, "Starting...")
+    status_message = await hq_core.send_to(context.bot, chat_id, "Starting...")
     last_edit = 0.0
 
     async def update_status(text: str) -> None:
@@ -2458,7 +2459,7 @@ async def run_build_phase(
         logger.exception("Build phase crashed")
         await asyncio.to_thread(hq_meter.end_session, sess, build_usd)
         build_sessions.pop(chat_id, None)
-        await context.bot.send_message(
+        await hq_core.send_to(context.bot, 
             chat_id, "Something went wrong while building. Check the logs."
         )
         return
@@ -2487,7 +2488,7 @@ async def run_build_phase(
         await update_status(message_text[:TELEGRAM_MESSAGE_LIMIT])
         if len(message_text) > TELEGRAM_MESSAGE_LIMIT:
             for chunk in split_for_telegram(message_text[TELEGRAM_MESSAGE_LIMIT:]):
-                await context.bot.send_message(chat_id, chunk)
+                await hq_core.send_to(context.bot, chat_id, chunk)
         return
 
     changes = [f"- created {p}" for p in created] + [f"- modified {p}" for p in modified]

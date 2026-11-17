@@ -5,7 +5,7 @@ Free tiers change their limits, models and terms often. Re-check this page befor
 are starting values, and the provider's own 429 answers always win (Jarvis backs off and rotates).
 
 Rules the code enforces whatever this page says:
-- **Client personal data never goes to a free-tier provider** (`contains_client_data=True` routes only to the owner's self-hosted model, or the task is refused / done in plain code).
+- **Client personal data never goes to a free-tier provider** (enforced in hq_llm from the prompt sources and a personal-data scan, default private: private prompts route only to the owner's self-hosted model, or the task is refused / done in plain code).
 - **Providers that train on prompts are excluded** unless the Chairman opts in (`JARVIS_ALLOW_TRAINING_PROVIDERS=1`). None of the catalog entries is marked as training; mark any new one honestly.
 - **No silent paid fallback.** When every free provider is at its limit, the work is queued and the Chairman is told.
 - Every call, free or not, still passes the spend gateway (kill switch, caps, paused agent).

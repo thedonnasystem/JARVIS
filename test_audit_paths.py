@@ -193,7 +193,9 @@ class RouteInventory(unittest.TestCase):
                          {"bot.py": 5, "hq.py": 1, "hq_backup.py": 1, "hq_dev.py": 1, "hq_mail.py": 1, "hq_systems.py": 1,
                           "hq_voice.py": 1, "hq_wholesale.py": 1,
                           # Jarvis core v2 (dormant): model providers (chat + /models health), the owner's channels (WhatsApp / emergency call), GitHub for self-edit
-                          "hq_llm.py": 2, "hq_channels.py": 1, "hq_selfedit.py": 1})
+                          "hq_channels.py": 1, "hq_selfedit.py": 1})
+        # hq_llm: the provider transport and the /models probe go through ONE no-redirect opener (a 3xx never carries the key to another origin)
+        self.assertEqual(self.count(r"\bOPENER\.open\("), {"hq_llm.py": 2})
 
     def test_policy_authorize_callers_for_send_email(self):
         self.assertEqual(self.count(r'hq_policy\.authorize\(.*"send_email"', files={"hq_mail.py", "hq_commands.py", "hq_engine.py", "hq_web.py", "bot.py"}), {"hq_mail.py": 1})

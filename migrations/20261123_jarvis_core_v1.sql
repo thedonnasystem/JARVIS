@@ -13,6 +13,10 @@
 --     (system_state.daily_spend_cap_cents), kill switch and mode are NOT touched.
 --   * backup_classification() is re-created with the same rows plus the new tables, all EXCLUDED from the off-site export for now (an unclassified table would fail the backup
 --     closed; exporting them needs reviewed backup_redaction_spec() rows first). PROTECTED object: owner approval needed.
+--   * Fix-up after review RVJC: owner checks are app-owner only (as ffm_require_owner); an expired lease at max_attempts dead-letters; the emergency-call
+--     criteria live IN THE DATABASE (jarvis_call_criteria, seeded from ops/CRITICAL_EVENTS.json); self-funding credits must match the bank deposit exactly
+--     and stop counting when it is unmatched; memory search excludes the owner's private profile unless the destination is self-hosted; the seed import
+--     is owner-only (the bot only stages it); mission budgets (mission_guard / mission_spent_cents) also apply to 'jarvis:<division>:<mission>:...' purposes.
 -- Rollback: ops/rollback_jarvis_core.sql.
 
 -- ---------------------------------------------------------------------------------------------------------------------------- tables
@@ -115,6 +119,30 @@ create table if not exists public.jarvis_self_fund_credits (
   confirmed_by text not null
 );
 
+-- The ONLY events that may place an emergency call (ops/CRITICAL_EVENTS.json, owner-approved list; a python test keeps the two identical). Written only here.
+create table if not exists public.jarvis_call_criteria (
+  event_kind text primary key check (event_kind ~ '^[a-z][a-z_]{2,40}$'),
+  min_severity text not null check (min_severity = 'critical'),
+  says text not null check (length(says) between 3 and 200)
+);
+insert into public.jarvis_call_criteria (event_kind, min_severity, says) values
+  ('kill_switch_tripped', 'critical', 'the kill switch was turned on'),
+  ('security_incident', 'critical', 'a security incident was detected'),
+  ('spend_anomaly', 'critical', 'spending is far above normal or running away'),
+  ('production_down', 'critical', 'production is down'),
+  ('deadline_critical', 'critical', 'a time-critical deal or legal deadline needs you')
+on conflict (event_kind) do update set min_severity = excluded.min_severity, says = excluded.says;
+delete from public.jarvis_call_criteria where event_kind not in ('kill_switch_tripped', 'security_incident', 'spend_anomaly', 'production_down', 'deadline_critical');
+
+-- The bot STAGES a seed file here; only the owner applies it (jarvis_seed_apply). Items are the parsed bullets (no file is stored).
+create table if not exists public.jarvis_seed_staging (
+  id uuid primary key default gen_random_uuid(),
+  at timestamptz not null default now(),
+  file_sha256 text not null check (file_sha256 ~ '^[0-9a-f]{64}$'),
+  items jsonb not null check (jsonb_typeof(items) = 'array' and jsonb_array_length(items) between 1 and 500),
+  applied_at timestamptz
+);
+
 -- Only Jarvis is always on. Every other agent sleeps until Jarvis wakes it for a specific queued job, with the reason recorded; it sleeps again when its
 -- queue is empty or it stops making progress. Append-only: every wake and sleep, with reason and cost.
 create table if not exists public.jarvis_agent_wakes (
@@ -140,7 +168,7 @@ create table if not exists public.jarvis_large_approvals (
 do $$
 declare t text;
 begin
-  foreach t in array array['jarvis_core_config', 'jarvis_jobs', 'jarvis_job_events', 'jarvis_task_stats', 'jarvis_result_cache', 'jarvis_changelog', 'jarvis_call_log', 'jarvis_large_approvals', 'jarvis_self_fund_credits', 'jarvis_agent_wakes'] loop
+  foreach t in array array['jarvis_core_config', 'jarvis_jobs', 'jarvis_job_events', 'jarvis_task_stats', 'jarvis_result_cache', 'jarvis_changelog', 'jarvis_call_log', 'jarvis_large_approvals', 'jarvis_self_fund_credits', 'jarvis_agent_wakes', 'jarvis_call_criteria', 'jarvis_seed_staging'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from public, anon, authenticated, service_role', t);   -- default privileges grant them on Supabase / the replica: take them back
   end loop;
@@ -178,13 +206,12 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------------------------------------------------------- owner check
--- The owner is: the signed-in PWA owner (is_app_owner), or a direct database session that is NOT one of the API roles (the owner in the Supabase SQL editor).
--- The bot (service_role) and the app roles are refused.
+-- The owner is the signed-in app owner ONLY (is_app_owner: a confirmed auth user listed in app_owners), exactly as ffm_require_owner. A direct database session
+-- is NOT the owner by itself: in the Supabase SQL editor the owner first sets his auth uid (ops/OWNER_JARVIS_CORE.sql). The bot and every API role are refused.
 create or replace function public.jarvis_require_owner() returns void
 language plpgsql stable security definer set search_path to 'public' as $$
 begin
-  if coalesce(public.is_app_owner(), false) then return; end if;
-  if coalesce(nullif(current_setting('role', true), ''), 'none') in ('service_role', 'anon', 'authenticated', 'authenticator') or session_user in ('authenticator', 'anon', 'authenticated', 'service_role') then
+  if not coalesce(public.is_app_owner(), false) then
     raise exception 'owner approval required: this action is refused for the bot' using errcode = '42501';
   end if;
 end $$;
@@ -270,6 +297,15 @@ begin
      limit greatest(1, least(coalesce(p_n, 1), 20))
      for update skip locked
   loop
+    -- a job whose lease ran out at its last attempt (the worker crashed or outlived the lease) is dead-lettered, not re-run forever
+    if r.status = 'leased' and r.attempts >= r.max_attempts then
+      update public.jarvis_jobs set status = 'dead', lease_owner = null, lease_until = null, finished_at = now(), updated_at = now(),
+                                    last_error = 'lease expired at attempt ' || r.attempts || ' of ' || r.max_attempts || ' (worker crash or timeout)' where id = r.id;
+      insert into public.jarvis_job_events (job_id, event, actor, detail) values (r.id, 'dead', p_worker, jsonb_build_object('attempt', r.attempts, 'reason', 'lease expired', 'previous_owner', r.lease_owner));
+      insert into public.jarvis_task_stats (task_class, runs, ai_runs, cost_cents, last_run_at) values (r.kind, 1, 0, 0, now())
+      on conflict (task_class) do update set runs = jarvis_task_stats.runs + 1, last_run_at = now();
+      continue;
+    end if;
     insert into public.jarvis_job_events (job_id, event, actor, detail)
     values (r.id, case when r.status = 'leased' then 'reclaimed' else 'leased' end, p_worker, jsonb_build_object('attempt', r.attempts + 1, 'previous_owner', r.lease_owner));
     update public.jarvis_jobs set status = 'leased', lease_owner = p_worker, lease_until = now() + make_interval(secs => greatest(30, least(coalesce(p_lease_seconds, 300), 3600))),
@@ -358,6 +394,11 @@ language sql stable security definer set search_path to 'public' as $$
      and (s.runs >= c.automation_threshold_runs or s.cost_cents >= c.automation_threshold_cents)
      and not (s.task_class = any (coalesce(p_protected, '{}')))
      and s.task_class !~ '^(money|spend|capital|bank|payment|tax|kill|mode|permission|grant|auth|secret|consent|suppression|privacy|redaction|backup|insurance|audit|ci|gate|review|protected)'
+     -- by CATEGORY, not only prefix: any word of the class (split on . _ -) that is protected (lead.payment.reminder, ffm.consent.followup, ops.backup.verify ...)
+     and not exists (select 1 from regexp_split_to_table(lower(s.task_class), '[._-]+') w
+                      where w = any (coalesce(p_protected, '{}') || array['money','spend','capital','bank','payment','tax','kill','mode','permission','grant','auth','secret',
+                                     'consent','suppression','privacy','redaction','backup','insurance','audit','ci','gate','review','protected','legal','contract','finance','billing',
+                                     'refund','invoice','wire','transfer','payout','outreach','send','lead','ffm','dnc','optout','unsubscribe','selfedit','deploy','release','security','owner']))
    order by s.cost_cents desc, s.runs desc;
 $$;
 revoke all on function public.jarvis_automation_candidates(text[]) from public, anon, authenticated;
@@ -403,7 +444,8 @@ end $$;
 revoke all on function public.jarvis_changelog_add(text, text, text) from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------------------------------------------------------- emergency call ledger
--- Called by the call adapter BEFORE any vendor call. The answer is recorded either way. p_criteria_ok: the adapter's check against ops/CRITICAL_EVENTS.json (owner-approved list).
+-- Called by the call adapter BEFORE any vendor call. The answer is recorded either way. The criteria are checked HERE against jarvis_call_criteria (the
+-- owner-approved list); p_criteria_ok is kept for the adapter's signature and IGNORED. An unlisted event is refused and never uses up the daily limit.
 create or replace function public.jarvis_call_allowed(p_event_kind text, p_dedupe text, p_criteria_ok boolean) returns jsonb
 language plpgsql security definer set search_path to 'public' as $$
 declare c public.jarvis_core_config; v_today timestamptz; n integer; v_outcome text;
@@ -413,7 +455,7 @@ begin
   v_today := (date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto');
   select count(*) into n from public.jarvis_call_log where outcome in ('allowed') and at >= v_today;
   if not coalesce(c.emergency_call_enabled, false) then v_outcome := 'refused_disabled';
-  elsif not coalesce(p_criteria_ok, false) then v_outcome := 'refused_criteria';
+  elsif not exists (select 1 from public.jarvis_call_criteria k where k.event_kind = p_event_kind and k.min_severity = 'critical') then v_outcome := 'refused_criteria';
   elsif exists (select 1 from public.jarvis_call_log where dedupe_key = p_dedupe and outcome = 'allowed' and at > now() - interval '24 hours') then v_outcome := 'refused_duplicate';
   elsif n >= c.max_calls_per_day then v_outcome := 'refused_limit';
   else v_outcome := 'allowed'; end if;
@@ -426,7 +468,7 @@ create or replace function public.jarvis_call_result(p_dedupe text, p_outcome te
 language plpgsql security definer set search_path to 'public' as $$
 begin
   if p_outcome not in ('placed', 'failed', 'dry_run') then raise exception 'jarvis_call_result: bad outcome'; end if;
-  insert into public.jarvis_call_log (event_kind, dedupe_key, outcome, detail) values ('call_result', p_dedupe, p_outcome, coalesce(p_detail, '{}'::jsonb) - 'to' - 'from' - 'number');
+  insert into public.jarvis_call_log (event_kind, dedupe_key, outcome, detail) values ('call_result', p_dedupe, p_outcome, (select coalesce(jsonb_object_agg(k, v), '{}'::jsonb) from jsonb_each(coalesce(p_detail, '{}'::jsonb)) e(k, v) where k in ('reason', 'missing', 'call')));
 end $$;
 revoke all on function public.jarvis_call_result(text, text, jsonb) from public, anon, authenticated;
 
@@ -462,6 +504,9 @@ begin
   select * into l from public.ledger where id = p_ledger;
   if l.id is null or l.kind <> 'revenue' or l.status <> 'received' or l.amount_cents <= 0 then raise exception 'only a received revenue entry can be confirmed'; end if;
   if not exists (select 1 from public.bank_transactions b where b.ledger_id = l.id and b.status = 'matched') then raise exception 'this revenue is not matched to a bank deposit yet (reconcile first: /bank)'; end if;
+  if (select coalesce(sum(b.amount_cents), 0) from public.bank_transactions b where b.ledger_id = l.id and b.status = 'matched') <> l.amount_cents then
+    raise exception 'the matched bank deposit(s) do not equal the revenue amount exactly: correct the reconciliation first';
+  end if;
   insert into public.jarvis_self_fund_credits (ledger_id, amount_cents, confirmed_by) values (l.id, l.amount_cents, 'owner') on conflict (ledger_id) do nothing;
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'jarvis_revenue_confirmed', 'ledger/' || l.id, jsonb_build_object('amount_cents', l.amount_cents));
   return public.jarvis_self_fund_status();
@@ -473,7 +518,10 @@ revoke all on function public.jarvis_owner_confirm_revenue(uuid) from public, an
 create or replace function public.jarvis_self_fund_status() returns jsonb
 language sql stable security definer set search_path to 'public' as $$
   with c as (select * from public.jarvis_core_config where id = 1),
-       r as (select coalesce(sum(amount_cents), 0)::bigint v from public.jarvis_self_fund_credits),
+       -- a credit counts only while its revenue row is still received, still equals the credited amount and is still matched to bank deposits of exactly that amount
+       r as (select coalesce(sum(cr.amount_cents), 0)::bigint v from public.jarvis_self_fund_credits cr join public.ledger l on l.id = cr.ledger_id
+              where l.kind = 'revenue' and l.status = 'received' and l.amount_cents = cr.amount_cents
+                and (select coalesce(sum(b.amount_cents), 0) from public.bank_transactions b where b.ledger_id = l.id and b.status = 'matched') = cr.amount_cents),
        s as (select coalesce(sum(coalesce(actual_cents, reserved_cents)), 0)::bigint v from public.llm_calls where agent_slug = 'jarvis-core' and status in ('reserved', 'done'))
   select jsonb_build_object('confirmed_revenue_cents', r.v, 'pct', c.self_fund_pct, 'budget_cents', (r.v * c.self_fund_pct) / 100, 'paid_spent_cents', s.v,
                             'available_cents', greatest(0, (r.v * c.self_fund_pct) / 100 - s.v), 'paid_enabled', c.paid_providers_enabled,
@@ -483,25 +531,30 @@ $$;
 revoke all on function public.jarvis_self_fund_status() from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------------------------------------------------------- memory
-create or replace function public.jarvis_memory_search(p_query text, p_k integer default 8, p_kinds text[] default null)
+-- Ranked retrieval (any word matches, best first). The owner's private profile (kind 'owner_profile') is returned ONLY for p_destination = 'selfhost'
+-- (hq_llm also refuses to send it to any provider that is not client_data_ok, so a wrong destination here still cannot leak it).
+create or replace function public.jarvis_memory_search(p_query text, p_k integer default 8, p_kinds text[] default null, p_destination text default 'external')
 returns table (kind text, content text, source text, rank real)
 language sql stable security definer set search_path to 'public' as $$
-  with q as (select plainto_tsquery('simple', left(coalesce(p_query, ''), 500)) tq)
+  with q as (select nullif(replace(plainto_tsquery('simple', left(coalesce(p_query, ''), 500))::text, ' & ', ' | '), '')::tsquery tq)
   select m.kind, m.content, m.source, ts_rank(to_tsvector('simple', m.content), q.tq) as rank
     from public.memory m, q
-   where (m.expires_at is null or m.expires_at > now())
+   where q.tq is not null
+     and (m.expires_at is null or m.expires_at > now())
      and (p_kinds is null or m.kind = any (p_kinds))
+     and (m.kind <> 'owner_profile' or coalesce(p_destination, 'external') = 'selfhost')
      and to_tsvector('simple', m.content) @@ q.tq
    order by rank desc, m.created_at desc
    limit greatest(1, least(coalesce(p_k, 8), 30));
 $$;
-revoke all on function public.jarvis_memory_search(text, integer, text[]) from public, anon, authenticated;
+revoke all on function public.jarvis_memory_search(text, integer, text[], text) from public, anon, authenticated;
 
 -- owner seed import. p_items: [{"section": "...", "content": "..."}]. Dedupe on the normalised content of existing owner_profile rows. One audit row (counts only, never content).
 create or replace function public.jarvis_seed_memory(p_items jsonb, p_file_sha256 text, p_actor text default 'owner') returns jsonb
 language plpgsql security definer set search_path to 'public' as $$
 declare it jsonb; v_content text; added integer := 0; dup integer := 0; bad integer := 0;
 begin
+  perform public.jarvis_require_owner();                 -- owner-only IN THE DATABASE: the bot stages (jarvis_seed_stage), the owner applies
   if p_file_sha256 is null or p_file_sha256 !~ '^[0-9a-f]{64}$' then raise exception 'jarvis_seed_memory: file hash required'; end if;
   if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) > 500 then raise exception 'jarvis_seed_memory: 1 to 500 items'; end if;
   for it in select * from jsonb_array_elements(p_items) loop
@@ -515,10 +568,79 @@ begin
     added := added + 1;
   end loop;
   insert into public.audit_log (actor, action, target, detail)
-  values (left(coalesce(p_actor, 'owner'), 40), 'jarvis_memory_seeded', 'memory/owner_profile', jsonb_build_object('file_sha256', p_file_sha256, 'added', added, 'duplicates', dup, 'rejected', bad));
+  values ('owner', 'jarvis_memory_seeded', 'memory/owner_profile', jsonb_build_object('file_sha256', p_file_sha256, 'added', added, 'duplicates', dup, 'rejected', bad));
   return jsonb_build_object('added', added, 'duplicates', dup, 'rejected', bad);
 end $$;
 revoke all on function public.jarvis_seed_memory(jsonb, text, text) from public, anon, authenticated;
+
+-- the bot's /seedmemory path: stage the parsed items (owner-verified by Telegram id in code); nothing reaches memory until the owner applies it
+create or replace function public.jarvis_seed_stage(p_items jsonb, p_file_sha256 text) returns uuid
+language plpgsql security definer set search_path to 'public' as $$
+declare v uuid;
+begin
+  if p_file_sha256 is null or p_file_sha256 !~ '^[0-9a-f]{64}$' then raise exception 'jarvis_seed_stage: file hash required'; end if;
+  if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) not between 1 and 500 then raise exception 'jarvis_seed_stage: 1 to 500 items'; end if;
+  insert into public.jarvis_seed_staging (file_sha256, items) values (p_file_sha256, p_items) returning id into v;
+  insert into public.audit_log (actor, action, target, detail) values ('bot', 'jarvis_memory_seed_staged', 'jarvis_seed_staging/' || v, jsonb_build_object('file_sha256', p_file_sha256, 'items', jsonb_array_length(p_items)));
+  return v;
+end $$;
+revoke all on function public.jarvis_seed_stage(jsonb, text) from public, anon, authenticated;
+
+create or replace function public.jarvis_seed_apply(p_stage uuid) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare st public.jarvis_seed_staging; res jsonb;
+begin
+  perform public.jarvis_require_owner();
+  select * into st from public.jarvis_seed_staging where id = p_stage and applied_at is null for update;
+  if st.id is null then raise exception 'jarvis_seed_apply: no unapplied staged import with that id'; end if;
+  res := public.jarvis_seed_memory(st.items, st.file_sha256, 'owner');
+  update public.jarvis_seed_staging set applied_at = now(), items = '[{"content":"applied"}]'::jsonb where id = st.id;   -- the staged text is not kept after use
+  return res;
+end $$;
+revoke all on function public.jarvis_seed_apply(uuid) from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------------------------------------------------------- mission budgets for the core (PROTECTED: owner approval)
+-- Same bodies as 20261112_missions_v1 / 20261113_mission_guard_v1 plus ONE branch each: a 'jarvis:<division>:<mission uuid>:...' purpose belongs to that mission,
+-- so focus mode and the mission budget apply to the core's calls exactly as to 'task <uuid>' calls. Restored by ops/rollback_jarvis_core.sql.
+create or replace function public.mission_spent_cents(p_mission uuid)
+returns int language sql stable set search_path to 'public' as $$
+  select (coalesce((select sum(coalesce(c.actual_cents, c.reserved_cents))
+                      from public.llm_calls c join public.tasks t on c.purpose = 'task ' || t.id::text
+                     where t.mission_id = p_mission and c.status in ('reserved','done')), 0)
+        + coalesce((select sum(coalesce(c.actual_cents, c.reserved_cents))
+                      from public.llm_calls c
+                     where c.purpose like 'jarvis:%:' || p_mission::text || ':%' and c.status in ('reserved','done')), 0))::int;
+$$;
+revoke all on function public.mission_spent_cents(uuid) from public, anon, authenticated;   -- unchanged ACL (service_role keeps execute)
+
+create or replace function public.mission_guard(p_agent text, p_purpose text, p_est_cents integer) returns void
+language plpgsql stable set search_path to 'public' as $$
+declare v_focus uuid; v_mission uuid; v_budget int; v_spent int;
+begin
+  select focus_mission into v_focus from public.system_state where id = 1;
+  if p_purpose ~ '^task [0-9a-fA-F-]{36}$' then
+    select mission_id into v_mission from public.tasks where id = substr(p_purpose, 6)::uuid;
+  elsif p_purpose ~ '^jarvis:[a-z0-9-]+:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:' then
+    v_mission := split_part(p_purpose, ':', 3)::uuid;
+    if not exists (select 1 from public.missions where id = v_mission) then raise exception 'Unknown mission % in the purpose.', left(v_mission::text, 8); end if;
+  end if;
+  -- The owner talking to Jarvis (chat) is never backlog and is not a mission task; it stays metered by the normal daily caps.
+  -- Two narrow exemptions from focus mode, both tiny and both needed to keep control: owner chat (not backlog), and the
+  -- 1-cent hourly credit probe (without it a paused engine could never notice that credit is back while focus is on).
+  if v_focus is not null and v_mission is distinct from v_focus
+     and not (p_agent = 'jarvis-chat' and p_purpose !~ '^task ')
+     and not (p_agent = 'jarvis' and p_purpose = 'credit probe') then
+    raise exception 'Focus mode: only mission % may use AI right now.', left(v_focus::text, 8);
+  end if;
+  if v_mission is not null then
+    select budget_cents into v_budget from public.missions where id = v_mission;
+    v_spent := public.mission_spent_cents(v_mission);
+    if v_spent + coalesce(p_est_cents, 0) > coalesce(v_budget, 0) then
+      raise exception 'Mission budget would be exceeded (% of % cents used).', v_spent, coalesce(v_budget, 0);
+    end if;
+  end if;
+end $$;
+revoke all on function public.mission_guard(text, text, integer) from public, anon, authenticated;   -- unchanged ACL (service_role keeps execute)
 
 -- ---------------------------------------------------------------------------------------------------------------------------- reports
 -- purposes written by the core: 'jarvis:<division>:<mission id or ->:<task class>'
@@ -620,7 +742,9 @@ language sql immutable set search_path to 'pg_catalog', 'public' as $$
     ('jarvis_changelog', 'secret', 'append-only changelog; off-site export pending'), ('jarvis_call_log', 'secret', 'append-only emergency-call ledger (no phone numbers); off-site export pending'),
     ('jarvis_large_approvals', 'secret', 'owner approvals for the large model tier; off-site export pending'), ('jarvis_self_fund_credits', 'secret', 'owner-confirmed Jarvis revenue (amounts only); off-site export pending'),
     ('jarvis_agent_wakes', 'secret', 'append-only agent wake / sleep log; off-site export pending'),
-    ('jarvis_result_cache', 'secret', 'cached task output; may contain client data, never exported (rebuilt on demand)')
+    ('jarvis_result_cache', 'secret', 'cached task output; may contain client data, never exported (rebuilt on demand)'),
+    ('jarvis_call_criteria', 'secret', 'the owner-approved emergency-call events (copy of ops/CRITICAL_EVENTS.json); off-site export pending'),
+    ('jarvis_seed_staging', 'secret', 'owner profile import staged by the bot until the owner applies it; private, never exported')
   ) v (table_name, data_class, note)
 $$;
 revoke all on function public.backup_classification() from public, anon, authenticated;

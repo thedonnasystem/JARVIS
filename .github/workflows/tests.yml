@@ -5,8 +5,8 @@ name: tests
 # no persisted git credentials, hash-verified Python deps (requirements/dev.lock), timeouts, one run per ref.
 on:
   pull_request:
-    # labeled / unlabeled: the owner's approval label (scripts/check_protected_paths.py) re-runs the checks
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # labeled / unlabeled: the owner's approval label (scripts/check_protected_paths.py) re-runs the checks; edited: a base retarget re-runs them
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   pull_request_review:
     # the owner's APPROVED review on the head commit re-runs the checks (protected-path approval)
     types: [submitted, dismissed]
@@ -36,13 +36,32 @@ jobs:
       - run: python3 scripts/check_workflow_pins.py
       - run: python3 scripts/check_gitleaks_ignore.py
       - run: scripts/gate.sh --only unit,scripts-tests,lint,bundle,appcheck,webjs
-      - name: Protected paths (never-edit list; owner approval marker required on pull requests)
+      - name: Trusted judge (the BASE branch's checker and config, checked out separately; never the PR's copy)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.base.ref || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'overnight-build' }}
+          path: _trusted
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Protected paths (never-edit list; owner approval marker required; judged by the base branch's copy against the CURRENT base)
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python3 scripts/check_protected_paths.py --ci
+          PUSH_REF: ${{ github.ref_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_REF}" ]; then git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"; fi
+          if [ -f _trusted/scripts/check_protected_paths.py ] && [ -f _trusted/ops/PROTECTED_PATHS.json ]; then
+            python3 _trusted/scripts/check_protected_paths.py --ci --repo . --config _trusted/ops/PROTECTED_PATHS.json
+          else
+            echo "BOOTSTRAP: the base branch has no checker yet (this PR introduces it). Using the PR's copy ONCE; it fails closed without owner approval."
+            python3 scripts/check_protected_paths.py --ci
+          fi
   migrations:
     # the full gate: everything in `unit` plus the replica run (migrations, e2e, integration, rollback drill), the generated
     # function manifest, and the backup drill when the branch has one. --strict: a skipped required step is a failure.

@@ -5,8 +5,14 @@ Chairman's rule (Nov 16 2026): the brain costs $0 by default.
   * A ROTATION of free-tier, OpenAI-compatible providers (Groq, Cerebras trial, OpenRouter ':free' models, GitHub Models, NVIDIA NIM) plus a FREE self-hosted
     fallback (a small quantized Hermes / Qwen model on an always-free CPU VM via llama.cpp or Ollama, ops/selfhost/). A provider is used only when its key is set.
   * Providers whose free tier trains on prompts are excluded unless the owner opts in (JARVIS_ALLOW_TRAINING_PROVIDERS=1).
-  * Client personal data (contains_client_data=True) NEVER goes to a free-tier provider: only to a provider marked client_data_ok (the owner's own self-hosted
-    model) or it is handled by plain code. With no such provider the call is refused.
+  * Client / personal data NEVER goes to a free-tier provider. ENFORCED here, not a caller flag: every call names its prompt SOURCES (sources=[...]);
+    route_class() treats the prompt as PRIVATE unless every source is on PUBLIC_SOURCES (code-only list) AND no text contains personal data
+    (hq_scrub's detector: phones, emails, ids ...). Unknown / missing sources = PRIVATE (default deny). Private prompts go only to a catalog provider
+    marked client_data_ok (the owner's own self-hosted model) or are refused. Memory rows carry their kind as a source ('memory:owner_profile' = private).
+  * Large tier: only with a single-use owner approval, consumed in complete() itself (jarvis_use_large_approval).
+  * Mission budgets: the purpose 'jarvis:<division>:<mission>:...' is parsed by the database's mission_guard, so focus mode and the mission budget apply.
+  * The provider registry for paid vendors is CODE ONLY (CATALOG, protected): JARVIS_LLM_EXTRA_PROVIDERS cannot redeclare a catalog name, cannot point at a
+    known paid vendor host, cannot be marked client_data_ok, and JARVIS_LLM_PRICES cannot change a catalog model's price.
   * Per-provider rate tracking (requests/min, requests/day, tokens/min) with backoff on 429 / errors and rotation to the next provider.
   * When every provider is exhausted: AllProvidersExhausted. The caller queues the work (enqueue_batch) and tells the Chairman plainly (EXHAUSTED_REPLY).
   * Paid providers (Anthropic, a rented GPU pod) are configurable but OFF: they are eligible only when the owner set paid_providers_enabled AND the
@@ -20,7 +26,7 @@ Environment (names only; values live in Railway Variables, never in the repo). F
   JARVIS_SELFHOST_BASE_URL               the self-hosted endpoint (https, or http only for localhost)
   JARVIS_GPU_BASE_URL / JARVIS_GPU_API_KEY / JARVIS_GPU_USD_PER_HOUR   optional rented GPU pod (paid, gpu_hour metering)
   JARVIS_LLM_ORDER                       comma list, default "groq,cerebras,openrouter,github,nvidia,selfhost,gpu,anthropic"
-  JARVIS_LLM_EXTRA_PROVIDERS             JSON list of extra provider dicts (same fields as CATALOG)
+  JARVIS_LLM_EXTRA_PROVIDERS             JSON list of extra FREE OpenAI-compatible provider dicts (restricted: see load_providers)
   JARVIS_ALLOW_TRAINING_PROVIDERS        1 = owner opted in to providers that train on prompts (default off)
 """
 from __future__ import annotations
@@ -37,6 +43,7 @@ import urllib.request
 
 import hq
 import hq_meter
+import hq_scrub
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +81,15 @@ CATALOG = [
      "models": {"small": "claude-haiku-5-5", "medium": "claude-sonnet-5-5", "large": "claude-opus-5-5"}, "limits": {"rpm": 50, "rpd": 5000, "tpm": 100000}},
 ]
 DEFAULT_ORDER = "groq,cerebras,openrouter,github,nvidia,selfhost,gpu,anthropic"
+CATALOG_NAMES = frozenset(s["name"] for s in CATALOG)
+# Hosts of vendors that charge per token. An extra provider may never point at one (it would be a paid call declared free).
+PAID_HOSTS = ("anthropic.com", "openai.com", "openai.azure.com", "googleapis.com", "mistral.ai", "cohere.ai", "cohere.com", "together.xyz", "together.ai",
+              "fireworks.ai", "deepseek.com", "x.ai", "perplexity.ai", "groq.com", "cerebras.ai", "openrouter.ai", "nvidia.com", "github.ai", "replicate.com",
+              "deepinfra.com", "anyscale.com", "ai21.com", "voyageai.com", "bedrock", "amazonaws.com")
+# Prompt sources that may go to a FREE third-party provider. Anything else (or nothing declared) is private. Code-only (protected file).
+PUBLIC_SOURCES = frozenset({"identity", "system", "repo_code", "public_web", "task_stats", "memory:lesson", "memory:decision", "memory:outcome", "memory:fact",
+                            "job:research.public", "job:content.public", "job:code.write", "job:code.review", "job:mission.plan", "job:system.toolcheck"})
+PRIVATE_MEMORY_KINDS = frozenset({"owner_profile"})
 
 
 class BrainOffline(Exception):
@@ -92,12 +108,37 @@ class PromptTooLarge(Exception):
     pass
 
 
-class MissionStopped(Exception):
-    """Budget, step limit, loop or no progress. Stopped before spending more."""
-
-
 class LargeTierRefused(Exception):
     pass
+
+
+# ------------------------------------------------------------------------------------------------------------------- client-data routing
+def _texts(system: str, messages: list, tools: list | None = None) -> list[str]:
+    out = [system or ""]
+    for m in messages or []:
+        c = m.get("content", "") if isinstance(m, dict) else m
+        out.append(c if isinstance(c, str) else json.dumps(c, ensure_ascii=False, default=str))
+    if tools:
+        out.append(json.dumps(tools, ensure_ascii=False, default=str))
+    return out
+
+
+def has_personal_data(text: str) -> bool:
+    try:
+        return "[redacted" in (hq_scrub.scrub(text) or "")
+    except Exception:
+        return True          # the detector failed: treat as personal (fail closed)
+
+
+def route_class(sources, texts) -> str:
+    """'public' only when every declared source is on PUBLIC_SOURCES and no text holds personal data; otherwise 'private' (default deny)."""
+    if not sources:
+        return "private"
+    if any(str(s) not in PUBLIC_SOURCES for s in sources):
+        return "private"
+    if any(has_personal_data(t) for t in texts if t):
+        return "private"
+    return "public"
 
 
 # ------------------------------------------------------------------------------------------------------------------- providers
@@ -119,9 +160,11 @@ class Provider:
         except ValueError:
             self.gpu_usd_per_hour = 0.0
         try:
-            self.prices = json.loads(env.get("JARVIS_LLM_PRICES") or "{}")
+            prices = json.loads(env.get("JARVIS_LLM_PRICES") or "{}")
         except ValueError:
-            self.prices = {}
+            prices = {}
+        builtin = {m for c in CATALOG for m in (c.get("models") or {}).values()}
+        self.prices = {k: v for k, v in (prices.items() if isinstance(prices, dict) else []) if k not in builtin}   # a built-in model's price is never overridden
 
     def problems(self) -> list[str]:
         out = []
@@ -129,8 +172,13 @@ class Provider:
             out.append(f"{self.name}: no endpoint ({self.spec.get('base_url_env')})")
         else:
             u = urllib.parse.urlparse(self.base_url)
-            if u.scheme != "https" and not (u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1", "::1")):
+            host = (u.hostname or "").lower()
+            if u.scheme != "https" and not (u.scheme == "http" and host in ("localhost", "127.0.0.1", "::1")):
                 out.append(f"{self.name}: endpoint must use https (plain http only for localhost)")
+            if u.username or u.password or "@" in (u.netloc or ""):
+                out.append(f"{self.name}: endpoint must not carry credentials in the URL")
+            if host.startswith("169.254.") or host.startswith("fe80:") or host in ("metadata.google.internal", "metadata", "100.100.100.200") or host.startswith("[fe80"):
+                out.append(f"{self.name}: link-local / cloud metadata endpoints are refused")
         if not self.key:
             out.append(f"{self.name}: {self.spec['key_env']} not set")
         if not self.models["small"]:
@@ -148,13 +196,33 @@ def load_providers(env: dict | None = None) -> list[Provider]:
     specs = {s["name"]: s for s in CATALOG}
     try:
         for s in json.loads(e.get("JARVIS_LLM_EXTRA_PROVIDERS") or "[]"):
-            if isinstance(s, dict) and s.get("name") and (s.get("base_url") or s.get("base_url_env")) and s.get("key_env"):
-                specs[str(s["name"])] = s
+            why = extra_problem(s, e)
+            if why:
+                logger.warning("JARVIS_LLM_EXTRA_PROVIDERS entry refused: %s", why)
+                continue
+            specs[str(s["name"])] = {**s, "paid": False, "client_data_ok": False, "kind": "openai_compat", "metering": "tokens"}
     except ValueError:
         logger.warning("JARVIS_LLM_EXTRA_PROVIDERS is not valid JSON; ignored")
     order = [n.strip() for n in (e.get("JARVIS_LLM_ORDER") or DEFAULT_ORDER).split(",") if n.strip()]
     order += [n for n in specs if n not in order]
     return [Provider(specs[n], e) for n in order if n in specs]
+
+
+def extra_problem(s, env) -> str | None:
+    """Extra providers are FREE OpenAI-compatible endpoints only. They cannot replace a catalog provider, reach a paid vendor's host, carry client data,
+    be paid or GPU metered (paid vendors are code-only, in CATALOG)."""
+    if not (isinstance(s, dict) and s.get("name") and (s.get("base_url") or s.get("base_url_env")) and s.get("key_env")):
+        return "needs name, base_url and key_env"
+    name = str(s["name"]).strip().lower()
+    if name in CATALOG_NAMES:
+        return f"{name} is a built-in provider and cannot be redeclared"
+    if s.get("paid") or s.get("client_data_ok") or s.get("kind", "openai_compat") != "openai_compat" or s.get("metering", "tokens") != "tokens":
+        return f"{name}: extra providers are free, OpenAI-compatible, no client data"
+    url = (env.get(s["base_url_env"], "") if s.get("base_url_env") else s.get("base_url", "")) or ""
+    host = (urllib.parse.urlparse(url.strip()).hostname or "").lower()
+    if any(host == h or host.endswith("." + h) or h in host for h in PAID_HOSTS):
+        return f"{name}: {host} is a paid vendor: paid providers are code-only"
+    return None
 
 
 def eligible(providers: list[Provider], *, contains_client_data: bool, paid_allowed: bool, allow_training: bool) -> list[Provider]:
@@ -223,13 +291,10 @@ TRACKER = RateTracker()
 
 
 # ------------------------------------------------------------------------------------------------------------------- routing
-def choose_tier(task_class: str, quality_failed: bool = False, large_approval: str | None = None, mission_id: str | None = None, use_approval=None) -> str:
-    """small by default; medium when a quality check failed or the class needs it; large ONLY with an owner approval the database accepts (single use)."""
+def choose_tier(task_class: str, quality_failed: bool = False, large_approval: str | None = None) -> str:
+    """small by default; medium when a quality check failed or the class needs it; large ONLY with an owner approval, which complete() consumes
+    (single use, checked by the database) before any provider is called."""
     if large_approval:
-        if use_approval is None:
-            use_approval = lambda a, m: bool(hq._request("POST", "/rest/v1/rpc/jarvis_use_large_approval", {"p_id": a, "p_mission": m}))
-        if not use_approval(large_approval, mission_id):
-            raise LargeTierRefused("the large model tier needs a valid, unused owner approval (jarvis_owner_approve_large)")
         return "large"
     if quality_failed or task_class in MEDIUM_CLASSES:
         return "medium"
@@ -245,8 +310,15 @@ def self_fund_status() -> dict:
 
 
 # ------------------------------------------------------------------------------------------------------------------- prompts
-def estimate_tokens(text: str) -> int:
-    return int(math.ceil(len(text or "") / CHARS_PER_TOKEN))
+def estimate_tokens(text) -> int:
+    """Over-counts on purpose: ASCII at CHARS_PER_TOKEN per token, every other character (CJK, emoji, accents) one token each. Lists / dicts
+    (content blocks, tool schemas) are counted on their JSON text."""
+    if text is None:
+        return 0
+    if not isinstance(text, str):
+        text = json.dumps(text, ensure_ascii=False, default=str)
+    ascii_n = sum(1 for ch in text if ord(ch) < 128)
+    return int(math.ceil(ascii_n / CHARS_PER_TOKEN)) + (len(text) - ascii_n)
 
 
 def build_messages(identity: str, core_memory: str, retrieved: list[str], task: str, max_tokens: int = FREE_PROMPT_TOKENS, max_output: int = 800):
@@ -266,13 +338,18 @@ def build_messages(identity: str, core_memory: str, retrieved: list[str], task: 
     return system, [{"role": "user", "content": user}], used
 
 
-def retrieve_memory(query: str, k: int = 6, kinds: list[str] | None = None) -> list[str]:
+def retrieve_memory(query: str, k: int = 6, kinds: list[str] | None = None, destination: str = "external", with_sources: bool = False):
+    """Ranked memory rows. The owner's private profile comes back only for destination 'selfhost' (the database enforces it too).
+    with_sources: (texts, ['memory:<kind>', ...]) so complete() can route the prompt."""
     try:
-        rows = hq._request("POST", "/rest/v1/rpc/jarvis_memory_search", {"p_query": query[:500], "p_k": int(k), "p_kinds": kinds}) or []
+        rows = hq._request("POST", "/rest/v1/rpc/jarvis_memory_search", {"p_query": query[:500], "p_k": int(k), "p_kinds": kinds,
+                                                                          "p_destination": "selfhost" if destination == "selfhost" else "external"}) or []
     except Exception:
         logger.warning("memory retrieval failed; continuing without it")
-        return []
-    return [str(r.get("content", ""))[:600] for r in rows if r.get("content")]
+        rows = []
+    rows = [r for r in rows if r.get("content")]
+    texts = [str(r.get("content", ""))[:600] for r in rows]
+    return (texts, sorted({f"memory:{r.get('kind') or 'unknown'}" for r in rows})) if with_sources else texts
 
 
 # ------------------------------------------------------------------------------------------------------------------- cost
@@ -305,9 +382,18 @@ def purpose(division: str, mission_id: str | None, task_class: str, provider: st
 
 # ------------------------------------------------------------------------------------------------------------------- transport
 class ProviderError(Exception):
-    def __init__(self, msg, retry_after=None, rate_limited=False):
+    def __init__(self, msg, retry_after=None, rate_limited=False, sent=False):
         super().__init__(msg)
-        self.retry_after, self.rate_limited = retry_after, rate_limited
+        self.retry_after, self.rate_limited, self.sent = retry_after, rate_limited, sent
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the request carries the provider key, and a 3xx to another origin would hand it over."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def _post(url: str, body: dict, headers: dict, timeout: int) -> dict:
@@ -316,7 +402,7 @@ def _post(url: str, body: dict, headers: dict, timeout: int) -> dict:
         req.add_header(k, v)
     req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with OPENER.open(req, timeout=timeout) as r:
             return json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         ra = e.headers.get("retry-after") if e.headers else None
@@ -326,7 +412,9 @@ def _post(url: str, body: dict, headers: dict, timeout: int) -> dict:
             ra = None
         raise ProviderError(f"HTTP {e.code}", ra, e.code == 429) from None
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-        raise ProviderError(type(e).__name__) from None
+        raise ProviderError(type(e).__name__, sent=True) from None
+    except ValueError:
+        raise ProviderError("malformed provider answer", sent=True) from None
 
 
 def request_body(p: Provider, model: str, system: str, messages: list, max_output: int, tools: list | None):
@@ -346,11 +434,17 @@ def request_body(p: Provider, model: str, system: str, messages: list, max_outpu
 def parse(p: Provider, resp: dict):
     """-> (text, input_tokens, output_tokens, tool_calls)"""
     if p.kind == "anthropic":
+        if not isinstance(resp, dict) or not isinstance(resp.get("content"), list):
+            raise ProviderError("malformed provider answer", sent=True)
         text = "".join(b.get("text", "") for b in resp.get("content") or [] if b.get("type") == "text")
         calls = [b for b in resp.get("content") or [] if b.get("type") == "tool_use"]
         u = resp.get("usage") or {}
-        return text, int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0), int(u.get("output_tokens") or 0), calls
-    ch = (resp.get("choices") or [{}])[0].get("message") or {}
+        # cache writes are billed at 1.25x input, reads at 0.1x: counting both as full input (writes rounded up x1.25) never under-records
+        cin = int(math.ceil(int(u.get("cache_creation_input_tokens") or 0) * 1.25))
+        return text, int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) + cin, int(u.get("output_tokens") or 0), calls
+    if not isinstance(resp, dict) or not isinstance(resp.get("choices"), list) or not resp["choices"] or not isinstance(resp["choices"][0], dict):
+        raise ProviderError("malformed provider answer", sent=True)
+    ch = resp["choices"][0].get("message") or {}
     u = resp.get("usage") or {}
     return ch.get("content") or "", int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0), ch.get("tool_calls") or []
 
@@ -363,21 +457,38 @@ def _settle(call_id, cents: int, status: str) -> None:
 
 
 def complete(system: str, messages: list, *, division: str, task_class: str, tier: str = "small", mission_id: str | None = None, max_output: int = 800,
-             tools: list | None = None, contains_client_data: bool = False, providers: list[Provider] | None = None, tracker: RateTracker | None = None,
-             post=_post, clock=time.monotonic, fund=None, env: dict | None = None) -> dict:
+             tools: list | None = None, sources: list[str] | None = None, contains_client_data: bool = False, large_approval: str | None = None,
+             providers: list[Provider] | None = None, tracker: RateTracker | None = None, post=_post, clock=time.monotonic, fund=None, env: dict | None = None,
+             use_approval=None, on_attempt=None) -> dict:
     """One answer from the first eligible provider that is inside its limits; rotate on 429 / errors.
-    Raises ClientDataRefused, AllProvidersExhausted (queue it), BrainOffline (nothing configured), PromptTooLarge, hq_meter.MeterBlocked (the gateway said no)."""
+    sources: where the prompt's content came from (PUBLIC_SOURCES); missing / unknown = private, so only a client_data_ok provider may get it.
+    tier 'large' needs large_approval, consumed here (single use) before any provider is called.
+    on_attempt(): called before each provider request (the worker extends its job lease there).
+    Raises ClientDataRefused, AllProvidersExhausted (queue it), BrainOffline (nothing configured), PromptTooLarge, LargeTierRefused, hq_meter.MeterBlocked."""
     e = os.environ if env is None else env
+    if tier not in TIERS:
+        raise ValueError(f"unknown tier {tier!r}")
     providers = load_providers(e) if providers is None else providers
     tracker = TRACKER if tracker is None else tracker
-    in_est = estimate_tokens(system) + sum(estimate_tokens(m.get("content", "")) for m in messages)
+    texts = _texts(system, messages, tools)
+    in_est = sum(estimate_tokens(t) for t in texts)
     if in_est + max_output > MAX_PROMPT_TOKENS:
         raise PromptTooLarge(f"about {in_est} input tokens: over the {MAX_PROMPT_TOKENS} limit")
+    private = contains_client_data or route_class(sources, texts) == "private"
+    if tier == "large":
+        if not large_approval:
+            raise LargeTierRefused("the large model tier needs a valid, unused owner approval (jarvis_owner_approve_large)")
+        if use_approval is None:
+            use_approval = lambda a, m: bool(hq._request("POST", "/rest/v1/rpc/jarvis_use_large_approval", {"p_id": a, "p_mission": m}))   # noqa: E731
+        if not use_approval(large_approval, mission_id):
+            raise LargeTierRefused("the large model tier needs a valid, unused owner approval (jarvis_owner_approve_large)")
     fund_state = (fund or self_fund_status)() if any(p.paid and not p.problems() for p in providers) else {"paid_allowed": False}
-    pool = eligible(providers, contains_client_data=contains_client_data, paid_allowed=bool(fund_state.get("paid_allowed")),
+    pool = eligible(providers, contains_client_data=private, paid_allowed=bool(fund_state.get("paid_allowed")),
                     allow_training=(e.get("JARVIS_ALLOW_TRAINING_PROVIDERS") == "1"))
+    if private:
+        pool = [p for p in pool if p.name in CATALOG_NAMES and p.client_data_ok]     # only the code-defined self-hosted / owner models
     if not pool:
-        if contains_client_data:
+        if private:
             raise ClientDataRefused(CLIENT_DATA_REPLY)
         raise BrainOffline(OFFLINE_REPLY)
     tried = []
@@ -392,32 +503,31 @@ def complete(system: str, messages: list, *, division: str, task_class: str, tie
             tried.append(f"{p.name}: self-funded budget too small"); continue
         call_id = hq_meter._reserve_cents(CORE_AGENT, est, model, purpose(division, mission_id, task_class, p.name))
         url, body, headers = request_body(p, model, system, messages, max_output, tools)
+        if on_attempt:
+            try:
+                on_attempt()
+            except Exception:
+                logger.warning("jarvis llm: on_attempt hook failed")
         t0 = clock()
         try:
             resp = post(url, body, headers, p.timeout)
+            text, tin, tout, calls = parse(p, resp)
         except ProviderError as err:
-            _settle(call_id, actual_cents(p, model, 0, 0, clock() - t0) if p.metering == "gpu_hour" else 0, "failed")
+            # a paid request that may have reached the vendor (timeout, cut connection, malformed answer) settles at the reserved estimate, never 0
+            charge = actual_cents(p, model, 0, 0, clock() - t0) if p.metering == "gpu_hour" else (est if (p.paid and err.sent) else 0)
+            _settle(call_id, charge, "failed")
             wait = tracker.penalize(p, err.retry_after)
             tried.append(f"{p.name}: {err} (cooling {int(wait)} s)")
             continue
         except Exception:
-            _settle(call_id, 0, "failed")
+            _settle(call_id, est if p.paid else 0, "failed")
             raise
-        text, tin, tout, calls = parse(p, resp)
         tracker.record(p, (tin or in_est) + (tout or 0))
         cents = actual_cents(p, model, tin, tout, clock() - t0)
         _settle(call_id, cents, "done")
-        return {"text": text, "provider": p.name, "model": model, "tier": tier, "input_tokens": tin, "output_tokens": tout, "cents": cents, "tool_calls": calls, "tried": tried}
+        return {"text": text, "provider": p.name, "model": model, "tier": tier, "input_tokens": tin, "output_tokens": tout, "cents": cents, "tool_calls": calls,
+                "tried": tried, "route": "private" if private else "public"}
     raise AllProvidersExhausted(EXHAUSTED_REPLY + " (" + "; ".join(tried)[:300] + ")")
-
-
-def complete_or_queue(system: str, messages: list, *, division: str, task_class: str, payload: dict, **kw) -> dict:
-    """complete(), and when every free provider is exhausted, queue the job and return the plain message for the Chairman."""
-    try:
-        return complete(system, messages, division=division, task_class=task_class, **kw)
-    except AllProvidersExhausted as ex:
-        job = enqueue_batch(division, task_class, payload, kw.get("mission_id"))
-        return {"text": None, "queued_job": job, "owner_message": EXHAUSTED_REPLY, "detail": str(ex)}
 
 
 def health(p: Provider, get=None, timeout: int = 10) -> dict:
@@ -430,7 +540,7 @@ def health(p: Provider, get=None, timeout: int = 10) -> dict:
 
     def _get(url):
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {p.key}"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with OPENER.open(req, timeout=timeout) as r:
             return json.loads(r.read() or b"{}")
     try:
         data = (get or _get)(f"{p.base_url}/models")
@@ -448,8 +558,8 @@ TOOL_PROBE = {"name": "get_time", "description": "Return the current time for a 
 def check_tool_calling(provider: Provider, **kw) -> dict:
     """Activation-time check that a provider's model returns structured tool calls (vLLM: --enable-auto-tool-choice + the model's --tool-call-parser;
     llama.cpp server: --jinja). One small call through the gateway (free providers: 0 cents). Never run automatically."""
-    r = complete("You can call tools. Use the tool when it helps.", [{"role": "user", "content": "What time is it in Ottawa? Use the tool."}],
-                 division="donna", task_class="system.toolcheck", max_output=200, tools=[TOOL_PROBE], providers=[provider], **kw)
+    r = complete("You can call tools. Use the tool when it helps.", [{"role": "user", "content": "What time is it in Toronto? Use the tool."}],
+                 division="donna", task_class="system.toolcheck", max_output=200, tools=[TOOL_PROBE], providers=[provider], sources=["system"], **kw)
     calls = r["tool_calls"]
     name = None
     if calls:
@@ -464,48 +574,25 @@ def cache_key(provider_model: str, system: str, user: str) -> str:
 
 
 def cached_complete(system: str, messages: list, *, task_class: str, tier: str = "small", ttl_hours: int = 24, **kw) -> dict:
-    """complete() with a reuse cache of prior results for identical requests (same tier, prefix and task). A hit makes no model call at all."""
-    key = cache_key(tier, system, json.dumps(messages, ensure_ascii=False, sort_keys=True))
-    try:
-        hit = hq._request("POST", "/rest/v1/rpc/jarvis_cache_get", {"p_key": key})
-    except Exception:
-        hit = None
-    if isinstance(hit, str) and hit:
-        return {"text": hit, "provider": "cache", "model": None, "tier": tier, "cents": 0, "cached": True, "tool_calls": []}
+    """complete() with a reuse cache of prior results for identical PUBLIC requests (same tier, sources, prefix and task). A hit makes no model call.
+    Private prompts (client / personal sources) are never read from or written to the cache. The large tier is never cached (its approval is single use)."""
+    texts = _texts(system, messages, kw.get("tools"))
+    public = not kw.get("contains_client_data") and route_class(kw.get("sources"), texts) == "public" and tier != "large"
+    key = cache_key(tier + "|" + ",".join(sorted(map(str, kw.get("sources") or []))), system, json.dumps(messages, ensure_ascii=False, sort_keys=True, default=str))
+    if public:
+        try:
+            hit = hq._request("POST", "/rest/v1/rpc/jarvis_cache_get", {"p_key": key})
+        except Exception:
+            hit = None
+        if isinstance(hit, str) and hit:
+            return {"text": hit, "provider": "cache", "model": None, "tier": tier, "cents": 0, "cached": True, "tool_calls": [], "route": "public"}
     r = complete(system, messages, task_class=task_class, tier=tier, **kw)
-    try:
-        hq._request("POST", "/rest/v1/rpc/jarvis_cache_put", {"p_key": key, "p_class": task_class, "p_result": r["text"], "p_model": r["model"], "p_ttl_hours": int(ttl_hours)})
-    except Exception:
-        logger.warning("result cache write failed")
+    if public and r.get("route") == "public" and r.get("text"):
+        try:
+            hq._request("POST", "/rest/v1/rpc/jarvis_cache_put", {"p_key": key, "p_class": task_class, "p_result": r["text"], "p_model": r["model"], "p_ttl_hours": int(ttl_hours)})
+        except Exception:
+            logger.warning("result cache write failed")
     return {**r, "cached": False}
-
-
-# ------------------------------------------------------------------------------------------------------------------- per-mission guard
-class MissionGuard:
-    """Per-mission budget, step limit, loop and no-progress detection. Stops BEFORE the next spend.
-    (The database's mission_guard also caps a mission at the gateway; this stops loops that stay inside the budget, which on a $0 stack still burn free quota.)"""
-
-    def __init__(self, budget_cents: int, max_steps: int = 12, repeat_limit: int = 3, stall_limit: int = 3):
-        self.budget, self.max_steps, self.repeat_limit, self.stall_limit = int(budget_cents), max_steps, repeat_limit, stall_limit
-        self.spent, self.steps, self.stalls = 0, 0, 0
-        self.seen: dict[str, int] = {}
-
-    def before_step(self, est_cents: int = 0) -> None:
-        if self.steps >= self.max_steps:
-            raise MissionStopped(f"step limit reached ({self.max_steps})")
-        if self.spent + max(0, est_cents) > self.budget:
-            raise MissionStopped(f"mission budget would be exceeded ({self.spent}+{est_cents} > {self.budget} cents)")
-
-    def after_step(self, output: str, cents: int, progressed: bool) -> None:
-        self.steps += 1
-        self.spent += max(0, int(cents))
-        h = hashlib.sha256(" ".join((output or "").lower().split()).encode()).hexdigest()
-        self.seen[h] = self.seen.get(h, 0) + 1
-        if self.seen[h] >= self.repeat_limit:
-            raise MissionStopped(f"loop: the same output came back {self.seen[h]} times")
-        self.stalls = 0 if progressed else self.stalls + 1
-        if self.stalls >= self.stall_limit:
-            raise MissionStopped(f"no progress in {self.stalls} steps")
 
 
 # ------------------------------------------------------------------------------------------------------------------- batch queue

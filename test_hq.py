@@ -44,7 +44,7 @@ class HQBridge(unittest.TestCase):
         bot = FakeBot()
         rows = [{"id": "a1", "kind": "money", "channel": "telegram", "body": "Profit: $0"}]
         calls = self.run_job(rows, bot)
-        self.assertEqual(bot.sent, [(12345, "Money\n\nProfit: $0")])
+        self.assertEqual(bot.sent, [(12345, "Sir, Money\n\nProfit: $0")])   # every owner message says "sir" (hq_core.address)
         self.assertEqual(calls[1][0], "PATCH")
         self.assertIn("sent_at", calls[1][2])
         self.assertEqual(self.pushed, 1)  # push goes out after Telegram, once per delivered message

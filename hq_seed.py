@@ -1,7 +1,8 @@
 """
 Memory seed import (owner only). The Chairman sends a PRIVATE markdown file to the bot with the caption /seedmemory. The file is parsed in memory,
 never written to disk and never stored in the repository; each bullet / paragraph becomes one memory row (kind 'owner_profile') through
-jarvis_seed_memory(), which dedupes against what is already there and writes one audit row with counts and the file's sha256 only.
+jarvis_seed_stage() (the bot can only STAGE), and the owner applies it with jarvis_seed_apply() (owner-only in the database), which dedupes against what is
+already there and writes one audit row with counts and the file's sha256 only.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ MAX_ITEMS = 500
 MAX_LEN = 600
 
 
-def parse_markdown(text: str) -> list[dict]:
+def parse_markdown(text: str, limit: int | None = MAX_ITEMS) -> list[dict]:
     """[{section, content}]: headings name the section; bullets, numbered items and paragraph lines are items. Code blocks, tables, front matter,
     HTML comments and link-only lines are skipped. Markdown emphasis is removed. Long items are cut at MAX_LEN."""
     items, section, in_code, in_front = [], "", False, False
@@ -41,7 +42,7 @@ def parse_markdown(text: str) -> list[dict]:
         if len(c) < 3 or re.fullmatch(r"https?://\S+", c):
             continue
         items.append({"section": section, "content": c[:MAX_LEN]})
-        if len(items) >= MAX_ITEMS:
+        if limit and len(items) >= limit:
             break
     return items
 
@@ -54,15 +55,18 @@ def _clean(s: str) -> str:
 
 
 def import_bytes(raw: bytes, rpc=None) -> dict:
+    """Parse in memory and STAGE the items (jarvis_seed_stage). Only the owner can apply a stage (jarvis_seed_apply, owner-only in SQL).
+    -> {stage, items, dropped}: dropped = items beyond MAX_ITEMS (reported, never silently lost)."""
     if len(raw) > MAX_BYTES:
         raise ValueError("file too large")
     text = raw.decode("utf-8", errors="replace")
-    items = parse_markdown(text)
+    items = parse_markdown(text, limit=None)
     if not items:
-        return {"added": 0, "duplicates": 0, "rejected": 0}
+        return {"stage": None, "items": 0, "dropped": 0}
+    kept, dropped = items[:MAX_ITEMS], max(0, len(items) - MAX_ITEMS)
     sha = hashlib.sha256(raw).hexdigest()
-    rpc = rpc or (lambda args: hq._request("POST", "/rest/v1/rpc/jarvis_seed_memory", args))
-    return rpc({"p_items": items, "p_file_sha256": sha, "p_actor": "owner"}) or {}
+    rpc = rpc or (lambda args: hq._request("POST", "/rest/v1/rpc/jarvis_seed_stage", args))
+    return {"stage": rpc({"p_items": kept, "p_file_sha256": sha}), "items": len(kept), "dropped": dropped}
 
 
 def owner_profile(limit: int = 12) -> list[str]:

@@ -18,6 +18,7 @@ import urllib.parse
 from datetime import datetime, timezone
 
 import hq
+import hq_core
 import hq_missions
 import hq_policy
 import hq_bank
@@ -138,10 +139,10 @@ async def hq_status(update, context) -> None:
     if not _owner(update):
         return
     try:
-        await update.message.reply_text(status_text())
+        await hq_core.reply_to(update.message, status_text())
     except Exception as e:
         logger.exception("HQ status failed")
-        await update.message.reply_text(f"HQ status failed: {str(e)[:200]}")
+        await hq_core.reply_to(update.message, f"HQ status failed: {str(e)[:200]}")
 
 
 async def _set_kill(update, on: bool) -> None:
@@ -150,7 +151,7 @@ async def _set_kill(update, on: bool) -> None:
     hq._request("PATCH", "/rest/v1/system_state?id=eq.1", {"kill_switch": on}, prefer="return=minimal")
     hq._request("POST", "/rest/v1/audit_log", {"actor": "owner", "action": "kill_switch_on" if on else "kill_switch_off",
                                                "target": "system_state", "detail": {"via": "telegram"}}, prefer="return=minimal")
-    await update.message.reply_text("All agents stopped. /resume to restart." if on else "Agents running again.")
+    await hq_core.reply_to(update.message, "All agents stopped. /resume to restart." if on else "Agents running again.")
 
 
 async def hq_kill(update, context) -> None:
@@ -178,23 +179,23 @@ async def hq_money(update, context) -> None:
         return
     args = context.args or []
     if len(args) < 2 or args[0].lower() not in ("in", "out"):
-        await update.message.reply_text("Use: /money in 450 dayjob commission Nov   or   /money out 29 donna twilio")
+        await hq_core.reply_to(update.message, "Use: /money in 450 dayjob commission Nov   or   /money out 29 donna twilio")
         return
     cents = parse_amount(args[1])
     if cents is None:
-        await update.message.reply_text("Amount must be a positive number, like 450 or 1,250.50")
+        await hq_core.reply_to(update.message, "Amount must be a positive number, like 450 or 1,250.50")
         return
     vid, vslug, err = resolve_venture(args[2] if len(args) > 2 else None)
     company = len(args) > 2 and args[2].lower() in COMPANY_WORDS and not vid
     if err and not company:
-        await update.message.reply_text(err + " Use a venture name, or the word 'company' for a company-wide entry.")
+        await hq_core.reply_to(update.message, err + " Use a venture name, or the word 'company' for a company-wide entry.")
         return
     note = ledger_note(" ".join(args[3:] if (vid or company) else args[2:]))
     kind = "revenue" if args[0].lower() == "in" else "expense"
     hq._request("POST", "/rest/v1/ledger", {"venture_id": vid, "kind": kind, "amount_cents": cents, "currency": "CAD",
                                             "status": "received", "note": note or None,
                                             "occurred_on": datetime.now().date().isoformat()}, prefer="return=minimal")
-    await update.message.reply_text(f"Logged {kind}: ${cents/100:,.2f} CAD{(' to ' + vslug) if vslug else ''}"
+    await hq_core.reply_to(update.message, f"Logged {kind}: ${cents/100:,.2f} CAD{(' to ' + vslug) if vslug else ''}"
                                     + (f" ({note})." if note else ". Free-text memos are not stored in the ledger (they could name a client): add a category word such as ads, tools, hosting, travel, fees, refund, payout, commission, tax."))
 
 
@@ -203,7 +204,7 @@ async def hq_ask(update, context) -> None:
         return
     args = context.args or []
     if len(args) < 2:
-        await update.message.reply_text("Use: /ask donna-researcher find 10 Ottawa HVAC companies with no online booking")
+        await hq_core.reply_to(update.message, "Use: /ask donna-researcher find 10 Ottawa HVAC companies with no online booking")
         return
     slug, text = args[0].lower(), " ".join(args[1:])
     rows = _get(f"agents?slug=eq.{_q(slug)}&select=slug,venture_id,status&limit=1")
@@ -213,7 +214,7 @@ async def hq_ask(update, context) -> None:
         mgr = (_get(f"ventures?id=eq.{_q(vid)}&select=manager_agent&limit=1") or [{}])[0].get("manager_agent") if vid else None
         rows = _get(f"agents?slug=eq.{_q(mgr)}&select=slug,venture_id,status&limit=1") if mgr else []
         if not rows:
-            await update.message.reply_text(f"No agent or venture called {slug}. /agents and /venture list show them.")
+            await hq_core.reply_to(update.message, f"No agent or venture called {slug}. /agents and /venture list show them.")
             return
         slug = rows[0]["slug"]
     hq._request("POST", "/rest/v1/tasks", {
@@ -221,7 +222,7 @@ async def hq_ask(update, context) -> None:
         "status": "todo", "title": text[:140],
         "detail": text + "\n\nAsked directly by the owner. Research or drafting only: no contacting anyone, no spending, no signing.",
     }, prefer="return=minimal")
-    await update.message.reply_text(f"Queued for {slug}. It runs within about 5 minutes; Jarvis reports anything that matters.")
+    await hq_core.reply_to(update.message, f"Queued for {slug}. It runs within about 5 minutes; Jarvis reports anything that matters.")
 
 
 async def hq_brief(update, context) -> None:
@@ -234,7 +235,7 @@ async def hq_brief(update, context) -> None:
     # --- hqui begin: inbox count in the brief ---
     text = hq_inbox.append_to_brief(str(text))
     # --- hqui end ---
-    await update.message.reply_text(str(text)[:4000])
+    await hq_core.reply_to(update.message, str(text)[:4000])
 
 
 async def hq_ideas(update, context) -> None:
@@ -243,13 +244,13 @@ async def hq_ideas(update, context) -> None:
     rows = _get("ideas?status=in.(new,testing,scaled)&order=score.desc.nullslast&limit=10"
                 "&select=name,status,score,startup_cost_cents,test_ends_on,kill_metric")
     if not rows:
-        await update.message.reply_text("No ideas in the lab.")
+        await hq_core.reply_to(update.message, "No ideas in the lab.")
         return
     out = []
     for r in rows:
         tag = f"TESTING until {r['test_ends_on']}" if r["status"] == "testing" else r["status"]
         out.append(f"- {r['name']} [{tag}] score {r.get('score')}, start ${(r.get('startup_cost_cents') or 0)/100:,.0f}")
-    await update.message.reply_text("Idea lab (best first):\n" + "\n".join(out) + "\n\nStart a 7-day test: /testidea <name>   Park: /parkidea <name>")
+    await hq_core.reply_to(update.message, "Idea lab (best first):\n" + "\n".join(out) + "\n\nStart a 7-day test: /testidea <name>   Park: /parkidea <name>")
 
 
 def set_idea_status_by_id(idea_id: str, status: str) -> str:
@@ -277,11 +278,11 @@ async def _set_idea_status(update, context, status: str) -> None:
         return
     frag = " ".join(context.args or []).strip()
     if len(frag) < 3:
-        await update.message.reply_text("Give at least 3 letters of the idea's name.")
+        await hq_core.reply_to(update.message, "Give at least 3 letters of the idea's name.")
         return
     rows = _get(f"ideas?name=ilike.*{_q(frag)}*&select=id,name&limit=2")
     if len(rows) != 1:
-        await update.message.reply_text("No match." if not rows else "More than one match; be more specific.")
+        await hq_core.reply_to(update.message, "No match." if not rows else "More than one match; be more specific.")
         return
     try:
         hq._request("PATCH", f"/rest/v1/ideas?id=eq.{_q(rows[0]['id'])}", {"status": status}, prefer="return=minimal")
@@ -292,9 +293,9 @@ async def _set_idea_status(update, context, status: str) -> None:
             msg = _j.loads(e.read().decode()).get("message", msg)
         except Exception:
             pass
-        await update.message.reply_text(f"Not changed: {msg[:200]}")
+        await hq_core.reply_to(update.message, f"Not changed: {msg[:200]}")
         return
-    await update.message.reply_text(f"{rows[0]['name']} is now {status}." + (" 7-day test clock started." if status == "testing" else ""))
+    await hq_core.reply_to(update.message, f"{rows[0]['name']} is now {status}." + (" 7-day test clock started." if status == "testing" else ""))
 
 
 async def hq_testidea(update, context) -> None:
@@ -310,7 +311,7 @@ async def hq_drafts(update, context) -> None:
         return
     rows = _get("outbox?status=eq.draft&order=created_at.asc&limit=5&select=id,body,to_ref,agent")
     if not rows:
-        await update.message.reply_text("No drafts waiting.")
+        await hq_core.reply_to(update.message, "No drafts waiting.")
         return
     for r in rows:
         body = f"Draft by {r.get('agent')} to {r.get('to_ref') or 'unknown'}:\n\n{r['body']}"[:3500]
@@ -318,7 +319,7 @@ async def hq_drafts(update, context) -> None:
             "from_agent": "jarvis", "kind": "proposal", "channel": "telegram", "body": body, "needs_decision": True,
             "ref_table": "outbox", "ref_id": r["id"], "sent_at": datetime.now(timezone.utc).isoformat(),
         }, prefer="return=representation") or [{}])[0]
-        await update.message.reply_text(body, reply_markup=hq.decision_buttons(msg["id"]) if msg.get("id") else None)
+        await hq_core.reply_to(update.message, body, reply_markup=hq.decision_buttons(msg["id"]) if msg.get("id") else None)
 
 
 def mark_sent(outbox_id: str) -> str:
@@ -367,20 +368,20 @@ async def hq_sent(update, context) -> None:
         return
     frag = (context.args or [""])[0].strip().lower()
     if not re.fullmatch(r"[0-9a-f]{8}", frag):
-        await update.message.reply_text("Use: /sent <8-character code from the approval message>")
+        await hq_core.reply_to(update.message, "Use: /sent <8-character code from the approval message>")
         return
     rows = [r for r in _get("outbox?status=eq.approved&select=id,lead_id&limit=200") if r["id"].startswith(frag)]
     if len(rows) != 1:
-        await update.message.reply_text("No approved draft with that code.")
+        await hq_core.reply_to(update.message, "No approved draft with that code.")
         return
-    await update.message.reply_text(mark_sent(rows[0]["id"]))
+    await hq_core.reply_to(update.message, mark_sent(rows[0]["id"]))
 
 
 async def hq_systems_cmd(update, context) -> None:
     if not _owner(update):
         return
     import hq_systems
-    await update.message.reply_text("Systems:\n" + "\n".join(hq_systems.status_lines()))
+    await hq_core.reply_to(update.message, "Systems:\n" + "\n".join(hq_systems.status_lines()))
 
 
 def log_day(d: int, p: int, sub: int) -> str:
@@ -402,9 +403,9 @@ async def hq_day(update, context) -> None:
         return
     args = context.args or []
     if len(args) != 3 or not all(a.isdigit() for a in args):
-        await update.message.reply_text("Use: /day 280 6 2   (dials pitches submissions for today)")
+        await hq_core.reply_to(update.message, "Use: /day 280 6 2   (dials pitches submissions for today)")
         return
-    await update.message.reply_text(log_day(*(int(a) for a in args)))
+    await hq_core.reply_to(update.message, log_day(*(int(a) for a in args)))
 
 
 def log_paid(who: str = "") -> str:
@@ -429,7 +430,7 @@ async def hq_paid(update, context) -> None:
     """/paid [name]: a deal paid out after install."""
     if not _owner(update):
         return
-    await update.message.reply_text(log_paid(" ".join(context.args or [])))
+    await hq_core.reply_to(update.message, log_paid(" ".join(context.args or [])))
 
 
 NIGHT_MAX_CENTS = 2000  # $20 hard ceiling, same as budget proposals
@@ -455,26 +456,26 @@ async def hq_nightshift(update, context) -> None:
     if args and args[0].lower() in ("off", "stop", "end"):
         st = (_get("system_state?id=eq.1&select=day_cap_cents,night_until") or [{}])[0]
         if not st.get("night_until"):
-            await update.message.reply_text("Night Shift isn't running.")
+            await hq_core.reply_to(update.message, "Night Shift isn't running.")
             return
         hq._request("PATCH", "/rest/v1/system_state?id=eq.1", {"daily_spend_cap_cents": st.get("day_cap_cents") or 330,
                     "night_until": datetime.now(timezone.utc).isoformat()}, prefer="return=minimal")
-        await update.message.reply_text("Night Shift ending. The normal cap is back, and the report arrives within 5 minutes.")
+        await hq_core.reply_to(update.message, "Night Shift ending. The normal cap is back, and the report arrives within 5 minutes.")
         return
     cents = parse_amount(args[0]) if args else 500
     if not cents:
-        await update.message.reply_text("Use: /nightshift 8   (overnight AI budget in dollars, max $20)   or /nightshift off")
+        await hq_core.reply_to(update.message, "Use: /nightshift 8   (overnight AI budget in dollars, max $20)   or /nightshift off")
         return
     cents = min(cents, NIGHT_MAX_CENTS)
     st = (_get("system_state?id=eq.1&select=daily_spend_cap_cents,night_until,pause_reason") or [{}])[0]
     if st.get("pause_reason") == "api_credits":
-        await update.message.reply_text("Can't start Night Shift: the Anthropic API account is out of credit. Top up at "
+        await hq_core.reply_to(update.message, "Can't start Night Shift: the Anthropic API account is out of credit. Top up at "
                                         "console.anthropic.com > Settings > Billing, then try again.")
         return
     day_cap = st.get("daily_spend_cap_cents") or 330
     if st.get("night_until"):  # already running: just change the leash
         hq._request("PATCH", "/rest/v1/system_state?id=eq.1", {"daily_spend_cap_cents": cents}, prefer="return=minimal")
-        await update.message.reply_text(f"Night Shift budget changed to ${cents/100:.2f}.")
+        await hq_core.reply_to(update.message, f"Night Shift budget changed to ${cents/100:.2f}.")
         return
     hq._request("PATCH", "/rest/v1/system_state?id=eq.1", {
         "day_cap_cents": day_cap, "daily_spend_cap_cents": max(cents, day_cap), "night_until": _next_7am_utc(),
@@ -490,7 +491,7 @@ async def hq_nightshift(update, context) -> None:
             logger.exception("Night Shift could not queue %s", fn)
     hq._request("POST", "/rest/v1/audit_log", {"actor": "owner", "action": "night_shift_start", "target": "system_state",
                                                "detail": {"cap_cents": cents, "via": "telegram"}}, prefer="return=minimal")
-    await update.message.reply_text(
+    await hq_core.reply_to(update.message, 
         f"Night Shift on until 7am with a ${max(cents, day_cap)/100:.2f} budget. "
         + (f"Queued: {', '.join(queued)}. " if queued else "No new backlog to queue; agents work what's on the board. ")
         + "You get a report of every task and its cost in the morning. /nightshift off ends it early.")
@@ -500,7 +501,7 @@ async def hq_agents(update, context) -> None:
     if not _owner(update):
         return
     rows = _get("agents?status=eq.active&select=slug&order=slug.asc")
-    await update.message.reply_text("Agents:\n" + "\n".join(r["slug"] for r in rows))
+    await hq_core.reply_to(update.message, "Agents:\n" + "\n".join(r["slug"] for r in rows))
 
 
 async def hq_leads(update, context) -> None:
@@ -512,9 +513,9 @@ async def hq_leads(update, context) -> None:
         name = ventures.get(r.get("venture_id"), "unassigned")
         counts[name] = counts.get(name, 0) + 1
     if not counts:
-        await update.message.reply_text("No leads yet.")
+        await hq_core.reply_to(update.message, "No leads yet.")
         return
-    await update.message.reply_text("Leads:\n" + "\n".join(f"- {k}: {v}" for k, v in sorted(counts.items())))
+    await hq_core.reply_to(update.message, "Leads:\n" + "\n".join(f"- {k}: {v}" for k, v in sorted(counts.items())))
 
 
 DAYJOB_SLUG = "day-job-sales"
@@ -558,9 +559,9 @@ async def hq_lead(update, context) -> None:
         return
     lead = parse_lead(" ".join(context.args or []))
     if not lead:
-        await update.message.reply_text("Use: /lead Jane Doe | 613-555-0101 | wants fixed rate | 3\n(name | phone | note | follow up in N days)")
+        await hq_core.reply_to(update.message, "Use: /lead Jane Doe | 613-555-0101 | wants fixed rate | 3\n(name | phone | note | follow up in N days)")
         return
-    await update.message.reply_text(add_lead(lead))
+    await hq_core.reply_to(update.message, add_lead(lead))
 
 
 def log_contact(sid: int, days: int, outcome: str = "") -> str:
@@ -592,12 +593,12 @@ async def hq_done(update, context) -> None:
         return
     args = context.args or []
     if not args or not args[0].lstrip("#").isdigit():
-        await update.message.reply_text("Use: /done 12 3 left voicemail   (lead #, follow up in N days, note). /done 12 0 signed  closes it.")
+        await hq_core.reply_to(update.message, "Use: /done 12 3 left voicemail   (lead #, follow up in N days, note). /done 12 0 signed  closes it.")
         return
     sid = int(args[0].lstrip("#"))
     days = int(args[1]) if len(args) > 1 and args[1].isdigit() else DEFAULT_FOLLOWUP_DAYS
     outcome = " ".join(args[2:] if len(args) > 1 and args[1].isdigit() else args[1:])[:200]
-    await update.message.reply_text(log_contact(sid, days, outcome))
+    await hq_core.reply_to(update.message, log_contact(sid, days, outcome))
 
 
 async def hq_due(update, context) -> None:
@@ -607,10 +608,10 @@ async def hq_due(update, context) -> None:
     rows = _get(f"leads?next_followup_at=lte.{today}&do_not_contact=eq.false&status=neq.closed"
                 "&order=next_followup_at.asc&limit=30&select=short_id,name,phone,notes,next_followup_at")
     if not rows:
-        await update.message.reply_text("No follow-ups due.")
+        await hq_core.reply_to(update.message, "No follow-ups due.")
         return
     lines = [f"#{r['short_id']} {r['name']}  {r.get('phone') or ''}  ({r['next_followup_at']})" for r in rows]
-    await update.message.reply_text("Due now:\n" + "\n".join(lines) + "\n\nAfter each call: /done <#> <days> <note>")
+    await hq_core.reply_to(update.message, "Due now:\n" + "\n".join(lines) + "\n\nAfter each call: /done <#> <days> <note>")
 
 
 DECISION_TABLES = {"escalations", "outbox"}
@@ -668,18 +669,18 @@ async def hq_setaddress(update, context) -> None:
         if vid:
             slug, args = vslug, args[1:]
         elif args[0].startswith("@") or re.fullmatch(r"[a-z][a-z0-9-]{2,40}", args[0]):
-            await update.message.reply_text(err or f"No venture called '{args[0]}'.")
+            await hq_core.reply_to(update.message, err or f"No venture called '{args[0]}'.")
             return
     addr = " ".join(args).strip()
     if len(addr) < 10 or not re.search(r"\d", addr):
-        await update.message.reply_text("Use: /setaddress [venture] 123 Example St, Ottawa ON K1A 0A1  (the business mailing address, required by CASL; no venture word means Donna)")
+        await hq_core.reply_to(update.message, "Use: /setaddress [venture] 123 Example St, Ottawa ON K1A 0A1  (the business mailing address, required by CASL; no venture word means Donna)")
         return
     _save_profile(slug, mailing_address=addr[:200])
     if slug == hq_mail.DONNA:
-        await update.message.reply_text("Saved. Every approved email now ends with your name, this address and an unsubscribe line.")
+        await hq_core.reply_to(update.message, "Saved. Every approved email now ends with your name, this address and an unsubscribe line.")
     else:
         done = hq_mail.profile(slug)
-        await update.message.reply_text(f"Saved the address for {slug}. " + ("Its emails can now carry a CASL footer." if done else
+        await hq_core.reply_to(update.message, f"Saved the address for {slug}. " + ("Its emails can now carry a CASL footer." if done else
             f"Not ready yet: also set the sender and brand with /venture profile {slug} sender <name> and /venture profile {slug} brand <name>."))
 
 
@@ -821,7 +822,7 @@ async def hq_decision_callback(update, context) -> None:
     await query.answer(result[:190])
     try:
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(result)
+        await hq_core.reply_to(query.message, result)
     except Exception:
         pass
 
@@ -834,7 +835,7 @@ async def hq_missions_cmd(update, context) -> None:
         text = hq_missions.list_text(include_done=show_all)
     except Exception as e:
         text = f"Missions unavailable: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_mission_cmd(update, context) -> None:
@@ -843,7 +844,7 @@ async def hq_mission_cmd(update, context) -> None:
         return
     args = list(context.args or [])
     if not args:
-        await update.message.reply_text("Usage:\n/mission new [@venture] <objective>\n/mission <id>\n/mission pause|resume|abandon <id>\n"
+        await hq_core.reply_to(update.message, "Usage:\n/mission new [@venture] <objective>\n/mission <id>\n/mission pause|resume|abandon <id>\n"
                                         "/mission budget <id> <cents CAD>\n/mission steps <id> <n>\n/mission focus <id>|off\n/mission due <id> <YYYY-MM-DD|+3d|off>\n/mission repeat <id> <weekly|daily|Nd|off> [runs]\n/mission unstick <id>  (a repeat that never started its next run)\nOr just tell me the goal in chat.")
         return
     try:
@@ -853,7 +854,7 @@ async def hq_mission_cmd(update, context) -> None:
             if len(args) > 1 and args[1].startswith("@"):  # /mission new @venture <objective>
                 _vid, vslug, err = resolve_venture(args[1])
                 if err:
-                    await update.message.reply_text(err)
+                    await hq_core.reply_to(update.message, err)
                     return
                 args = args[:1] + args[2:]
             r = hq_missions.create_mission(" ".join(args[1:]), vslug, created_by="owner") if vslug else hq_missions.create_mission(" ".join(args[1:]), created_by="owner")
@@ -877,7 +878,7 @@ async def hq_mission_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ mission command failed")
         text = f"Mission command failed: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_policy_cmd(update, context) -> None:
@@ -893,7 +894,7 @@ async def hq_policy_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ policy command failed")
         text = f"Policy command failed: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_venture_cmd(update, context) -> None:
@@ -935,7 +936,7 @@ async def hq_venture_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ venture command failed")
         text = f"Venture command failed: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_pnl_cmd(update, context) -> None:
@@ -950,7 +951,7 @@ async def hq_pnl_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ pnl failed")
         text = f"P&L failed: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_bank_cmd(update, context) -> None:
@@ -971,7 +972,7 @@ async def hq_bank_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ bank command failed")
         text = f"Bank command failed: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_bank_file(update, context) -> None:
@@ -989,7 +990,7 @@ async def hq_bank_file(update, context) -> None:
     except Exception as e:
         logger.exception("HQ bank import failed")
         text = f"Statement import failed: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_pay_cmd(update, context) -> None:
@@ -999,11 +1000,11 @@ async def hq_pay_cmd(update, context) -> None:
     a = context.args or []
     if a and a[0].lower() == "done":
         if len(a) < 4:
-            await update.message.reply_text("Use: /pay done <id> <amount> <RBC reference>")
+            await hq_core.reply_to(update.message, "Use: /pay done <id> <amount> <RBC reference>")
             return
-        await update.message.reply_text(hq_payments.confirm(a[1], a[2], " ".join(a[3:])))
+        await hq_core.reply_to(update.message, hq_payments.confirm(a[1], a[2], " ".join(a[3:])))
         return
-    await update.message.reply_text(hq_payments.open_text() + "\n\nAfter you pay in RBC: /pay done <id> <amount> <reference>")
+    await hq_core.reply_to(update.message, hq_payments.open_text() + "\n\nAfter you pay in RBC: /pay done <id> <amount> <reference>")
 
 
 async def hq_setter_cmd(update, context) -> None:
@@ -1012,19 +1013,19 @@ async def hq_setter_cmd(update, context) -> None:
         return
     a = context.args or []
     if not a:
-        await update.message.reply_text(hq_setters.owed_text())
+        await hq_core.reply_to(update.message, hq_setters.owed_text())
         return
     verb, rest = a[0].lower(), " ".join(a[1:])
     if verb == "add" and rest:
         parts = [p.strip() for p in rest.split("|")] + ["", ""]
-        await update.message.reply_text(hq_setters.add(parts[0], parts[1], parts[2]))
+        await hq_core.reply_to(update.message, hq_setters.add(parts[0], parts[1], parts[2]))
     elif verb in ("booked", "closed", "cancelled") and rest:
         parts = [p.strip() for p in rest.split("|")] + [""]
-        await update.message.reply_text(hq_setters.log(parts[0], verb, parts[1]))
+        await hq_core.reply_to(update.message, hq_setters.log(parts[0], verb, parts[1]))
     elif verb == "paid" and len(a) >= 4:
-        await update.message.reply_text(hq_setters.paid(a[1], a[2], a[3], " ".join(a[4:])))
+        await hq_core.reply_to(update.message, hq_setters.paid(a[1], a[2], a[3], " ".join(a[4:])))
     else:
-        await update.message.reply_text("Use: /setter  |  /setter add Name | contact | niche  |  /setter booked Name | client  |  /setter closed Name | client  |  /setter paid Name close|recurring|bonus amount ref")
+        await hq_core.reply_to(update.message, "Use: /setter  |  /setter add Name | contact | niche  |  /setter booked Name | client  |  /setter closed Name | client  |  /setter paid Name close|recurring|bonus amount ref")
 
 
 async def hq_waterfall_cmd(update, context) -> None:
@@ -1033,7 +1034,7 @@ async def hq_waterfall_cmd(update, context) -> None:
         return
     a = context.args or []
     days = int(a[0]) if a and a[0].isdigit() else 30
-    await update.message.reply_text(await asyncio.to_thread(hq_waterfall.text, days))
+    await hq_core.reply_to(update.message, await asyncio.to_thread(hq_waterfall.text, days))
 
 
 async def hq_succession_cmd(update, context) -> None:
@@ -1042,14 +1043,14 @@ async def hq_succession_cmd(update, context) -> None:
         return
     text = await asyncio.to_thread(hq_succession.build)
     for i in range(0, len(text), 3800):
-        await update.message.reply_text(text[i:i + 3800])
+        await hq_core.reply_to(update.message, text[i:i + 3800])
 
 
 async def hq_autonomy_cmd(update, context) -> None:
     """/autonomy: evidence for moving a message type from approve-first toward auto-send."""
     if not _owner(update):
         return
-    await update.message.reply_text(await asyncio.to_thread(hq_waterfall.autonomy_text))
+    await hq_core.reply_to(update.message, await asyncio.to_thread(hq_waterfall.autonomy_text))
 
 
 async def hq_tool_cmd(update, context) -> None:
@@ -1065,7 +1066,7 @@ async def hq_tool_cmd(update, context) -> None:
         out = await asyncio.to_thread(hq_tools.mark, rest, verb)
     else:
         out = await asyncio.to_thread(hq_tools.text)
-    await update.message.reply_text(out)
+    await hq_core.reply_to(update.message, out)
 
 
 async def hq_account_cmd(update, context) -> None:
@@ -1075,17 +1076,17 @@ async def hq_account_cmd(update, context) -> None:
     a = context.args or []
     if a and a[0].lower() == "done":
         if len(a) < 3:
-            await update.message.reply_text("Use: /account done <id> <login email or username>  (never the password)")
+            await hq_core.reply_to(update.message, "Use: /account done <id> <login email or username>  (never the password)")
             return
-        await update.message.reply_text(hq_accounts.complete(a[1], " ".join(a[2:])))
+        await hq_core.reply_to(update.message, hq_accounts.complete(a[1], " ".join(a[2:])))
         return
-    await update.message.reply_text(hq_accounts.open_text() + "\n\nAfter you sign up: /account done <id> <login>")
+    await hq_core.reply_to(update.message, hq_accounts.open_text() + "\n\nAfter you sign up: /account done <id> <login>")
 
 
 async def hq_office_cmd(update, context) -> None:
     if not _owner(update):
         return
-    await update.message.reply_text(hq_office.office_text()[:4000])
+    await hq_core.reply_to(update.message, hq_office.office_text()[:4000])
 
 
 async def hq_capital_cmd(update, context) -> None:
@@ -1101,7 +1102,7 @@ async def hq_capital_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ capital command failed")
         text = f"Capital command failed: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_backup_cmd(update, context) -> None:
@@ -1121,7 +1122,7 @@ async def hq_backup_cmd(update, context) -> None:
             if not hq_backup.configured():
                 text = "Backup is not configured (BACKUP_KEY or BACKUP_PUT_URL missing)."
             else:
-                await update.message.reply_text("Running backup now. This can take a minute.")
+                await hq_core.reply_to(update.message, "Running backup now. This can take a minute.")
                 r = await asyncio.to_thread(hq_backup.run, True)
                 text = "Backup finished. Check /backup for details." if r.get("ok") else f"Backup did not complete: {str(r.get('reason'))[:200]}"
         else:
@@ -1136,7 +1137,7 @@ async def hq_backup_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ backup command failed")
         text = f"Backup command failed: {type(e).__name__}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_gate_cmd(update, context) -> None:
@@ -1157,7 +1158,7 @@ async def hq_gate_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ gate command failed")
         text = f"Gate command failed: {type(e).__name__}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 # --- hqui begin: /needs (unified Needs-you inbox; read-only, buttons reuse the existing hqd:/hqq: callbacks) ---
@@ -1168,13 +1169,13 @@ async def hq_needs_cmd(update, context) -> None:
         items = hq_inbox.fetch()
     except Exception as e:
         logger.exception("HQ /needs failed")
-        await update.message.reply_text(f"Could not read the inbox: {type(e).__name__}. Is migration 20261115_inbox_needs_you_v1 applied?")
+        await hq_core.reply_to(update.message, f"Could not read the inbox: {type(e).__name__}. Is migration 20261115_inbox_needs_you_v1 applied?")
         return
-    await update.message.reply_text(hq_inbox.format_inbox(items))
+    await hq_core.reply_to(update.message, hq_inbox.format_inbox(items))
     for it in items[:3]:  # tap-to-act for the top items only, through the same Approve/Reject and answer callbacks as the original message
         markup = hq_inbox.action_buttons(it)
         if markup is not None:
-            await update.message.reply_text(f"{it.get('title', '')[:200]}", reply_markup=markup)
+            await hq_core.reply_to(update.message, f"{it.get('title', '')[:200]}", reply_markup=markup)
 
 
 MENU_HQUI = [("needs", "Everything waiting on you, ranked")]
@@ -1251,7 +1252,7 @@ async def hq_answer_callback(update, context) -> None:
     await query.answer(result[:190])
     try:
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(result)
+        await hq_core.reply_to(query.message, result)
     except Exception:
         pass
 
@@ -1585,7 +1586,7 @@ async def hq_reply_cmd(update, context) -> None:
         return
     args = list(context.args or [])
     if len(args) < 2:
-        await update.message.reply_text("Use: /reply 12 interested wants a call Tuesday\nKinds: " + ", ".join(hq_venture_ops.REPLY_KINDS) +
+        await hq_core.reply_to(update.message, "Use: /reply 12 interested wants a call Tuesday\nKinds: " + ", ".join(hq_venture_ops.REPLY_KINDS) +
                                         "\n'unsubscribe' stops all contact with that address in every venture, at once.")
         return
     try:
@@ -1593,7 +1594,7 @@ async def hq_reply_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ reply command failed")
         text = f"Reply failed: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_deal_cmd(update, context) -> None:
@@ -1622,7 +1623,7 @@ async def hq_deal_cmd(update, context) -> None:
     except Exception as e:
         logger.exception("HQ deal command failed")
         text = f"Deal command failed: {str(e)[:150]}"
-    await update.message.reply_text(text[:4000])
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 def register_venture2(app, CommandHandler) -> None:

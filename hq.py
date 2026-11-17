@@ -133,7 +133,8 @@ async def deliver_owner_messages(context) -> None:
                 markup = option_buttons(msg["id"], msg["options"])
             else:
                 markup = decision_buttons(msg["id"]) if msg.get("needs_decision") else None
-            text = format_owner_message(msg)
+            import hq_core
+            text = hq_core.address(format_owner_message(msg))      # every owner message, whichever module or SQL function queued it, says "sir"
             # --- hqui begin: the morning/evening brief carries the inbox count (read-only; '' if unreadable) ---
             if msg.get("kind") == "brief":
                 try:

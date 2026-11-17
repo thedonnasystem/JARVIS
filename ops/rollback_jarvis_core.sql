@@ -8,13 +8,45 @@ drop function if exists public.jarvis_set_config(text, jsonb), public.jarvis_cor
   public.jarvis_lease(text, integer, integer, text[]), public.jarvis_extend_lease(uuid, text, integer), public.jarvis_finish(uuid, text, boolean, text, integer, boolean),
   public.jarvis_automation_candidates(text[]), public.jarvis_mark_automation(text, text, text), public.jarvis_cache_get(text), public.jarvis_cache_put(text, text, text, text, integer),
   public.jarvis_changelog_add(text, text, text), public.jarvis_call_allowed(text, text, boolean), public.jarvis_call_result(text, text, jsonb),
-  public.jarvis_owner_approve_large(uuid, integer), public.jarvis_use_large_approval(uuid, uuid), public.jarvis_memory_search(text, integer, text[]),
+  public.jarvis_owner_approve_large(uuid, integer), public.jarvis_use_large_approval(uuid, uuid), public.jarvis_memory_search(text, integer, text[], text), public.jarvis_seed_stage(jsonb, text), public.jarvis_seed_apply(uuid),
   public.jarvis_seed_memory(jsonb, text, text), public.jarvis_cost_meter(integer), public.jarvis_daily_report_data(date),
   public.jarvis_owner_confirm_revenue(uuid), public.jarvis_self_fund_status(), public.jarvis_wake_agent(text, uuid, text),
   public.jarvis_sleep_agent(text, text, integer, integer);
 drop table if exists public.jarvis_job_events, public.jarvis_jobs, public.jarvis_task_stats, public.jarvis_result_cache, public.jarvis_changelog, public.jarvis_call_log,
-  public.jarvis_large_approvals, public.jarvis_self_fund_credits, public.jarvis_agent_wakes, public.jarvis_core_config;
+  public.jarvis_large_approvals, public.jarvis_self_fund_credits, public.jarvis_agent_wakes, public.jarvis_core_config, public.jarvis_call_criteria, public.jarvis_seed_staging;
 drop function if exists public.jarvis_append_only(), public.jarvis_require_owner();
+-- mission budgets: the exact previous bodies (20261112_missions_v1 / 20261113_mission_guard_v1); CREATE OR REPLACE keeps their grants
+create or replace function public.mission_spent_cents(p_mission uuid)
+returns int language sql stable set search_path to 'public' as $$
+  select coalesce(sum(coalesce(c.actual_cents, c.reserved_cents)), 0)::int
+  from public.llm_calls c
+  join public.tasks t on c.purpose = 'task ' || t.id::text
+  where t.mission_id = p_mission and c.status in ('reserved','done');
+$$;
+create or replace function public.mission_guard(p_agent text, p_purpose text, p_est_cents integer) returns void
+language plpgsql stable set search_path to 'public' as $$
+declare v_focus uuid; v_mission uuid; v_budget int; v_spent int;
+begin
+  select focus_mission into v_focus from public.system_state where id = 1;
+  if p_purpose ~ '^task [0-9a-fA-F-]{36}$' then
+    select mission_id into v_mission from public.tasks where id = substr(p_purpose, 6)::uuid;
+  end if;
+  -- The owner talking to Jarvis (chat) is never backlog and is not a mission task; it stays metered by the normal daily caps.
+  -- Two narrow exemptions from focus mode, both tiny and both needed to keep control: owner chat (not backlog), and the
+  -- 1-cent hourly credit probe (without it a paused engine could never notice that credit is back while focus is on).
+  if v_focus is not null and v_mission is distinct from v_focus
+     and not (p_agent = 'jarvis-chat' and p_purpose !~ '^task ')
+     and not (p_agent = 'jarvis' and p_purpose = 'credit probe') then
+    raise exception 'Focus mode: only mission % may use AI right now.', left(v_focus::text, 8);
+  end if;
+  if v_mission is not null then
+    select budget_cents into v_budget from public.missions where id = v_mission;
+    v_spent := public.mission_spent_cents(v_mission);
+    if v_spent + coalesce(p_est_cents, 0) > coalesce(v_budget, 0) then
+      raise exception 'Mission budget would be exceeded (% of % cents used).', v_spent, coalesce(v_budget, 0);
+    end if;
+  end if;
+end $$;
 drop index if exists public.memory_fts_simple_idx;
 -- the agent row stays if it has spend history (llm_calls references it); otherwise it is removed
 delete from public.agents a where a.slug = 'jarvis-core' and not exists (select 1 from public.llm_calls c where c.agent_slug = a.slug);

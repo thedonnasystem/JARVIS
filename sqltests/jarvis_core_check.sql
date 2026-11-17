@@ -1,14 +1,30 @@
 -- Jarvis core v2 (migrations/20261123_jarvis_core_v1.sql). Everything in one transaction, rolled back. Run on a fresh apply (scripts/replica/run.sh does).
 begin;
 grant usage on schema public to anon, authenticated, service_role;   -- as on Supabase (inside the rolled-back transaction)
+-- the bot: service_role with NO signed-in user (app.uid cleared for the call, restored after)
 create function pg_temp.svc(p_sql text) returns text language plpgsql as $$
-declare r text;
+declare r text; u text := current_setting('app.uid', true);
 begin
+  perform set_config('app.uid', '', true);
   set local role service_role;
-  begin execute p_sql into r; exception when others then reset role; return 'ERR:' || sqlerrm; end;
+  begin execute p_sql into r; exception when others then reset role; perform set_config('app.uid', coalesce(u, ''), true); return 'ERR:' || sqlerrm; end;
   reset role;
+  perform set_config('app.uid', coalesce(u, ''), true);
   return 'OK:' || coalesce(r, '');
 end $$;
+-- a plain database session without the owner's auth uid (an agent with direct SQL access)
+create function pg_temp.nouid(p_sql text) returns text language plpgsql as $$
+declare r text; u text := current_setting('app.uid', true);
+begin
+  perform set_config('app.uid', '', true);
+  begin execute p_sql into r; exception when others then perform set_config('app.uid', coalesce(u, ''), true); return 'ERR:' || sqlerrm; end;
+  perform set_config('app.uid', coalesce(u, ''), true);
+  return 'OK:' || coalesce(r, '');
+end $$;
+-- the owner, signed in (synthetic auth user; the same pattern as ops/OWNER_JARVIS_CORE.sql)
+insert into auth.users (id, email) values ('99999999-9999-9999-9999-99999999a001', 'jc-owner@example.invalid') on conflict do nothing;
+insert into public.app_owners (email) values ('jc-owner@example.invalid') on conflict do nothing;
+select set_config('app.uid', '99999999-9999-9999-9999-99999999a001', true);
 create function pg_temp.as_role(p_role text, p_sql text) returns text language plpgsql as $$
 declare r text;
 begin
@@ -36,6 +52,9 @@ begin
   if pg_temp.svc($q$select public.jarvis_set_config('core_enabled', 'true')::text$q$) not like 'ERR:owner approval required%' then raise exception 'J2 the bot could change the config'; end if;
   if pg_temp.svc($q$update public.jarvis_core_config set core_enabled = true returning 'x'$q$) not like 'ERR:permission denied%' then raise exception 'J2 the bot could update the config table'; end if;
   if pg_temp.svc($q$select public.jarvis_set_config('self_edit_enabled', 'true')::text$q$) not like 'ERR:%' then raise exception 'J2 bot self_edit'; end if;
+  -- S4: a direct database session is NOT the owner by itself (as strict as ffm_require_owner)
+  if pg_temp.nouid($q$select public.jarvis_set_config('core_enabled', 'true')::text$q$) not like 'ERR:owner approval required%' then raise exception 'J2 a plain SQL session acted as the owner'; end if;
+  if pg_temp.nouid($q$select public.jarvis_owner_approve_large(null, 1)::text$q$) not like 'ERR:owner approval required%' then raise exception 'J2 a plain SQL session approved the large tier'; end if;
   begin perform public.jarvis_set_config('kill_switch', 'true'); raise exception 'J2 unknown key accepted'; exception when others then if sqlerrm not like 'jarvis_set_config: unknown setting%' then raise; end if; end;
   begin perform public.jarvis_set_config('core_enabled', '"yes"'); raise exception 'J2 non-boolean accepted'; exception when others then if sqlerrm not like '%needs true or false%' then raise; end if; end;
 
@@ -86,6 +105,16 @@ begin
   exception when others then if sqlerrm not like '%w1 does not hold the lease%' then raise; end if; end;
   if public.jarvis_finish(j2, 'w9', true) <> 'done' then raise exception 'J4 reclaimed job finish'; end if;
   if (select runs from public.jarvis_task_stats where task_class = 'alert.check') <> 1 then raise exception 'J4 stats'; end if;
+  -- B6: a job that crashes the worker every time (the lease just expires) is dead-lettered at max_attempts, never leased forever
+  j1 := public.jarvis_enqueue('donna', 'crash.loop', '{}', 'normal', null, null, null, false, 2);
+  for n in 1..40 loop
+    perform 1 from public.jarvis_lease('w-crash', 5, 30, array['donna']);
+    update public.jarvis_jobs set lease_until = now() - interval '1 second' where id = j1 and status = 'leased';
+  end loop;
+  select * into r from public.jarvis_jobs where id = j1;
+  if r.status <> 'dead' or r.attempts <> 2 then raise exception 'B6 crash loop: status % attempts %', r.status, r.attempts; end if;
+  if (select count(*) from public.jarvis_job_events where job_id = j1 and event in ('leased', 'reclaimed')) <> 2 then raise exception 'B6 leased more than max_attempts times'; end if;
+  if not exists (select 1 from public.jarvis_job_events where job_id = j1 and event = 'dead' and detail ->> 'reason' = 'lease expired') then raise exception 'B6 dead-letter not audited'; end if;
 end $$;
 
 -- J5 append-only audit, even for the database owner
@@ -121,16 +150,20 @@ end $$;
 do $$
 declare r jsonb;
 begin
-  r := public.jarvis_call_allowed('kill_switch', 'ks-1', true);
+  r := public.jarvis_call_allowed('kill_switch_tripped', 'ks-1', true);
   if r ->> 'outcome' <> 'refused_disabled' then raise exception 'J7 disabled: %', r; end if;
   update public.jarvis_core_config set emergency_call_enabled = true where id = 1;
-  if (public.jarvis_call_allowed('lunch', 'l-1', false)) ->> 'outcome' <> 'refused_criteria' then raise exception 'J7 criteria'; end if;
-  if (public.jarvis_call_allowed('kill_switch', 'ks-1', true)) ->> 'outcome' <> 'allowed' then raise exception 'J7 first call'; end if;
-  if (public.jarvis_call_allowed('kill_switch', 'ks-1', true)) ->> 'outcome' <> 'refused_duplicate' then raise exception 'J7 dedupe'; end if;
+  -- B7: the criteria are the DATABASE's list; the caller's boolean is ignored; unlisted events never use up the limit
+  if (public.jarvis_call_allowed('lunch_is_ready', 'l-1', true)) ->> 'outcome' <> 'refused_criteria' then raise exception 'J7 unlisted event with criteria_ok=true allowed'; end if;
+  if (public.jarvis_call_allowed('anything_at_all', 'a-1', true)) ->> 'outcome' <> 'refused_criteria' then raise exception 'J7 unlisted event allowed'; end if;
+  if pg_temp.svc($q$select (public.jarvis_call_allowed('lunch_is_ready', 'l-2', true)) ->> 'outcome'$q$) <> 'OK:refused_criteria' then raise exception 'J7 bot: unlisted allowed'; end if;
+  if pg_temp.svc($q$insert into public.jarvis_call_criteria values ('lunch_is_ready', 'critical', 'lunch') returning 'x'$q$) not like 'ERR:permission denied%' then raise exception 'J7 the bot can add criteria'; end if;
+  if (public.jarvis_call_allowed('kill_switch_tripped', 'ks-1', false)) ->> 'outcome' <> 'allowed' then raise exception 'J7 first call (listed event, caller flag ignored)'; end if;
+  if (public.jarvis_call_allowed('kill_switch_tripped', 'ks-1', true)) ->> 'outcome' <> 'refused_duplicate' then raise exception 'J7 dedupe'; end if;
   if (public.jarvis_call_allowed('production_down', 'pd-1', true)) ->> 'outcome' <> 'allowed' then raise exception 'J7 second call'; end if;
   if (public.jarvis_call_allowed('security_incident', 'si-1', true)) ->> 'outcome' <> 'refused_limit' then raise exception 'J7 third call allowed (limit 2/day)'; end if;
-  perform public.jarvis_call_result('ks-1', 'placed', '{"to": "+15550000000", "sid": "x"}');
-  if exists (select 1 from public.jarvis_call_log where detail ? 'to') then raise exception 'J7 a phone number was logged'; end if;
+  perform public.jarvis_call_result('ks-1', 'placed', '{"to": "+15550000000", "To": "+15550000000", "phone": "+15550000000", "call": "x"}');
+  if exists (select 1 from public.jarvis_call_log where detail ?| array['to', 'To', 'phone']) then raise exception 'J7 a phone number was logged'; end if;
   if (select count(*) from public.jarvis_call_log) < 7 then raise exception 'J7 not every decision logged'; end if;
   begin perform public.jarvis_set_config('max_calls_per_day', '9'); raise exception 'J7 limit above 5 accepted'; exception when others then if sqlerrm not like '%max_calls_per_day_check%' and sqlerrm not like '%violates check%' then raise; end if; end;
 end $$;
@@ -151,7 +184,7 @@ end $$;
 
 -- J9 memory seed (synthetic data only): added, deduped, audited without content
 do $$
-declare r jsonb; h text := repeat('ab', 32);
+declare r jsonb; h text := repeat('ab', 32); st text;
 begin
   r := public.jarvis_seed_memory('[{"section":"Role","content":"Synthetic chairman runs three test ventures"},{"section":"Style","content":"Prefers short bullet answers"},{"content":"x"}]', h, 'owner');
   if (r ->> 'added')::int <> 2 or (r ->> 'rejected')::int <> 1 then raise exception 'J9 first import %', r; end if;
@@ -160,8 +193,20 @@ begin
   if (select count(*) from public.audit_log where action = 'jarvis_memory_seeded') <> 2 then raise exception 'J9 audit rows'; end if;
   if exists (select 1 from public.audit_log where action = 'jarvis_memory_seeded' and detail::text ilike '%chairman%') then raise exception 'J9 audit row carries content'; end if;
   begin perform public.jarvis_seed_memory('[]', 'nothex', 'owner'); raise exception 'J9 bad hash accepted'; exception when others then if sqlerrm not like '%file hash required%' then raise; end if; end;
-  -- J10 retrieval, not a dump
-  if (select count(*) from public.jarvis_memory_search('bullet answers', 8, array['owner_profile'])) <> 1 then raise exception 'J10 search'; end if;
+  -- S9: owner-only IN SQL: the bot cannot seed directly (even claiming p_actor 'owner'); it stages, the owner applies
+  if pg_temp.svc(format($q$select public.jarvis_seed_memory('[{"content":"bot written profile line"}]', %L, 'owner')::text$q$, h)) not like 'ERR:owner approval required%' then raise exception 'S9 the bot seeded memory'; end if;
+  st := pg_temp.svc(format($q$select public.jarvis_seed_stage('[{"section":"Goal","content":"Synthetic staged item one"}]', %L)::text$q$, h));
+  if st not like 'OK:%' then raise exception 'S9 stage %', st; end if;
+  if pg_temp.svc(format($q$select public.jarvis_seed_apply(%L)::text$q$, substr(st, 4))) not like 'ERR:owner approval required%' then raise exception 'S9 the bot applied a stage'; end if;
+  r := public.jarvis_seed_apply(substr(st, 4)::uuid);
+  if (r ->> 'added')::int <> 1 then raise exception 'S9 apply %', r; end if;
+  begin perform public.jarvis_seed_apply(substr(st, 4)::uuid); raise exception 'S9 applied twice'; exception when others then if sqlerrm not like '%no unapplied%' then raise; end if; end;
+  if exists (select 1 from public.audit_log where action like 'jarvis_memory_seed%' and actor not in ('owner', 'bot')) then raise exception 'S9 audit actor'; end if;
+  -- J10 retrieval, not a dump; B5: the private profile only for a self-hosted destination; any word matches
+  if (select count(*) from public.jarvis_memory_search('bullet answers', 8, array['owner_profile'], 'selfhost')) <> 1 then raise exception 'J10 search'; end if;
+  if (select count(*) from public.jarvis_memory_search('bullet answers', 8, null)) <> 0 then raise exception 'B5 owner_profile returned for an external destination'; end if;
+  if (select count(*) from public.jarvis_memory_search('bullet answers', 8, array['owner_profile'], 'groq')) <> 0 then raise exception 'B5 owner_profile returned for groq'; end if;
+  if (select count(*) from public.jarvis_memory_search('what bullet style zzqq', 8, array['owner_profile'], 'selfhost')) < 1 then raise exception 'J10 multi-word query found nothing (AND semantics)'; end if;
   if (select count(*) from public.jarvis_memory_search('ventures', 1, null)) > 1 then raise exception 'J10 limit'; end if;
 end $$;
 
@@ -190,8 +235,10 @@ end $$;
 do $$
 begin
   delete from public.jarvis_task_stats;
-  insert into public.jarvis_task_stats (task_class, runs, ai_runs, cost_cents) values ('lead.followup', 50, 50, 10), ('spend.review', 99, 99, 999), ('backup.check', 99, 99, 999), ('report.weekly', 3, 3, 500), ('never.ai', 99, 0, 0);
-  if (select array_agg(task_class order by task_class) from public.jarvis_automation_candidates(array['report.weekly'])) <> array['lead.followup'] then
+  insert into public.jarvis_task_stats (task_class, runs, ai_runs, cost_cents) values ('summary.daily', 50, 50, 10), ('spend.review', 99, 99, 999), ('backup.check', 99, 99, 999),
+    ('report.weekly', 3, 3, 500), ('never.ai', 99, 0, 0), ('lead.payment.reminder', 99, 99, 99), ('ffm.consent.followup', 99, 99, 99), ('legal.check', 99, 99, 99),
+    ('contract.review', 99, 99, 99), ('outreach.send', 99, 99, 99), ('billing.refund', 99, 99, 99), ('wire.transfer', 99, 99, 99), ('ops.backup.verify', 99, 99, 99);
+  if (select array_agg(task_class order by task_class) from public.jarvis_automation_candidates(array['report.weekly'])) <> array['summary.daily'] then
     raise exception 'J12 candidates %', (select array_agg(task_class) from public.jarvis_automation_candidates(array['report.weekly'])); end if;
   if (select count(*) from public.jarvis_automation_candidates('{}')) <> 2 then raise exception 'J12 thresholds'; end if;
 end $$;
@@ -214,13 +261,23 @@ begin
   if pg_temp.svc(format($q$select public.jarvis_owner_confirm_revenue(%L)::text$q$, l1)) not like 'ERR:owner approval required%' then raise exception 'J15 the bot confirmed revenue'; end if;
   begin perform public.jarvis_owner_confirm_revenue(l1); raise exception 'J15 unmatched revenue accepted'; exception when others then if sqlerrm not like '%not matched to a bank deposit%' then raise; end if; end;
   begin perform public.jarvis_owner_confirm_revenue(l2); raise exception 'J15 expected revenue accepted'; exception when others then if sqlerrm not like '%only a received revenue%' then raise; end if; end;
-  insert into public.bank_transactions (posted_on, description, amount_cents, dedupe_key, status, ledger_id) values (current_date, 'deposit', 10000, 'jc-test-1', 'matched', l1);
+  -- S5: a 1-cent matched deposit does not confirm a 100-dollar row
+  insert into public.bank_transactions (posted_on, description, amount_cents, dedupe_key, status, ledger_id) values (current_date, 'deposit', 1, 'jc-test-0', 'matched', l1);
+  begin perform public.jarvis_owner_confirm_revenue(l1); raise exception 'S5 amount mismatch accepted'; exception when others then if sqlerrm not like '%do not equal the revenue amount exactly%' then raise; end if; end;
+  update public.bank_transactions set amount_cents = 10000 where dedupe_key = 'jc-test-0';
   perform public.jarvis_set_config('self_fund_pct', '20');
   r := public.jarvis_owner_confirm_revenue(l1);
   if (r ->> 'budget_cents')::int <> 2000 or (r ->> 'paid_allowed')::boolean then raise exception 'J15 budget without paid switch %', r; end if;
   perform public.jarvis_set_config('paid_providers_enabled', 'true');
   r := public.jarvis_self_fund_status();
   if not (r ->> 'paid_allowed')::boolean or (r ->> 'available_cents')::int <> 2000 - (r ->> 'paid_spent_cents')::int then raise exception 'J15 status %', r; end if;
+  -- S5: the credit stops counting when the deposit is unmatched or the ledger row is changed
+  update public.bank_transactions set status = 'unmatched' where dedupe_key = 'jc-test-0';
+  if ((public.jarvis_self_fund_status()) ->> 'confirmed_revenue_cents')::int <> 0 then raise exception 'S5 credit kept after the deposit was unmatched'; end if;
+  update public.bank_transactions set status = 'matched' where dedupe_key = 'jc-test-0';
+  update public.ledger set amount_cents = 1 where id = l1;
+  if ((public.jarvis_self_fund_status()) ->> 'confirmed_revenue_cents')::int <> 0 then raise exception 'S5 credit kept after the ledger row changed'; end if;
+  update public.ledger set amount_cents = 10000 where id = l1;
   begin perform public.jarvis_set_config('self_fund_pct', '80'); raise exception 'J15 pct above 50 accepted'; exception when others then if sqlerrm not like '%check%' then raise; end if; end;
   if pg_temp.svc($q$select public.jarvis_set_config('self_fund_pct', '50')::text$q$) not like 'ERR:owner approval required%' then raise exception 'J15 the bot set the percentage'; end if;
 end $$;
@@ -238,6 +295,19 @@ begin
   begin delete from public.jarvis_agent_wakes; raise exception 'J16 wake log deletable'; exception when others then if sqlerrm not like '%append-only%' then raise; end if; end;
   r := public.jarvis_daily_report_data((now() at time zone 'America/Toronto')::date);
   if (r -> 'wakes' -> 'donna-researcher' ->> 'wakes')::int <> 1 or (r -> 'wakes' -> 'donna-researcher' ->> 'sleeps')::int <> 1 then raise exception 'J16 report %', r -> 'wakes'; end if;
+end $$;
+-- J17 B8: mission budgets apply to the core's 'jarvis:<division>:<mission>:...' purposes (focus mode too)
+do $$
+declare m uuid; id1 uuid;
+begin
+  update public.agents set status = 'active' where slug = 'jarvis-core';
+  if public.capital_mode() <> 'normal' then raise notice 'J17 skipped: capital mode is %', public.capital_mode(); return; end if;
+  insert into public.missions (title, objective, budget_cents) values ('jc synthetic mission', 'synthetic objective for the budget test', 5) returning id into m;
+  begin perform public.reserve_llm_budget('jarvis-core', 50, 'claude-haiku-5-5', 'jarvis:donna:' || m || ':x:anthropic'); raise exception 'J17 50 cents reserved against a 5-cent mission';
+  exception when others then if sqlerrm not like '%Mission budget would be exceeded%' then raise; end if; end;
+  id1 := public.reserve_llm_budget('jarvis-core', 0, 'claude-haiku-5-5', 'jarvis:donna:' || m || ':x:groq');      -- a free call still fits
+  begin perform public.reserve_llm_budget('jarvis-core', 0, 'claude-haiku-5-5', 'jarvis:donna:' || gen_random_uuid() || ':x:groq'); raise exception 'J17 unknown mission accepted';
+  exception when others then if sqlerrm not like '%Unknown mission%' then raise; end if; end;
 end $$;
 rollback;
 
