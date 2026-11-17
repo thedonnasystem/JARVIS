@@ -40,6 +40,13 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      postgres2:
+        # a SECOND, separate server (own data directory, so its own system identifier): the backup drill restores a dump into it to prove a restore into another cluster closes the gate (V9)
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: pw }
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -53,6 +60,8 @@ jobs:
         env:
           PGPASSWORD: pw
           REPLICA_URL: postgresql://postgres:pw@localhost:5432/postgres
+          DRILL_OTHER_CLUSTER_URL: postgresql://postgres:pw@localhost:5433/postgres
+          DRILL_REQUIRE_OTHER_CLUSTER: "1"
         run: scripts/gate.sh --strict
   secret-scan:
     # gitleaks over the full history of every ref the checkout fetched, then over the PR's own commits. Config: .gitleaks.toml.

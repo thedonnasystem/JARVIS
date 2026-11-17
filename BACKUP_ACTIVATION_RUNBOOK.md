@@ -43,8 +43,9 @@ Secrets go ONLY into your password manager, Railway Variables, and the hidden pr
    - `BACKUP_PUT_URL` = `b2://<Bucket ID>/hq`
    - `BACKUP_AUTH` = `<keyId of key A>:<applicationKey of key A>` (one colon, no spaces/quotes)
    Saving redeploys the bot; wait for "deployed". Do NOT add any `RESTORE_*` variable to Railway.
-5. Optional self-check without exposing values: `railway run ops/backup_activation_preflight.sh --network` (prints only PASS/WARN/FAIL lines).
-6. Separate approvals still required before it can actually run in production: merge and Railway release of this branch's fixes and applying migration `20261113_backup_schema_v1.sql` (read-only functions). The `/backup` command and `hq_backup.py` are already live in production commit ecadb31; what is NOT live until a Railway release is this branch's `hq_backup.py` fixes (alert kind, retry, clear key error). The migration is a separate approval.
+5. **Suppression key (separate from BACKUP_KEY).** In the Supabase SQL editor run the `ffm_set_key('suppression_hmac_key', ...)` step of `ops/OWNER_CONSENT_INTEGRITY.sql` with a 64-hex key you generated locally; store it offline next to, but not with, `BACKUP_KEY`; delete the SQL editor snippet afterwards. Without it the backup carries no suppression checkpoint and `/backup check` warns. Requires migrations `20261121_*` (a separate approval).
+6. Optional self-check without exposing values: `railway run ops/backup_activation_preflight.sh --network` (prints only PASS/WARN/FAIL lines).
+7. Separate approvals still required before it can actually run in production: merge and Railway release of this branch's fixes and applying migration `20261113_backup_schema_v1.sql` (read-only functions). The `/backup` command and `hq_backup.py` are already live in production commit ecadb31; what is NOT live until a Railway release is this branch's `hq_backup.py` fixes (alert kind, retry, clear key error). The migration is a separate approval.
 
 ## 4. Verify
 1. Telegram `/backup check`: every line OK (3 variables set, valid key, URL format, Backblaze accepts key, can write, limited to the bucket, no delete/read/admin powers, upload address issued, `backup_schema` installed). WARN on the key being too powerful or on `backup_schema`: fix, rerun. It does not test: bucket Private, lifecycle rule, key B, or your second key copy.
@@ -53,10 +54,14 @@ Secrets go ONLY into your password manager, Railway Variables, and the hidden pr
 4. Restore proof on your computer: `ops/restore_local.sh --b2-latest --expect-sha256 <hash from /backup>`; then fingerprint comparison. Show Claude only the two output files. Pass criteria: `BACKUP_PROOF_PROCEDURE.md` steps C-E.
 5. Calendar: weekly glance at `/backup` ("Last good" under 2 days), monthly restore drill.
 
+## 4b. After any restore (outreach gate)
+The restore leaves outreach DENIED (gate `unverified`) and prints the procedure; do the steps in `DATA_CLASSIFICATION_AND_BACKUP_POLICY.md` section 8 (set key, re-establish list from provider backup and/or hashes, `ffm_verify_suppression`). If the result is not `verified`, stay closed.
+
 ## 5. Rollback / disable
 - Stop backups instantly: delete `BACKUP_PUT_URL` (or `BACKUP_KEY`) in Railway; the bot goes back to "NOT configured" and does nothing. Existing backups are untouched.
 - Rotate a leaked bot key: revoke key A in Backblaze (backups can no longer be written, nothing readable is lost), create a new Write Only key, update `BACKUP_AUTH`. Rotating `BACKUP_KEY`: keep the old key forever for old files.
 - Undo the DB side: `ops/rollback_sprint12.sql` removes the backup functions (only if you also want the schema snapshot gone).
+- Consent integrity DB side: `ops/rollback_consent_integrity.sql` (read the warning in the policy doc section 7 first).
 - Remove everything: delete the bucket and keys in Backblaze after emptying the bucket.
 
 ## 6. Sandbox validation evidence (this branch, Nov 14)

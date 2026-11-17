@@ -1,0 +1,45 @@
+>>> unit: python3 -m unittest discover -q (repo tests)
+    Ran 715 tests in 12.360s
+    
+    OK
+>>> scripts-tests: lint + manifest tests (scripts/test_*.py)
+    Ran 72 tests in 2.853s
+    
+    OK
+>>> lint: migration lint (scripts/lint_migrations.py)
+    lint_migrations: 0 error(s)
+>>> bundle: dist/APPLY_ALL.sql matches migrations/ (build_bundle.sh --check)
+    bundle current
+>>> appcheck: PWA vs database drift: RPC names, message kinds, offline cache (scripts/check_app_rpcs.py)
+    check_app_rpcs: 0 problem(s)
+>>> webjs: PWA smoke tests (webtests/: node --test, jsdom, no browser)
+    # skipped 0
+    # todo 0
+    # duration_ms 4248.597053
+>>> replica: replica: all migrations + e2e + integration + rollback drill on a scratch DB
+    rollback drill: Phase 1 rollback must restore the live (Nov 12) function definitions exactly
+    rollback drill OK (and the migrations re-apply cleanly afterwards)
+    REPLICA OK
+>>> manifest: function manifest vs live baseline matches ops/EXPECTED_NEW_FUNCTIONS.txt
+      unverifiable in replica (30): seed copy already differed from live; check with ops/verify_live.sql after deploy
+      replica scaffolding ignored (0)
+    matches ops/EXPECTED_NEW_FUNCTIONS.txt
+>>> backup: backup + restore drill (scripts/backup_drill.sh; uses its own scratch DBs)
+    
+    73/73 checks passed
+    results file: /tmp/drill_5x_fcqkd/drill_results.json
+
+================ GATE SUMMARY ================
+STEP           RESULT   DETAIL
+unit           PASS     python3 -m unittest discover -q (repo tests)
+scripts-tests  PASS     lint + manifest tests (scripts/test_*.py)
+lint           PASS     migration lint (scripts/lint_migrations.py)
+bundle         PASS     dist/APPLY_ALL.sql matches migrations/ (build_bundle.sh --check)
+appcheck       PASS     PWA vs database drift: RPC names, message kinds, offline cache (scripts/check_app_rpcs.py)
+webjs          PASS     PWA smoke tests (webtests/: node --test, jsdom, no browser)
+replica        PASS     replica: all migrations + e2e + integration + rollback drill on a scratch DB
+manifest       PASS     function manifest vs live baseline matches ops/EXPECTED_NEW_FUNCTIONS.txt
+backup         PASS     backup + restore drill (scripts/backup_drill.sh; uses its own scratch DBs)
+----------------------------------------------
+logs: /tmp/gate.tsSQjA
+GATE PASSED: 9 steps passed

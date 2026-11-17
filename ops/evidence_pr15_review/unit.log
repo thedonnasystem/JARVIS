@@ -1,0 +1,194 @@
+2026-11-15 11:14:37,010 - hq_inbox - WARNING - inbox count unavailable for the brief: needs_you() returned something that is not a list
+2026-11-15 11:14:37,011 - hq - WARNING - HQ: Telegram send failed for a1: telegram down
+2026-11-15 11:14:37,073 - hq_accounts - WARNING - request_account failed: 404
+2026-11-15 11:14:45,863 - hq_backup - WARNING - backup: owner message not delivered
+2026-11-15 11:14:45,968 - hq_bank - INFO - bank alerts unavailable: down
+2026-11-15 11:14:46,267 - hq_waterfall - INFO - owner_seen skipped: <urlopen error Tunnel connection failed: 502 Bad Gateway>
+/home/claude/wt/consent2/hq_dev.py:65: DeprecationWarning: 'maxsplit' is passed as positional argument
+  name = re.split(r"[\[<>=~!;\s@]", line, 1)[0].lower().replace("_", "-")
+2026-11-15 11:14:47,110 - hq_dev - WARNING - GitHub call failed: 403
+2026-11-15 11:14:47,116 - hq_engine - INFO - HQ mission budget refusal for task t1: Mission budget would be exceeded (190 of 200 cents used).
+2026-11-15 11:14:47,121 - hq_engine - WARNING - HQ: dropped draft #7 with an unfilled placeholder
+2026-11-15 11:14:47,124 - hq_engine - WARNING - HQ: web_fetch rejected (unknown tool type web_fetch_20260318); retrying with search only
+2026-11-15 11:14:47,125 - hq_engine - INFO - HQ gateway blocked (daily cap reached); pausing the task board until it clears
+2026-11-15 11:14:47,126 - hq_engine - WARNING - HQ integration status write failed: db down
+2026-11-15 11:14:47,126 - hq_engine - WARNING - could not read running executor runs: HTTP 400
+2026-11-15 11:14:47,126 - hq_engine - WARNING - could not read running executor runs: HTTP 401
+2026-11-15 11:14:47,127 - hq_engine - WARNING - could not read running executor runs: HTTP 403
+2026-11-15 11:14:47,127 - hq_engine - WARNING - could not read running executor runs: HTTP 500
+2026-11-15 11:14:47,127 - hq_engine - WARNING - HQ paused: Anthropic credit exhausted (Error code: 400 - Your credit balance is too low to access the Anthropic API.)
+2026-11-15 11:14:47,129 - hq_engine - WARNING - could not read running executor runs: HTTP 500
+2026-11-15 11:14:47,130 - hq_engine - WARNING - HQ triage reply unreadable for escalation e2
+/home/claude/wt/consent2/test_hq_executor_schedule.py:46: ResourceWarning: unclosed file <_io.TextIOWrapper name='bot.py' mode='r' encoding='utf-8'>
+  src = open("bot.py").read()
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/home/claude/wt/consent2/test_hq_executor_schedule.py:51: ResourceWarning: unclosed file <_io.TextIOWrapper name='hq_engine.py' mode='r' encoding='utf-8'>
+  self.assertNotIn("expire_stale", open("hq_engine.py").read())
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+2026-11-15 11:14:47,278 - hq_executor - WARNING - settled 2 stale executor run(s) at their full reservation
+/home/claude/wt/consent2/test_hq_executor_schedule.py:77: ResourceWarning: unclosed file <_io.TextIOWrapper name='hq_executor.py' mode='r' encoding='utf-8'>
+  self.assertNotIn("import hq_engine", open("hq_executor.py").read())
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+2026-11-15 11:14:47,299 - hq_inbox - WARNING - inbox count unavailable for the brief: invalid literal for int() with base 10: 'soon'
+2026-11-15 11:14:47,300 - hq_inbox - WARNING - inbox count unavailable for the brief: invalid literal for int() with base 10: 'soon'
+2026-11-15 11:14:47,300 - hq_inbox - WARNING - inbox count unavailable for the brief: slow
+2026-11-15 11:14:47,300 - hq_inbox - WARNING - inbox count unavailable for the brief: down
+2026-11-15 11:14:47,300 - hq_inbox - WARNING - inbox count unavailable for the brief: down
+/home/claude/wt/consent2/test_hq_inbox.py:147: ResourceWarning: unclosed file <_io.TextIOWrapper name='/home/claude/wt/consent2/hq_inbox.py' mode='r' encoding='utf-8'>
+  tree = ast.parse(open(os.path.join(os.path.dirname(__file__), "hq_inbox.py")).read())
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+2026-11-15 11:14:47,305 - hq_commands - ERROR - HQ /needs failed
+Traceback (most recent call last):
+  File "/home/claude/wt/consent2/hq_commands.py", line 1135, in hq_needs_cmd
+    items = hq_inbox.fetch()
+  File "/home/claude/wt/consent2/hq_inbox.py", line 35, in fetch
+    rows = hq._request("POST", "/rest/v1/rpc/needs_you", {"p_limit": int(limit)}, timeout=FETCH_TIMEOUT)
+  File "/usr/local/lib/python3.13/unittest/mock.py", line 1169, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/unittest/mock.py", line 1173, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/unittest/mock.py", line 1234, in _execute_mock_call
+    raise effect
+urllib.error.HTTPError: HTTP Error 404: nf
+2026-11-15 11:14:47,308 - hq - ERROR - HQ: inbox line skipped
+Traceback (most recent call last):
+  File "/home/claude/wt/consent2/hq.py", line 123, in deliver_owner_messages
+    text = hq_inbox.append_to_brief(text)
+  File "/usr/local/lib/python3.13/unittest/mock.py", line 1169, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/unittest/mock.py", line 1173, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/unittest/mock.py", line 1234, in _execute_mock_call
+    raise effect
+RuntimeError: boom
+2026-11-15 11:14:47,309 - hq_inbox - WARNING - inbox count unavailable for the brief: down
+2026-11-15 11:14:47,310 - hq_inbox - WARNING - inbox count unavailable for the brief: invalid literal for int() with base 10: 'soon'
+2026-11-15 11:14:47,352 - hq_meter - WARNING - meter: spend gateway unreachable, refusing the AI call: <urlopen error down>
+/home/claude/wt/consent2/test_hq_missions.py:1362: ResourceWarning: unclosed file <_io.TextIOWrapper name='MISSION_ENGINE.md' mode='r' encoding='utf-8'>
+  self.assertIn("untrusted", open("MISSION_ENGINE.md").read().lower())
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+2026-11-15 11:14:47,374 - hq_missions - WARNING - HQ mission budget check failed; not advancing m1 this tick
+2026-11-15 11:14:47,378 - hq_missions - INFO - mission fa326184-db1f-495d-93ea-e93d91a2ad7d: format repair not queued (400)
+2026-11-15 11:14:47,378 - hq_missions - ERROR - mission fa326184-db1f-495d-93ea-e93d91a2ad7d advance failed
+Traceback (most recent call last):
+  File "/home/claude/wt/consent2/hq_missions.py", line 1360, in advance
+    _handle_captured(m, tasks)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/claude/wt/consent2/hq_missions.py", line 662, in _handle_captured
+    _apply_evaluation(m, last.get("result") or "", last)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/claude/wt/consent2/hq_missions.py", line 682, in _apply_evaluation
+    _start_evaluation(m)
+    ~~~~~~~~~~~~~~~~~^^^
+  File "/home/claude/wt/consent2/hq_missions.py", line 584, in _start_evaluation
+    _new_task(m, researcher, f"{kind} {m['title']}", evaluation_detail(m, _active_agents(), gaps), priority=1,
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+              role="replan" if gaps else "eval")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/claude/wt/consent2/hq_missions.py", line 557, in _new_task
+    row = _insert("tasks", {
+          ~~~~~~~^^^^^^^^^^^
+        "assigned_agent": agent, "created_by": "mission-manager", "venture_id": m.get("venture_id"),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        "mission_id": m["id"], "mission_role": role, "priority": priority, "status": "todo",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        "title": (TITLE_PREFIX + title)[:140], "detail": detail[:12000],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    }, returning=True) or {}
+    ^^^^^^^^^^^^^^^^^^
+  File "/home/claude/wt/consent2/hq_missions.py", line 79, in _insert
+    r = hq._request("POST", f"/rest/v1/{table}", row, prefer="return=representation" if returning else "return=minimal")
+  File "/home/claude/wt/consent2/test_hq_missions.py", line 91, in __call__
+    raise urllib.error.HTTPError("u", 400, "limit", {}, io.BytesIO(b'{"message":"Mission has too many evaluation/verification tasks"}'))
+urllib.error.HTTPError: HTTP Error 400: limit
+2026-11-15 11:14:47,388 - hq_missions - WARNING - mission lesson write failed: db down
+2026-11-15 11:14:47,390 - hq_missions - ERROR - recurring mission check failed
+Traceback (most recent call last):
+  File "/home/claude/wt/consent2/hq_missions.py", line 1378, in advance
+    spawn_recurring()
+    ~~~~~~~~~~~~~~~^^
+  File "/home/claude/wt/consent2/hq_missions.py", line 1241, in spawn_recurring
+    out = create_mission(r["objective"], _venture_slug(r), title=r["title"], budget_cents=r.get("budget_cents"),
+                         created_by="recurrence", priority=r.get("priority") or 2, max_steps=r.get("max_steps"),
+                         due_at=(now + timedelta(days=days)).isoformat(), checkpoint=child_cp)
+  File "/usr/local/lib/python3.13/unittest/mock.py", line 1169, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/unittest/mock.py", line 1173, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/unittest/mock.py", line 1234, in _execute_mock_call
+    raise effect
+RuntimeError: db down
+2026-11-15 11:14:47,396 - hq_missions - ERROR - mission 1102d03a-19b4-41ff-ac58-533f366f8bb4 advance failed
+Traceback (most recent call last):
+  File "/home/claude/wt/consent2/hq_missions.py", line 1369, in advance
+    _handle_running(m, tasks)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/claude/wt/consent2/hq_missions.py", line 930, in _handle_running
+    _launch_steps(m, plan, tasks)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/home/claude/wt/consent2/hq_missions.py", line 772, in _launch_steps
+    tid = _new_task(m, s["agent"], s["title"], f"Part of mission '{m['title']}'.\nObjective: {m['objective'][:1500]}\n\n"
+                    f"Your step: {s['detail']}{handoff_text(plan, i, by_id)}{STEP_SUFFIX}")
+  File "/home/claude/wt/consent2/hq_missions.py", line 557, in _new_task
+    row = _insert("tasks", {
+          ~~~~~~~^^^^^^^^^^^
+        "assigned_agent": agent, "created_by": "mission-manager", "venture_id": m.get("venture_id"),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        "mission_id": m["id"], "mission_role": role, "priority": priority, "status": "todo",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        "title": (TITLE_PREFIX + title)[:140], "detail": detail[:12000],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    }, returning=True) or {}
+    ^^^^^^^^^^^^^^^^^^
+  File "/home/claude/wt/consent2/hq_missions.py", line 79, in _insert
+    r = hq._request("POST", f"/rest/v1/{table}", row, prefer="return=representation" if returning else "return=minimal")
+  File "/home/claude/wt/consent2/test_hq_missions.py", line 397, in boom
+    raise urllib.error.HTTPError("u", 400, "bad", {}, io.BytesIO(b'{"message":"invalid input syntax"}'))
+urllib.error.HTTPError: HTTP Error 400: bad
+2026-11-15 11:14:47,405 - hq_payments - WARNING - prepare_payment failed: 404 function not found
+2026-11-15 11:14:47,407 - hq_push - INFO - push notify skipped: x
+2026-11-15 11:14:47,409 - hq_setters - WARNING - setter_standing failed: x
+2026-11-15 11:14:47,409 - hq_setters - WARNING - setter payout failed: x
+2026-11-15 11:14:47,410 - hq_succession - INFO - succession read venture_procedures failed: 404
+2026-11-15 11:14:48,583 - hq_voice - WARNING - transcription failed: OSError
+2026-11-15 11:14:48,588 - hq_waterfall - WARNING - autonomy_report failed: x
+2026-11-15 11:14:48,589 - hq_waterfall - WARNING - waterfall failed: x
+2026-11-15 11:14:48,596 - hq_web - ERROR - web message m1 failed
+Traceback (most recent call last):
+  File "/home/claude/wt/consent2/hq_web.py", line 189, in poll
+    await handle(row, context)
+  File "/home/claude/wt/consent2/hq_web.py", line 141, in handle
+    text = await _reply_fn(owner, body[:6000], context, typing=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/claude/wt/consent2/test_hq_web.py", line 30, in fake_reply
+    raise reply
+RuntimeError: boom
+2026-11-15 11:14:48,598 - hq_web - INFO - web app tables not installed yet; web poller idle
+2026-11-15 11:14:48,621 - hq_meter - WARNING - meter: spend gateway unreachable, refusing the AI call: <urlopen error connection refused>
+2026-11-15 11:14:48,641 - hq_meter - WARNING - meter: could not price the call, refusing it: <urlopen error connection refused>
+2026-11-15 11:14:48,657 - hq_meter - WARNING - meter: could not price the call, refusing it: <urlopen error connection refused>
+2026-11-15 11:14:48,659 - hq_meter - WARNING - meter: could not price the call, refusing it: <urlopen error connection refused>
+2026-11-15 11:14:48,666 - hq_engine - WARNING - HQ credit probe not run: HTTP Error 400: Kill switch is on.
+2026-11-15 11:14:48,666 - hq_engine - WARNING - HQ credit probe not run: HTTP Error 400: The company daily spend cap would be exceeded.
+2026-11-15 11:14:48,666 - hq_engine - WARNING - HQ credit probe not run: HTTP Error 400: Agent builder would exceed its daily cap.
+2026-11-15 11:14:48,666 - hq_engine - WARNING - HQ credit probe not run: HTTP Error 400: Agent builder is paused.
+2026-11-15 11:14:48,666 - hq_engine - WARNING - HQ credit probe not run: HTTP Error 400: Focus mode: only mission 1111 may use AI right now.
+2026-11-15 11:14:48,666 - hq_engine - WARNING - HQ credit probe not run: HTTP Error 400: Mission budget would be exceeded (190 of 200 cents used).
+2026-11-15 11:14:48,667 - hq_engine - WARNING - HQ credit probe not run: HTTP Error 400: Capital hard stop: the operating fund is nearly empty. AI calls are paused.
+2026-11-15 11:14:48,667 - hq_engine - WARNING - HQ credit probe not run: HTTP Error 400: Unknown agent builder.
+2026-11-15 11:14:48,667 - hq_engine - WARNING - HQ credit probe not run: HTTP Error 400: some database hiccup nobody planned for
+2026-11-15 11:14:48,667 - hq_engine - WARNING - HQ credit probe not run: <urlopen error x>
+2026-11-15 11:14:48,769 - hq_meter - WARNING - meter: spend gateway unreachable, refusing the AI call: <urlopen error connection refused>
+/home/claude/wt/consent2/test_rank_leads.py:37: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpb2e21p8f/out.csv' mode='r' encoding='utf-8'>
+  self.assertEqual(r.returncode, 0, r.stderr); rows = list(csv.reader(open(o)))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+----------------------------------------------------------------------
+Ran 715 tests in 12.360s
+
+OK

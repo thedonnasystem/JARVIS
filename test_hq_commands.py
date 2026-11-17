@@ -4,6 +4,14 @@ from unittest import mock
 import hq, hq_commands as C
 
 
+def _db_allows_outreach(case):
+    """These tests are about approval flows, not about the outreach gate: the database RPC public.outreach_send_allowed (PR #15 review) answers yes. The gate has its own tests."""
+    import hq_venture_ops
+    orig = hq_venture_ops._rpc
+    p = mock.patch.object(hq_venture_ops, "_rpc", lambda name, args: {"allowed": True, "reason": "ok"} if name == "outreach_send_allowed" else orig(name, args))
+    p.start(); case.addCleanup(p.stop)
+
+
 class Msg:
     def __init__(self): self.sent = []
     async def reply_text(self, t): self.sent.append(t)
@@ -233,6 +241,10 @@ class DecisionFake(Fake):
 
 
 class D(unittest.TestCase):
+    def setUp(self):
+        _p = mock.patch("hq_gatemark.attest", return_value={"ok": True}); _p.start(); self.addCleanup(_p.stop)   # the sender mark vouches for the database (its own tests are in test_hq_gatemark)
+        _db_allows_outreach(self)
+
     def test_approve_closes_escalation_and_saves_decision(self):
         f = DecisionFake()
         with mock.patch.object(hq, "_request", f):
@@ -461,7 +473,9 @@ class Resolve(unittest.TestCase):
 
 class Casl(unittest.TestCase):
     def setUp(self):
+        _p = mock.patch("hq_gatemark.attest", return_value={"ok": True}); _p.start(); self.addCleanup(_p.stop)   # the sender mark vouches for the database (its own tests are in test_hq_gatemark)
         os.environ["JARVIS_OWNER_ID"] = "42"
+        _db_allows_outreach(self)
 
     def test_donna_footer_unchanged_and_other_ventures_fail_closed(self):
         with mock.patch.object(hq, "_request", World(profiles={"donna": {"mailing_address": "1 Main St, Ottawa ON"}})):

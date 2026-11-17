@@ -1,0 +1,5 @@
+CREATE TABLE
+COPY 6000
+old-code differential fuzz: 6000 cases, 1648 SQL/Python mismatches
+U+2028/U+2029/U+1680 accepted by old SQL: true/true/true
+old +31 06 vs +31 6: +310612345678 vs +31612345678

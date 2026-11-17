@@ -13,6 +13,12 @@
 begin;
 -- live Supabase grants USAGE on schema public to the API roles; a freshly created replica schema does not
 grant usage on schema public to anon, authenticated, service_role;
+-- fixture: the outreach gate (20261121_suppression_integrity_v1) is closed by default; the legacy outbox tests below approve and send drafts, so open it for them
+set local session_replication_role = replica;
+insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, verified_marker_id = (select coalesce(max(id),0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
+update public.ffm_gate_config set phone_outreach_enabled = true;     -- text / call are disabled by default (v3 review F1); the checks below exercise them, so enable them in this scratch transaction
+set local session_replication_role = origin;
 
 create or replace function pg_temp.refused(p_sql text) returns text language plpgsql as $f$
 begin execute p_sql; return null; exception when others then return sqlerrm; end $f$;
@@ -110,9 +116,9 @@ begin
   perform pg_temp.expect('B9b retarget to a list', 'update public.outbox set to_ref = ''bystander@example.com,victim@example.com'' where id = ''00000000-0000-0000-0000-00000000b004''');
   perform pg_temp.expect('B9c retarget to junk', 'update public.outbox set to_ref = ''x'' where id = ''00000000-0000-0000-0000-00000000b004''', '%not one clean%');
   -- the channel flip trick: leave email, retarget, come back
-  perform pg_temp.ok('B10a channel -> text', 'update public.outbox set channel = ''text'' where id = ''00000000-0000-0000-0000-00000000b005''');
-  perform pg_temp.ok('B10b retarget on text', 'update public.outbox set to_ref = ''victim@example.com'' where id = ''00000000-0000-0000-0000-00000000b005''');
-  perform pg_temp.expect('B10c channel back to email', 'update public.outbox set channel = ''email'' where id = ''00000000-0000-0000-0000-00000000b005''', '%do-not-contact%');
+  -- (PR #15 review: an APPROVED row is delivery-bound, so flipping it to the text channel with an email address as its number is refused outright - stricter than before, the trick is closed at step one)
+  perform pg_temp.expect('B10a channel -> text on an approved row (not a phone number)', 'update public.outbox set channel = ''text'' where id = ''00000000-0000-0000-0000-00000000b005''', '%unusable recipient%');
+  perform pg_temp.expect('B10b the row is still an email row', 'update public.outbox set to_ref = ''victim@example.com'' where id = ''00000000-0000-0000-0000-00000000b005''', '%do-not-contact%');
   -- a lead flagged do-not-contact blocks every draft that points at it, whatever the address says
   perform pg_temp.expect('B11 draft for a do-not-contact lead', format('insert into public.outbox (agent, channel, to_ref, body, lead_id) values (''donna-ops'', ''email'', ''fresh@example.com'', ''x unsubscribe'', %L)', la), '%do-not-contact%');
   -- the raw flag cascades and cannot be cleared

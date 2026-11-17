@@ -113,3 +113,114 @@ class UniqueBlanks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuppressionPayload(unittest.TestCase):
+    """The restore tool's own, independent re-check of the keyed-hash list, and the gate it sets on a restored database."""
+    @staticmethod
+    def payload(macs=(("email", "a" * 64), ("phone", "b" * 64))):
+        import hashlib
+        lines = sorted(f"{k}:{m}" for k, m in macs)
+        return {"version": 1, "included": True, "key_check": "e" * 64, "count": len(lines), "email_count": sum(1 for k, _ in macs if k == "email"),
+                "phone_count": sum(1 for k, _ in macs if k == "phone"), "hash": hashlib.sha256("\n".join(lines).encode()).hexdigest(), "macs": [list(m) for m in macs]}
+
+    def test_good_and_bad(self):
+        self.assertEqual(R.check_suppression_payload(self.payload()), [])
+        self.assertEqual(R.check_suppression_payload(self.payload(())), [])
+        p = self.payload(); p["macs"].pop()
+        self.assertTrue(R.check_suppression_payload(p))
+        p = self.payload(); p["macs"][0][1] = "0" * 64
+        self.assertTrue(R.check_suppression_payload(p))
+        p = self.payload(); p["macs"].append(p["macs"][0])
+        self.assertTrue(R.check_suppression_payload(p))
+        for bad in (None, {}, {"version": 2}, {**self.payload(), "macs": [["x", "a" * 64]]}, {**self.payload(), "macs": [["email", "alice@example.com"]]}, {**self.payload(), "key_check": "x"}):
+            self.assertTrue(R.check_suppression_payload(bad))
+
+    def test_agrees_with_the_bot_side_validator(self):
+        import hq_consent as C
+        for macs in ([], [("email", "a" * 64)], [("email", "a" * 64), ("phone", "b" * 64), ("phone", "c" * 64)]):
+            p = self.payload(macs)
+            self.assertEqual(R.check_suppression_payload(p) == [], C.validate_suppression_export(p) == [])
+            self.assertEqual(p["hash"], C.suppression_digest(macs)["hash"])
+
+    class Cur:
+        def __init__(self, tables=True, opened=False):
+            self.sql, self.params, self.tables, self.opened, self.last = [], [], tables, opened, None
+        def execute(self, q, p=None):
+            self.sql.append(" ".join(q.split())); self.params.append(p); self.last = " ".join(q.split())
+        def executemany(self, q, rows):
+            self.sql.append(" ".join(q.split())); self.params.append(list(rows))
+        def fetchone(self):
+            q = self.last
+            if "to_regclass" in q: return (self.tables,)
+            if "ffm_outreach_gate_open" in q: return (self.opened,)
+            if "select state from" in q: return ("unverified",)
+            return (0,)
+
+    def test_gate_is_closed_and_checkpoint_staged(self):
+        rep, cur = {}, self.Cur()
+        self.assertTrue(R.apply_gate(cur, rep, self.payload()))
+        g = rep["outreach_gate"]
+        self.assertEqual((g["state"], g["open"], g["checkpoint_staged"], g["checkpoint"]["count"]), ("unverified", False, True, 2))
+        self.assertTrue(any("insert into public.ffm_suppression_expected" in q for q in cur.sql))
+        self.assertGreaterEqual(len(rep["next_steps"]), 4)
+        self.assertFalse(any("'verified'" in q and "set state = 'verified'" in q for q in cur.sql))      # the tool only ever closes the gate
+
+    def test_restore_marker_and_epoch_are_written_by_the_tool_and_the_gate_only_closes(self):
+        """v3: the restore writes a restore MARKER and recreates the epoch row (lower than the sender's outside mark), before it touches the gate row."""
+        for sup in (self.payload(), None):
+            rep, cur = {}, self.Cur()
+            self.assertTrue(R.apply_gate(cur, rep, sup, file_sha="ab" * 32))
+            m = [i for i, q in enumerate(cur.sql) if "insert into public.ffm_restore_markers" in q]
+            e = [i for i, q in enumerate(cur.sql) if "insert into public.ffm_epoch" in q]
+            g = [i for i, q in enumerate(cur.sql) if "insert into public.ffm_outreach_gate" in q]
+            self.assertEqual((len(m), len(e), len(g)), (1, 1, 1)); self.assertLess(m[0], g[0]); self.assertLess(e[0], g[0])
+            self.assertIn("sha256 " + "ab" * 8, cur.params[m[0]][0]); self.assertTrue(rep["outreach_gate"]["restore_marker_recorded"])
+            self.assertTrue(any("verified_epoch = null" in q and "attested_at = null" in q and "instance_fp = null" in q for q in cur.sql))     # every v3 verification column is cleared
+            self.assertFalse(any("delete from public.ffm_restore_markers" in q or "update public.ffm_restore_markers" in q for q in cur.sql))
+        rep = {}
+        class NoMarkers(self.Cur):
+            def fetchone(s):
+                if s.last and "ffm_restore_markers') is not null" in s.last: return (False,)
+                return super().fetchone()
+        self.assertFalse(R.apply_gate(NoMarkers(), rep, self.payload()))      # a schema without the marker table cannot be made safe: FAIL
+        self.assertIn("APPLY", rep["next_steps"][0])
+
+    def test_marker_gate_and_data_commit_together(self):
+        """The restore must not COMMIT between loading the data and writing the marker / closed gate (one transaction, one commit)."""
+        import os, re
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops", "restore_backup.py")) as fh: src = fh.read()
+        body = src[src.index("replay_schema_acl_and_comments(cur, schema, rep)\n"):src.index("apply_gate(cur, rep, sup")]
+        self.assertNotIn("conn.commit()", body)
+
+    def test_without_checkpoint_and_with_open_gate(self):
+        rep = {}
+        self.assertTrue(R.apply_gate(self.Cur(), rep, None))
+        self.assertFalse(rep["outreach_gate"]["checkpoint_staged"]); self.assertIn("no checkpoint", rep["outreach_gate"]["note"])
+        rep = {}
+        self.assertFalse(R.apply_gate(self.Cur(opened=True), rep, None))        # would allow outreach: the restore must FAIL
+
+    def test_old_schema_without_a_gate_FAILS_the_restore(self):
+        """PR #15 review finding 5: a restored schema with no outreach gate left outreach ungated yet reported PASS. It must FAIL."""
+        rep = {}
+        self.assertFalse(R.apply_gate(self.Cur(tables=False), rep, self.payload()))
+        self.assertEqual(rep["outreach_gate"]["state"], "NOT PRESENT"); self.assertIn("APPLY", rep["next_steps"][0]); self.assertIn("FAILS", rep["outreach_gate"]["note"])
+        rep = {}
+        self.assertFalse(R.apply_gate(self.Cur(tables=False), rep, None))
+
+    def test_untrusted_checkpoint_is_not_staged(self):
+        """Finding 6: without an independently recorded file hash the checkpoint in the file is ignored (verifying against it would be a tautology); the gate stays closed."""
+        rep, cur = {}, self.Cur()
+        self.assertTrue(R.apply_gate(cur, rep, self.payload(), checkpoint_trusted=False))
+        g = rep["outreach_gate"]
+        self.assertFalse(g["checkpoint_staged"]); self.assertIn("NOT staged", g["checkpoint_ignored"]); self.assertEqual((g["state"], g["open"]), ("unverified", False))
+        self.assertFalse(any("insert into public.ffm_suppression_expected" in q for q in cur.sql))
+
+    def test_a_restore_requires_expect_sha256_or_the_explicit_flag(self):
+        import subprocess, sys, os
+        here = os.path.dirname(os.path.abspath(__file__))
+        for args in (["--file", "x.enc", "--wipe"], ["--b2-latest"]):
+            r = subprocess.run([sys.executable, "-I", os.path.join(here, "ops", "restore_backup.py")] + args, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2); self.assertIn("--expect-sha256", r.stderr); self.assertIn("--i-accept-unverified-suppression", r.stderr)
+        r = subprocess.run([sys.executable, "-I", os.path.join(here, "ops", "restore_backup.py"), "--file", "x.enc", "--i-accept-unverified-suppression"], capture_output=True, text=True, env={**os.environ, "BACKUP_KEY": ""})
+        self.assertNotIn("a restore needs --expect-sha256", r.stderr)      # the flag is accepted (it then fails later for its own reasons: no such file / no key)

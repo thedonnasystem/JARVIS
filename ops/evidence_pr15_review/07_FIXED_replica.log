@@ -1,0 +1,170 @@
+applied 20261112_permissions_v1.sql
+applied 20261112_chat_meter.sql
+applied 20261112_capital_v1.sql
+applied 20261112_bank_v1.sql
+applied 20261112_learning_v1.sql
+applied 20261112_org_v1.sql
+applied 20261112_holding_v1.sql
+applied 20261112_ventures_v1.sql
+applied 20261112_agents_v1.sql
+applied 20261112_allocation_v1.sql
+applied 20261112_opportunity_v1.sql
+applied 20261112_webapp_v1.sql
+applied 20261112_venture_view_v1.sql
+applied 20261112_office_v1.sql
+applied 20261112_payments_v1.sql
+applied 20261112_assets_procedures_v1.sql
+applied 20261112_accounts_v1.sql
+applied 20261112_brief_v3.sql
+applied 20261112_push_v1.sql
+applied 20261112_setters_v1.sql
+applied 20261112_finance_rules_v1.sql
+applied 20261112_autonomy_v1.sql
+applied 20261112_setter_apply_v1.sql
+applied 20261113_phase1_repair_v1.sql
+applied 20261113_mission_guard_v1.sql
+applied 20261113_backup_schema_v1.sql
+applied 20261114_venture_generic_v1.sql
+applied 20261115_venture_deals_replies_v1.sql
+applied 20261115_inbox_needs_you_v1.sql
+applied 20261116_audit_hardening_v1.sql
+applied 20261116_evidence_sources_v1.sql
+applied 20261117_executor_gate_v1.sql
+applied 20261117_client_workspaces_v1.sql
+applied 20261118_executor_sweep_v1.sql
+applied 20261118_ffm_onboarding_v1.sql
+applied 20261119_ffm_consent_v1.sql
+applied 20261119_backup_exclude_client_pii_v1.sql
+applied 20261121_consent_evidence_v1.sql
+applied 20261121_suppression_integrity_v1.sql
+applied 20261112_lockdown_v1.sql
+re-applying every migration (must be safe to run twice)
+11111111-1111-1111-1111-111111111111|owner@example.com
+is_owner|t
+snapshot keys|agents
+snapshot keys|bank_alerts
+snapshot keys|capital
+snapshot keys|dayjob
+snapshot keys|drafts
+snapshot keys|due_leads
+snapshot keys|feed
+snapshot keys|ideas
+snapshot keys|leads
+snapshot keys|missions
+snapshot keys|needs_you
+snapshot keys|now
+snapshot keys|org_changes
+snapshot keys|pnl
+snapshot keys|policy
+snapshot keys|scorecard
+snapshot keys|spend_7d
+snapshot keys|spend_today_cents
+snapshot keys|state
+snapshot keys|systems
+snapshot keys|tasks
+snapshot keys|venture_stage
+snapshot keys|ventures
+create_venture|aea77887-c5d0-47b4-9834-a13cedd41131
+activate|
+opp scans|1
+office|9
+venture view|Acme Cleaning|0
+alloc|acme [active]: ceiling $30.00, AI used (30d) $0.00
+day-job-sales [active]: ceiling $0.00, AI used (30d) $0.00
+donna [active]: ceiling $0.00, AI used (30d) $0.00
+idea-lab [active]: ceiling $0.00, AI used (30d) $0.00
+real-estate [active]: ceiling $0.00, AI used (30d) $0.00
+Allocated $30.00 of $300.00 available.
+budget|Acme Cleaning monthly ceiling is now $25.00. Total allocated $25.00 of $300.00 available.
+prepare|{"reason": "Reserved; waiting for the owner.", "decision": "allow", "instruction_id": "7a2b656b-d204-465e-86a4-c15b1bf01968"}
+app_payments|[{"id": "7a2b656b-d204-465e-86a4-c15b1bf01968", "due": "2026-11-18", "cents": 1500, "payee": "Twilio", "short": "7a2b656b", "status": "awaiting_owner", "purpose": "Phone number for Donna"
+decide|Approved: $15.00 to Twilio. Pay it in RBC, then /pay done 7a2b656b <amount> <reference>.
+confirm|Recorded: $15.00 paid to Twilio (ref RBC-TEST-1). It will match when your bank statement is imported.
+ledger|expense|1500
+account req|{"reason": "Waiting for the owner.", "decision": "ask_owner", "request_id": "9e40cbd1-1a34-49ea-a79b-6fb9cd967009"}
+account decide|Approved: Twilio. Sign up at https://twilio.com, then /account done 9e40cbd1 <login email or username>.
+account done|Recorded: Twilio account (moe@biz.ca). Saved as a venture asset; no password stored.
+bank alerts|["No bank balance on record: spending is limited by the internal ledger only. Send /bank balance <amount>."]
+capital|28500|normal
+msgs|money|payment_instructions|t
+msgs|proposal|account_requests|t
+create_agent|active
+brief|t
+22222222-2222-2222-2222-222222222222|intruder@example.com
+intruder_refused_everywhere
+privileged_functions_not_callable_by_signed_in_users
+{"id": "965c8785-5580-403f-92b2-9f75a6566aeb"}
+{"ok": true, "name": "Sam Setter", "first_booking": true}
+{"ok": true, "name": "Sam Setter", "first_booking": false}
+{"ok": true, "name": "Sam Setter", "first_booking": false}
+{"ok": true, "name": "Sam Setter", "first_booking": false}
+setters_ok
+finance_rules_ok
+autonomy_ok
+lockdown_ok
+setter_apply_ok
+idempotency_and_audit_ok
+alerts_and_gate_ok
+mission_guard_ok
+step_limit_ok
+step_allowance_ok
+lifetime_ceiling_ok
+focus_isolation_ok
+draft_queue_ok
+chat_exemption_scoped_ok
+independent_controls_ok
+credit_probe_exemption_ok
+outreach_gate_default_closed_after_e2e|t
+integration: real engine + mission code against the replica database
+ok   mission created with budget 200 and 4 strict steps
+ok   mission reaches completed with real parsers + real triggers
+ok   exactly 4 step tasks despite the model proposing 6
+ok   every step has an assigned agent and stored output
+ok   verification and evaluation are not counted as steps
+ok   evidence stored with sources
+ok   mission spend recorded and within the 200c budget
+ok   backlog task untouched in focus mode
+ok   no non-mission AI calls were made
+ok   no outbox row was sent (dry run)
+ok   mode still dry_run
+ok   state changes audited
+ok   focus cleared and audited
+ok   after cleanup the backlog runs again
+ok   small-budget mission never exceeds its budget
+ok   the stopped task says why (mission budget)
+ok   small-budget mission did not complete and is not silently running
+ok   the rest of the board kept working
+ok   extra step refused by the database
+ok   D: resilient mission reaches completed
+ok   D: fabricated evidence cost exactly one counted attempt
+ok   D: evidence stored is traceable
+ok   D: exactly one eval repair and one verify repair, no loop
+ok   D: evidence downgrade audited
+ok   D: repairs went through the mission budget
+ok   D: repair calls are metered llm_calls
+ok   D: kill switch blocks recurrence
+ok   D: one successor, captured, same budget, runs decremented
+ok   D: overdue owner message sent once
+
+RESULT: ALL PASSED
+sqltest: audit_paths_check.sql
+sqltest: backup_exclude_check.sql
+sqltest: client_workspaces_check.sql
+sqltest: consent_integrity_check.sql
+sqltest: consent_review_fixes_check.sql
+sqltest: evidence_sources_check.sql
+sqltest: executor_gate_check.sql
+sqltest: executor_sweep_check.sql
+sqltest: ffm_consent_check.sql
+sqltest: ffm_onboarding_check.sql
+sqltest: inbox_needs_you_check.sql
+sqltest: pending_signoff_check.sql
+sqltest: venture_deals_replies_check.sql
+sqltest: venture_generic_check.sql
+consent-integrity rollback drill: ops/rollback_consent_integrity.sql removes the evidence/suppression/gate objects, restores the previous functions, and the migrations re-apply
+consent-integrity rollback drill OK (previous behaviour restored, then migrations re-apply and the consent checks pass again)
+sprint rollback drill: ops/rollback_sprint12.sql removes only the Sprint 1-2 objects and leaves Phase 1 and the suppression list in place
+sprint rollback drill OK (Phase 1 intact, suppression list kept, migrations re-apply cleanly)
+rollback drill: Phase 1 rollback must restore the live (Nov 12) function definitions exactly
+rollback drill OK (and the migrations re-apply cleanly afterwards)
+REPLICA OK

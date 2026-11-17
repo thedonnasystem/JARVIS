@@ -30,6 +30,7 @@ class World:
         self.config = kw.get("config", {"venture": "ottawa-cleanouts", "reply_sla_hours": 24, "reply_sla_is_default": True, "prospecting_brief_set": True, "drafts_ready": True})
         self.rpc_error = kw.get("rpc_error")
         self.rpc_reply = kw.get("rpc_reply", {})
+        self.send_reply = kw.get("send_reply", {"allowed": True, "reason": "ok"})   # what public.outreach_send_allowed answers (PR #15 review)
 
     def writes(self):
         return [c for c in self.calls if c[0] != "GET" and not c[1].endswith("/rpc/owner_seen")]
@@ -39,6 +40,9 @@ class World:
         if path.startswith("/rest/v1/rpc/"):
             name = path.rsplit("/", 1)[1]
             if self.rpc_error: raise http(self.rpc_error)
+            if name == "outreach_send_allowed":
+                if isinstance(self.send_reply, Exception): raise self.send_reply
+                return self.send_reply
             if name == "venture_config_get": return self.config
             if name == "record_lead_reply": return self.rpc_reply
             if name in ("create_deal",): return "d9999999-0000"
@@ -147,6 +151,17 @@ class Ops(unittest.TestCase):
 class Gate(unittest.TestCase):
     """Every approval path funnels through _outbox_casl_gate -> these checks."""
     OB = {"lead_id": "L1", "to_ref": "A@Acme.co", "channel": "email", "venture_id": "v-cl"}
+    def setUp(self):
+        _p = mock.patch("hq_gatemark.attest", return_value={"ok": True}); _p.start(); self.addCleanup(_p.stop)   # the sender mark vouches for the database (its own tests are in test_hq_gatemark)
+
+
+    def test_approval_requires_the_senders_outside_mark_to_vouch_for_the_database(self):
+        """F1: a same-instance restore inside the attestation window leaves the database's own gate open; an approval must not rest on that alone."""
+        w = World(leads=[{"id": "L1", "short_id": 12, "venture_id": "v-cl", "do_not_contact": False}], outbox=self.OB)
+        for att in ({"ok": False, "reason": "rollback_detected"}, {"ok": False, "reason": "sender_unanchored"}, {"ok": False, "reason": "hwm_unavailable"}):
+            with mock.patch.object(hq, "_request", w), mock.patch("hq_gatemark.attest", return_value=att) as a, mock.patch.object(V, "_rpc", side_effect=AssertionError("the database must not even be asked")):
+                why = V.dnc_problem("ob1")
+            self.assertIn("outside gate mark", why); self.assertIn(att["reason"], why); a.assert_called_once_with(force=True)
 
     def test_dnc_lead_blocks(self):
         w = World(leads=[{"id": "L1", "short_id": 12, "venture_id": "v-cl", "do_not_contact": True}], outbox=self.OB)
@@ -179,6 +194,34 @@ class Gate(unittest.TestCase):
                 return World.__call__(s, method, path, *a, **k)
         with mock.patch.object(hq, "_request", Gone(outbox=self.OB)):
             self.assertIsNone(V.dnc_problem("ob1"))  # migration not applied: the only tolerated failure
+
+    def test_gate_closed_blocks_approval(self):
+        """PR #15 review finding 2: dnc_problem must ask the database (gate, hash-only and phone suppressions), not only the plaintext list."""
+        w = World(outbox=self.OB, send_reply={"allowed": False, "reason": "suppression_unverified"})
+        with mock.patch.object(hq, "_request", w):
+            self.assertIn("outreach gate is closed", V.dnc_problem("ob1"))
+        w = World(outbox=self.OB, send_reply={"allowed": False, "reason": "suppressed"})   # e.g. a HASH-ONLY suppression the plaintext table does not show
+        with mock.patch.object(hq, "_request", w):
+            self.assertIn("refuses outreach", V.dnc_problem("ob1"))
+
+    def test_prohibited_channels_cannot_be_approved_even_if_the_database_would_say_yes(self):
+        """v3: telegram / post / whatsapp / unknown channels have no durable suppression identifier. The approval path refuses them BEFORE asking the database, and says why."""
+        for ch in ("telegram", "post", "mail", "whatsapp", "other", "fax", "Email", ""):
+            w = World(outbox={**self.OB, "channel": ch})
+            with mock.patch.object(hq, "_request", w):
+                got = V.dnc_problem("ob1")
+            self.assertIn("prohibited", got or "", repr(ch))
+            self.assertFalse([c for c in w.calls if "outreach_send_allowed" in c[1]], repr(ch))      # refused before any database decision
+        for ch in ("email", "text", "call"):
+            with mock.patch.object(hq, "_request", World(outbox={**self.OB, "channel": ch, "to_ref": "+1 613 555 0101" if ch != "email" else "a@acme.co"})):
+                self.assertIsNone(V.dnc_problem("ob1"), ch)
+
+    def test_outreach_check_fails_closed_on_error_or_odd_answer(self):
+        for reply in (http(500), http(404), RuntimeError("boom"), {"allowed": "true"}, {"allowed": None}, {}, None, "yes", [], [{"allowed": False}]):
+            with mock.patch.object(hq, "_request", World(outbox=self.OB, send_reply=reply)):
+                self.assertTrue(V.dnc_problem("ob1"), repr(reply))
+        with mock.patch.object(hq, "_request", World(outbox=self.OB, send_reply=[{"allowed": True}])):
+            self.assertIsNone(V.dnc_problem("ob1"))      # PostgREST may wrap a scalar answer in a one-element list
 
     def test_config_problem_fails_closed_except_donna(self):
         with mock.patch.object(hq, "_request", World(config={"drafts_ready": False})):

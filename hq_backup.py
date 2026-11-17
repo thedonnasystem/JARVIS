@@ -20,6 +20,7 @@ from decimal import Decimal
 
 import hq
 from hq_backup_keep import KEEP as KEEP_COLUMNS
+import hq_consent
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,11 @@ def _rpc(path: str, body: dict | None = None, **kw):
     finally:
         hq.APIKEY_OVERRIDE.reset(reset_gw)
         hq.AUTH_OVERRIDE.reset(reset)
+if "_rpc" not in globals():   # PR #16 (leak redaction) defines the real _rpc above this line (BACKUP_READER_JWT only, never the service key); this stand-in never replaces it
+    def _rpc(path: str, body: dict | None = None, **kw):
+        """Call a backup function as the backup identity. Before PR #16 lands the only backup identity is the service key, so this stand-in uses hq._request. When PR #16 is
+        merged, its _rpc (defined earlier in this module) wins and every backup function, the suppression export included, runs as backup_reader."""
+        return hq._request("POST", path, body, **kw)
 
 
 # ------------------------------------------------------------------ dump
@@ -510,6 +516,33 @@ def require_suppression_export(manifest: dict) -> None:
     if "not installed" in reason or "failed (" in reason or not reason:
         raise BackupError("the suppression list could not be exported (" + (reason[:120] or "no reason given") + "): refusing to write a backup without the opt-out list")
 
+def _suppression_section() -> tuple[bytes | None, dict]:
+    """The KEYED-HASH suppression list for the off-site file (never addresses or numbers: those are client PII and stay out of the plain file).
+    Returns (json bytes or None, manifest entry). FAILS CLOSED (raises BackupError, so the run records backup_failed and uploads nothing) when the export is refused
+    (any HTTP error, e.g. 401/403 because the backup identity may not run it), missing (404: function not installed), unreachable, or not a valid keyed-hash export.
+    The ONE case that continues without the list is the database's own explicit answer that the owner has not set the suppression key yet: then no list can exist,
+    the manifest says included: false, the owner is told, and the restore tool leaves the outreach gate closed with no checkpoint (drill T6).
+    The database function returns only HMAC values made with the owner-held suppression key, which is separate from BACKUP_KEY. It is called through _rpc
+    (the backup identity: backup_reader with PR #16, see migration 20261121_suppression_integrity_v1 section 7)."""
+    try:
+        exp = _rpc("/rest/v1/rpc/backup_suppression_export", {}, timeout=120, exact=True)
+    except BackupError:
+        raise                                          # e.g. PR #16's _rpc without BACKUP_READER_JWT: its own reason
+    except urllib.error.HTTPError as e:
+        raise BackupError("suppression list export " + ("is not installed (backup_suppression_export() missing)" if e.code == 404 else f"was refused (backup_suppression_export() HTTP {e.code})")
+                          + ": refusing to write a backup without the opt-out list") from None
+    except Exception as e:
+        raise BackupError(f"suppression list export failed ({type(e).__name__}): refusing to write a backup without the opt-out list") from None
+    if isinstance(exp, dict) and exp.get("included") is False and set(exp) <= {"version", "included", "reason"} and isinstance(exp.get("reason"), str) and exp.get("reason"):
+        return None, {"included": False, "reason": exp["reason"][:200]}     # the database says: no suppression key set (owner action pending)
+    probs = hq_consent.validate_suppression_export(exp) if isinstance(exp, dict) and exp.get("included") is True else ["not a suppression export"]
+    if probs:
+        raise BackupError("suppression list export rejected (" + probs[0][:120] + "): refusing to write a backup without the opt-out list")
+    clean = {k: exp[k] for k in ("version", "included", "key_check", "count", "email_count", "phone_count", "hash", "macs")}   # whitelist: nothing else can ride along
+    data = json.dumps(clean, separators=(",", ":"), sort_keys=True).encode()
+    return data, {"included": True, "count": clean["count"], "email_count": clean["email_count"], "phone_count": clean["phone_count"], "hash": clean["hash"],
+                  "key_check": clean["key_check"], "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+
 
 def dump() -> tuple[bytes, dict]:
     """Returns (plain tar.gz bytes, manifest). Raises if any table cannot be read completely."""
@@ -558,12 +591,15 @@ def dump() -> tuple[bytes, dict]:
     manifest["excluded"] = sorted((str(e.get("table")), str(e.get("class"))) for e in pol["excluded"] if isinstance(e, dict))    # names and classes only, never data
     manifest["excluded"] = [list(x) for x in manifest["excluded"]]
     manifest["unclassified_excluded"] = sorted(str(t) for t in pol["unclassified"])
+    sup_data, manifest["suppression"] = _suppression_section()
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for t in names:
             data, n = data_by_table[t]
             _add(tar, f"data/{t}.jsonl", data)
             manifest["tables"][t] = {"rows": n, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        if sup_data:
+            _add(tar, "suppression/hashes.json", sup_data)
         if schema:
             sdata = json.dumps(schema, separators=(",", ":"), sort_keys=True, default=str).encode()
             _add(tar, "schema.json", sdata)
@@ -608,6 +644,12 @@ def verify(encrypted: bytes, manifest: dict) -> list[str]:
                     problems.append(f"{t}: expected {meta['rows']} rows, found {got}")
                 if hashlib.sha256(raw).hexdigest() != meta["sha256"]:
                     problems.append(f"{t}: checksum differs")
+            sup = manifest.get("suppression") or {}
+            if sup.get("included"):
+                f = tar.extractfile("suppression/hashes.json")
+                raw = b"" if f is None else f.read()
+                if hashlib.sha256(raw).hexdigest() != sup.get("sha256"):
+                    problems.append("suppression/hashes.json checksum differs")
             if manifest.get("schema"):
                 f = tar.extractfile("schema.json")
                 if f is None or hashlib.sha256(f.read()).hexdigest() != manifest["schema"]["sha256"]:
@@ -741,6 +783,12 @@ def preflight() -> list[dict]:
     try:
         sch = get_schema()
         add("Database schema snapshot function (backup_schema) installed", "pass" if sch else "warn", "" if sch else "not installed; backups would be data-only")
+        try:
+            _d, sup = _suppression_section()
+            add("Suppression list exports as keyed hashes (owner set the suppression key)", "pass" if sup.get("included") else "warn",
+                "" if sup.get("included") else sup.get("reason", "") + " - a restore will then have NO checkpoint and outreach stays blocked until the owner rebuilds it from the provider backup")
+        except BackupError as e:
+            add("Suppression list exports as keyed hashes (owner set the suppression key)", "fail", str(e)[:200] + " - every backup run fails until this is fixed")
     except BackupError as e:
         add("Database reachable as the backup identity", "fail", str(e)[:160])
     except Exception as e:
@@ -956,6 +1004,8 @@ def run(force: bool = False) -> dict:
             logger.warning("backup: audit row not written")
         if not manifest["complete"]:
             _tell_owner("Backup saved, but it holds data only: the schema snapshot function is not installed in the database yet. Ask for the backup_schema migration.")
+        if not (manifest.get("suppression") or {}).get("included"):
+            _tell_owner("Backup saved, but WITHOUT the opt-out (suppression) list: the suppression key is not set. A restore from this file keeps all outreach blocked until you rebuild the list. Set the key (ffm_set_key) to fix this.")
     finally:
         _RUN_LOCK.release()
     return out

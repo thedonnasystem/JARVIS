@@ -75,6 +75,11 @@ def record_reply(ref: str, kind: str, note: str = "", by: str = OWNER) -> str:
     r = r if isinstance(r, dict) else {}
     name = lead.get("name") or "lead"
     if kind == "unsubscribe":
+        try:  # the opt-out just moved the database's suppression epoch: advance the sender's OUTSIDE high-water mark now, so a restore to a point just before it is detectable (best effort, never blocks)
+            import hq_gatemark
+            hq_gatemark.observe()
+        except Exception:
+            pass
         return (f"#{ref.lstrip('#')} {name} is now do-not-contact. {r.get('leads_marked', 1)} lead(s) sharing the address marked across all ventures; "
                 f"{r.get('drafts_rejected', 0)} open draft(s) rejected. Nothing more will be drafted or sent to them.")
     if r.get("unchanged"):
@@ -220,6 +225,9 @@ def dnc_problem(outbox_id: str) -> str | None:
         lead = (_get(f"leads?id=eq.{_q(ob['lead_id'])}&select=do_not_contact&limit=1") or [{}])[0]
         if lead.get("do_not_contact"):
             return "Cannot approve: this lead is do-not-contact (opted out). The draft stays unsent."
+    why_ch = hq_mail.channel_problem(ob.get("channel", "email"))
+    if why_ch:
+        return f"Cannot approve: person-directed outreach on {str(ob.get('channel'))[:20]} is prohibited ({why_ch}): there is no durable suppression identifier for it. The draft stays unsent."
     raw = (ob.get("to_ref") or "").strip()
     to = hq_mail.normalize_addr(raw)
     if raw and ob.get("channel", "email") == "email" and to is None:
@@ -232,6 +240,25 @@ def dnc_problem(outbox_id: str) -> str | None:
             return "Cannot approve: could not check the do-not-contact list. Try again."
     except Exception:
         return "Cannot approve: could not check the do-not-contact list. Try again."
+    # the database's own decision (PR #15 review): outreach gate, lead flag, plaintext AND hash-only suppressions, phone numbers for text/call. Fail closed on ANY error,
+    # including a missing function: an approval the database would refuse anyway must not be offered, and an unanswerable question is a no.
+    # F1: the database's answer is only as good as the database. An approval must not rest on gate state that a same-instance restore can bring back, so the sender first compares the database with its
+    # OUTSIDE high-water mark (the same check deliver_approved makes before a send); if that cannot vouch for the database, nothing is approved.
+    import hq_gatemark
+    att = hq_gatemark.attest(force=True)
+    if not att.get("ok"):
+        return f"Cannot approve: the sender's outside gate mark does not vouch for the database ({str(att.get('reason'))[:40]}). Run /gate for the next step. The draft stays unsent."
+    try:
+        got = _rpc("outreach_send_allowed", {"p_outbox": outbox_id})
+    except Exception:
+        return "Cannot approve: could not check the outreach gate and suppression lists. Try again."
+    if isinstance(got, list) and len(got) == 1:
+        got = got[0]
+    if not (isinstance(got, dict) and got.get("allowed") is True):
+        why = str(got.get("reason")) if isinstance(got, dict) else "unexpected answer"
+        if why == "suppression_unverified":
+            return "Cannot approve: the suppression list has not been verified, so the outreach gate is closed (after a restore or on a fresh database). The owner must verify it first."
+        return f"Cannot approve: the database refuses outreach to this recipient ({why[:40]}). The draft stays unsent."
     return None
 
 

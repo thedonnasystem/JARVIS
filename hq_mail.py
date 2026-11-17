@@ -7,6 +7,7 @@ import json, os, re, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 
 import hq
+import hq_gatemark
 import hq_policy
 
 API = "https://api.resend.com/emails"
@@ -83,8 +84,24 @@ def profile_refusal(row: dict, prof: dict | None, slug: str | None) -> str | Non
     return None
 
 
+# Person-directed outbound is allowed ONLY on channels with a durable suppression identifier (an address or a number). Mirror of public.outreach_channel_problem.
+# hq_mail itself sends email only; text and call are listed so the approval path agrees with the database. Everything else is refused here AND at the database.
+ALLOWED_CHANNELS = ("email", "text", "call")
+PROHIBITED_CHANNELS = ("telegram", "post", "mail", "whatsapp", "signal", "other")
+
+
+def channel_problem(channel) -> str | None:
+    """None for a channel that has a durable suppression identifier; otherwise a reason code. Fails closed: a missing or odd channel is a no."""
+    if channel in ALLOWED_CHANNELS:
+        return None
+    return "channel_prohibited" if channel in PROHIBITED_CHANNELS else "unknown_channel"
+
+
 def refusal(row: dict, lead: dict | None = None) -> str | None:
     """Why this draft must NOT be sent right now, or None if it may."""
+    ch = row.get("channel", "email")
+    if ch != "email":
+        return f"channel {ch!r} is not sent by this module ({channel_problem(ch) or 'email only'}): no person-directed outreach without a durable suppression identifier"
     to = (row.get("to_ref") or "").strip()
     body = row.get("body") or ""
     if not EMAIL.match(to) or normalize_addr(to) is None:
@@ -127,18 +144,31 @@ def normalize_addr(p) -> str | None:
 
 
 def suppressed(address) -> bool:
-    """True when the address is on the do-not-contact list, or when that cannot be checked (fail closed: never send on doubt)."""
+    """True when the address is on the do-not-contact list (plaintext OR hash-only entries, via the database's is_suppressed), or when that cannot be checked
+    (fail closed: ANY error, a missing function or an unexpected answer blocks the send)."""
     if not (address or "").strip():
         return False
     a = normalize_addr(address)
     if a is None:
         return True  # not one clean address (a list, or unparseable): never send on doubt
     try:
-        return bool(_get(f"contact_suppressions?address=eq.{_q(a)}&select=address&limit=1"))
-    except urllib.error.HTTPError as e:
-        return e.code != 404  # table absent = migration not applied, nothing suppressed yet; any other failure blocks
+        got = hq._request("POST", "/rest/v1/rpc/is_suppressed", {"p_address": a}, timeout=10)
     except Exception:
         return True
+    return got is not False   # only an explicit JSON false is "not suppressed"
+
+
+def send_allowed(outbox_id) -> bool:
+    """The ONE question every send path asks, before it claims a row and again immediately before the provider call: public.outreach_send_allowed(outbox_id).
+    It covers the outreach gate (default-deny), the lead flag, the plaintext AND hash-only suppression lists, and phone numbers for the text/call channels.
+    Fails closed: an error, a timeout, a missing function (migration not applied) or any answer other than {"allowed": true} is a no."""
+    try:
+        got = hq._request("POST", "/rest/v1/rpc/outreach_send_allowed", {"p_outbox": str(outbox_id)}, timeout=10)
+    except Exception:
+        return False
+    if isinstance(got, list) and len(got) == 1:
+        got = got[0]
+    return isinstance(got, dict) and got.get("allowed") is True
 
 
 def _post(row: dict) -> bool:
@@ -172,7 +202,10 @@ def _mark_sent(row: dict) -> None:
 
 def _claim(row: dict) -> bool:
     """At-most-once: stamp sent_at on the still-approved, unsent row BEFORE posting. Only the caller that gets the row back may post, so two
-    overlapping engines (a deploy overlap) or a retry after a failed bookkeeping write can never send the same email twice. Any error: no claim."""
+    overlapping engines (a deploy overlap) or a retry after a failed bookkeeping write can never send the same email twice. Any error: no claim.
+    The outreach decision is asked FIRST (send_allowed): with the gate closed or the recipient suppressed nothing is claimed (the database trigger refuses the claim too)."""
+    if not send_allowed(row.get("id")):
+        return False
     try:
         got = hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(row['id'])}&status=eq.approved&sent_at=is.null",
                           {"sent_at": datetime.now(timezone.utc).isoformat()}, prefer="return=representation")
@@ -207,8 +240,11 @@ def deliver_approved(limit: int = 5) -> dict:
             out["reason"] = "not configured"; return out
         if not live():
             out["reason"] = "not live"; return out
+        a = hq_gatemark.attest()   # the sender's OUTSIDE high-water mark against the database: a restored (rolled-back) database closes its own gate here, and an unanchored sender sends nothing
+        if not a.get("ok"):
+            out["reason"] = "gate: " + str(a.get("reason")); return out
         rows = _get(f"outbox?status=eq.approved&channel=eq.email&sent_at=is.null&order=created_at.asc&limit={int(limit)}"
-                    "&select=id,to_ref,body,subject,lead_id,agent,venture_id")
+                    "&select=id,to_ref,body,subject,lead_id,agent,venture_id,channel")
         for row in rows:
             lead = None
             if row.get("lead_id"):
@@ -228,12 +264,14 @@ def deliver_approved(limit: int = 5) -> dict:
                 out["skipped"] += 1; continue
             posted = False
             try:
-                posted = _post(row)
+                # the gate or a suppression may have changed since the checks above (and since the claim): ask again IMMEDIATELY before the provider call. Fails closed.
+                if send_allowed(row.get("id")):
+                    posted = _post(row)
             finally:
                 if not posted:
                     _release(row)
             if not posted:
-                out["failed"] += 1; continue
+                out["failed"] += 1; continue   # (includes "the second check said no": the claim was released above and nothing was posted)
             try:
                 _mark_sent(row); out["sent"] += 1
             except Exception as e:  # the email is out: never retry it, tell the owner's audit trail instead

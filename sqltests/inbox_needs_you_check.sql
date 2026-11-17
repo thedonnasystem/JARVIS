@@ -2,6 +2,11 @@
 --   psql "$REPLICA_URL" -v ON_ERROR_STOP=1 -f sqltests/inbox_needs_you_check.sql      (scripts/replica/run.sh runs every sqltests/*.sql)
 -- One transaction, rolled back. Any failed assertion raises. Rows are seeded with a unique tag so leftovers from other tests cannot interfere.
 begin;
+-- fixture: the outreach gate is closed by default (20261121_suppression_integrity_v1); this test creates approved drafts, so open it for the transaction
+set local session_replication_role = replica;
+insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, verified_marker_id = (select coalesce(max(id),0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
+set local session_replication_role = origin;
 do $$
 declare r jsonb; ids text[]; e jsonb; msg_a1 uuid; msg_a2 uuid; msg_q uuid; msg_stale uuid; msg_dec uuid; msg_esc uuid; esc_pending uuid; esc_free uuid;
         ar_live uuid; ar_dead uuid; mis uuid; pay uuid; t_ok uuid; t_credit uuid; t_old uuid; t_mis uuid; n int; kinds text[]; denied boolean; ob_done uuid; ob_live uuid;
@@ -70,7 +75,9 @@ begin
 
   -- approval messages whose referenced row is gone or no longer pending are hidden (random ref_id, an outbox row already approved, an account already created)
   insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-GHOST-OUTBOX missing row', true, 'outbox', gen_random_uuid());
+  set local session_replication_role = replica;   -- a legacy approved draft with no address (the outbox guard now refuses to create one: an approved row is delivery-bound)
   insert into outbox (channel, body, status, created_at) values ('email', 'INBOX-OB approved already', 'approved', now() - interval '1 day') returning id into ob_done;
+  set local session_replication_role = origin;
   insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id) values ('jarvis', 'proposal', 'INBOX-GHOST-OUTBOX2 not pending', true, 'outbox', ob_done);
   insert into outbox (channel, body, status) values ('email', 'INBOX-OB draft', 'draft') returning id into ob_live;
   insert into owner_messages (from_agent, kind, body, needs_decision, ref_table, ref_id, created_at) values ('jarvis', 'proposal', 'INBOX-LIVE-OUTBOX pending draft', true, 'outbox', ob_live, now() - interval '10 minutes');

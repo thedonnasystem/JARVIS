@@ -1,4 +1,5 @@
 import re
+import hashlib
 import io, json, logging, os, sys, tarfile, unittest, urllib.error
 from datetime import datetime, timezone
 from unittest import mock
@@ -39,6 +40,7 @@ POLICY = {"exported": ["ideas", "ledger", "tasks"], "excluded": [{"table": "lead
 
 
 EPOCH = {"seq": 1, "rows": {"leads": 1}, "denylist_rows": 3, "code": "x"}      # what backup_epoch() returns; tests mutate it to model a change between reads
+NO_KEY_EXPORT = {"version": 1, "included": False, "reason": "the owner has not set the suppression key, so no keyed hashes can be exported"}
 
 
 def fake_request(method, path, body=None, prefer=None, timeout=30, exact=False):
@@ -51,6 +53,8 @@ def fake_request(method, path, body=None, prefer=None, timeout=30, exact=False):
     if method == "POST" and path.endswith("/rpc/backup_snapshot"):                       # the one-statement database snapshot (the only read path: no raw-table fallback exists)
         return {"data": {t: [{"id": i, "v": f"{t}{i}", "note": "café \U0001F600"} for i in range(ROWS.get(t, 0))] for t in POLICY["exported"]},
                 "schema": SCHEMA, "method": "x", "policy": POLICY, "redaction": REDACTION}
+    if method == "POST" and path.endswith("/rpc/backup_suppression_export"):
+        return NO_KEY_EXPORT     # the database's own "suppression key not set" answer: the only case in which a backup continues without the opt-out list
     if method == "GET" and "/audit_log" in path:
         return []
     if method == "GET":
@@ -72,7 +76,7 @@ class FakeStore:
         self.posts = []
 
     def __call__(self, method, path, body=None, prefer=None, timeout=30, exact=False):
-        if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch", "/rpc/backup_snapshot", "/rpc/backup_snapshot_cost")):
+        if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch", "/rpc/backup_snapshot", "/rpc/backup_snapshot_cost", "/rpc/backup_suppression_export")):
             self.posts.append((path, body))
             return None
         return fake_request(method, path, body, prefer)
@@ -127,6 +131,153 @@ class Dump(unittest.TestCase):
         evil = {"constraints": [{"table": "t", "type": "p", "def": 'PRIMARY KEY ("a;drop")'}]}
         self.assertEqual(B._pk_order(evil, "t"), "&order=id.asc")
 
+
+
+class SuppressionSection(unittest.TestCase):
+    """The keyed-hash suppression list in the off-site file (consent integrity): hashes only, whitelisted fields, never fatal, always declared in the manifest."""
+    import hq_consent as _hc
+    MACS = [("email", "a" * 64), ("email", "b" * 64), ("phone", "c" * 64)]
+
+    def export(self, macs=None, **over):
+        macs = self.MACS if macs is None else macs
+        e = {"version": 1, "included": True, "key_check": "f" * 64, "macs": [list(m) for m in sorted(macs)], **self._hc.suppression_digest(macs)}
+        e.update(over); return e
+
+    def req(self, result=None, exc=None):
+        def f(method, path, body=None, prefer=None, timeout=30, exact=False):
+            if path.endswith("/rpc/backup_suppression_export"):
+                if exc: raise exc
+                return result
+            return fake_request(method, path, body, prefer)
+        return f
+
+    def dump(self, **kw):
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(**kw)):
+            return B.dump()
+
+    def test_included_and_declared(self):
+        blob, m = self.dump(result=self.export())
+        tar = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz")
+        self.assertIn("suppression/hashes.json", tar.getnames())
+        raw = tar.extractfile("suppression/hashes.json").read()
+        self.assertEqual(m["suppression"]["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual((m["suppression"]["included"], m["suppression"]["count"], m["suppression"]["email_count"], m["suppression"]["phone_count"]), (True, 3, 2, 1))
+        self.assertEqual(json.loads(raw)["macs"], [["email", "a" * 64], ["email", "b" * 64], ["phone", "c" * 64]])
+
+    def test_extra_fields_cannot_ride_along(self):
+        blob, m = self.dump(result=self.export(note="alice@example.com", addresses=["alice@example.com"]))
+        raw = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").extractfile("suppression/hashes.json").read().decode()
+        self.assertNotIn("alice", raw); self.assertEqual(sorted(json.loads(raw)), ["count", "email_count", "hash", "included", "key_check", "macs", "phone_count", "version"])
+
+    def test_key_not_set_is_the_only_case_that_continues_and_it_says_why(self):
+        """The database's own answer "the owner has not set the suppression key": no list can exist; the backup is written, the manifest says so, the owner is told."""
+        blob, m = self.dump(result={"version": 1, "included": False, "reason": "the owner has not set the suppression key"})
+        self.assertFalse(m["suppression"]["included"]); self.assertIn("suppression key", m["suppression"]["reason"]); self.assertTrue(m["complete"])
+        self.assertNotIn("suppression/hashes.json", tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz").getnames())
+        store = FakeStore()
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=store), mock.patch.object(B, "put_files", return_value={"target": "put", "files": {}}):
+            r = B.run(force=True)
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(any("WITHOUT the opt-out" in (b or {}).get("body", "") for p, b in store.posts), "owner not told that the backup has no opt-out list")
+
+    FAIL_CLOSED = [("empty body", dict(result=None)), ("404 not installed", dict(exc=urllib.error.HTTPError("u", 404, "no fn", {}, None))),
+                   ("401 refused", dict(exc=urllib.error.HTTPError("u", 401, "jwt", {}, None))), ("403 permission denied", dict(exc=urllib.error.HTTPError("u", 403, "denied", {}, None))),
+                   ("500", dict(exc=urllib.error.HTTPError("u", 500, "boom", {}, None))), ("network", dict(exc=OSError("net"))),
+                   ("count mismatch", dict(bad="count")), ("empty list with wrong hash", dict(bad="empty")), ("plaintext mac", dict(bad="plain")),
+                   ("included false with extra fields", dict(result={"version": 1, "included": False, "reason": "x", "macs": [["email", "alice@example.com"]]})),
+                   ("included false without a reason", dict(result={"version": 1, "included": False})), ("not a dict", dict(result=["email", "a" * 64]))]
+
+    def _case(self, kw):
+        kw = dict(kw); bad = kw.pop("bad", None)
+        if bad == "count": kw["result"] = self.export(count=99)
+        if bad == "empty": kw["result"] = self.export(macs=[], hash="0" * 64)
+        if bad == "plain": kw["result"] = {**self.export(), "macs": [["email", "alice@example.com"]]}
+        return kw
+
+    def test_refused_missing_or_invalid_export_fails_the_dump(self):
+        for name, kw in self.FAIL_CLOSED:
+            with self.subTest(name):
+                with self.assertRaises(B.BackupError) as cm:
+                    self.dump(**self._case(kw))
+                self.assertIn("opt-out list", str(cm.exception), name)
+                self.assertNotIn("alice", str(cm.exception), name)
+
+    def test_refused_export_fails_the_run_records_backup_failed_and_uploads_nothing(self):
+        for name, kw in self.FAIL_CLOSED:
+            store = FakeStore(); kw = self._case(kw)
+            def req(method, path, body=None, prefer=None, timeout=30, exact=False, kw=kw):
+                if path.endswith("/rpc/backup_suppression_export"):
+                    if kw.get("exc"): raise kw["exc"]
+                    return kw.get("result")
+                return store(method, path, body, prefer)
+            with self.subTest(name), mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req), mock.patch.object(B, "put_files") as put:
+                r = B.run(force=True)
+                self.assertFalse(r["ok"], name); self.assertIn("opt-out list", r["reason"], name)
+                put.assert_not_called()
+                self.assertEqual([b["action"] for p, b in store.posts if p.endswith("/audit_log")], ["backup_failed"], name)
+
+    def test_export_goes_through_the_backup_identity_rpc(self):
+        """hq_backup reaches the export through _rpc (with PR #16: BACKUP_READER_JWT / backup_reader), never directly with hq._request."""
+        calls = []; real_rpc = B._rpc
+        def rpc(path, body=None, **kw):
+            calls.append(path)
+            return self.export() if path.endswith("/rpc/backup_suppression_export") else real_rpc(path, body, **kw)
+        def req(method, path, body=None, prefer=None, timeout=30, exact=False):
+            self.assertFalse(path.endswith("/rpc/backup_suppression_export"), "export called with the service key, not through _rpc")
+            return fake_request(method, path, body, prefer)
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req), mock.patch.object(B, "_rpc", side_effect=rpc):
+            _, m = B.dump()
+        self.assertIn("/rest/v1/rpc/backup_suppression_export", calls); self.assertTrue(m["suppression"]["included"])
+        # a refusal raised by _rpc itself (PR #16's _rpc without BACKUP_READER_JWT) fails with that reason
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=fake_request), \
+             mock.patch.object(B, "_rpc", side_effect=B.BackupError("BACKUP_READER_JWT is not set")), self.assertRaises(B.BackupError) as cm:
+            B._suppression_section()
+        self.assertIn("BACKUP_READER_JWT", str(cm.exception))
+
+    def test_stand_in_rpc_never_replaces_an_earlier_definition(self):
+        """After the merge with PR #16 the module holds PR #16's (unguarded, JWT-only) _rpc first; the guarded stand-in must not override it. Holds on both trees."""
+        import ast, inspect
+        tree = ast.parse(inspect.getsource(B))
+        guarded = [n for n in tree.body if isinstance(n, ast.If) and any(isinstance(b, ast.FunctionDef) and b.name == "_rpc" for b in n.body)]
+        self.assertEqual(len(guarded), 1)
+        plain = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_rpc"]
+        self.assertTrue(all(n.lineno < guarded[0].lineno for n in plain), "an unguarded _rpc AFTER the stand-in would be shadowed / shadow it")
+        effective = B._rpc.__code__.co_firstlineno
+        if plain:
+            self.assertEqual(effective, plain[0].lineno, "the stand-in replaced PR #16's _rpc")
+        else:
+            self.assertGreater(effective, guarded[0].lineno)
+        ns = {"_rpc": "pr16", "hq": None}
+        exec(compile(ast.Module(body=guarded, type_ignores=[]), "x", "exec"), ns)
+        self.assertEqual(ns["_rpc"], "pr16")
+
+    def test_verify_checks_the_suppression_member(self):
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(result=self.export())):
+            blob, m = B.dump()
+            self.assertEqual(B.verify(B.encrypt(blob), m), [])
+            bad = json.loads(json.dumps(m)); bad["suppression"]["sha256"] = "0" * 64
+            self.assertTrue(any("suppression" in p for p in B.verify(B.encrypt(blob), bad)))
+
+    def test_no_plaintext_and_no_key_in_the_file(self):
+        blob, m = self.dump(result=self.export())
+        tar = tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz")
+        everything = b"".join(tar.extractfile(n).read() for n in tar.getnames() if tar.getmember(n).isfile())
+        for needle in (b"@", b"suppression_hmac_key"):
+            self.assertNotIn(needle, everything)
+
+    def test_preflight_fails_when_the_export_is_refused(self):
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(exc=urllib.error.HTTPError("u", 403, "denied", {}, None))):
+            row = next(r for r in B.preflight() if r["check"].startswith("Suppression list exports"))
+        self.assertEqual(row["status"], "fail"); self.assertIn("refused", row["detail"])
+
+    def test_preflight_warns_without_the_list(self):
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(result={"version": 1, "included": False, "reason": "no key"})):
+            pf = B.preflight()
+        row = next(r for r in pf if r["check"].startswith("Suppression list exports"))
+        self.assertEqual(row["status"], "warn"); self.assertIn("NO checkpoint", row["detail"])
+        with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=self.req(result=self.export())):
+            row = next(r for r in B.preflight() if r["check"].startswith("Suppression list exports"))
+        self.assertEqual(row["status"], "pass")
 
 
 class Consistency(unittest.TestCase):
@@ -623,7 +774,7 @@ class ReviewFixes(unittest.TestCase):
                 raise urllib.error.URLError("down")
             if method == "POST" and path.endswith("/audit_log"):
                 audits.append(body["action"]); return None
-            if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch", "/rpc/backup_snapshot", "/rpc/backup_snapshot_cost")):
+            if method == "POST" and not path.endswith(("/rpc/backup_schema", "/rpc/backup_export_policy", "/rpc/backup_epoch", "/rpc/backup_snapshot", "/rpc/backup_snapshot_cost", "/rpc/backup_suppression_export")):
                 return None
             return fake_request(method, path, body, prefer)
         with mock.patch.dict(os.environ, ENV), mock.patch("hq._request", side_effect=req), \

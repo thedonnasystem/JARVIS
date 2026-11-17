@@ -1,0 +1,79 @@
+NOTICE:  database "drill_restore_32614" does not exist, skipping
+PASS  1 backup ran through hq_backup.run() and uploaded  [766 rows, sha256 f7a9b61960e27e1f..., complete=True]
+PASS  2 off-site store holds the encrypted file + sha256 sidecar  [hq/hq-20261115T161537Z.tar.gz.enc, hq/hq-20261115T161537Z.tar.gz.enc.sha256]
+PASS  3 stored object is ciphertext (no plaintext leak)
+PASS  4 stored sha256 equals sha256 of stored bytes
+PASS  5 audit_log recorded backup_ok with checksum and no secret
+PASS  6 restore tool: download with READ-only key, sha256 sidecar + audit checksum match, decrypts
+PASS  7 restore tool: overall result  [{"file_checksum_decrypt_manifest": "PASS", "schema_rebuilt": "PASS", "data_loaded": "PASS", "constraints_indexes_triggers_views_policies_grants": "PASS", "every_row_identical": "PASS", "schema_identical": "PASS", "smoke_tests": "PASS", "outreach_gate_closed_default_deny": "PASS"} ]
+PASS  8 business data survives: Tasks and missions  [{"tasks": "86 -> 86", "missions": "2 -> 2"}]
+PASS  8 business data survives: Company memory  [{"memory": "124 -> 124", "company_profile": "0 -> 0", "handbook": "1 -> 1"}]
+PASS  8 business data survives: Spending ledger and LLM calls  [{"ledger": "35 -> 35", "llm_calls": "50 -> 50", "spend_reservations": "1 -> 1", "capital_policy": "1 -> 1"}]
+PASS  8 business data survives: Audit logs  [{"audit_log": "283 -> 283", "action_log": "2 -> 2"}]
+PASS  8 business data survives: Leads and outbox drafts (excluded by policy)  [{"(none)": "absent from backup, as required"}]
+PASS  9 schema identical after restore: functions  [199 -> 199]
+PASS  9 schema identical after restore: triggers  [46 -> 46]
+PASS  9 schema identical after restore: indexes  [32 -> 32]
+PASS  9 schema identical after restore: constraints  [347 -> 347]
+PASS  9 schema identical after restore: table_grants  [1823 -> 1823]
+PASS  9 schema identical after restore: views  [5 -> 5]
+PASS  9 schema identical after restore: tables  [83 -> 83]
+PASS  10 smoke test on restored DB: capital_mode() runs  [('normal',)]
+PASS  10 smoke test on restored DB: spend gateway refuses when kill switch is on  [Kill switch is on.]
+PASS  11 constraint warnings (rows violating FKs)
+PASS  12 independent check: every table's content hash is identical in source and restored DB  [53 tables, 766 rows; differing: []]
+PASS  14 comments (table, column, view, function) and schema USAGE grants are restored  [('Reference table: it\'s "quoted" 美味', 'human label', 'view comment', 'returns the capital mode') (True, True)]
+PASS  P1 CLIENT PII IS NOT IN THE OFF-SITE FILE: no client table files, and none of the seeded lead names/emails/phones appear in any data file  [client files: []]
+PASS  P2 the file carries the export policy (what was excluded and why) and the schema still rebuilds the empty client tables
+PASS  2b the backup used the single-statement database snapshot (consistent=True)  [{"attempts": 1, "consistent": true, "method": "single SQL statement snapshot (all tables + schema)"}]
+PASS  2d backup_snapshot/backup_schema are STABLE (single-snapshot guarantee depends on it) and only service_role may execute  [[('backup_schema', 's', False, False, True), ('backup_snapshot', 's', False, False, True)]]
+PASS  2e negative control: two separate statements DO show cross-table skew under the same writer (so 2c can fail)  [skewed reads seen: 1]
+PASS  2c under concurrent two-table transactions, every snapshot is internally consistent  [25 snapshots while 1836 paired transactions committed; inconsistent snapshots: 0]
+PASS  13 restored sequences continue after the data (next serial id does not collide) and view keeps security_invoker  [next id 26, view options [('true',)]]
+PASS  C1 the off-site file carries the suppression list as KEYED HASHES, equal to the independently computed HMACs (every opt-out in the source)  [{"bytes": 618, "count": 5, "email_count": 3, "hash": "22a1442cb973787f7122349f441884abeb79d29fce7d2a8571f0b11a074b7b86", "included": true, "key_check": "71737b4c203b16b7ff1614e911ece7bbb33df7b2c0cbc38]
+PASS  C2 no opted-out address, no opted-out number and not the suppression key appear anywhere in the (decrypted) backup  [[]]
+PASS  C3 the suppression key is a different secret from BACKUP_KEY
+PASS  C4 contact_suppressions, ffm_phone_suppressions, ffm_secrets, ffm_outreach_gate and both hash tables have no data file
+PASS  C5 restore tool put the restored database into 'suppression unverified' (gate closed) and staged the checkpoint  [{"state": "unverified", "open": false, "checkpoint_staged": true, "checkpoint": {"count": 5, "email_count": 3, "phone_count": 2, "hash": "22a1442cb973787f7122349f441884abeb79d29fce7d2a8571f0b11a074b7b]
+PASS  C6 restore tool prints the procedure and counts the closed gate as a pass criterion
+PASS  C7 restored database: plaintext lists EMPTY (as designed), no key, no imported hashes, every expected entry staged, gate closed  [(0, 0, 0, 0, 5, False)]
+PASS  C8 RESTORE INTO AN EMPTY DATABASE THEN RE-CONTACT: refused for everyone (reason suppression_unverified), including the opted-out person re-added in other formats  [[(False, 'suppression_unverified'), (False, 'suppression_unverified'), (False, 'suppression_unverified'), (False, 'suppression_unverified')]]
+PASS  C9 verification without the suppression key is refused and the bot cannot run it  [bot_refused=True {'reason': 'the suppression key is not set', 'verified': False}]
+PASS  C10 a WRONG suppression key is detected (does not match the checkpoint's key fingerprint)  [{'reason': 'the suppression key differs from the one that made the checkpoint', 'verified': False}]
+PASS  C11 right key but EMPTY list (nothing re-established yet): verification refused as incomplete, gate stays closed, outreach refused  [{'reason': 'incomplete: 5 of 5 expected suppression entries are not in the live list', 'verified': False}]
+PASS  C12 after re-establishing the list from the keyed hashes, OWNER verification succeeds exactly (all entries) and the gate opens  [imported 5 {'mode': 'exact', 'current': 5, 'expected': 5, 'verified': True}]
+PASS  C13 after verification: the opted-out person stays refused through hash-only suppression (email +tag/case form and phone form); the unrelated consented lead is allowed  [[(False, 'suppressed'), (False, 'suppressed'), (True, 'express'), (True, 'express')]]
+PASS  C14 the list SHRANK after verification (a row removed under the triggers): the gate closes by itself
+PASS  C15 a PARTIAL live list (one hash missing) is refused with the exact count  [{'reason': 'incomplete: 1 of 5 expected suppression entries are not in the live list', 'verified': False}]
+PASS  C16 restoring the missing entry and verifying again re-opens the gate  [{'mode': 'exact', 'current': 5, 'expected': 5, 'verified': True}]
+PASS  C17 negative control: a restored database that would allow outreach makes apply_gate() report failure  [{'state': 'unverified', 'open': True, 'checkpoint_staged': False, 'note': 'no checkpoint in this backup (the owner had not set the suppression key, or the backup predates the export): verification is impossible from this file', 'plaintext_email_suppressions_restored': 0}]
+PASS  T1 a suppression list with an entry removed (manifest unchanged) is refused by the restore tool  [archive integrity: suppression/hashes.json: missing or content differs from manifest]
+PASS  T2 an entry removed AND the file hash in the manifest fixed up is still refused (count/digest no longer match the list)  [archive integrity: suppression list is inconsistent: count does not match the list; hash does not match the list]
+PASS  T3 an entry altered (file hash fixed up) is refused  [archive integrity: suppression list is inconsistent: hash does not match the list]
+PASS  T4 a self-consistent but SMALLER list is caught by the expected file hash taken from the audit log (--expect-sha256): the file is not the one the bot wrote  [checksum mismatch: file 541c32a09c1a986f7ce653cb11e2f1444d6a47a08f3e8b1a6e2c26ee0a399101 vs --expect-sha256 f7a9b61960e2]
+PASS  T5 without --expect-sha256 (explicit --i-accept-unverified-suppression) a self-consistent smaller list restores, but its checkpoint is NOT staged: the gate is closed with no checkpoint and says so  [{'state': 'unverified', 'open': False, 'checkpoint_staged': False, 'checkpoint_ignored': "the file's suppression checkpoint was NOT staged (no --expect-sha256 was given, so the file is unverified)", ']
+PASS  T5b a restore with neither --expect-sha256 nor --i-accept-unverified-suppression is refused before anything is touched  [t inside the file can be trusted), or --i-accept-unverified-suppression (the checkpoint is then ignored and the outreach gate stays closed)
+]
+PASS  T6 a backup WITHOUT a suppression section (key never set) restores, but there is no checkpoint, the gate is closed and says so  [{'state': 'unverified', 'open': False, 'checkpoint_staged': False, 'note': 'no checkpoint in this backup (the owner had not set the suppression key, or the backup predates the export): verification is impossible from this file', 'plaintext_email_suppressions_restored': 0} ('unverified', True, False)]
+PASS  T7 a suppression file the manifest does not declare is refused  [archive integrity: suppression/hashes.json present but not declared in the manifest]
+PASS  C18 full restore again after the consent checks (state for the remaining checks)
+PASS  N1 corrupted object in storage is rejected by checksum  [checksum mismatch: file 38679bd8341759328789a016b004fd3ce9c996a49474f9cc34b5d3826fd37593 vs sidecar ]
+PASS  N2 wrong BACKUP_KEY is rejected  [cannot decrypt: wrong BACKUP_KEY or the file is damaged]
+PASS  N3 production-looking target is refused before any connection  [refusing: host 'db.ihxzvpwbqydqtblvazbq.supabase.co' is not local. This tool only restores into a sc]
+PASS  N4 local database with a real-looking name is refused  [refusing: database name 'postgres' must start with restore_, drill_, scratch_ or tmp (so it cannot b]
+PASS  N5 non-empty scratch DB is not overwritten without --wipe  [the scratch database is not empty; add --wipe to drop its public schema first]
+PASS  N6 mismatching expected checksum is rejected  [checksum mismatch: file f7a9b61960e27e1fff547860e8a918188efddfa9c4ec8c95dfab5c4b380dfb07 vs --expect]
+PASS  N7 row verifier catches a deleted row and an altered value  [ledger={'backup_rows': 35, 'restored_rows': 34, 'identical': False, 'missing_in_restore': 1, 'unexpected_in_restore': 0}, memory={'backup_rows': 124, 'restored_rows': 124, 'identical': False, 'missing_in_restore': 1, 'unexpected_in_restore': 1}]
+PASS  N8 schema verifier passes clean restore and catches dropped index + edited function  [{'tables': True, 'constraints': True, 'indexes': False, 'triggers': True, 'functions': False, 'views': True, 'policies': True, 'table_grants': True, 'sequences': True, 'enums': True, 'domains': True, ]
+SKIP  L1 ops/restore_local.sh (Docker not available here; CI runs it)
+PASS  G1 hostaddr in the connection string is refused  [refusing: connection string uses hostaddr, which can redirect the connection away from the]
+PASS  G2 empty host + PGHOST environment redirect is refused  [refusing: give an explicit local host (localhost, 127.0.0.1, ::1 or a unix socket director]
+PASS  G3 service= in the connection string is refused  [refusing: connection string uses service, which can redirect the connection away from the ]
+PASS  G4 a scratch-named database that looks like Supabase is refused and left untouched  [refusing: the connected server looks like a Supabase project (auth, storage). Nothing was ]
+PASS  R1 restore picks the newest backup in the bucket  [hq/hq-20261001T080000Z.tar.gz.enc]
+PASS  R2 after the newest object disappears, restore uses the next surviving backup  [hq/hq-20260901T080000Z.tar.gz.enc]
+PASS  R3 an older backup can be restored by name (point-in-time choice)  [hq/hq-20260801T080000Z.tar.gz.enc]
+PASS  R4 empty bucket fails loudly instead of restoring nothing  [no backups found in that bucket/prefix]
+
+73/73 checks passed
+results file: /tmp/drill_5x_fcqkd/drill_results.json

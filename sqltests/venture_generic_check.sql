@@ -3,6 +3,11 @@
 -- (run.sh's rollback drill drops these functions at the end, hence re-applying the migration first.)
 -- Everything runs in one transaction and is rolled back. Any failed assertion raises.
 begin;
+-- fixture: the outreach gate is closed by default (20261121_suppression_integrity_v1); this test approves drafts, so open it for the transaction
+set local session_replication_role = replica;
+insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, verified_marker_id = (select coalesce(max(id),0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
+set local session_replication_role = origin;
 do $$
 declare vid uuid; res jsonb; k jsonb; t uuid; before_ledger int; recent int; cnt int; lid uuid;
 begin

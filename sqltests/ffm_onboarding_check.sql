@@ -15,6 +15,21 @@ begin
   if p then perform set_config('app.uid', '99999999-9999-9999-9999-999999999991', true);
   else perform set_config('app.uid', '', true); end if;
 end $$;
+-- fixture: open the outreach gate (closed by default) and give the tests an owner-attested capture helper. Evidence verification itself is tested in consent_integrity_check.sql.
+set local session_replication_role = replica;
+insert into public.ffm_secrets (name, value, set_by) values ('suppression_hmac_key', repeat('fixture-key-', 4), 'fixture') on conflict do nothing;
+update public.ffm_outreach_gate set state = 'verified', verified_raw_count = 0, reason = 'test fixture', verified_at = clock_timestamp(), verified_epoch = 1, verified_marker_id = (select coalesce(max(id),0) from public.ffm_restore_markers), instance_fp = public.ffm_instance_fp(), attested_at = clock_timestamp() where id = 1;
+update public.ffm_gate_config set phone_outreach_enabled = true;     -- text / call are disabled by default (v3 review F1); the checks below exercise them, so enable them in this scratch transaction
+set local session_replication_role = origin;
+create function pg_temp.express(p_ws uuid, p_lead uuid, p_ch text, p_ref text, p_by text default 'bot') returns uuid language plpgsql as $$
+declare prev text := current_setting('app.uid', true); r uuid;
+begin
+  perform set_config('app.uid', '99999999-9999-9999-9999-999999999991', true);
+  if not exists (select 1 from public.ffm_consent_wordings where workspace_id = p_ws and version = 'v1') then perform public.ffm_register_wording(p_ws, 'v1', repeat('b', 64), 'test'); end if;
+  perform public.ffm_register_capture_owner(p_ws, p_ref, p_ch, 'v1', repeat('a', 64), now() - interval '2 hours', p_lead, null, 'test');
+  perform set_config('app.uid', coalesce(prev, ''), true);
+  return public.ffm_record_consent(p_ws, p_lead, p_ch, 'express', 'v1', 'web form', now(), p_ref, p_by);
+end $$;
 do $$
 declare a uuid; b uuid; ca uuid; cb uuid; sa uuid; cra uuid; rr uuid; lead_a uuid; lead_b uuid; ap uuid; t text; r text; f text; j jsonb; k text; n int; s text;
 begin
@@ -46,7 +61,7 @@ begin
     if not has_function_privilege('service_role', f, 'execute') then raise exception 'F6 service_role cannot execute %', f; end if;
   end loop;
   select count(*) into n from pg_proc where pronamespace = 'public'::regnamespace and proname like 'ffm\_%';
-  if n <> 28 then raise exception 'F6b expected 28 ffm functions (21 onboarding + 7 consent), found %', n; end if;
+  if n <> 62 then raise exception 'F6b expected 62 ffm functions (+ffm_cc_len; 21 onboarding + 7 consent + 12 evidence (+ffm_lp, ffm_key_problem) + 11 suppression integrity (-ffm_suppression_mac, +ffm_sup_message) + 10 restore-closed gate (epoch guard, bump, instance_fp, gate_core_ok, owner_record_restore, gate_state, sender_attest, set_gate_config, lead_identifier_guard, set_phone_outreach)), found %', n; end if;
 
   -- two clients
   insert into public.client_workspaces (slug, name, vertical) values ('f-mortgage', 'Test Mortgage Broker', 'mortgage') returning id into a;
@@ -159,8 +174,8 @@ begin
   lead_a := public.ws_add_lead(a, ca, 'Pat Example', 'pat@example.com', '613-555-0142', 'web form', 'wants a callback about renewal');
   lead_b := public.ws_add_lead(b, cb, 'Sam Other', 'sam@example.com', null, 'referral');
   -- (20261119) routing preview now needs current consent: record an express consent for both test leads so this section keeps testing routing, not consent
-  perform public.ffm_record_consent(a, lead_a, 'email', 'express', 'v1', 'web form', now(), 'form-001', 'test');
-  perform public.ffm_record_consent(b, lead_b, 'email', 'express', 'v1', 'web form', now(), 'form-002', 'test');
+  perform pg_temp.express(a, lead_a, 'email', 'form-001', 'test');
+  perform pg_temp.express(b, lead_b, 'email', 'form-002', 'test');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_routing_rule(%L, 'bad', 'email', 'x@example.com', array['name','note'])$q$, a), '%violates check%');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_routing_rule(%L, 'bad', 'email', 'x@example.com', array['name','sin'])$q$, a), '%violates check%');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_routing_rule(%L, 'bad', 'email', 'bank statement inbox', array['name'])$q$, a), 'Sensitive data refused%');
