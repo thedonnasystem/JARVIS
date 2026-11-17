@@ -43,7 +43,7 @@ begin
   select id into v from public.ventures limit 1;
   insert into public.leads (venture_id, name, email, phone, notes) values (v, 'ZZMARKERNAME Prospect', 'zzmarker-lead@example.com', '613-555-0199', 'ZZMARKERNOTE');
   insert into public.contact_suppressions (address, reason, recorded_by) values ('zzmarker-suppressed@example.com', 'unsubscribe', 'test');
-  insert into public.client_workspaces (slug, name) values ('zz-marker', 'ZZMARKERCLIENT Ltd') returning id into a;
+  insert into public.client_workspaces (slug, name, vertical) values ('zz-marker', 'ZZMARKERCLIENT Ltd', 'mortgage') returning id into a;   -- (a workspace without a vertical gets the insurance wording screen since 20261122; the marker strings are not vocabulary, and the classifier is not under test here)
   insert into public.ws_campaigns (workspace_id, name) values (a, 'zz camp') returning id into ca;
   perform public.ws_add_lead(a, ca, 'ZZMARKERWS Person', 'zzmarker-ws@example.com', '613-555-0188', 'web form');
   insert into public.ventures (slug, name, kind) values ('zz-visible', 'ZZVISIBLE venture', 'lab');   -- an exported table: the marker MUST be present, or the test proves nothing

@@ -41,6 +41,7 @@
 20261120_leak_source_prevention_v1.sql
 20261121_consent_evidence_v1.sql
 20261121_suppression_integrity_v1.sql
+20261122_insurance_classifier_v1.sql
 20261112_lockdown_v1.sql
 20261121_postlock_backup_identity_v1.sql
 20261122_postlock_backup_identity_v2.sql

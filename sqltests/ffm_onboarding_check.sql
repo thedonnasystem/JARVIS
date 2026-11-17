@@ -137,16 +137,16 @@ begin
   perform pg_temp.expect_fail(format($q$select public.ffm_activate(%L)$q$, a), 'activation refused: workspace is not in draft%');
 
   -- blocked items and their reasons
-  perform public.ffm_block_input(b, 'licensing_status', 'client has not replied');
+  perform public.ffm_block_input(b, 'licensing_status', 'awaiting_client');
   if (select status from public.ffm_onboarding_items where workspace_id = b and template_key = 'licensing_status') <> 'blocked' then raise exception 'F20 not blocked'; end if;
 
   -- campaign architecture: drafts are plain text, guarded, isolated, dry-run only
   ca := public.ffm_add_campaign(a, 'Renewal reminders', 'meta');
-  cb := public.ffm_add_campaign(b, 'Agent recruiting test', 'meta');
+  cb := public.ffm_add_campaign(b, 'Agent spring promo', 'meta');
   sa := public.ffm_add_ad_set(a, ca, 'Ottawa homeowners', 'renewal in the next year', null);
   cra := public.ffm_add_creative(a, ca, sa, 'Mortgage renewal coming up?', 'Talk to a licensed broker about your options.', 'Book a call');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_ad_set(%L, %L, 'x ad set')$q$, a, cb), '%foreign key%');
-  perform pg_temp.expect_fail(format($q$select public.ffm_add_creative(%L, %L, %L, 'hello there', 'body text')$q$, b, cb, sa), '%foreign key%');
+  perform pg_temp.expect_fail(format($q$select public.ffm_add_creative(%L, %L, %L, 'Get a quote', 'Protect your family')$q$, b, cb, sa), '%foreign key%');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_creative(%L, %L, %L, 'Upload your credit report', 'body text')$q$, a, ca, sa), 'Sensitive data refused%');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_creative(%L, %L, %L, 'Fine headline', 'send your bank statement here')$q$, a, ca, sa), 'Sensitive data refused%');
   perform pg_temp.expect_fail(format($q$select public.ffm_add_ad_set(%L, %L, 'Fine name', 'income over 100k')$q$, a, ca), 'Sensitive data refused%');

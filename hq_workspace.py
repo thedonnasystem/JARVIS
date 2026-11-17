@@ -34,6 +34,16 @@ def screen(*texts) -> None:
             raise SensitiveDataRefused(", ".join(h))
 
 
+def classify_text(text: str, workspace=None) -> dict:
+    """Insurance-aware check (migrations/20261122_insurance_classifier_v1.sql): {"allowed": bool, "reasons": [codes]}. The text is never echoed back.
+    With a workspace id, exact owner-approved insurance product terms (and approved place names) are accepted when there is no personal context.
+    Without one it is the strict screen. Fail closed: an unexpected reply counts as refused. Client text bound for a model should still use screen()."""
+    r = _rpc("ws_classify_text", {"p_text": text or "", "p_ws": workspace})
+    if not isinstance(r, dict) or r.get("allowed") is not True:
+        return {"allowed": False, "reasons": list((r or {}).get("reasons") or ["unexpected_reply"]) if isinstance(r, dict) else ["unexpected_reply"]}
+    return {"allowed": True, "reasons": list(r.get("reasons") or [])}
+
+
 def add_lead(workspace: str, campaign, name, email=None, phone=None, source=None, note=None):
     try:
         return _rpc("ws_add_lead", {"p_ws": workspace, "p_campaign": campaign, "p_name": name, "p_email": email,
