@@ -1472,3 +1472,35 @@ class RecurrenceClaimTests(DueAndRecurrenceTests):
             self.tick(db)
         self.assertTrue(any("checkpoint->recurrence->>enabled=eq.true" in p for p in seen))
         self.assertFalse(any("limit=200" in p and "select=id,checkpoint" in p for p in seen))
+
+
+class ScrubbedStorageEndToEnd(MissionEngineBase):
+    """Finding 5: the engine stores SCRUBBED task results. A mission whose evidence is a staff-directory URL and a JSON price must still complete on that stored text."""
+    RAW = ("Prices found. Directory: https://example.ca/staff/directory and https://example.com/a\n"
+           '{"price": 1234567, "sites": 3}\n20 prospects with public sources. Contact: jean.tremblay@example.ca, 613-555-0199.')
+
+    def stored(self):
+        import hq_scrub
+        return hq_scrub.scrub_stored(self.RAW, lambda p: [])
+
+    def test_stored_text_keeps_urls_and_numbers_but_loses_contact_data(self):
+        s = self.stored()
+        self.assertIn("https://example.ca/staff/directory", s); self.assertIn('"price": 1234567', s)
+        self.assertNotIn("jean.tremblay", s); self.assertNotIn("555-0199", s)
+
+    def test_mission_completes_with_evidence_urls_in_scrubbed_results(self):
+        db = FakeDB(); mid = self.new(db)["id"]
+        self.tick(db); db.finish("Evaluate", EVAL_GO)
+        self.run_steps(db, mid, self.stored())
+        ver = next(t for t in db.open_tasks() if t.get("mission_role") == "verify")
+        ver["status"], ver["result"] = "done", ("VERIFIED: YES\nEVIDENCE: staff directory exists | https://example.ca/staff/directory\n"
+                                                "EVIDENCE: 20 prospects with public sources | task record\n")
+        self.tick(db)
+        self.assertEqual(db.missions[mid]["status"], "completed")
+        self.assertEqual(len(db.missions[mid]["evidence"]), 2)
+
+    def test_the_old_all_urls_scrub_breaks_the_evidence_check(self):
+        import hq_scrub
+        light = hq_scrub.scrub(self.RAW)    # light mode (the old stored form) rewrites the directory URL
+        kept, bad = M.check_evidence([{"claim": "staff directory exists", "source": "https://example.ca/staff/directory"}], [], [{"id": "a", "title": "Mission: a", "status": "done", "result": light}])
+        self.assertEqual(kept, [])

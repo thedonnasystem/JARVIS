@@ -34,6 +34,19 @@ Defaults: 1 approve E1a first; 2 first live tool = `send_approved_email` for one
 ## F. First mission (dry-run, see `FIRST_MISSION.md`)
 Approve creating it after A3. It spends AI budget (cap $10 hard max, default far lower) and the system is currently paused for `api_credits`; unpausing/adding credits is YOUR authorization. Blocks release: No.
 
+## G. Backup redaction, round 8 (PR #16; details: `DATA_CLASSIFICATION_AND_BACKUP_POLICY.md` section 2, rule 15)
+| # | Decision | Default | Blocks? |
+|---|---|---|---|
+| G1 | Accepted residuals for 3-4 letter client names: not redacted behind a 4+ letter prefix (`xxxxkhan`), before an unlisted suffix (`khanabc`), or when the glued form is an ordinary word in lower case, sentence-initial or capitals (`kings`, `Kings of the road`; `call the Kings` mid-sentence IS redacted); 2-letter names alone | Accept (closing them means blanking more columns) | No, but it is a stated limit of "no client data off-site" |
+| G2 | Identifiers that hold a known client name are exported as keyed pseudonyms (`n1a2b3c4d5e-roofing`); a restored database shows the pseudonym, not the original slug. System slugs (`jarvis`, `idea-lab`, seeded ventures) are kept | Accept | No |
+| G3 | `missions.objective` is no longer exported (blank after a restore), because the venture description is copied into it | Accept | No |
+| G4 | Event trigger `ffm_backup_acl_sweep`: if the hosted database role cannot create it, the migration only warns. The preflight and the ACL manifest check then FAIL on purpose | Have the platform admin create it before activation | Yes, blocks backup activation |
+| G5 | `BACKUP_GATEWAY_APIKEY` = the project's anon / publishable key (sent as `apikey`; the reader token stays in `Authorization`). Unverified against the real project | Set it, then run `/backup check` once | Yes, blocks backup activation until one check passes |
+| G6 | Post-lockdown (`postlock`) migrations: the lint now refuses the known ways to hand privileges out, but it is a tripwire only | Every postlock file gets a human review before it is applied; you name the reviewer | No (process decision) |
+| G7 | 12 new hash indexes on the client-name / email / phone columns (bounded write cost). Building them blocks writes to those tables briefly | Apply in a quiet minute | No |
+| G8 | `ffm_phone_suppressions.phone` (opted-out numbers in plain text, consent PR) is NOT used as a redaction source; such a number is removed from exports by the generic phone patterns only | Accept, or ask for it to become a source (needs a migration ordered after the consent one) | No |
+| G9 | A backup FAILS (nothing uploaded, you are told once a day) when the consent tables exist and the opt-out list cannot be exported; "suppression key not set yet" is not a failure | Accept | No, but set the suppression key before relying on a restore |
+
 ## What I need from you, in order
 1. Run `ops/preflight_live.sql`, `ops/verify_live.sql`, `ops/preflight_sprint12.sql` in the Supabase SQL editor and send me the result tables (no secrets in them), or reconnect the Supabase connector.
 2. Say "approve A1-A3" (or each separately).

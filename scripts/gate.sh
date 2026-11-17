@@ -56,13 +56,14 @@ if [ "$replica_ok" = 1 ]; then
   run replica "replica: all migrations + e2e + integration + rollback drill on a scratch DB" replica_check
   if want manifest; then
     if grep -q '^REPLICA OK' "$logs/replica.log" 2>/dev/null; then
-      run manifest "function manifest vs live baseline matches ops/EXPECTED_NEW_FUNCTIONS.txt" python3 scripts/function_manifest.py --check --manifest-out "$logs/function_manifest.txt"
+      manifest_check() { python3 scripts/function_manifest.py --check --manifest-out "$logs/function_manifest.txt" && python3 scripts/acl_manifest.py --check; }
+      run manifest "function manifest vs live baseline matches ops/EXPECTED_NEW_FUNCTIONS.txt; ops/ACL_MANIFEST_public.tsv (every function/table/view/sequence x anon/authenticated/service_role/backup_reader) matches the replica ACLs" manifest_check
     else skip manifest "replica step did not pass, so there is nothing to compare"; fi
   fi
   if want backup; then
     if [ -x scripts/backup_drill.sh ] && python3 -c "import cryptography, psycopg2" 2>/dev/null; then
       hostport="$(echo "$REPLICA_URL" | sed -E 's#^[a-z]+://[^@]*@([^/]*)/.*#\1#')"
-      run backup "backup + restore drill (scripts/backup_drill.sh; uses its own scratch DBs)" env PGHOST="${hostport%%:*}" PGPORT="$( [[ "$hostport" == *:* ]] && echo "${hostport##*:}" || echo 5432)" scripts/backup_drill.sh
+      run backup "backup + restore drill (scripts/backup_drill.sh; uses its own scratch DBs)" env -u REPLICA_URL -u RESTORE_URL PGHOST="${hostport%%:*}" PGPORT="$( [[ "$hostport" == *:* ]] && echo "${hostport##*:}" || echo 5432)" scripts/backup_drill.sh
     elif [ -x scripts/backup_drill.sh ]; then skip backup "scripts/backup_drill.sh present but cryptography/psycopg2 missing (pip install cryptography psycopg2-binary)"
     else skip backup "(optional) scripts/backup_drill.sh not present on this branch"; fi
   fi

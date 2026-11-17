@@ -1,6 +1,6 @@
 {
- "count": 9,
- "sha256": "7ca839d14d54cbf01b0006fdd827ddf92af5df4b02faef8780adfed80ea50773",
+ "count": 11,
+ "sha256": "e1fdb3eb89f69231f34be127b8b15a5cd89886af4f5f03a62786c8b93cad2606",
  "hash_definition": "sha256 of the sorted non-comment non-blank lines of .gitleaksignore joined by \\n plus a trailing \\n",
  "entries": {
   "15a69bc8c39a98e3be492f601dd5ca412b1de1fd:sqltests/consent_review_fixes_check.sql:generic-api-key:321": {
@@ -47,6 +47,16 @@
    "why": "synthetic: literal 'fixture-key-0123456789abcdefghijklmnop' inserted into a scratch ffm_secrets table by a test/replica script (set_by 'fixture'); not a credential for any system",
    "origin": "closed PR #14 head 5828a5e4 (build/consent-integrity)",
    "reviewed": "2026-11-15"
+  },
+  "4885f72873e199900407ca7d032d4e19f9422d47:test_hq_backup.py:generic-api-key:323": {
+   "why": "synthetic: literal 'sb_publishable_abc123' set as BACKUP_GATEWAY_APIKEY inside a mocked unit test (urlopen patched, no network); not a key for any system. Replaced by a constant in the next commit.",
+   "origin": "commit 4885f72 in open PR #16 history (build/leak-redaction round 8)",
+   "reviewed": "2026-11-16"
+  },
+  "3675ba108dc87d1a908e11eecb982b5bd7b657ae:webapp/hq/hq.js:generic-api-key:12": {
+   "why": "false positive: a JS constant named KEY whose value is the localStorage slot name used to save simulated HQ missions in the browser; not a secret of any kind. Renamed in the next commit.",
+   "origin": "commit 3675ba1 in open PR #25 history (build/hq-experience)",
+   "reviewed": "2026-11-16"
   }
  }
 }

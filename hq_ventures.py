@@ -36,6 +36,15 @@ def slugify(name: str) -> str:
     return s[:40].strip("-")
 
 
+NAME_IN_SLUG = "venture slug contains a known client or contact name"      # the database's refusal (migration 20261120_leak_source_prevention_v1)
+
+
+def neutral_slug() -> str:
+    """A slug that says nothing about the venture's name: used when the name-derived slug would carry a known client name."""
+    import secrets
+    return "venture-" + secrets.token_hex(4)
+
+
 def _rpc(name: str, args: dict):
     return hq._request("POST", f"/rest/v1/rpc/{name}", args)
 
@@ -51,11 +60,20 @@ def start(name: str, description: str, metric: str | None = None, budget_cents: 
     if len(name) < 3 or len(description) < 15:
         return {"error": "Give the venture a name and at least a sentence on what it does."}
     slug = slugify(name)
+    args = {"p_slug": slug, "p_name": name[:80], "p_kind": "revenue", "p_metric": metric or "verified revenue (CAD)",
+            "p_budget_cents": int(budget_cents or 0), "p_description": description[:1000], "p_by": by}
     try:
-        _rpc("create_venture", {"p_slug": slug, "p_name": name[:80], "p_kind": "revenue", "p_metric": metric or "verified revenue (CAD)",
-                                "p_budget_cents": int(budget_cents or 0), "p_description": description[:1000], "p_by": by})
+        _rpc("create_venture", args)
     except Exception as e:
-        return {"error": _err(e) or "Could not create the venture (migration pending?)."}
+        # The database refuses a slug that carries a known client / contact name (trigger redaction_venture_slug_guard): the slug is copied into departments, agents and the
+        # audit trail, all of which are exported. Retry ONCE with a neutral slug; the name itself stays in ventures.name.
+        if NAME_IN_SLUG not in (_err(e) or ""):
+            return {"error": _err(e) or "Could not create the venture (migration pending?)."}
+        slug = neutral_slug()
+        try:
+            _rpc("create_venture", {**args, "p_slug": slug})
+        except Exception as e2:
+            return {"error": _err(e2) or "Could not create the venture (migration pending?)."}
     m = hq_missions.create_mission(f"Venture '{name}' ({slug}): {description}\n\n{LIFECYCLE}", "idea-lab",
                                    title=f"Validate venture: {name}"[:60], created_by=by)
     hq._request("POST", "/rest/v1/owner_messages", {

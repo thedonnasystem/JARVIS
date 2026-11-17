@@ -20,6 +20,8 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED on second apply: $f"; exit 1; }
 done
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$here/e2e.sql" 2>&1 | grep -v NOTICE | cut -c1-200
+echo "perf: backup_snapshot() redaction cost on 2,000 audit rows + 200 tasks of 11.5k characters (budget 60 s, normal 5-8 s on the scratch machine)"
+"$root/scripts/perf_redaction.sh" "$REPLICA_URL" 2000 200 60 || { echo "PERF CHECK FAILED"; exit 1; }
 if python3 -c "import psycopg2" 2>/dev/null; then
   echo "integration: real engine + mission code against the replica database"
   python3 "$here/run_integration.py" 2>&1 | grep -v '^Traceback\|^  File\|^    \|~\|^HQ ' | tail -40
@@ -31,6 +33,17 @@ for f in "$root"/sqltests/*.sql; do   # SQL-level checks (grants, behaviour) run
   echo "sqltest: $(basename "$f")"
   psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$f" >/dev/null 2>"${TMPDIR:-/tmp}/sqltest.err" || { cat "${TMPDIR:-/tmp}/sqltest.err"; echo "SQLTEST FAILED: $f"; exit 1; }
 done
+echo "perf: write-path cost of the redaction epoch triggers at 50,000 leads + 50,000 outbox rows (round 8, S5; budget 1500 ms for a 150-row lead insert; rolled back)"
+"$root/scripts/perf_epoch_triggers.sh" "$REPLICA_URL" 50000 1500 || { echo "EPOCH TRIGGER PERF CHECK FAILED"; exit 1; }
+echo "acl detection drill (round 8, S4): a disabled or dropped event trigger must fail the manifest check and the preflight"
+"$here/acl_detect_check.sh" || { echo "ACL DETECTION DRILL FAILED"; exit 1; }
+if python3 -c "import psycopg2" 2>/dev/null; then   # isolated-per-variant leak matrix + paged == single property check (round 4); each case is its own rolled-back transaction
+  echo "isolated leak matrix (quick) and paged == single property check"
+  REPLICA_URL="$REPLICA_URL" python3 "$here/isolated_leak_check.py" quick || { echo "ISOLATED LEAK MATRIX FAILED"; exit 1; }
+  REPLICA_URL="$REPLICA_URL" python3 "$here/prop_paged_check.py" 1 || { echo "PAGED != SINGLE PROPERTY CHECK FAILED"; exit 1; }
+  echo "backup consistency race matrix (item A/B): real hq_backup.run() with committed changes between pages"
+  REPLICA_URL="$REPLICA_URL" python3 "$here/backup_race_check.py" || { echo "BACKUP RACE CHECK FAILED"; exit 1; }
+elif [ -n "${REQUIRE_INTEGRATION:-}" ]; then echo "psycopg2 missing but REQUIRE_INTEGRATION is set"; exit 1; fi
 echo "sprint rollback drill: ops/rollback_sprint12.sql removes only the Sprint 1-2 objects and leaves Phase 1 and the suppression list in place"
 psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/ops/rollback_sprint12.sql" >/dev/null 2>&1 || { echo "SPRINT ROLLBACK FAILED to run"; exit 1; }
 psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/ops/rollback_sprint12.sql" >/dev/null 2>&1 || { echo "SPRINT ROLLBACK is not idempotent"; exit 1; }
@@ -58,4 +71,26 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do   # the whole or
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after rollback: $f"; exit 1; }
 done
 echo "rollback drill OK (and the migrations re-apply cleanly afterwards)"
+echo "leak-redaction rollback drill: ops/rollback_leak_redaction.sql must restore the live (Nov 15) definitions of the writers and the repo-head backup_snapshot exactly"
+# round 8 (integration rehearsal S2): the leak rollback must restore ONLY its own functions. is_suppressed / outbox_dnc_guard live in the same older migration files and are replaced by another PR
+# (consent integrity); here they are replaced by marked copies, and the marker must still be there after the rollback (it used to re-run those files wholesale and revert them).
+psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -c "do \$\$ declare r record; begin for r in select p.oid from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in ('is_suppressed', 'outbox_dnc_guard', 'normalize_addr', 'leads_suppression_guard') loop execute regexp_replace(pg_get_functiondef(r.oid), '\\\$function\\\$', '\$function\$ /* zz replaced by another migration */ '); end loop; end \$\$;" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "LEAK ROLLBACK DRILL: could not mark the foreign functions"; exit 1; }
+marked="$(psql "$REPLICA_URL" -At -c "select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosrc like '%zz replaced by another migration%'")"
+[ "$marked" -ge 2 ] || { echo "LEAK ROLLBACK DRILL: premise failed, only $marked foreign functions marked"; exit 1; }
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_leak_redaction.sql >/dev/null 2>&1) || { echo "LEAK ROLLBACK FAILED to run"; exit 1; }
+still="$(psql "$REPLICA_URL" -At -c "select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosrc like '%zz replaced by another migration%'")"
+[ "$still" = "$marked" ] || { echo "LEAK ROLLBACK DRILL FAILED: the rollback re-created functions it does not own (expected $marked marked functions to survive, actual $still)"; exit 1; }
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_leak_redaction.sql >/dev/null 2>&1) || { echo "LEAK ROLLBACK is not idempotent"; exit 1; }
+got="$(psql "$REPLICA_URL" -At -c "select p.oid::regprocedure::text||' '||md5(pg_get_functiondef(p.oid)) from pg_proc p where p.pronamespace='public'::regnamespace and p.prokind='f' and p.proname in ('mark_do_not_contact','record_lead_reply','setter_record_payout','set_deal_stage','confirm_deal_won','backup_snapshot') order by 1")"
+want="$(grep -E '^[a-z_]+\(' "$root/ops/live_function_md5_20261115.txt" | sort)"
+[ "$got" = "$want" ] || { echo "LEAK ROLLBACK DRILL FAILED"; diff <(echo "$got") <(echo "$want"); exit 1; }
+left="$(psql "$REPLICA_URL" -At -c "select count(*) from pg_proc where pronamespace='public'::regnamespace and proname in ('backup_unescape_text','backup_normalise','backup_redaction_context','backup_redact_patterns','backup_probe_encoded','backup_redact_text','backup_redact_text_full','backup_redact_json','backup_redact_json_k','backup_redaction_spec','backup_redact_row','backup_redaction_status','agent_runs_scrub','backup_effective_spec','backup_deny_scan','backup_snapshot_page','backup_table_digest','backup_snapshot_cost','backup_table_expr','backup_redaction_meta','backup_topic_fast','backup_ctx_hot')")"
+[ "$left" = "0" ] || { echo "LEAK ROLLBACK DRILL FAILED: $left redaction functions remain"; exit 1; }
+kept="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_tables where schemaname='public' and tablename in ('ffm_redaction_denylist','ffm_redaction_keys'))||'/'||(select count(*) from pg_trigger where tgname='redaction_capture' and not tgisinternal)||'/'||(select count(*) from pg_proc where proname in ('redaction_capture','redaction_capture_trg','backup_fold_text','backup_stopwords'))")"
+case "$kept" in 2/0/*|*/0/*|2/*/[0-3]) echo "LEAK ROLLBACK DRILL FAILED: the deny-list / capture chain must stay in place (got $kept)"; exit 1;; esac
+psql "$REPLICA_URL" -q -At -c "insert into public.leads (venture_id, name, status) select id, 'Rollback Window Fixture', 'new' from public.ventures limit 1; delete from public.leads where name = 'Rollback Window Fixture'" >/dev/null 2>&1 || { echo "LEAK ROLLBACK DRILL FAILED: writing to leads fails while the rollback is in force"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the leak rollback: $f"; exit 1; }
+done
+echo "leak rollback drill OK (live definitions restored exactly, then the migrations re-apply cleanly)"
 echo "REPLICA OK"

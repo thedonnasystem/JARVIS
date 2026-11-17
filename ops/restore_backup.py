@@ -34,6 +34,9 @@ class Fail(Exception):
     pass
 
 
+ALLOW_UNVERIFIED = False      # --allow-unverified: restore an archive whose manifest does not say consistent:true (forensics only; the report records it)
+
+
 def qi(x: str) -> str:
     return '"' + str(x).replace('"', '""') + '"'
 
@@ -215,6 +218,9 @@ def open_archive(enc: bytes, sidecar: str | None, name: str, expect: str | None,
                       "consistency": manifest.get("consistency")}
     if bad:
         raise Fail("archive integrity: " + "; ".join(bad[:5]))
+    cons = manifest.get("consistency")
+    if not (isinstance(cons, dict) and cons.get("consistent") is True) and not ALLOW_UNVERIFIED:
+        raise Fail("archive consistency is not verified true (manifest consistency: %r); a backup that was not verified consistent is never restored unless --allow-unverified is given for forensics" % (cons if isinstance(cons, dict) else None))
     data = {t: [json.loads(ln) for ln in members[f"data/{t}.jsonl"].decode().split("\n") if ln.strip()] for t in manifest["tables"]}
     return manifest, schema, data
 
@@ -283,7 +289,7 @@ def rebuild_schema(cur, schema: dict, rep: dict):
     for d in schema.get("domains", []):
         cur.execute(f'create domain public.{qi(d["name"])} as {d["base"]}' + (f' default {d["default"]}' if d.get("default") else "") + (" not null" if d["notnull"] else "")
                     + "".join(f" {c}" for c in d.get("checks", [])))
-    used = " ".join((c.get("default") or "") for t in schema["tables"] for c in t["columns"])
+    used = " ".join((c.get("default") or "") for t in schema["tables"] for c in t["columns"]) + " " + " ".join(str(f.get("def", "")) for f in schema.get("functions", []))   # a sequence used only by a function (the redaction epoch counter) is created too
     for s in schema.get("sequences", []):
         if f'{s["name"]}' in used:       # identity/serial-owned sequences are created with their column
             cur.execute(f'create sequence public.{qi(s["name"])} as {s["type"]} start with {s["start"]} increment by {s["increment"]} '
@@ -298,6 +304,113 @@ def rebuild_schema(cur, schema: dict, rep: dict):
         cur.execute(f["def"])
     rep["rebuilt"] = {"tables": len(schema["tables"]), "functions": len(schema.get("functions", [])), "roles_created_or_present": len(roles)}
     return skipped
+
+
+BLANK_MARKER = "[blanked: not stored off-site]"   # 30 characters: satisfies the longest minimum-length CHECK on a blanked column today (venture_procedures.steps >= 20)
+
+
+def _split_cols(txt: str) -> list:
+    out, depth, cur = [], 0, ""
+    for ch in txt:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur.strip()); cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur.strip())
+    return out
+
+
+def _unique_defs(schema: dict) -> list:
+    """[(table, name, [column expressions], has_where)] for every unique index and every unique / primary-key constraint, from the saved definitions."""
+    import re
+    out = []
+    for i in schema.get("indexes", []):
+        d = str(i.get("def", ""))
+        m = re.match(r"CREATE UNIQUE INDEX \S+ ON (?:ONLY )?(?:public\.)?\"?([^\s\"(]+)\"? USING \w+ \((.*)\)(?: INCLUDE \(.*\))?( WHERE .*)?$", d, re.S)
+        if m:
+            out.append((i.get("table") or m.group(1), i.get("name"), _split_cols(m.group(2)), bool(m.group(3))))
+    for c in schema.get("constraints", []):
+        if c.get("type") in ("u", "p"):
+            m = re.match(r"(?:UNIQUE|PRIMARY KEY)(?: NULLS NOT DISTINCT)? \((.*?)\)(?: INCLUDE.*)?$", str(c.get("def", "")), re.S)
+            if m:
+                out.append((c.get("table"), c.get("name"), _split_cols(m.group(1)), False))
+    return out
+
+
+def _unique_columns(schema: dict) -> dict:
+    """{table: {column names that appear in any unique index / constraint}} (an expression index counts every identifier it mentions)."""
+    import re
+    res = {}
+    for t, _n, cols, _w in _unique_defs(schema):
+        for e in cols:
+            for ident in re.findall(r'"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*)', e):
+                res.setdefault(t, set()).add(ident[0] or ident[1])
+    return res
+
+
+def assert_unique_feasible(schema: dict, data: dict) -> None:
+    """Before any row is loaded: every plain-column UNIQUE index / constraint must be satisfiable by the rows of THIS archive (after blanking). A violation fails the restore cleanly here,
+    naming the index, instead of failing after the data is loaded when the index is built. (Partial and expression indexes cannot be evaluated here; rebuild_constraints reports those with the index name.)"""
+    import re
+    for t, name, cols, has_where in _unique_defs(schema):
+        if has_where or t not in data or not all(re.fullmatch(r'"?[A-Za-z_][A-Za-z0-9_]*"?', e) for e in cols):
+            continue
+        names = [e.strip('"') for e in cols]
+        seen = {}
+        for row in data[t]:
+            key = tuple(json.dumps(row.get(n), sort_keys=True) for n in names)
+            if any(row.get(n) is None for n in names):
+                continue                                        # NULLs are distinct in a unique index
+            if key in seen:
+                raise Fail(f"restore refused before loading: unique index/constraint {name} on {t} ({', '.join(names)}) would be violated by this archive (two rows share the same key); nothing was loaded")
+            seen[key] = 1
+
+
+def apply_blanks(schema: dict, data: dict, manifest: dict, rep: dict) -> None:
+    """Columns the backup exported BLANK (manifest redaction.blanked_columns: agent / scraper / client free text that is not safe to keep off-site) restore as:
+      * NULL where the column is nullable and no CHECK constraint mentions it (the honest "no value"),
+      * '' where it is NOT NULL,
+      * BLANK_MARKER ('[blanked: not stored off-site]') where a CHECK constraint mentions a text column (e.g. memory_fact_needs_source: source IS NOT NULL, payment_instructions_payee_check: length(payee) >= 2),
+        because neither NULL nor '' is guaranteed to satisfy an arbitrary CHECK, but a short non-empty marker satisfies not-null and minimum-length checks and says plainly that the text was not backed up,
+      * {} for a NOT NULL json column, [] for a NOT NULL array column (NULL when nullable).
+    So no NOT NULL / CHECK constraint is broken by the blanking; rebuild_constraints() still reports anything else."""
+    import re
+    blanked = (manifest.get("redaction") or {}).get("blanked_columns") or []
+    tdef = {t["name"]: t for t in schema.get("tables", [])}
+    checks = {}
+    for c in schema.get("constraints", []):
+        if c.get("type") == "c":
+            checks.setdefault(c.get("table"), []).append(str(c.get("def", "")))
+    uniq = _unique_columns(schema)
+    n = 0
+    for tc in blanked:
+        t, _, c = str(tc).partition(".")
+        col = next((x for x in tdef.get(t, {}).get("columns", []) if x["name"] == c), None)
+        if col is None or t not in data:
+            continue
+        ty = str(col.get("type", "")).lower()
+        notnull = bool(col.get("notnull"))
+        if ty.endswith("[]"):
+            val = [] if notnull else None
+        elif ty in ("json", "jsonb"):
+            val = (([] if "'[]'" in str(col.get("default") or "") else {}) if notnull else None)      # a NOT NULL json column that defaults to an array (missions.plan, web_messages.payload) gets [] back, not {}
+        elif any(re.search(r"(?<![A-Za-z0-9_])" + re.escape(c) + r"(?![A-Za-z0-9_])", d) for d in checks.get(t, [])):
+            val = BLANK_MARKER
+        else:
+            val = "" if notnull else None
+        in_unique = c in uniq.get(t, set()) and ty in ("text", "character varying", "varchar", "citext") and (notnull or val is not None)
+        for k, row in enumerate(data[t]):
+            if c in row:
+                # a column inside a UNIQUE index / constraint must not collapse to one shared value (evidence_sources_dedupe_idx is unique on (task_id, content_sha256, final_url) and final_url is blanked):
+                # every row gets its own marker ("[blanked: not stored off-site] #<n>", still >= 30 chars so minimum-length checks hold)
+                row[c] = f"{BLANK_MARKER} #{k + 1}" if in_unique else val
+                n += 1
+    rep["blanked_fields_restored_empty"] = n
 
 
 def load_data(cur, schema: dict, data: dict, rep: dict):
@@ -338,7 +451,9 @@ def load_data(cur, schema: dict, data: dict, rep: dict):
 def rebuild_constraints(cur, schema: dict, rep: dict):
     warnings = []
     for i in schema.get("indexes", []):      # first: a foreign key may rely on a plain unique index that is not itself a constraint
-        cur.execute(i["def"])
+        err = _try(cur, i["def"])
+        if err:
+            raise Fail(f'index {i.get("name")} on {i.get("table")} could not be built on the restored data ({err[:120]}); the restore is aborted and nothing was committed')
     for kind in FK_LAST:
         for c in schema.get("constraints", []):
             if c["type"] != kind and not (kind == "x" and c["type"] not in FK_LAST):
@@ -607,8 +722,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--file"); ap.add_argument("--sidecar"); ap.add_argument("--b2-latest", action="store_true"); ap.add_argument("--b2-name")
     ap.add_argument("--list", action="store_true"); ap.add_argument("--target"); ap.add_argument("--wipe", action="store_true")
+    ap.add_argument("--allow-unverified", action="store_true", help="restore an archive that is not verified consistent (forensics only)")
     ap.add_argument("--verify-only", action="store_true"); ap.add_argument("--expect-sha256"); ap.add_argument("--report")
     args = ap.parse_args()
+    global ALLOW_UNVERIFIED
+    ALLOW_UNVERIFIED = bool(args.allow_unverified)
     if not (args.file or args.b2_latest or args.b2_name or args.list):
         ap.error("give --file, --b2-latest, --b2-name or --list")
     rep = {"started_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "steps": {}}
@@ -639,7 +757,7 @@ def main():
                 cur.execute("drop schema public cascade"); cur.execute("drop schema if exists supabase_migrations cascade"); cur.execute("create schema public")
             cur.execute("set time zone 'UTC'")
             skipped = rebuild_schema(cur, schema, rep); rep["steps"]["schema_rebuilt"] = "PASS"
-            load_data(cur, schema, data, rep); rep["steps"]["data_loaded"] = "PASS"
+            apply_blanks(schema, data, manifest, rep); assert_unique_feasible(schema, data); load_data(cur, schema, data, rep); rep["steps"]["data_loaded"] = "PASS"
             rebuild_constraints(cur, schema, rep); rebuild_rest(cur, schema, rep); replay_schema_acl_and_comments(cur, schema, rep)
             rep["steps"]["constraints_indexes_triggers_views_policies_grants"] = "PASS" if not rep["views_failed"] else "FAIL"
             rep.setdefault("not_restored", {}).update(dict(skipped))

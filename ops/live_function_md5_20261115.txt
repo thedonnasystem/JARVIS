@@ -1,0 +1,11 @@
+# md5(pg_get_functiondef(oid)) of the functions replaced by 20261120_leak_source_prevention_v1 / 20261120_backup_redact_leak_paths_v1, READ-ONLY from the live production database
+# (project ihxzvpwbqydqtblvazbq, select pg_get_functiondef, Nov 15 2026). The first five equal the repo definitions exactly (verified on the scratch replica), so the new migration bodies are based on the live text.
+# backup_snapshot differs from the repo head ONLY because 20261119_backup_exclude_client_pii_v1 is not applied to production yet: live = the 20261113_backup_schema_v1 definition (e911b2d7...), repo head before this change = c79dc52d...
+# ops/rollback_leak_redaction.sql restores the repo head (c79dc52d...), which is what production will have once 20261119 is released.
+mark_do_not_contact(uuid,text,text) 8cd2c69d909dd965c590e8f63dbb2ad0
+record_lead_reply(uuid,text,text,text) 5d80fcda590388b8bfb60263865ef41c
+setter_record_payout(text,text,integer,text,text) c9b072545f93e9075c6ef7b933537b3f
+set_deal_stage(uuid,text,text,text) d7bc9cd0ecb93d6eabe5a410bf3d5936
+confirm_deal_won(uuid,integer,text,text,text) d0782bd217bc69c0eb49c6429e59fbe8
+backup_snapshot(text[]) c79dc52db624d3076739aaa272a402e2
+# live backup_snapshot(text[]) e911b2d7bbbc326bb5475d90447d8cc7 (20261113 definition; not compared by the drill)
