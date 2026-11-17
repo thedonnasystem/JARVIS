@@ -71,7 +71,7 @@ export async function boot(opts = {}) {
     },
   };
   const dom = new JSDOM(read('webapp/index.html'), {
-    url: 'https://fendezy-hq-app.onrender.com/', runScripts: 'dangerously', pretendToBeVisual: true,
+    url: opts.url || 'https://fendezy-hq-app.onrender.com/', runScripts: 'dangerously', pretendToBeVisual: true,
     beforeParse(w) {
       w.supabase = { createClient: () => client };
       w.matchMedia = () => ({ matches: false });
@@ -82,7 +82,11 @@ export async function boot(opts = {}) {
     },
   });
   const w = dom.window; const doc = w.document;
-  const el = doc.createElement('script'); el.textContent = read('webapp/app.js'); doc.body.appendChild(el);
+  w.__errors = []; w.addEventListener('error', (e) => w.__errors.push(String(e.message || e)));
+  // same order as index.html: every local script it references, then app.js
+  for (const rel of [...read('webapp/index.html').matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]).filter((x) => !x.startsWith('vendor/'))) {
+    const el = doc.createElement('script'); el.textContent = read('webapp/' + rel); doc.body.appendChild(el);
+  }
   await tick();
   const api = {
     win: w, doc, calls, handler, state,

@@ -13,7 +13,9 @@ function h(tag, attrs, ...kids) {
 }
 const sb = window.supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
 const S = { snap: null, inbox: null, msgs: [], tab: 'chat', seen: new Set(), busy: false };
-const TABS = [['chat', 'Jarvis'], ['inbox', 'Inbox'], ['home', 'Home'], ['missions', 'Missions'], ['agents', 'Agents'], ['money', 'Money'], ['feed', 'Feed']];
+// ?demo=1 opens the FENDEZY HQ screens with the offline Jarvis planner only: no login, no database call of any kind (hq/org.js, hq/jarvis.js).
+const DEMO = /(?:^|[?&])demo=1(?:&|$)/.test(location.search) && !!window.HQ;
+const TABS = DEMO ? [['hq', 'HQ']] : [['chat', 'Jarvis'], ['inbox', 'Inbox'], ['hq', 'HQ'], ['home', 'Home'], ['missions', 'Missions'], ['agents', 'Agents'], ['money', 'Money'], ['feed', 'Feed']];
 
 async function rpc(name, args) {
   const { data, error } = await sb.rpc(name, args || {});
@@ -32,6 +34,7 @@ function note(msg) { const b = $('banner'); b.textContent = msg; b.hidden = !msg
 // ---------- login (email code; owner check is enforced in the database) ----------
 async function boot() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (DEMO) return enterDemo();
   const { data } = await sb.auth.getSession();
   if (data.session) return enter();
   $('login').hidden = false;
@@ -51,6 +54,11 @@ $('f-code').addEventListener('submit', async (e) => {
   $('login').hidden = true; enter();
 });
 
+function enterDemo() {
+  $('login').hidden = true; $('app').hidden = false; $('tabs').hidden = true;
+  $('pill').className = 'pill warn'; $('pill').textContent = 'DEMO: simulated data'; $('stamp').textContent = 'not connected';
+  show('hq');
+}
 async function enter() {
   try { await rpc('app_snapshot'); } catch (e) {
     await sb.auth.signOut();
@@ -103,6 +111,7 @@ async function act(kind, payload) {
 
 // ---------- render ----------
 function render() {
+  if (DEMO) { rHQ(null); return; }
   const s = S.snap; if (!s) return;
   const st = s.state || {};
   const pill = $('pill');
@@ -116,7 +125,7 @@ function render() {
   const ae = document.activeElement;
   if (S.tab !== 'chat' && ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && $('v-' + S.tab).contains(ae)) return;
   const n = inboxItems(s).length; const tb = $('t-inbox'); if (tb) tb.textContent = n ? 'Inbox (' + n + ')' : 'Inbox';
-  try { ({ chat: rChat, home: rHome, inbox: rInbox, missions: rMissions, agents: rAgents, money: rMoney, feed: rFeed })[S.tab](s); }
+  try { ({ chat: rChat, home: rHome, inbox: rInbox, hq: rHQ, missions: rMissions, agents: rAgents, money: rMoney, feed: rFeed })[S.tab](s); }
   catch (e) { note('Could not draw this page: ' + String((e && e.message) || e)); $('v-' + S.tab).replaceChildren(h('p', { class: 'dim' }, 'This page could not be drawn. Pull to refresh, or tell Jarvis.')); }
 }
 // ---------- inbox: everything waiting on the owner, ranked by the database (app_needs_you). Read-only here: Approve/Reject/answer/resume use the EXISTING app_send kinds ----------
@@ -147,6 +156,12 @@ function rInbox(s) {
         ? h('div', { class: 'btns' }, (it.actions || []).filter((a) => a && INBOX_KINDS[a.kind] === 1 && a.payload).map((a) => h('button', { class: a.verb === 'approve' ? 'ok' : a.verb === 'reject' || a.verb === 'abandon' ? 'bad' : 'ghost',
           onclick: () => { if (a.confirm && !confirm(a.label + ' this?')) return; act(a.kind, a.payload); } }, a.label || a.verb)))
         : (it.command ? h('div', { class: 'dim' }, 'In Telegram: ' + it.command) : null))));
+}
+// ---------- FENDEZY HQ (hq/hq.js): org screens + offline Jarvis planner (SIMULATED); signed in, LIVE panels show what the existing reads already return ----------
+function rHQ(s) {
+  window.HQ.render($('v-hq'), DEMO ? { mode: 'demo' } : { mode: 'live', snap: s, office: S.office, inbox: inboxItems(s), goTab: show,
+    // LIVE hand-off: the existing Missions-tab call (app_send kind 'mission', verb 'new'); no new RPC, grant or migration
+    sendMission: (objective) => send('', 'mission', { verb: 'new', objective }) });
 }
 function rChat() {
   const box = $('msgs'); const atEnd = box.parentElement.scrollHeight - box.parentElement.scrollTop - box.parentElement.clientHeight < 80;

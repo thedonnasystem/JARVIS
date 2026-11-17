@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="HQ">
 <link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-192.png"><link rel="icon" href="icon.svg">
-<title>Fendezy HQ</title><link rel="stylesheet" href="styles.css"></head>
+<title>Fendezy HQ</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="hq/hq.css"></head>
 <body>
 <section id="login" hidden>
   <h1>Fendezy HQ</h1><p class="dim">Owner access only.</p>
@@ -22,6 +22,7 @@
       <form id="f-chat"><button type="button" id="mic" aria-label="Speak">🎙</button><input id="say" autocomplete="off" placeholder="Tell Jarvis…"><button id="sendbtn">Send</button></form>
       <label class="dim speak"><input type="checkbox" id="speak"> Jarvis speaks replies</label></section>
     <section id="v-inbox" class="view"></section>
+    <section id="v-hq" class="view"></section>
     <section id="v-home" class="view"></section>
     <section id="v-missions" class="view"></section>
     <section id="v-agents" class="view"></section>
@@ -31,5 +32,8 @@
   <nav id="tabs"></nav>
 </main>
 <script src="vendor/supabase.js"></script>
+<script src="hq/org.js"></script>
+<script src="hq/jarvis.js"></script>
+<script src="hq/hq.js"></script>
 <script src="app.js"></script>
 </body></html>
