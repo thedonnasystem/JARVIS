@@ -1,0 +1,13 @@
+# /etc/systemd/system/jarvis-llm.service   (systemctl enable --now jarvis-llm)   auto-restart on crash and at boot
+[Unit]
+Description=Jarvis self-hosted model (llama.cpp, OpenAI-compatible)
+After=network-online.target
+[Service]
+EnvironmentFile=/etc/jarvis-llm.env
+ExecStart=/opt/jarvis/start_llamacpp.sh
+Restart=always
+RestartSec=10
+User=jarvis
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target

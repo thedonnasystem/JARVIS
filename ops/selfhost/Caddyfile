@@ -1,0 +1,5 @@
+# TLS in front of the model server (automatic certificates). Railway -> https://<your-domain> with header Authorization: Bearer <JARVIS_SELFHOST_API_KEY>.
+# The model server itself also checks the key; Caddy adds TLS and hides the local port. Open only 443 (and 80 for the certificate) in the VM firewall.
+{$JARVIS_LLM_DOMAIN} {
+    reverse_proxy 127.0.0.1:8080
+}

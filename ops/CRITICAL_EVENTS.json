@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "about": "The ONLY events that may place an emergency phone call to the Chairman (hq_channels.EmergencyCallAdapter). PROTECTED file (ops/PROTECTED_PATHS.json): changing it needs the Chairman's approval. Everything else goes to Telegram text. The database also enforces: calls switched off by default (jarvis_core_config.emergency_call_enabled), at most max_calls_per_day (default 2, hard limit 5), one call per dedupe key per 24 h, every decision logged in jarvis_call_log.",
+  "status": "PROPOSED: awaiting the Chairman's approval of this list",
+  "events": {
+    "kill_switch_tripped": {"says": "the kill switch was turned on", "min_severity": "critical"},
+    "security_incident": {"says": "a security incident was detected", "min_severity": "critical"},
+    "spend_anomaly": {"says": "spending is far above normal or running away", "min_severity": "critical", "rule": "spend in the last hour above 50 percent of the daily cap, or the cap hit before 12:00 Toronto time"},
+    "production_down": {"says": "production is down", "min_severity": "critical", "rule": "health check failed for 15 minutes in a row"},
+    "deadline_critical": {"says": "a time-critical deal or legal deadline needs you", "min_severity": "critical", "rule": "a deadline less than 6 hours away that only the Chairman can act on"}
+  },
+  "script": "Hello sir, this is Jarvis with an emergency alert: {says}. Please check Telegram now. I repeat: {says}. Please check Telegram.",
+  "night_rule": "22:00-07:00 America/Toronto: only these events, and only at severity critical. Weekdays 08:00-17:00: these events only (they are all critical)."
+}

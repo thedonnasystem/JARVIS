@@ -1264,6 +1264,11 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd), ("gate", hq_gate_cmd)):
         app.add_handler(CommandHandler(name, fn))
     register_venture2(app, CommandHandler)  # venture2 hook
+    try:  # Jarvis core v2: /core, /briefing, /report, /seedmemory (owner only, no AI). Worker + 07:00 report only with JARVIS_CORE=1.
+        import hq_core
+        hq_core.register(app, CommandHandler)
+    except Exception:  # never block startup over the dormant core
+        logger.exception("jarvis core commands not registered")
     # --- hqui begin ---
     app.add_handler(CommandHandler("needs", hq_needs_cmd))
     # --- hqui end ---
@@ -1627,3 +1632,4 @@ def register_venture2(app, CommandHandler) -> None:
 
 MENU.extend([("reply", "Record a lead's reply; unsubscribe = do not contact"), ("deal", "Deals: new, move, won (owner confirms revenue)")])
 # --- venture2 end ---
+MENU.extend([("core", "Jarvis core status (queue, switches, model providers)"), ("briefing", "Jarvis's briefing to you"), ("report", "The daily report now")])

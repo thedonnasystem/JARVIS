@@ -102,7 +102,7 @@ PROVIDER_PATTERNS = [r"api\.anthropic\.com", r"api\.openai\.com", r"deepgram", r
                      r"generativelanguage\.googleapis", r"api\.cohere", r"api\.mistral", r"replicate\.com", r"api\.together",
                      r"^\s*(?:import|from)\s+(?:openai|cohere|mistralai|groq|replicate|google\.generativeai)\b",
                      r"\bAnthropic\(", r"\bClaudeSDKClient\(", r"async for \w+ in query\(", r"\.messages\.create\("]
-ALLOWED_FILES = {"bot.py", "hq_engine.py", "hq_meter.py", "hq_voice.py"}
+ALLOWED_FILES = {"bot.py", "hq_engine.py", "hq_meter.py", "hq_voice.py", "hq_llm.py"}   # hq_llm: Jarvis core v2 provider layer (reserve-first, tested below)
 
 
 def strip_comments_and_docstrings(t):
@@ -161,6 +161,14 @@ class StaticSurface(unittest.TestCase):
         probe = t[t.index("def _credits_back("):t.index("def resume_after_credits")]
         self.assertLess(probe.index('"reserve_llm_budget"'), probe.index(".messages.create("))
         self.assertEqual(len(re.findall(r"\.messages\.create\(", strip_comments_and_docstrings(t))), 3)  # _complete x2 + probe
+
+    def test_core_provider_calls_follow_a_reservation(self):
+        t = strip_comments_and_docstrings(SRC["hq_llm.py"])
+        body = t[t.index("def complete("):t.index("def complete_or_queue(")]
+        self.assertLess(body.index("hq_meter._reserve_cents("), body.index("post(url"), "hq_llm must reserve at the gateway before every provider request")
+        self.assertEqual(t.count("= post(url"), 1)
+        self.assertEqual(len(re.findall(r"urllib\.request\.urlopen\(", t)), 2)       # the transport and the /models health probe (no generation)
+        self.assertNotIn("record_spent_usd", t)
 
     def test_meter_has_no_unmetered_fallthrough(self):
         t = strip_comments_and_docstrings(SRC["hq_meter.py"])

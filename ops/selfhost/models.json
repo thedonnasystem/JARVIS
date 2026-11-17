@@ -1,0 +1,15 @@
+{
+  "checked": "2026-11-16 (planning only: confirm the exact current model id, quantization, licence and tool-calling format at activation, and record them here)",
+  "default_family": "Nous Research Hermes (Hermes 4 when a build fits the hardware; Hermes 3 8B as the small CPU option)",
+  "free_cpu_vm": [
+    {"use": "default free fallback", "hardware": "always-free ARM VM, 4 cores, ~24 GB RAM, no GPU", "model": "Hermes 3 (Llama 3.1 8B) GGUF Q4_K_M, about 5 GB", "server": "llama.cpp llama-server --jinja",
+     "speed": "a few tokens per second (slow; fine for queued work)", "licence": "Llama 3.1 Community Licence (CONFIRM)", "tool_calls": "Hermes function-calling format via the chat template (CONFIRM with hq_llm.check_tool_calling)"},
+    {"use": "alternative", "hardware": "same VM", "model": "Qwen (7-8B class, instruct) GGUF Q4", "server": "llama.cpp or Ollama", "licence": "Apache 2.0 for most Qwen releases (CONFIRM per model)", "tool_calls": "Qwen/Hermes-style (CONFIRM)"}
+  ],
+  "paid_gpu_optional": [
+    {"hardware": "24-48 GB GPU", "model": "Hermes 4 ~14B class (if released at that size) or Qwen ~14B instruct, AWQ / GPTQ 4-bit", "server": "vLLM", "tool_parser": "hermes", "licence": "CONFIRM"},
+    {"hardware": "48-80 GB GPU", "model": "Hermes 4 70B class, AWQ 4-bit", "server": "vLLM", "tool_parser": "hermes", "licence": "Llama 3.x Community Licence for Llama-based builds (CONFIRM)"},
+    {"hardware": "48-80 GB GPU", "model": "alternatives: Qwen ~30B MoE / DeepSeek distills / GLM, quantized", "server": "vLLM", "tool_parser": "per model (CONFIRM)", "licence": "per model (CONFIRM)"}
+  ],
+  "not_used": "Nous 'Hermes Agent' (agent framework): not a replacement for Jarvis core (no spend gateway, kill switch, consent rules, HQ, missions or never-edit enforcement). See OWNER_GUIDE_JARVIS_V2.md."
+}

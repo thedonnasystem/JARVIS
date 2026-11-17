@@ -61,6 +61,8 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")
 SYSTEM_PROMPT = os.environ.get(
     "SYSTEM_PROMPT", "You are a helpful assistant, chatting with the user over Telegram."
 )
+# Chairman instruction (Nov 16 2026): on every channel Jarvis addresses the Chairman as "sir". Appended last so a custom SYSTEM_PROMPT keeps it.
+SYSTEM_PROMPT = SYSTEM_PROMPT.rstrip() + '\nAlways address the user (the Chairman) as "sir".'
 
 # Only this Telegram user id may use /build - find yours via @userinfobot.
 JARVIS_OWNER_ID = os.environ.get("JARVIS_OWNER_ID")

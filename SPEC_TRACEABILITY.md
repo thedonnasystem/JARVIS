@@ -80,3 +80,31 @@ Migration green light, Auth setup, merge to the Railway branch, VAPID keys, Anth
 | Telegram voice notes in | BUILT, switched off until OPENAI_API_KEY is set (voice replies not built) |
 | Real send provider for outbox | BUILT, dormant (`hq_mail.py`, Resend): needs RESEND_API_KEY, MAIL_FROM, a verified domain and your CASL address |
 | Daily database backup | BUILT, dormant (`hq_backup.py`, encrypted, restore-checked): needs BACKUP_KEY and a storage endpoint outside this Supabase project |
+
+## Jarvis core v2 (Nov 16 2026, branch `build/jarvis-core`; NOT on overnight-build, NOT live)
+Status words here: BUILT-DORMANT = code + tests on the dev branch, switched off; DESIGN = documented interface, no implementation; NOT BUILT = stated.
+Tests are scratch-Postgres and mocked providers: nothing here is production proof.
+| Requirement | Status | Where / note |
+|---|---|---|
+| A Never-edit list (7 categories) + CI check, rename/copy/symlink aware, owner approval marker | BUILT-DORMANT | `ops/PROTECTED_PATHS.json`, `scripts/check_protected_paths.py` (+22 tests), step in the `unit` CI job, CODEOWNERS. Enforced only once you add branch protection (owner action). Pattern checks are a tripwire, not proof |
+| A Approval from Telegram in one tap | PARTLY | GitHub review on the head commit, or the `owner-approved-<sha12>` label by your account. A DB-recorded Telegram approval was rejected (CI cannot read it; the bot could forge it) |
+| B Durable queue, worker, retries/backoff/leases, per-division queues | BUILT-DORMANT | `jarvis_jobs`, `jarvis_job_events` (append-only), `jarvis_lease/finish`, `hq_core.worker_once`; sqltest J3-J5 |
+| B Only Jarvis always on; agents woken per job with a reason, sleep on empty queue / no progress | BUILT-DORMANT | `jarvis_agent_wakes` (append-only), `jarvis_wake_agent/sleep_agent`; J16 + unit tests. The existing engine tick (`hq_engine.tick`, 5 min) is unchanged and still processes the task board |
+| B Quiet hours (22-07 emergencies only, weekdays 8-17 urgent only) | BUILT-DORMANT | `hq_core.notify_allowed/send_owner` (held via `deliver_after`). Existing owner-message delivery keeps its own 22-07 rule |
+| B 07:00 daily report (changelog, spend, missions, approvals, cost per division, revenue/costs/net/runway, wakes) | BUILT-DORMANT | `jarvis_daily_report_data`, `hq_core.format_daily_report`, `/report` |
+| C Cost engine: $0 free-tier rotation, client-data rule, rate tracking, no silent paid switch | BUILT-DORMANT | `hq_llm.py` (+20 tests), `FREE_PROVIDER_TERMS.md`. Limits are starting values; several provider terms UNVERIFIED |
+| C Tiers small/medium/large; large only with an owner approval | BUILT-DORMANT | `hq_llm.choose_tier`, `jarvis_owner_approve_large` (single use, expiring) |
+| C Prompt caching / under-100k / retrieval not dumps / reuse cache / batch queue / per-mission stop | BUILT-DORMANT | cache_control on Anthropic only (no-op elsewhere); 90k hard cap, 6k for free tiers; `jarvis_memory_search`; `jarvis_result_cache`; `enqueue_batch` (Anthropic batches 50% verified in docs); `MissionGuard` |
+| C Cost meter per mission/division/day | BUILT-DORMANT | `jarvis_cost_meter` (bot RPC). NOT on the PWA: a new app RPC needs a lockdown keep-open change (applied migration), left for a separate owner decision |
+| C $10/day design | TESTED | J11 runs the gateway at 1000 cents inside a rolled-back transaction; the cap in data is unchanged |
+| C Self-funding (confirmed revenue x owner %) | BUILT-DORMANT | `jarvis_self_fund_credits`, `jarvis_owner_confirm_revenue` (received + bank-matched only), `jarvis_self_fund_status`; J15 |
+| D Self-edit pipeline (branch, PR, CI, independent reviewer, protected check, auto-merge to jarvis/integration, rollback) | BUILT-DORMANT | `hq_selfedit.py` (+11 tests, GitHub mocked). Never targets overnight-build / Railway branch. Refuses the owner's token |
+| E Self-automation of repeated task classes | BUILT-DORMANT | `jarvis_task_stats`, `jarvis_automation_candidates`, `hq_core.automation_scan`, `hq_selfedit.draft_automation` |
+| F Chairman briefing via channel adapter | BUILT-DORMANT | `hq_briefing.py`, `/briefing`, Telegram adapter (existing path) |
+| F WhatsApp Cloud API adapter (text) | BUILT-DORMANT | `hq_channels.WhatsAppChannel`; never called a vendor; owner checklist in the guide |
+| F Emergency call adapter | BUILT-DORMANT | `hq_channels.EmergencyCall`, `ops/CRITICAL_EVENTS.json` (protected, PROPOSED), DB limit/dedupe/log (J7). Not wired to triggers yet |
+| F Real-time two-way voice | DESIGN | `hq_channels.VoiceConversation` interface only |
+| G Memory seed import (owner only, dedupe, audit) | BUILT-DORMANT | `/seedmemory` file caption, `hq_seed.py`, `jarvis_seed_memory`; synthetic tests only (J9) |
+| Self-hosted fallback brain kit | BUILT (kit) | `ops/selfhost/` (llama.cpp + systemd + Caddy TLS + key; optional vLLM GPU). Not deployed; model ids and licences to confirm |
+| Off-site backup of the new tables | NOT BUILT | classified `secret` = excluded from the off-site export until reviewed `backup_redaction_spec()` rows exist (protected follow-up); provider backups still hold them |
+| Identity: always "sir" | BUILT | `hq_core.IDENTITY`; templates tested (briefing, daily report, call script, channel messages) |

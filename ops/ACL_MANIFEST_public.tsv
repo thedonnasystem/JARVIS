@@ -192,6 +192,31 @@ function	guard_capital_policy()	-	-	execute	invoker	trigger function: cannot be 
 function	holding_pnl(integer)	-	-	execute	invoker		-
 function	is_app_owner()	-	execute	execute	security_definer		-
 function	is_suppressed(text)	-	-	execute	security_definer		-
+function	jarvis_append_only()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	jarvis_automation_candidates(text[])	-	-	execute	security_definer		-
+function	jarvis_cache_get(text)	-	-	execute	security_definer		-
+function	jarvis_cache_put(text,text,text,text,integer)	-	-	execute	security_definer		-
+function	jarvis_call_allowed(text,text,boolean)	-	-	execute	security_definer		-
+function	jarvis_call_result(text,text,jsonb)	-	-	execute	security_definer		-
+function	jarvis_changelog_add(text,text,text)	-	-	execute	security_definer		-
+function	jarvis_core_status()	-	-	execute	security_definer		-
+function	jarvis_cost_meter(integer)	-	-	execute	security_definer		-
+function	jarvis_daily_report_data(date)	-	-	execute	security_definer		-
+function	jarvis_enqueue(text,text,jsonb,text,text,timestamp with time zone,uuid,boolean,integer)	-	-	execute	security_definer		-
+function	jarvis_extend_lease(uuid,text,integer)	-	-	execute	security_definer		-
+function	jarvis_finish(uuid,text,boolean,text,integer,boolean)	-	-	execute	security_definer		-
+function	jarvis_lease(text,integer,integer,text[])	-	-	execute	security_definer		-
+function	jarvis_mark_automation(text,text,text)	-	-	execute	security_definer		-
+function	jarvis_memory_search(text,integer,text[])	-	-	execute	security_definer		-
+function	jarvis_owner_approve_large(uuid,integer)	-	-	execute	security_definer		-
+function	jarvis_owner_confirm_revenue(uuid)	-	-	execute	security_definer		-
+function	jarvis_require_owner()	-	-	execute	security_definer		-
+function	jarvis_seed_memory(jsonb,text,text)	-	-	execute	security_definer		-
+function	jarvis_self_fund_status()	-	-	execute	security_definer		-
+function	jarvis_set_config(text,jsonb)	-	-	execute	security_definer		-
+function	jarvis_sleep_agent(text,text,integer,integer)	-	-	execute	security_definer		-
+function	jarvis_use_large_approval(uuid,uuid)	-	-	execute	security_definer		-
+function	jarvis_wake_agent(text,uuid,text)	-	-	execute	security_definer		-
 function	lead_funnel(text)	-	-	execute	invoker		-
 function	leads_dnc_cascade()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	leads_suppression_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-
@@ -310,6 +335,10 @@ sequence	action_log_id_seq	-	-	-			-
 sequence	audit_log_id_seq	-	-	-			-
 sequence	ffm_redaction_epoch_seq	-	-	-			-
 sequence	ffm_restore_markers_id_seq	-	-	-			-
+sequence	jarvis_agent_wakes_id_seq	-	-	-			-
+sequence	jarvis_call_log_id_seq	-	-	-			-
+sequence	jarvis_changelog_id_seq	-	-	-			-
+sequence	jarvis_job_events_id_seq	-	-	-			-
 sequence	leads_short_id_seq	-	-	-			-
 table	account_requests	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	accounts_registry	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
@@ -364,6 +393,16 @@ table	handbook	delete,insert,references,select,trigger,truncate,update	delete,in
 table	human_handoffs	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	ideas	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	integration_status	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
+table	jarvis_agent_wakes	-	-	select	rls=true		-
+table	jarvis_call_log	-	-	select	rls=true		-
+table	jarvis_changelog	-	-	select	rls=true		-
+table	jarvis_core_config	-	-	select	rls=true		-
+table	jarvis_job_events	-	-	select	rls=true		-
+table	jarvis_jobs	-	-	select	rls=true		-
+table	jarvis_large_approvals	-	-	-	rls=true		-
+table	jarvis_result_cache	-	-	-	rls=true		-
+table	jarvis_self_fund_credits	-	-	-	rls=true		-
+table	jarvis_task_stats	-	-	select	rls=true		-
 table	lead_replies	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	leads	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	ledger	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-

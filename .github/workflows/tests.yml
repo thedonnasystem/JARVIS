@@ -5,6 +5,11 @@ name: tests
 # no persisted git credentials, hash-verified Python deps (requirements/dev.lock), timeouts, one run per ref.
 on:
   pull_request:
+    # labeled / unlabeled: the owner's approval label (scripts/check_protected_paths.py) re-runs the checks
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  pull_request_review:
+    # the owner's APPROVED review on the head commit re-runs the checks (protected-path approval)
+    types: [submitted, dismissed]
   push:
     branches: ["jarvis/**", "overnight-build", "stream/**"]
 permissions:
@@ -17,6 +22,9 @@ jobs:
     # fast feedback, no database: repo tests, lint/manifest tests, migration lint, bundle freshness, workflow pin check
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read   # read-only: the protected-path check reads the owner's review / label on the PR
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -28,6 +36,13 @@ jobs:
       - run: python3 scripts/check_workflow_pins.py
       - run: python3 scripts/check_gitleaks_ignore.py
       - run: scripts/gate.sh --only unit,scripts-tests,lint,bundle,appcheck,webjs
+      - name: Protected paths (never-edit list; owner approval marker required on pull requests)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/check_protected_paths.py --ci
   migrations:
     # the full gate: everything in `unit` plus the replica run (migrations, e2e, integration, rollback drill), the generated
     # function manifest, and the backup drill when the branch has one. --strict: a skipped required step is a failure.

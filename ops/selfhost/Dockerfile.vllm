@@ -1,0 +1,6 @@
+# OPTIONAL PAID path (off by default; needs the self-funded budget): a rented GPU pod serving a larger model with vLLM's OpenAI-compatible server.
+# Pin the image tag at activation (check the current vLLM release); the model id, quantization and licence come from models.json.
+FROM vllm/vllm-openai:v0.6.6
+ENV MODEL_ID="" TOOL_PARSER="hermes"
+# --api-key: every request must carry the key; --enable-auto-tool-choice + --tool-call-parser: structured tool calls (verify with hq_llm.check_tool_calling)
+ENTRYPOINT ["/bin/sh", "-c", "exec python3 -m vllm.entrypoints.openai.api_server --model \"$MODEL_ID\" --api-key \"$JARVIS_GPU_API_KEY\" --host 0.0.0.0 --port 8000 --max-model-len 16384 --enable-auto-tool-choice --tool-call-parser \"$TOOL_PARSER\""]
