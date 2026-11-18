@@ -1280,6 +1280,11 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
         hq_hands.register(app, CommandHandler)
     except Exception:  # never block startup over the dormant hands
         logger.exception("jarvis hands commands not registered")
+    try:  # FF Marketing engine v1: /ffm new|pack|show|list|queue (owner only). Generates draft campaign packs; launches, sends and spends nothing.
+        import hq_ffm_engine
+        hq_ffm_engine.register(app, CommandHandler)
+    except Exception:  # never block startup over the engine
+        logger.exception("ffm engine commands not registered")
     # --- hqui begin ---
     app.add_handler(CommandHandler("needs", hq_needs_cmd))
     # --- hqui end ---
@@ -1643,4 +1648,5 @@ def register_venture2(app, CommandHandler) -> None:
 
 MENU.extend([("reply", "Record a lead's reply; unsubscribe = do not contact"), ("deal", "Deals: new, move, won (owner confirms revenue)")])
 # --- venture2 end ---
+MENU.extend([("ffm", "FF Marketing: client brief -> draft campaign pack")])
 MENU.extend([("core", "Jarvis core status (queue, switches, model providers)"), ("briefing", "Jarvis's briefing to you"), ("report", "The daily report now")])

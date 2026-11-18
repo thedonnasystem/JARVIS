@@ -137,6 +137,12 @@ function	ffm_close_outreach_gate(text,text)	-	-	execute	security_definer	bot-cal
 function	ffm_consent_immutable()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	ffm_contact_mac(text,text,text)	-	-	execute	invoker		-
 function	ffm_contact_status(uuid,text)	-	-	execute	security_definer	read-only decision	-
+function	ffm_engine_create_workspace(text,text,text,text)	-	-	execute	security_definer		-
+function	ffm_engine_leaves(jsonb,text)	-	-	execute	invoker		-
+function	ffm_engine_save_brief(uuid,jsonb,text)	-	-	execute	security_definer		-
+function	ffm_engine_save_pack(uuid,text,jsonb,uuid,integer,text,text)	-	-	execute	security_definer		-
+function	ffm_engine_screen(uuid,text,text)	-	-	execute	security_definer		-
+function	ffm_engine_screen_texts(uuid,text[])	-	-	execute	security_definer		-
 function	ffm_epoch_bump()	-	-	execute	security_definer	trigger function (inlined update of the epoch row): cannot be called directly	-
 function	ffm_epoch_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	ffm_erase_lead(uuid,uuid,text)	-	-	execute	security_definer		-
@@ -390,6 +396,8 @@ table	ffm_consent_log	-	-	select	rls=true		-
 table	ffm_consent_settings	-	-	select	rls=true		-
 table	ffm_consent_wordings	-	-	select	rls=true		-
 table	ffm_creatives	-	-	select	rls=true		-
+table	ffm_engine_briefs	-	-	select	rls=true		-
+table	ffm_engine_packs	-	-	select	rls=true		-
 table	ffm_epoch	-	-	select	rls=true		-
 table	ffm_gate_config	-	-	select	rls=true		-
 table	ffm_onboarding_items	-	-	select	rls=true		-

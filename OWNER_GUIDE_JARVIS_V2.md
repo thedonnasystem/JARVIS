@@ -108,3 +108,24 @@ Also needed: the Jarvis core worker on (section 7), the system out of dry-run (`
 - X and LinkedIn are text-only in v1; Facebook takes text or one image; Instagram one image or one video; TikTok and YouTube one video by URL.
 - Approvals are recorded by the bot's owner-only Telegram handlers; the database checks the `owner:` marker but cannot itself prove the tap came from your phone (same model as account and payment approvals today).
 - No HQ app panel yet (it would need a new app function on the locked lockdown list).
+
+## 12. FF Marketing engine (client brief -> draft campaign pack), built, needs release
+
+Turns one client brief into a full campaign pack, stored as drafts only: positioning and offer angle, 3 audience angles (in words), 3 ad sets, 9 ad variants (headline, text, CTA), 9 image/video prompts with an AI-disclosure note, landing page copy plus a simple HTML page, the lead form (name, email, phone only; consent wording comes from the client), 5 follow-up texts/emails (templates), a 14-day organic calendar, KPI targets and the weekly report template (`ffm_weekly_report`). Vertical playbooks: generic, mortgage, insurance, home_services, real_estate (`prompts/ffm/`), each with a "confirm with the client" list (items to confirm, not legal advice).
+
+### Run it (3 steps, Telegram)
+1. `/ffm new` with the brief in the same message (send `/ffm new` alone to get the template): name, vertical, offer, area, customer, goal, budget (as stated, or unset). Creates a DRAFT workspace (no budget) and its onboarding checklist.
+2. `/ffm pack <slug>`: generates and stores the pack, sends you `<slug>-pack.json` and `<slug>-landing.html`. Run it again to regenerate (new version; the old one is marked superseded).
+3. `/ffm show <slug>`: summary, items to confirm with the client, your actions, and the two files. `/ffm list` lists workspaces. Optional: `/ffm queue <slug> <account-id>` turns the 14 posts into hands drafts for a connected account (each waits for your approval; refused while a standing approval covers that account).
+
+### Cost
+3 calls to the cheap model (`claude-haiku-5-5`) through the same spend gateway as your chat, inside the existing $3.30/day cap: about 3 cents per pack (each call reserves the 1-cent minimum). Hard per-pack ceiling 10 cents (`FFM_PACK_CEILING_CENTS`, max 30), at most 5 calls. If the cap, the kill switch or the ceiling would be hit, it stops, stores nothing and tells you.
+
+### What stays manual (yours or the client's)
+Budget, activation and creative approval (owner-only, unchanged); client sign-off on every ad, page and message; exact consent wording and licence/registration text; publishing the page, ads and posts; any message to a lead (outbox, consent and outreach gates unchanged). Nothing is launched, published, sent or spent by the engine.
+
+### Limits (plain)
+- Privacy screen: every generated text is screened; anything flagged is blanked and listed in `screened_out` for you to rewrite. The database classifier treats every vertical except mortgage as insurance context (20261122 design) and there only accepts the owner-approved marketing vocabulary (~830 words) plus approved terms. The engine gives the model that vocabulary, but trade words like "furnace" are refused: for home services, real estate and generic clients, expect blanked texts until you approve their words (`ws_add_vocab_word` / `ws_add_approved_term`, owner-only; no Telegram command for it yet). Mortgage packs pass the strict screen normally.
+- Opt-out lines, consent placeholder, compliance items and the HTML page are added from code when shown, not stored (they would not pass that vocabulary screen).
+- Packs are excluded from off-site backups (all `ffm_*` tables are), so a restore loses them; regenerate.
+- The model output is checked for shape and screened, not for truth or compliance: the client and you review everything.

@@ -143,4 +143,15 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
 done
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/jarvis_core_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "jarvis_core_check failed after the rollback + re-apply"; exit 1; }
 echo "jarvis core rollback drill OK"
+echo "ffm engine rollback drill: ops/rollback_ffm_engine.sql removes the engine objects (twice = idempotent), then everything re-applies"
+for i in 1 2; do
+  (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_ffm_engine.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FFM ENGINE ROLLBACK FAILED (run $i)"; exit 1; }
+done
+fe="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and proname like 'ffm\_engine\_%')||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'ffm\_engine\_%' and relkind='r')||'/'||(select public.backup_export_policy()->>'unclassified')")"
+[ "$fe" = "0/0/[]" ] || { echo "FFM ENGINE ROLLBACK DRILL FAILED: $fe"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the ffm engine rollback: $f"; exit 1; }
+done
+psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/ffm_engine_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ffm_engine_check failed after the rollback + re-apply"; exit 1; }
+echo "ffm engine rollback drill OK"
 echo "REPLICA OK"
