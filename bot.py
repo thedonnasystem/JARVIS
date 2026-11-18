@@ -2578,6 +2578,11 @@ def main() -> None:
         app.job_queue.run_repeating(hq_executor.expire_stale_job, interval=hq_executor.EXPIRE_EVERY_SECONDS, first=120, name="hq-executor-expire",
                                     job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 60})
         hq_web.configure(jarvis_reply)
+        try:  # Jarvis hands store generated passwords and API tokens in this same Bitwarden vault (values never reach the database or a model)
+            import hq_hands
+            hq_hands.configure_vault(_get_bw_client if vault_configured() else None, BW_ORGANIZATION_ID, BW_PROJECT_ID, save_vault_index)
+        except Exception:
+            logger.exception("jarvis hands vault not configured")
         app.job_queue.run_repeating(hq_web.poll, interval=hq_web.POLL_SECONDS, first=20, name="hq-web",
                                     job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 5})
         logger.info("Fendezy HQ bridge on: owner messages every 60s, task board and escalations every 5 min")

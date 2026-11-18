@@ -748,6 +748,11 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         out = hq_accounts.decide(ref_id, approved, by="owner:telegram")
         _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
         return out
+    elif ref_table == "hand_actions" and ref_id:
+        import hq_hands
+        out = hq_hands.decide(ref_id, approved, by="owner:telegram")
+        _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
+        return out
     elif ref_table == "payment_instructions" and ref_id:
         out = hq_payments.decide(ref_id, approved, by="owner:telegram")
         _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
@@ -1270,6 +1275,11 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
         hq_core.register(app, CommandHandler)
     except Exception:  # never block startup over the dormant core
         logger.exception("jarvis core commands not registered")
+    try:  # Jarvis hands v1: /accounts, /connect, /queue, /approve, /post, /code (owner only). Dormant until the owner enables a hand in the database.
+        import hq_hands
+        hq_hands.register(app, CommandHandler)
+    except Exception:  # never block startup over the dormant hands
+        logger.exception("jarvis hands commands not registered")
     # --- hqui begin ---
     app.add_handler(CommandHandler("needs", hq_needs_cmd))
     # --- hqui end ---

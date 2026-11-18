@@ -122,7 +122,18 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after insurance rollback: $f"; exit 1; }
 done
 echo "insurance rollback drill OK (and the migrations re-apply cleanly afterwards)"
+echo "jarvis hands rollback drill: ops/rollback_jarvis_hands.sql removes the hand objects (twice = idempotent), restores the export policy, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_hands.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS HANDS ROLLBACK FAILED to run"; exit 1; }
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_hands.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS HANDS ROLLBACK is not idempotent"; exit 1; }
+jh="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and proname like 'hands\_%')||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'hand\_%' and relkind='r')||'/'||(select count(*) from public.executor_registry where slug like 'hands-%')||'/'||(select count(*) from public.backup_redaction_spec() where table_name like 'hand\_%')||'/'||(select public.backup_export_policy()->>'unclassified')")"
+[ "$jh" = "0/0/0/0/[]" ] || { echo "JARVIS HANDS ROLLBACK DRILL FAILED: $jh"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the jarvis hands rollback: $f"; exit 1; }
+done
+psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/jarvis_hands_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "jarvis_hands_check failed after the rollback + re-apply"; exit 1; }
+echo "jarvis hands rollback drill OK"
 echo "jarvis core rollback drill: ops/rollback_jarvis_core.sql removes the core objects (twice = idempotent), keeps the export policy classified, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_hands.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS HANDS ROLLBACK (before the core rollback) FAILED"; exit 1; }   # hands depend on the core
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_core.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS CORE ROLLBACK FAILED to run"; exit 1; }
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_core.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS CORE ROLLBACK is not idempotent"; exit 1; }
 jc="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and proname like 'jarvis\_%')||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'jarvis\_%' and relkind='r')||'/'||(select public.backup_export_policy()->>'unclassified')")"

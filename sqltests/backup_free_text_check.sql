@@ -9,7 +9,8 @@ declare
     'human_handoffs.task','human_handoffs.url','human_handoffs.why_human','ideas.demand_source','ideas.description','ideas.kill_metric','ideas.result','ideas.revisit_trigger','memory.content','memory.source','missions.checkpoint',
     'missions.evidence','missions.next_action','missions.owner_decision','missions.plan','missions.result','missions.risks','missions.success_definition','missions.verdict_reason','owner_messages.answer','owner_messages.body',
     'owner_messages.options','payment_instructions.payee','predictions.action_ref','predictions.expected','predictions.outcome','reconciliation_flags.detail','tasks.detail','tasks.result','tasks.title','web_messages.body','web_messages.payload',
-    'agents.charter','agents.metric','ventures.description','ventures.primary_metric','venture_goals.metric','missions.objective'];
+    'agents.charter','agents.metric','ventures.description','ventures.primary_metric','venture_goals.metric','missions.objective',
+    'hand_accounts.asset_ref','hand_accounts.bio','hand_accounts.purpose','hand_actions.payload','hand_actions.result'];  -- Jarvis hands v1 (20261124)
   want_strict text[] := array['agents.title', 'audit_log.detail', 'departments.name', 'ledger.note', 'missions.title', 'venture_config.call_to_action', 'venture_config.offer', 'venture_goals.unit', 'ventures.name'];
   got text[]; v uuid; ag text; agid uuid; snap jsonb; pg jsonb; rec record; cn text; n int; txt text; mid uuid; i int;
 begin

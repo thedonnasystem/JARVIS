@@ -196,6 +196,8 @@ class RouteInventory(unittest.TestCase):
                           "hq_channels.py": 1, "hq_selfedit.py": 1})
         # hq_llm: the provider transport and the /models probe go through ONE no-redirect opener (a 3xx never carries the key to another origin)
         self.assertEqual(self.count(r"\bOPENER\.open\("), {"hq_llm.py": 2})
+        # Jarvis hands v1 (dormant): every official platform API call goes through ONE no-redirect opener (tokens never follow a redirect)
+        self.assertEqual(self.count(r"\b_NO_REDIRECT\.open\("), {"hq_hands_adapters.py": 1})
 
     def test_policy_authorize_callers_for_send_email(self):
         self.assertEqual(self.count(r'hq_policy\.authorize\(.*"send_email"', files={"hq_mail.py", "hq_commands.py", "hq_engine.py", "hq_web.py", "bot.py"}), {"hq_mail.py": 1})

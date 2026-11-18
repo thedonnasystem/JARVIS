@@ -189,6 +189,21 @@ function	forbid_policy_delete()	-	-	execute	invoker	trigger function: cannot be 
 function	forecast_bias_text()	-	-	execute	invoker		-
 function	guard_bank_balance()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	guard_capital_policy()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	hands_account_done(uuid,text,text)	-	-	execute	security_definer		-
+function	hands_ask_owner(uuid,text)	-	-	execute	security_definer		-
+function	hands_connect(text,text,text,text,text,timestamp with time zone,text[],text)	-	-	execute	security_definer		-
+function	hands_day_start()	-	-	execute	invoker		-
+function	hands_decide(uuid,boolean,text)	-	-	execute	security_definer		-
+function	hands_finish(uuid,text,text,text)	-	-	execute	security_definer		-
+function	hands_owner_enable(boolean,integer,integer)	-	-	execute	security_definer		-
+function	hands_owner_set_connector(text,boolean,integer)	-	-	execute	security_definer		-
+function	hands_owner_set_standing(text,text,boolean)	-	-	execute	security_definer		-
+function	hands_propose_account(text,text,text,text,text,text,text,integer,text)	-	-	execute	security_definer		-
+function	hands_release(uuid)	-	-	execute	security_definer		-
+function	hands_run_now(uuid,text)	-	-	execute	security_definer		-
+function	hands_start(uuid)	-	-	execute	security_definer		-
+function	hands_submit_action(text,uuid,text,jsonb,timestamp with time zone,boolean,text)	-	-	execute	security_definer		-
+function	hands_token_refreshed(uuid,text,timestamp with time zone)	-	-	execute	security_definer		-
 function	holding_pnl(integer)	-	-	execute	invoker		-
 function	is_app_owner()	-	execute	execute	security_definer		-
 function	is_suppressed(text)	-	-	execute	security_definer		-
@@ -391,6 +406,10 @@ table	ffm_secrets	-	-	-	rls=true		-
 table	ffm_sender_mark	-	-	select	rls=true		-
 table	ffm_suppression_expected	-	-	-	rls=true		-
 table	ffm_suppression_hashes	-	-	-	rls=true		-
+table	hand_accounts	-	-	select	rls=true		-
+table	hand_actions	-	-	select	rls=true		-
+table	hand_connectors	-	-	select	rls=true		-
+table	hand_standing	-	-	select	rls=true		-
 table	handbook	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	human_handoffs	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	ideas	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-

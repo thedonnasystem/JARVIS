@@ -74,3 +74,37 @@ Hermes Agent (Nous Research, MIT licence) is an agent framework with memory acro
 
 ## 10. Limits (stated plainly)
 The new Jarvis tables (queue, logs, wakes, approvals) are NOT in the encrypted off-site backup yet (the export needs a reviewed redaction rule per column first; follow-up); your database provider's own backups still hold them. Nothing here is proven in production: tests use a scratch database and mocked providers. Free-tier limits and terms change without notice. Rate tracking is in memory (a restart forgets it; providers' own limits still apply). The protected-path check is a tripwire plus an approval gate: the ruleset must require it, and a cleverly disguised change can still slip past pattern checks in the few places that are not locked by path (for example a file under `integrations/`), so the independent review and your approval are the control. The skill process is isolated from our code and keys but is not a jail. The personal-data scan is a pattern list. Telegram, GitHub rules and labels were tested only with mocks, not on GitHub or Telegram themselves.
+
+## 11. Jarvis's hands (accounts + posting), built and OFF
+What it is: one action pipeline (post, upload, send, update, deploy) over a connector registry. Every action: Jarvis drafts, you approve (one tap, `/approve <id>`, or a standing approval you set), the database re-checks kill switch, dry-run, connector on, account connected and the daily limit, the personal-data scan runs, then the executor gate and spend gateway, then the platform's **official API**. Every step is in `audit_log`.
+
+Accounts are **assisted only, for every service**. Jarvis proposes (platform, handle, name, bio, image); you approve; Jarvis sends you the official sign-up page with everything filled in for you to copy; **you sign up yourself and keep the password** (Jarvis never generates, stores or sees it); you send `/accounts done <id>`; then `/connect <platform> <division>` hands Jarvis posting through the official OAuth / API connection. Only the token goes to the Bitwarden vault; the database keeps the vault id.
+
+Connectors shipped: Facebook Page and Instagram professional (Meta Graph API), TikTok (Content Posting API), YouTube (Data API uploads), X (API v2, text), LinkedIn (Posts API, text), Email (drafts into the existing outbox: consent, suppression and `/drafts` still decide every send), Netlify (static deploy). New services are code adapters (`hq_hands_adapters.py`, template class inside): locked path, your approval.
+
+Telegram (owner only, "sir"): `/accounts` (list, `new`, `done`), `/connect`, `/queue`, `/approve <id> [no]`, `/post <id>` (run an approved one now).
+
+### Once per platform (what you do, ~10-20 min each)
+- **Meta (Facebook Page + Instagram):** create the Page yourself; switch Instagram to a professional account and link it to the Page; create an app at developers.facebook.com (type Business), add Facebook Login, set the redirect URL to the value of `HANDS_OAUTH_REDIRECT`; request `pages_manage_posts`, `instagram_content_publish` (App Review needed before it works for anyone but you as app admin). Railway Variables: `META_APP_ID`, `META_APP_SECRET`. Cost: $0. Meta caps API-published Instagram posts per 24 h.
+- **TikTok:** developers.tiktok.com app, add Content Posting API + Login Kit, redirect URL as above, verify the domain your videos are served from (pull-from-URL). Variables: `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`. Cost: $0. Until TikTok audits the app, posts are private (SELF_ONLY).
+- **YouTube:** Google Cloud project, enable YouTube Data API v3, OAuth client of type "TVs and Limited Input devices" (no redirect page needed; `/connect youtube <division>` shows a code). Reuses `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` if that client is that type, else set new ones. Cost: $0 within the default 10,000 units/day quota (an upload is about 1,600 units, so about 6 uploads/day). Uploads stay private until Google audits the project.
+- **X:** developer.x.com app with OAuth 2.0 (confidential client), redirect URL as above. Variables: `X_CLIENT_ID`, `X_CLIENT_SECRET`. Cost: X's free tier allows only a small number of posts per month and X changes its API pricing often; check the developer portal before turning it on (it may be paid).
+- **LinkedIn:** linkedin.com/developers app, add "Sign In with LinkedIn using OpenID Connect" and "Share on LinkedIn", redirect URL as above. Variables: `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`. Cost: $0. Posts as your member profile (company pages need LinkedIn's Community Management approval).
+- **Netlify:** sign up yourself, create the site, create a personal access token, then `/connect netlify <division> <site id> <token>` (the message is deleted). Cost: $0 on the free tier.
+- **Email:** nothing new; it uses the existing outbox and mail provider.
+- **All OAuth platforms:** one Railway Variable `HANDS_OAUTH_REDIRECT` = an https page you control (e.g. the HQ app URL). After you approve on the platform, the browser lands there; send `/connect <platform> <division> <that full link>`.
+
+### Turning a hand on (after the migration is released)
+In the Supabase SQL editor as the app owner (same pattern as `ops/OWNER_JARVIS_CORE.sql`: set your auth uid in the same transaction):
+```
+select public.hands_owner_enable(true, 10, 1);                       -- the action executor: 10 runs/day, 1 cent per run against the spend gateway
+select public.hands_owner_set_connector('meta-instagram', true, 5);  -- each platform you want, with its daily limit
+select public.hands_owner_set_standing('division', 'donna', true);   -- OPTIONAL: posts/uploads for a division skip the tap (default off)
+```
+Also needed: the Jarvis core worker on (section 7), the system out of dry-run (`auto_in_caps`; in dry-run every approved action is logged as "would post" and nothing is sent), and the Bitwarden variables (`BW_ACCESS_TOKEN`, `BW_ORGANIZATION_ID`) the bot already uses. Turn off: `select public.hands_owner_enable(false);` or the kill switch.
+
+### Limits (plain)
+- The adapters are written against each platform's documented API and tested with mocked responses only; the first real post on each platform is the real test.
+- X and LinkedIn are text-only in v1; Facebook takes text or one image; Instagram one image or one video; TikTok and YouTube one video by URL.
+- Approvals are recorded by the bot's owner-only Telegram handlers; the database checks the `owner:` marker but cannot itself prove the tap came from your phone (same model as account and payment approvals today).
+- No HQ app panel yet (it would need a new app function on the locked lockdown list).
