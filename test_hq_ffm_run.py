@@ -321,6 +321,7 @@ class DbTests(unittest.TestCase):
         self.sql("update public.system_state set kill_switch = false, mode = 'dry_run' where id = 1")
         self.today = datetime.now(hq_core.TZ).date()
         self.now = datetime.combine(self.today, datetime.min.time(), hq_core.TZ).replace(hour=11)
+        self.captured = (datetime.now(hq_core.TZ) - timedelta(minutes=5)).isoformat()   # real past time: the database refuses a capture in the future, and self.now (11:00) is in the future before 11am
         self.slug = "maple-test"          # every test is rolled back, so one fixed slug is enough (letters only: a digit run would trip the guard)
         self.ws = E._call("ffm_engine_create_workspace", {"p_slug": self.slug, "p_name": "Maple Mortgage Team", "p_vertical": "mortgage", "p_by": "owner:telegram"})
         camp = E._call("ffm_add_campaign", {"p_ws": self.ws, "p_name": "Campaign draft", "p_channel": "meta"})
@@ -397,7 +398,7 @@ class DbTests(unittest.TestCase):
 
     def lead(self, eng, ref="nf-live1", email="sam@example.com"):
         return eng.intake(self.launch(), "landing", ref, {"name": "Sam Lee", "email": email},
-                          {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": ref})
+                          {"given": True, "wording_version": "v1", "captured_at": self.captured, "evidence_ref": ref})
 
     def objs(self):
         return self.sql("select * from public.ffm_run_objects where launch_id = %s", (self.launch()["id"],))
@@ -462,7 +463,7 @@ class DbTests(unittest.TestCase):
         self.assertLessEqual(sum(o["daily_cents"] or 0 for o in objs), 3000)
         self.assertTrue(rec[("metrics", self.now.strftime("%Y-%m-%dT%H"))]["simulated"])
         r = eng.intake(l, "landing", "nf-abc123", {"name": "Alex Doe", "email": "alex@example.com", "phone": "613-555-0142", "income": "secret"},
-                       {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": "nf-abc123"})
+                       {"given": True, "wording_version": "v1", "captured_at": self.captured, "evidence_ref": "nf-abc123"})
         self.assertTrue(r["ok"])
         lead = r["lead_id"]
         self.assertEqual(self.sql("select status, email_id from public.ffm_run_touches where lead_id = %s", (lead,)), [{"status": "simulated", "email_id": None}])
@@ -727,7 +728,7 @@ class DbTests(unittest.TestCase):
         l = self.launch()
         eng = self.engine()
         bad = eng.intake(l, "landing", "nf-bad1", {"name": "Alex, SIN 046 454 286", "email": "alex@example.com"},
-                         {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": "nf-bad1"})
+                         {"given": True, "wording_version": "v1", "captured_at": self.captured, "evidence_ref": "nf-bad1"})
         self.assertFalse(bad["ok"])
         self.assertEqual(self.sql("select count(*) c from public.ws_leads where workspace_id = %s", (self.ws,))[0]["c"], 0)
         self.assertIn("sensitive", self.receipts("intake")[-1]["detail"])
@@ -736,7 +737,7 @@ class DbTests(unittest.TestCase):
         self.assertFalse(no_consent["ok"])
         self.assertIn("consent is required", no_consent["reason"])
         ok = eng.intake(l, "landing", "nf-ok1", {"name": "Alex", "email": "alex@example.com"},
-                        {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": "nf-ok1"})
+                        {"given": True, "wording_version": "v1", "captured_at": self.captured, "evidence_ref": "nf-ok1"})
         self.assertEqual(self.sql("select status from public.ffm_run_touches where lead_id = %s", (ok["lead_id"],))[0]["status"], "skipped")
         self.assertEqual(self.sql("select status from public.ffm_run_leads where lead_id = %s", (ok["lead_id"],))[0]["status"], "needs_consent")
         self.assertEqual(E._call("ffm_run_submit_hand", {"p_launch": l["id"], "p_item": "P1", "p_connector": "meta-facebook", "p_action": "post",
