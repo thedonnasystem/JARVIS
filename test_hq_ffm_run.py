@@ -262,7 +262,7 @@ class MigrationStaticTests(unittest.TestCase):
 
 
 # ------------------------------------------------------------------------------------------------------------------- database (real SQL)
-REPLICA = os.environ.get("REPLICA_URL")
+REPLICA = os.environ.get("REPLICA_URL") if os.environ.get("FFM_RUN_DB_TESTS") == "1" else None   # opt-in: scripts/replica/run.sh sets it AFTER the migrations are applied
 try:
     import psycopg2  # noqa: F401
     HAVE_PG = True
@@ -270,7 +270,7 @@ except ImportError:
     HAVE_PG = False
 
 
-@unittest.skipUnless(REPLICA and HAVE_PG, "needs REPLICA_URL (scratch Postgres with all migrations) and psycopg2; scripts/replica/run.sh runs these")
+@unittest.skipUnless(REPLICA and HAVE_PG, "needs FFM_RUN_DB_TESTS=1 + REPLICA_URL (scratch Postgres with all migrations) and psycopg2; scripts/replica/run.sh runs these")
 class DbTests(unittest.TestCase):
     """Real SQL, one transaction per test (rolled back). The owner's tap is simulated exactly as hq_commands.apply_decision records it."""
 
@@ -313,8 +313,11 @@ class DbTests(unittest.TestCase):
         self.db.conn.rollback()
         self.p = mock.patch.object(hq, "_request", self.db)
         self.p.start()
+        self.addCleanup(self.p.stop)            # registered at once: a failing setUp can never leak the patch into other tests
         self.p2 = mock.patch.object(R, "REPORT_HOUR", 25)        # no automatic Monday report inside a test tick
         self.p2.start()
+        self.addCleanup(self.p2.stop)
+        self.addCleanup(self.db.conn.rollback)
         self.sql("update public.system_state set kill_switch = false, mode = 'dry_run' where id = 1")
         self.today = datetime.now(hq_core.TZ).date()
         self.now = datetime.combine(self.today, datetime.min.time(), hq_core.TZ).replace(hour=11)
@@ -331,11 +334,6 @@ class DbTests(unittest.TestCase):
         self.sql("update public.client_workspaces set monthly_budget_cents = 500000 where id = %s", (self.ws,))       # (the owner-only ffm_set_budget in production)
         R.command("sender", [self.slug, "hello@maplemortgage.example", "|", "Sam", "Lee", "|", "Maple", "Mortgage", "Team", "|", "100", "Main", "Street,", "Ottawa", "ON"])
         self.sent, self.mails, self.attests = [], [], []
-
-    def tearDown(self):
-        self.p.stop()
-        self.p2.stop()
-        self.db.conn.rollback()
 
     def sql(self, q, params=None):
         return self.db.sql(q, params)

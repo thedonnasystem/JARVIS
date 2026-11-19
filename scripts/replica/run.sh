@@ -156,9 +156,9 @@ psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/ffm_engine_chec
 echo "ffm engine rollback drill OK"
 if python3 -c "import psycopg2" 2>/dev/null; then   # FF Marketing execution end to end: the REAL engine + REAL SQL, platform APIs mocked, each test rolled back
   echo "ffm execution: approve -> launch -> post -> lead -> follow-up -> optimize -> report, hard stop, kill switch, dry run, opt-out, guard (test_hq_ffm_run.DbTests)"
-  (cd "$root" && REPLICA_URL="$REPLICA_URL" python3 -m unittest -q test_hq_ffm_run.DbTests) 2>&1 | tail -3
-  (cd "$root" && REPLICA_URL="$REPLICA_URL" python3 -m unittest -q test_hq_ffm_run.DbTests >/dev/null 2>&1) || { echo "FFM EXECUTION DB TESTS FAILED"; exit 1; }
-  n_skip="$(cd "$root" && REPLICA_URL="$REPLICA_URL" python3 -m unittest -v test_hq_ffm_run.DbTests 2>&1 | grep -c 'skipped' || true)"
+  (cd "$root" && FFM_RUN_DB_TESTS=1 REPLICA_URL="$REPLICA_URL" python3 -m unittest -q test_hq_ffm_run.DbTests) 2>&1 | tail -3
+  (cd "$root" && FFM_RUN_DB_TESTS=1 REPLICA_URL="$REPLICA_URL" python3 -m unittest -q test_hq_ffm_run.DbTests >/dev/null 2>&1) || { echo "FFM EXECUTION DB TESTS FAILED"; exit 1; }
+  n_skip="$(cd "$root" && FFM_RUN_DB_TESTS=1 REPLICA_URL="$REPLICA_URL" python3 -m unittest -v test_hq_ffm_run.DbTests 2>&1 | grep -c 'skipped' || true)"
   [ "$n_skip" = "0" ] || { echo "FFM EXECUTION DB TESTS were skipped"; exit 1; }
 elif [ -n "${REQUIRE_INTEGRATION:-}" ]; then echo "psycopg2 missing but REQUIRE_INTEGRATION is set"; exit 1; fi
 echo "ffm execution rollback drill: ops/rollback_ffm_run.sql removes the execution objects (twice = idempotent), then everything re-applies"
