@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fendezy scoped token minter</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>body{font:16px system-ui;max-width:680px;margin:2rem auto;padding:0 16px}input{width:100%;font-size:16px;padding:8px;box-sizing:border-box}code{display:block;padding:12px;background:#eee;word-break:break-all;font-size:13px;max-height:16em;overflow:auto}button{padding:10px 16px;font-size:16px;margin:8px 8px 8px 0}</style></head>
+<body>
+<h1>Scoped tokens (Org &amp; Access, M1)</h1>
+<p>Runs only in this page: no network requests (blocked by the page's security policy), nothing stored. Open this file from your computer, not from a website.</p>
+<p>1. Paste the project's <b>JWT secret</b> (Supabase: Project Settings, JWT Keys, legacy JWT secret).</p>
+<input id="s" type="password" autocomplete="off" placeholder="JWT secret">
+<button id="g">Mint tokens</button> <button id="c" disabled>Copy</button>
+<code id="k" aria-live="polite">(press Mint)</code>
+<p>2. In Railway, Variables: paste the result as <b>FZ_SCOPED_TOKENS</b>, and set <b>FZ_GATEWAY_APIKEY</b> to the project's anon / publishable key (the same value as BACKUP_GATEWAY_APIKEY). Then close this page.</p>
+<p>The tokens name an identity only. The database decides what each may do, and the owner can switch any of them off at once (no need to change the secret). Office tokens do nothing until their office is activated. Valid 180 days.</p>
+<script>
+var IDENTITIES = [["jarvis", "fz_jarvis"], ["auditor", "fz_auditor"],
+  ["office:b2b-records:manager", "fz_office_agent"], ["office:donna:manager", "fz_office_agent"], ["office:the-trap:manager", "fz_office_agent"],
+  ["office:wolf-squad:manager", "fz_office_agent"], ["office:pimp-ai:manager", "fz_office_agent"], ["office:monopoly:manager", "fz_office_agent"],
+  ["office:ff-marketing:manager", "fz_office_agent"], ["office:fruition-factory:manager", "fz_office_agent"]];
+var DAYS = 180;
+function b64url(bytes) { var s = ""; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+function utf8(s) { return new TextEncoder().encode(s); }
+function randomId() { var b = new Uint8Array(12); crypto.getRandomValues(b); return b64url(b); }
+// claims: role + identity (+ office for office tokens), iat, exp, jti. NO `sub`: the database refuses a scoped token that carries one (it could pass for an app user).
+async function mintTokens(secret, nowSeconds) {
+  if (!secret || secret.trim().length < 32) throw new Error("That does not look like the JWT secret (too short).");
+  var key = await crypto.subtle.importKey("raw", utf8(secret.trim()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  var now = Math.floor(nowSeconds), out = {};
+  for (var i = 0; i < IDENTITIES.length; i++) {
+    var id = IDENTITIES[i][0], role = IDENTITIES[i][1];
+    var claims = { role: role, identity: id, iat: now, exp: now + DAYS * 86400, jti: randomId() };
+    if (id.indexOf("office:") === 0) claims.office = id.split(":")[1];
+    var head = b64url(utf8(JSON.stringify({ alg: "HS256", typ: "JWT" }))), body = b64url(utf8(JSON.stringify(claims)));
+    var sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, utf8(head + "." + body)));
+    out[id] = head + "." + body + "." + b64url(sig);
+  }
+  return JSON.stringify(out);
+}
+window.mintTokens = mintTokens;
+var result = "";
+document.getElementById("g").onclick = function () {
+  var el = document.getElementById("k");
+  mintTokens(document.getElementById("s").value, Date.now() / 1000).then(function (r) {
+    result = r; el.textContent = r; document.getElementById("c").disabled = false; document.getElementById("s").value = "";
+  }, function (e) { el.textContent = e.message; });
+};
+document.getElementById("c").onclick = function () { navigator.clipboard.writeText(result).then(function () { document.getElementById("c").textContent = "Copied"; }); };
+</script></body></html>

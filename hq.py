@@ -57,7 +57,139 @@ def auth_headers() -> tuple[str, str]:
     return (APIKEY_OVERRIDE.get() or override), override
 
 
-def _request(method: str, path: str, body: dict | None = None, timeout: int = 30, prefer: str | None = None, exact: bool = False):
+# ---- scoped identities (FENDEZY GROUP Phase 1, M1; migrations/20261127_org_access_v1.sql) ---------------------------------------------------------------------
+# A call can run as a NARROW identity (Jarvis group scope, an office manager, the auditor) instead of the service key: `with hq.as_identity("jarvis"): ...` or
+# `_request(..., identity="jarvis")`. The tokens are minted by the owner (ops/mint_scoped_tokens.html) and installed as ONE variable:
+#   FZ_SCOPED_TOKENS   JSON object {"<identity>": "<jwt>", ...}; each JWT has role fz_jarvis / fz_office_agent / fz_auditor and the claim identity=<identity>
+#   FZ_GATEWAY_APIKEY  the project's anon / publishable key for the `apikey` header (Supabase's gateway checks it; the scoped JWT goes in Authorization)
+# Not configured, unreadable, expired or for another identity: the call keeps the service key, exactly as before (additive; nothing breaks before install).
+# Configured: the call uses the scoped token and is NEVER retried with the service key when the database refuses it (a refusal is the scoping working).
+SCOPED_TOKENS_ENV = "FZ_SCOPED_TOKENS"
+SCOPED_GATEWAY_ENV = "FZ_GATEWAY_APIKEY"
+SCOPED_ROLES = ("fz_jarvis", "fz_office_agent", "fz_auditor")
+_scoped_cache: dict = {"raw": None, "tokens": {}}
+_scoped_warned: set = set()
+
+
+class ScopedTokenError(RuntimeError):
+    """as_identity(..., require=True) found no usable token: the caller asked never to fall back to the service key."""
+
+
+def _jwt_claims(token: str) -> dict | None:
+    """Claims of a JWT WITHOUT verifying it (the database verifies the signature). None when it is not a decodable JWT."""
+    import base64
+    try:
+        parts = (token or "").strip().split(".")
+        if len(parts) != 3 or not all(parts):
+            return None
+        c = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+        return c if isinstance(c, dict) else None
+    except Exception:
+        return None
+
+
+def _scoped_tokens() -> dict:
+    raw = os.environ.get(SCOPED_TOKENS_ENV, "")
+    if raw != _scoped_cache["raw"]:
+        tokens = {}
+        if raw.strip():
+            try:
+                parsed = json.loads(raw)
+                tokens = {str(k): str(v).strip() for k, v in parsed.items() if isinstance(v, str)} if isinstance(parsed, dict) else {}
+            except ValueError:
+                logger.warning("HQ: %s is not a JSON object; scoped identities are off (service key used)", SCOPED_TOKENS_ENV)
+        _scoped_cache.update(raw=raw, tokens=tokens)
+    return _scoped_cache["tokens"]
+
+
+def scoped_token_state(identity: str, now: float | None = None) -> tuple[str, str | None]:
+    """(state, token). state: ok | unset | malformed | wrongrole | wrongidentity | hassub | servicekey | expired. Only 'ok' returns the token."""
+    import math
+    import time
+    tok = _scoped_tokens().get(identity, "")
+    if not tok:
+        return "unset", None
+    if HQ_SUPABASE_SERVICE_KEY and tok == HQ_SUPABASE_SERVICE_KEY:
+        return "servicekey", None
+    c = _jwt_claims(tok)
+    if c is None:
+        return "malformed", None
+    if c.get("role") not in SCOPED_ROLES:
+        return "wrongrole", None       # never service_role, backup_reader, anon or authenticated through this path
+    if c.get("identity") != identity:
+        return "wrongidentity", None
+    if "sub" in c:
+        return "hassub", None          # the database refuses it too: a sub could pass for a signed-in app user
+    exp = c.get("exp")
+    now = time.time() if now is None else now
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)) or not math.isfinite(exp) or exp <= now + 30:
+        return "expired", None
+    return "ok", tok
+
+
+def scoped_gateway_key() -> str | None:
+    """The `apikey` header for scoped calls, or None (send the scoped JWT there: a plain PostgREST). Refuses anything that is, or looks like, a privileged key."""
+    k = os.environ.get(SCOPED_GATEWAY_ENV, "").strip()
+    if not k:
+        return None
+    role = (_jwt_claims(k) or {}).get("role")
+    if (HQ_SUPABASE_SERVICE_KEY and k == HQ_SUPABASE_SERVICE_KEY) or k.startswith("sb_secret_") or role not in (None, "anon"):
+        raise ScopedTokenError(f"{SCOPED_GATEWAY_ENV} must be the project's anon / publishable key: a service or secret key is refused")
+    return k
+
+
+class as_identity:
+    """Context manager: requests inside it run as `identity` when its scoped token is installed and valid; otherwise they keep the service key (require=False, the
+    default) or raise ScopedTokenError (require=True). `.scoped` says which happened. An override already in force (the backup identity) is never replaced."""
+
+    def __init__(self, identity: str, require: bool = False):
+        self.identity, self.require, self.scoped, self._resets = identity, require, False, None
+
+    def __enter__(self):
+        if AUTH_OVERRIDE.get():
+            if self.require:
+                raise ScopedTokenError("another identity is already in force for this call")
+            return self
+        state, tok = scoped_token_state(self.identity)
+        if state != "ok":
+            if self.require:
+                raise ScopedTokenError(f"no usable scoped token for {self.identity} ({state})")
+            if state != "unset" and (self.identity, state) not in _scoped_warned:
+                _scoped_warned.add((self.identity, state))
+                logger.warning("HQ: scoped token for %s not used (%s); falling back to the service key", self.identity, state)
+            return self
+        gw = scoped_gateway_key()
+        self._resets = (AUTH_OVERRIDE.set(tok), APIKEY_OVERRIDE.set(gw))
+        self.scoped = True
+        return self
+
+    def __exit__(self, *exc):
+        if self._resets:
+            APIKEY_OVERRIDE.reset(self._resets[1])
+            AUTH_OVERRIDE.reset(self._resets[0])
+            self._resets = None
+        return False
+
+
+def scoped_check(identity: str = "jarvis") -> dict:
+    """Install check for the owner's tokens: asks the database who this token is (fz_whoami). Never falls back to the service key."""
+    state, _ = scoped_token_state(identity)
+    if state != "ok":
+        return {"ok": False, "identity": identity, "reason": f"token {state}"}
+    try:
+        with as_identity(identity, require=True):
+            r = _request("POST", "/rest/v1/rpc/fz_whoami", {})
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "identity": identity, "reason": f"HTTP {e.code} (gateway key or token refused)"}
+    except (urllib.error.URLError, TimeoutError, ScopedTokenError) as e:
+        return {"ok": False, "identity": identity, "reason": str(e)[:200]}
+    return r if isinstance(r, dict) else {"ok": False, "identity": identity, "reason": "unreadable reply"}
+
+
+def _request(method: str, path: str, body: dict | None = None, timeout: int = 30, prefer: str | None = None, exact: bool = False, identity: str | None = None):
+    if identity:
+        with as_identity(identity):
+            return _request(method, path, body, timeout, prefer, exact)
     url = f"{HQ_SUPABASE_URL}{path}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)

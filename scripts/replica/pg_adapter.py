@@ -147,8 +147,46 @@ class PgAdapter:
         finally:
             self.conn.cursor().execute("reset role")
 
-    def __call__(self, method, path, body=None, timeout=30, prefer=None, exact=False):
+    SCOPED_ROLES = ("fz_jarvis", "fz_office_agent", "fz_auditor")
+
+    def _scoped_as(self, claims, method, path, body, timeout, prefer, exact):
+        """A scoped identity's call (migration 20261127_org_access_v1): what PostgREST does for a JWT whose role is fz_*: set the role AND the claims, then run the same
+        request. Signature NOT verified here (test tooling); the database checks the identity, the office and the claims exactly as in production."""
+        import hq as _hq
+        tx = not self.conn.autocommit                 # inside a test transaction: a refused statement must not abort it (PostgREST runs each request in its own)
+        cur = self.conn.cursor()
+        if tx:
+            cur.execute("savepoint fz_scoped")
+        cur.execute("select set_config('request.jwt.claims', %s, false)", (json.dumps(claims),))
+        cur.execute(f"set role {claims['role']}")
+        t = _hq.AUTH_OVERRIDE.set(None)
+        failed = False
+        try:
+            return self(method, path, body=body, timeout=timeout, prefer=prefer, exact=exact)
+        except Exception:
+            failed = True
+            raise
+        finally:
+            _hq.AUTH_OVERRIDE.reset(t)
+            self.calls.pop()                          # the inner call already counted it once more
+            cur = self.conn.cursor()
+            if tx and failed:
+                cur.execute("rollback to savepoint fz_scoped")
+            cur.execute("reset role")
+            cur.execute("select set_config('request.jwt.claims', '', false)")
+            if tx:
+                cur.execute("release savepoint fz_scoped")
+
+    def __call__(self, method, path, body=None, timeout=30, prefer=None, exact=False, identity=None):
+        import hq as _hq
+        if identity:                                  # hq._request(identity=...): the same token choice (hq.as_identity), then the call
+            with _hq.as_identity(identity):
+                return self(method, path, body=body, timeout=timeout, prefer=prefer, exact=exact)
         self.calls.append((method, path))
+        ov = _hq.AUTH_OVERRIDE.get()
+        claims = getattr(_hq, "_jwt_claims", lambda t: None)(ov) if ov else None
+        if claims and claims.get("role") in self.SCOPED_ROLES:
+            return self._scoped_as(claims, method, path, body, timeout, prefer, exact)
         path = path.replace("/rest/v1/", "", 1)
         try:
             if path.startswith("rpc/"):
