@@ -44,7 +44,8 @@ begin
   if exists (select 1 from public.hand_connectors where signup_mode not in ('assisted', 'none')) then raise exception 'H1 a non-assisted sign-up mode'; end if;
   begin update public.hand_connectors set signup_mode = 'auto' where slug = 'tiktok'; raise exception 'H1 an automated sign-up mode was accepted';
   exception when check_violation then null; end;
-  if (select count(*) from public.hand_connectors) <> 8 then raise exception 'H1 connector count %', (select count(*) from public.hand_connectors); end if;
+  if (select count(*) from public.hand_connectors) <> 9 or not exists (select 1 from public.hand_connectors where slug = 'meta-ads' and actions = '{}' and not enabled) then   -- 8 hands adapters + the ads-only meta-ads row (20261126_ffm_run_v1)
+    raise exception 'H1 connector count %', (select count(*) from public.hand_connectors); end if;
 
   -- H2 owner-only controls; the bot, a plain SQL session and the API roles are refused
   if pg_temp.svc($q$select public.hands_owner_enable(true)::text$q$) not like 'ERR:owner approval required%' then raise exception 'H2 the bot enabled the hand'; end if;

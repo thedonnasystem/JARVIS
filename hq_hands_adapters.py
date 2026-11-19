@@ -472,12 +472,24 @@ class Netlify(Adapter):
     terms = "The Chairman signs up himself; deploys a zip he approved to a site he connected; free tier"
 
     def execute(self, ctx):
-        z = str(ctx.payload.get("zip_url") or "")
-        if not z.startswith("https://"):
-            raise HandError("refused: a deploy needs zip_url (https)")
-        s, raw, _ = ctx.http("GET", z, timeout=120)
-        if s != 200 or not isinstance(raw, (bytes, bytearray)) or not raw.startswith(b"PK") or len(raw) > 50 * 1024 * 1024:
-            raise HandError(f"could not fetch a zip to deploy (HTTP {s})")
+        page = ctx.payload.get("html")
+        if isinstance(page, str) and page.strip():
+            # a single self-contained page (the FF Marketing landing page, approved by its hash): zipped in memory as index.html
+            import io
+            import zipfile
+            if len(page.encode()) > 200 * 1024:
+                raise HandError("refused: the page is larger than 200 KB")
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("index.html", page)
+            raw = buf.getvalue()
+        else:
+            z = str(ctx.payload.get("zip_url") or "")
+            if not z.startswith("https://"):
+                raise HandError("refused: a deploy needs zip_url (https) or html")
+            s, raw, _ = ctx.http("GET", z, timeout=120)
+            if s != 200 or not isinstance(raw, (bytes, bytearray)) or not raw.startswith(b"PK") or len(raw) > 50 * 1024 * 1024:
+                raise HandError(f"could not fetch a zip to deploy (HTTP {s})")
         site = ctx.account["external_id"]
         s, b, _ = ctx.http("POST", f"https://api.netlify.com/api/v1/sites/{urllib.parse.quote(site)}/deploys",
                            headers={"Authorization": "Bearer " + ctx.token()["api_key"], "Content-Type": "application/zip"}, data=bytes(raw), timeout=300)

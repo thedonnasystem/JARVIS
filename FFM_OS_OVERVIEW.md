@@ -13,6 +13,7 @@ FF Marketing is one reusable marketing-agency OS run per client "workspace". Bui
 | Reporting | `ffm_funnel`, `ffm_lead_booked_rate`, `ffm_spend_report`, `ffm_weekly_report`, views `ffm_funnel_v`, `ffm_spend_v` | Always per workspace_id |
 | Guard | `ffm_guard` (uses `ws_sensitive_hits`, the same detector as `ws_guard`) | Refuses SIN/card/account-like numbers, ID, banking, credit, application and income terms on every text column of every new table. ids and timestamps are skipped (they can compact into false digit runs) |
 | Engine | `hq_ffm_engine.py`, `prompts/ffm/`, `ffm_engine_briefs` / `ffm_engine_packs` (migration 20261125) | Owner-triggered (`/ffm new|pack|show|list|queue`) draft campaign pack per workspace: cheap model via the spend gateway, per-pack ceiling, every string screened, drafts only. See OWNER_GUIDE_JARVIS_V2.md section 12 |
+| Execution | `hq_ffm_run.py`, `ffm_run_*` tables (migration 20261126) | One owner tap per launch (`/ffm launch`); then Jarvis runs Meta ads (paused first, spend cap = approved total), organic posts and the landing page through the hands path, lead intake and email follow-ups through the outbox, daily optimizing and the Monday report. Approved budgets are immutable and enforced in the database; dry run = simulated receipts. See OWNER_GUIDE_JARVIS_V2.md section 13 |
 | App code | `hq_ffm.py` | `onboarding_plan`, `render_weekly_report`, `cost_per_booked` (pure) plus `_rpc` wrappers that turn refusals into typed exceptions |
 
 ## Safety model

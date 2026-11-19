@@ -154,4 +154,22 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
 done
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/ffm_engine_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ffm_engine_check failed after the rollback + re-apply"; exit 1; }
 echo "ffm engine rollback drill OK"
+if python3 -c "import psycopg2" 2>/dev/null; then   # FF Marketing execution end to end: the REAL engine + REAL SQL, platform APIs mocked, each test rolled back
+  echo "ffm execution: approve -> launch -> post -> lead -> follow-up -> optimize -> report, hard stop, kill switch, dry run, opt-out, guard (test_hq_ffm_run.DbTests)"
+  (cd "$root" && REPLICA_URL="$REPLICA_URL" python3 -m unittest -q test_hq_ffm_run.DbTests) 2>&1 | tail -3
+  (cd "$root" && REPLICA_URL="$REPLICA_URL" python3 -m unittest -q test_hq_ffm_run.DbTests >/dev/null 2>&1) || { echo "FFM EXECUTION DB TESTS FAILED"; exit 1; }
+  n_skip="$(cd "$root" && REPLICA_URL="$REPLICA_URL" python3 -m unittest -v test_hq_ffm_run.DbTests 2>&1 | grep -c 'skipped' || true)"
+  [ "$n_skip" = "0" ] || { echo "FFM EXECUTION DB TESTS were skipped"; exit 1; }
+elif [ -n "${REQUIRE_INTEGRATION:-}" ]; then echo "psycopg2 missing but REQUIRE_INTEGRATION is set"; exit 1; fi
+echo "ffm execution rollback drill: ops/rollback_ffm_run.sql removes the execution objects (twice = idempotent), then everything re-applies"
+for i in 1 2; do
+  (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_ffm_run.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FFM RUN ROLLBACK FAILED (run $i)"; exit 1; }
+done
+fr="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and proname like 'ffm\_run\_%')||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'ffm\_run\_%' and relkind='r')||'/'||(select count(*) from public.hand_connectors where slug='meta-ads')||'/'||(select public.backup_export_policy()->>'unclassified')")"
+[ "$fr" = "0/0/0/[]" ] || { echo "FFM RUN ROLLBACK DRILL FAILED: $fr"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the ffm run rollback: $f"; exit 1; }
+done
+psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/ffm_run_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ffm_run_check failed after the rollback + re-apply"; exit 1; }
+echo "ffm execution rollback drill OK"
 echo "REPLICA OK"

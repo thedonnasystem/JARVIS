@@ -646,7 +646,17 @@ async def ffm_cmd(update, context) -> None:
             return await _reply(update, await asyncio.to_thread(list_text))
         if sub == "queue" and len(args) > 2:
             return await _reply(update, await asyncio.to_thread(queue_organic, args[1].lower(), args[2]))
-        return await _reply(update, "Sir, FF Marketing engine: /ffm new (brief), /ffm pack <slug>, /ffm show <slug>, /ffm list, /ffm queue <slug> <account-id>.")
+        import hq_ffm_run     # execution: one owner approval per launch, then Jarvis runs ads, posts, leads and reports
+        if sub in hq_ffm_run.SUBCOMMANDS:
+            return await _reply(update, await asyncio.to_thread(hq_ffm_run.command, sub, args[1:]))
+        if sub == "connectads":
+            if len(args) > 1:
+                return await _reply(update, await asyncio.to_thread(hq_ffm_run.connect_ads_finish, args[1]))
+            return await _reply(update, "Sir, open this, approve with the Facebook login that owns the ad account, then send /ffm connectads <the page address you land on>:\n"
+                                        + hq_ffm_run.connect_ads_start())
+        return await _reply(update, "Sir, FF Marketing engine: /ffm new (brief), /ffm pack <slug>, /ffm show <slug>, /ffm list, /ffm queue <slug> <account-id>. "
+                                    "Execution: /ffm launch <slug> <daily $> <total $> [days], /ffm status <slug>, /ffm stop <slug>, /ffm budget <slug> <daily $> <total $>, "
+                                    "/ffm lead <id> replied|booked|stop|lost, /ffm connectads.")
     except BriefError as e:
         await _reply(update, f"Sir, the brief is not usable: {e}.")
     except SensitiveDataRefused as e:
@@ -667,3 +677,5 @@ async def ffm_cmd(update, context) -> None:
 
 def register(app, CommandHandler) -> None:
     app.add_handler(CommandHandler("ffm", ffm_cmd))
+    import hq_ffm_run
+    hq_ffm_run.register(app)      # the execution tick (plain code; nothing runs before an owner-approved launch)
