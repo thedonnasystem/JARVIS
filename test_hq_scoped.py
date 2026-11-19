@@ -114,8 +114,8 @@ class ScopedTests(unittest.TestCase):
         self.assertEqual(self.sent, [])                         # nothing was sent
         self.assertIsNone(hq.AUTH_OVERRIDE.get())
 
-    # --- tokens that must never be used (fall back, or refuse with require=True)
-    def test_unusable_tokens(self):
+    # --- installed tokens that must never be used: the call is REFUSED (nothing sent), never widened to the service key
+    def test_unusable_tokens_refuse(self):
         cases = {
             "wrongrole": tok(role="service_role"),
             "wrongidentity": tok(identity="auditor", role="fz_auditor"),
@@ -128,20 +128,46 @@ class ScopedTests(unittest.TestCase):
             with self.subTest(state=state):
                 self.install(jarvis=t)
                 self.assertEqual(hq.scoped_token_state("jarvis")[0], state)
-                hq._request("GET", "/rest/v1/tasks", identity="jarvis")
-                self.assertEqual(self.bearer(), SERVICE)        # default: today's behaviour
+                n = len(self.sent)
                 with self.assertRaises(hq.ScopedTokenError):
-                    with hq.as_identity("jarvis", require=True):
-                        pass
+                    hq._request("GET", "/rest/v1/tasks", identity="jarvis")
+                self.assertEqual(len(self.sent), n)                     # nothing sent, with any key
+                self.assertIsNone(hq.AUTH_OVERRIDE.get())
         for role in ("backup_reader", "anon", "authenticated"):
             self.install(jarvis=tok(role=role))
             self.assertEqual(hq.scoped_token_state("jarvis")[0], "wrongrole")
 
-    def test_bad_json_is_off(self):
-        os.environ[hq.SCOPED_TOKENS_ENV] = "{not json"
-        self.assertEqual(hq.scoped_token_state("jarvis")[0], "unset")
-        hq._request("GET", "/rest/v1/tasks", identity="jarvis")
-        self.assertEqual(self.bearer(), SERVICE)
+    def test_expired_token_refuses(self):
+        self.install(jarvis=tok(exp=int(time.time()) - 1))
+        with self.assertRaises(hq.ScopedTokenError):
+            hq._request("GET", "/rest/v1/tasks", identity="jarvis")
+        self.assertEqual(self.sent, [])
+
+    def test_identity_missing_from_installed_tokens_refuses(self):
+        self.install(auditor=tok("auditor", "fz_auditor"))
+        self.assertEqual(hq.scoped_token_state("jarvis")[0], "missing")
+        with self.assertRaises(hq.ScopedTokenError):
+            hq._request("GET", "/rest/v1/tasks", identity="jarvis")
+        self.assertEqual(self.sent, [])
+
+    def test_malformed_json_counts_as_installed_and_refuses(self):
+        for raw in ("{not json", "[1, 2]", '{"jarvis": 5}'):
+            with self.subTest(raw=raw):
+                os.environ[hq.SCOPED_TOKENS_ENV] = raw
+                with self.assertRaises(hq.ScopedTokenError):
+                    hq._request("GET", "/rest/v1/tasks", identity="jarvis")
+        self.assertEqual(self.sent, [])
+
+    def test_empty_values_are_off(self):
+        for raw in ("", "   ", "{}"):
+            with self.subTest(raw=raw):
+                os.environ[hq.SCOPED_TOKENS_ENV] = raw
+                self.assertEqual(hq.scoped_token_state("jarvis")[0], "off")
+                hq._request("GET", "/rest/v1/tasks", identity="jarvis")
+                self.assertEqual(self.bearer(), SERVICE)              # nothing installed: today's behaviour
+        with self.assertRaises(hq.ScopedTokenError):
+            with hq.as_identity("jarvis", require=True):
+                pass
 
     def test_backup_override_is_never_replaced(self):
         self.install(jarvis=tok())
@@ -169,7 +195,7 @@ class ScopedTests(unittest.TestCase):
         self.assertEqual(calls, [f"Bearer {t}"])               # one call, scoped, no second try with the service key
 
     def test_scoped_check(self):
-        self.assertEqual(hq.scoped_check("jarvis")["reason"], "token unset")
+        self.assertEqual(hq.scoped_check("jarvis")["reason"], "token off")
         t = tok()
         self.install(jarvis=t)
         with mock.patch("urllib.request.urlopen", return_value=_Resp(b'{"ok": true, "identity": "jarvis", "scope": "group"}')) as u:
@@ -225,9 +251,13 @@ class DbTests(unittest.TestCase):
         r = hq.scoped_check(self.A)
         self.assertTrue(r["ok"], r)
         self.assertEqual((r["office"], r["scope"]), ("b2b-records", "office"))
+        n_allow = self.db.sql("select count(*) n from public.action_log where decision = 'allow'")[0]["n"]
         d = hq._request("POST", "/rest/v1/rpc/fz_authorize_action", {"p_action": "research", "p_actor": "owner"}, identity=self.A)
-        self.assertEqual(d["decision"], "allow")
-        self.assertEqual(self.db.sql("select actor from public.action_log order by id desc limit 1")[0]["actor"], self.A)
+        self.assertEqual((d["decision"], d["evaluated_only"]), ("allow", True))           # evaluate only: nothing counted toward the caps
+        self.assertEqual(self.db.sql("select count(*) n from public.action_log where decision = 'allow'")[0]["n"], n_allow)
+        d = hq._request("POST", "/rest/v1/rpc/fz_authorize_action", {"p_action": "take_loan", "p_ref": "py-loan", "p_actor": "owner"}, identity=self.A)
+        self.assertIn(d["decision"], ("ask_owner", "deny"))
+        self.assertEqual(self.db.sql("select actor from public.action_log where ref = 'py-loan' order by id desc limit 1")[0]["actor"], self.A)   # actor = identity
 
 
 if __name__ == "__main__":

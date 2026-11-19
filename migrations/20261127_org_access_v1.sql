@@ -17,6 +17,9 @@
 -- Ordered BEFORE the lockdown (R3): it only grants to the NEW fz roles (never to public / anon / authenticated), and the lockdown's blanket service_role grant is harmless here
 -- (every fz_owner_* function checks is_app_owner() itself). Rollback: ops/rollback_org_access.sql. Safe to re-run.
 
+-- Apply while the bot is idle (short ALTERs on agents / tasks / missions / memory / departments / ventures): give up instead of queueing behind a long transaction.
+set lock_timeout = '5s';
+
 -- ---------------------------------------------------------------------------------------------------------------------------- roles (the backup_reader pattern)
 do $$
 declare r text;
@@ -154,9 +157,9 @@ on conflict (slug) do nothing;
 insert into public.fz_identities (slug, kind, office_id, db_role, agent_slug, status, note) values
   ('owner',          'owner',         'f0000000-0000-4000-8000-000000000000', null,             null,           'active',  'the Chairman: app login (is_app_owner) and Telegram; never a scoped token'),
   ('jarvis',         'jarvis',        'f0000000-0000-4000-8000-000000000000', 'fz_jarvis',      'jarvis',       'active',  'group scope; no approvals, no money controls'),
-  ('jarvis-chat',    'agent',         'f0000000-0000-4000-8000-000000000000', 'fz_jarvis',      'jarvis-chat',  'active',  'Jarvis chat (group)'),
-  ('jarvis-core',    'agent',         'f0000000-0000-4000-8000-000000000000', 'fz_jarvis',      'jarvis-core',  'active',  'Jarvis core v2 (group)'),
-  ('jarvis-hands',   'agent',         'f0000000-0000-4000-8000-000000000000', 'fz_jarvis',      'jarvis-hands', 'active',  'Jarvis hands (group)'),
+  ('jarvis-chat',    'agent',         'f0000000-0000-4000-8000-000000000000', 'fz_jarvis',      'jarvis-chat',  'dormant', 'Jarvis chat (group); dormant until a token is minted for it'),
+  ('jarvis-core',    'agent',         'f0000000-0000-4000-8000-000000000000', 'fz_jarvis',      'jarvis-core',  'dormant', 'Jarvis core v2 (group); dormant until a token is minted for it'),
+  ('jarvis-hands',   'agent',         'f0000000-0000-4000-8000-000000000000', 'fz_jarvis',      'jarvis-hands', 'dormant', 'Jarvis hands (group); dormant until a token is minted for it'),
   ('auditor',        'auditor',       'f0000000-0000-4000-8000-000000000000', 'fz_auditor',     null,           'active',  'group read-only'),
   ('backup-reader',  'backup_reader', 'f0000000-0000-4000-8000-000000000000', 'backup_reader',  null,           'active',  'existing backup identity (20261121_postlock_backup_identity_v1); unchanged, listed for completeness'),
   ('release',        'release',       'f0000000-0000-4000-8000-000000000000', null,             null,           'dormant', 'release pipeline (owner-run migrations); no database role in M1'),
@@ -259,7 +262,7 @@ begin
 end $$;
 revoke all on function public.fz_readable_offices(text) from public, anon, authenticated;
 
--- Offices whose rows of p_table the current identity may WRITE (the auditor never writes).
+-- Offices whose rows of p_table the current identity may WRITE (the auditor never writes): ACTIVE offices only (the group is always active).
 create or replace function public.fz_writable_offices(p_table text) returns uuid[]
 language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare i record; g public.fz_table_registry;
@@ -270,17 +273,26 @@ begin
   if not found or g.fz_write = '{}' or g.scope <> 'office' then return '{}'; end if;
   if i.is_group then
     if g.data_class = 'client_restricted' then return '{}'; end if;
-    return array(select id from public.fz_offices);
+    return array(select id from public.fz_offices where status = 'active');
   end if;
-  return array[i.office_id];
+  return array[i.office_id];                                              -- fz_identity_now() already requires the office to be active
 end $$;
 revoke all on function public.fz_writable_offices(text) from public, anon, authenticated;
 
--- Client workspaces whose rows (the workspace itself, and ws_* / ffm_* rows by workspace_id) the current identity may read: the workspaces of the readable offices.
+-- S1: an agent a scoped identity may hand a task to: an agent of the SAME office as the task (so an office token cannot queue work for a group agent such as builder).
+create or replace function public.fz_agent_in_office(p_agent text, p_office uuid) returns boolean
+language sql stable security definer set search_path to 'pg_catalog' as $$
+  select p_agent is null or exists (select 1 from public.agents a where a.slug = p_agent and a.office_id = p_office)
+$$;
+revoke all on function public.fz_agent_in_office(text, uuid) from public, anon, authenticated;
+
+-- Client workspaces whose rows (the workspace itself, and ws_* / ffm_* rows by workspace_id) the current identity may read: the workspaces of ITS office. Group scope
+-- gets none in M1 (client data stays with the office that serves the client).
 create or replace function public.fz_readable_workspaces(p_table text) returns uuid[]
 language sql stable security definer set search_path to 'pg_catalog' as $$
-  select coalesce(array(select w.id from public.client_workspaces w left join public.fz_workspace_offices m on m.workspace_id = w.id
-                         where coalesce(m.office_id, 'f0000000-0000-4000-8000-000000000007'::uuid) = any (public.fz_readable_offices(p_table))), '{}')
+  select case when public.is_group_scope() then '{}'::uuid[] else
+    coalesce(array(select w.id from public.client_workspaces w left join public.fz_workspace_offices m on m.workspace_id = w.id
+                    where coalesce(m.office_id, 'f0000000-0000-4000-8000-000000000007'::uuid) = any (public.fz_readable_offices(p_table))), '{}') end
 $$;
 revoke all on function public.fz_readable_workspaces(text) from public, anon, authenticated;
 
@@ -322,8 +334,8 @@ insert into public.fz_table_registry (relname, scope, scope_column, data_class, 
   ('ventures',          'office', 'office_id',    'internal',          true,  '{}', null, null, 'old ventures archived or kept'),
   ('missions',          'office', 'office_id',    'internal',          true,  '{}', null, null, 'missions; budget and owner decision columns: read-only for scoped identities'),
   ('tasks',             'office', 'office_id',    'internal',          true,  '{insert,update}',
-     '{office_id,venture_id,assigned_agent,title,detail,status,priority,due_at,result,dedupe_key}', '{assigned_agent,title,detail,status,priority,due_at,result}',
-     'work items; the only table scoped identities may write in M1 (no mission columns, office and author stamped by trigger)'),
+     '{office_id,venture_id,assigned_agent,title,detail,priority,due_at,dedupe_key}', '{assigned_agent,title,detail,priority,due_at}',
+     'work items; the only table scoped identities may write in M1: no status / result / mission columns, only agents of the same office, office and author stamped by trigger'),
   ('memory',            'office', 'office_id',    'internal',          true,  '{}', null, null, 'agent memory'),
   ('client_workspaces', 'office', 'workspace_self', 'confidential',    false,  '{}', null, null, 'FF Marketing client tenants; office in fz_workspace_offices (no row = ff-marketing)'),
   -- office-owned, by workspace_id (FF Marketing tenancy)
@@ -487,11 +499,11 @@ begin
     wr := format('office_id = any (coalesce((select public.fz_writable_offices(%L)), ''{}''::uuid[]))', r.relname);
     if 'insert' = any (r.fz_write) then
       execute format('grant insert (%s) on %s to fz_jarvis, fz_office_agent', (select string_agg(quote_ident(c), ', ') from unnest(r.fz_insert_columns) c), t);
-      execute format('create policy fz_scope_insert on %s for insert to fz_jarvis, fz_office_agent with check (%s)', t, wr);
+      execute format('create policy fz_scope_insert on %s for insert to fz_jarvis, fz_office_agent with check (%s and public.fz_agent_in_office(assigned_agent, office_id))', t, wr);
     end if;
     if 'update' = any (r.fz_write) then
       execute format('grant update (%s) on %s to fz_jarvis, fz_office_agent', (select string_agg(quote_ident(c), ', ') from unnest(r.fz_update_columns) c), t);
-      execute format('create policy fz_scope_update on %s for update to fz_jarvis, fz_office_agent using (%s) with check (%s)', t, wr, wr);
+      execute format('create policy fz_scope_update on %s for update to fz_jarvis, fz_office_agent using (%s) with check (%s and public.fz_agent_in_office(assigned_agent, office_id))', t, wr, wr);
     end if;
   end loop;
 end $$;
@@ -509,6 +521,7 @@ begin
     if not i.is_group then new.office_id := i.office_id; end if;
     new.created_by := i.slug;
   else
+    if old.mission_id is not null then raise exception 'scoped write refused: mission tasks are changed only by the mission engine' using errcode = '42501'; end if;
     new.office_id := old.office_id;
     new.created_by := old.created_by;
   end if;
@@ -558,18 +571,47 @@ create or replace function public.fz_set_office_policy(p_office text, p_action t
                                                        p_max_count_per_day integer default null, p_by text default 'jarvis') returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
 declare o public.fz_offices;
+        v_by text := case when coalesce(public.is_app_owner(), false) then 'owner' else 'bot:' || left(coalesce(nullif(btrim(p_by), ''), 'unknown'), 76) end;   -- a caller cannot record itself as the owner
 begin
   select * into o from public.fz_offices where slug = p_office and kind = 'office';
   if not found then raise exception 'unknown office %', p_office; end if;
   insert into public.fz_office_action_policy (office_id, action, allowed, max_cents_per_action, max_count_per_day, updated_by)
-    values (o.id, p_action, coalesce(p_allowed, false), p_max_cents_per_action, p_max_count_per_day, left(coalesce(nullif(btrim(p_by), ''), 'unknown'), 80))
+    values (o.id, p_action, coalesce(p_allowed, false), p_max_cents_per_action, p_max_count_per_day, v_by)
   on conflict (office_id, action) do update set allowed = excluded.allowed, max_cents_per_action = excluded.max_cents_per_action,
     max_count_per_day = excluded.max_count_per_day, updated_by = excluded.updated_by;
   return jsonb_build_object('office', o.slug, 'action', p_action, 'allowed', coalesce(p_allowed, false), 'max_cents_per_action', p_max_cents_per_action, 'max_count_per_day', p_max_count_per_day);
 end $$;
 revoke all on function public.fz_set_office_policy(text, text, boolean, integer, integer, text) from public, anon, authenticated;
 
--- The office-aware gate. Office layer first (can only refuse), then the UNCHANGED authorize_action() for the group decision (kill switch, mode, tiers, approvals, caps).
+-- Read-only preview of what authorize_action() would decide (same order of rules), WITHOUT consuming an approval or writing anything. A decision that would need an
+-- owner approval is always ask_owner here: a scoped identity can never use (burn) an approval, and an allow it gets is never counted toward the caps.
+create or replace function public.fz_policy_preview(p_action text, p_cents integer) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare pol public.action_policy; st record; v_today int; v_week int; v_start timestamptz; c int := greatest(coalesce(p_cents, 0), 0);
+begin
+  select kill_switch, mode into st from public.system_state where id = 1;
+  select * into pol from public.action_policy where action = p_action;
+  if coalesce(st.kill_switch, true) then return jsonb_build_object('decision', 'deny', 'reason', 'Kill switch is on.', 'tier', pol.tier); end if;
+  if pol.action is null then return jsonb_build_object('decision', 'deny', 'reason', 'Unknown action: everything not in the policy is refused.'); end if;
+  if pol.tier = 'prohibited' then return jsonb_build_object('decision', 'deny', 'reason', 'Prohibited by policy: ' || pol.description, 'tier', pol.tier); end if;
+  if pol.live_only and st.mode = 'dry_run' then return jsonb_build_object('decision', 'deny', 'reason', 'Dry-run mode: external actions are switched off.', 'tier', pol.tier); end if;
+  if pol.tier = 'red' or (pol.tier = 'yellow' and st.mode = 'approve_first') then
+    return jsonb_build_object('decision', 'ask_owner', 'tier', pol.tier, 'reason', 'Needs the owner''s decision; a scoped identity never uses an approval (the service path does, through authorize_action).');
+  end if;
+  v_start := date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto';
+  select count(*) into v_today from public.action_log where action = p_action and decision = 'allow' and at >= v_start;
+  select coalesce(sum(cents), 0) into v_week from public.action_log where action = p_action and decision = 'allow' and at >= now() - interval '7 days';
+  if pol.max_cents_per_action is not null and c > pol.max_cents_per_action then return jsonb_build_object('decision', 'ask_owner', 'tier', pol.tier, 'reason', 'Over the per-action limit.'); end if;
+  if pol.max_count_per_day is not null and v_today >= pol.max_count_per_day then return jsonb_build_object('decision', 'deny', 'tier', pol.tier, 'reason', format('Daily limit reached (%s per day).', pol.max_count_per_day)); end if;
+  if pol.max_cents_per_week is not null and v_week + c > pol.max_cents_per_week then return jsonb_build_object('decision', 'ask_owner', 'tier', pol.tier, 'reason', 'Weekly limit would be passed.'); end if;
+  return jsonb_build_object('decision', 'allow', 'tier', pol.tier, 'reason', initcap(pol.tier) || ' action within policy (evaluated only: nothing consumed or counted).');
+end $$;
+revoke all on function public.fz_policy_preview(text, integer) from public, anon, authenticated;
+
+-- The office-aware gate. Office layer first (can only refuse). Then:
+--   a SCOPED caller (fz roles) gets fz_policy_preview(): evaluate only. It never consumes an owner approval and never writes an allow row (allows count toward the caps);
+--     only refusals are logged. The real action still goes through authorize_action() on the service path when it is carried out.
+--   the SERVICE path calls the UNCHANGED authorize_action() for the group decision (kill switch, mode, tiers, approvals, caps), exactly as calling it directly would.
 -- A scoped caller cannot choose who it is: the actor is its identity and an office identity's office is its own. The auditor cannot act.
 create or replace function public.fz_authorize_action(p_action text, p_cents integer default 0, p_ref text default null, p_office text default null, p_actor text default null,
                                                       p_venture uuid default null, p_mission uuid default null, p_detail jsonb default '{}'::jsonb) returns jsonb
@@ -617,12 +659,21 @@ begin
     if v_reason is not null then
       insert into public.action_log (actor, action, tier, decision, reason, cents, venture_id, mission_id, ref, detail)
         values (v_actor, p_action, (select tier from public.action_policy where action = p_action), 'deny', v_reason, v_cents, p_venture, p_mission, p_ref,
-                coalesce(p_detail, '{}'::jsonb) || jsonb_build_object('office', o.slug, 'identity', v_ident, 'layer', 'office'));
+                coalesce(p_detail, '{}'::jsonb) || jsonb_build_object('office', o.slug, 'identity', coalesce(v_ident, 'service'), 'layer', 'office'));
       return jsonb_build_object('decision', 'deny', 'reason', v_reason, 'tier', (select tier from public.action_policy where action = p_action), 'office', o.slug);
     end if;
   end if;
+  if v_ident is not null then
+    res := public.fz_policy_preview(p_action, v_cents) || jsonb_build_object('evaluated_only', true);
+    if res ->> 'decision' <> 'allow' then                                -- a refusal / ask is logged (it never counts toward a cap); an allow is not
+      insert into public.action_log (actor, action, tier, decision, reason, cents, venture_id, mission_id, ref, detail)
+        values (v_actor, p_action, res ->> 'tier', res ->> 'decision', res ->> 'reason', v_cents, p_venture, p_mission, p_ref,
+                coalesce(p_detail, '{}'::jsonb) || jsonb_build_object('office', coalesce(o.slug, 'group'), 'identity', v_ident, 'layer', 'scoped_preview'));
+    end if;
+    return res || jsonb_build_object('office', coalesce(o.slug, 'group'));
+  end if;
   res := public.authorize_action(v_actor, p_action, v_cents, p_ref, p_venture, p_mission,
-                                 coalesce(p_detail, '{}'::jsonb) || jsonb_strip_nulls(jsonb_build_object('office', coalesce(o.slug, 'group'), 'identity', v_ident)));
+                                 coalesce(p_detail, '{}'::jsonb) || jsonb_build_object('office', coalesce(o.slug, 'group'), 'identity', 'service'));
   return res || jsonb_build_object('office', coalesce(o.slug, 'group'));
 end $$;
 revoke all on function public.fz_authorize_action(text, integer, text, text, text, uuid, uuid, jsonb) from public, anon, authenticated;
@@ -689,24 +740,22 @@ revoke all on function public.fz_revoke_identity(text, text) from public, anon, 
 
 -- ---------------------------------------------------------------------------------------------------------------------------- org re-seed (runs ONCE; every decision logged)
 -- Mapping: every existing client workspace -> ff-marketing (fz_workspace_offices; every ws_* / ffm_* row follows its workspace); everything else is the group (column defaults).
--- Archive: an old agent / department / venture is archived (archived_at stamp; an agent or department that is not live is paused) UNLESS something live uses it. Live means:
+-- Archive = an archived_at STAMP only. No status changes at apply time: nothing that runs today stops because of this migration. Pausing an archived row is a later owner
+-- action (fz_reseed_preview() shows the list first). A row is NOT archived when something live uses it:
 --   agents      named by live code (bot.py, hq_engine, hq_missions, hq_llm, hq_hands, hq_ffm_run, hq_mail, hq_meter, hq_commands), open tasks, a model call in the last 14 days,
 --               or belonging to / managing a kept venture
 --   ventures    the mission engine's venture teams (idea-lab, donna, real-estate, day-job-sales), status active or proposed (an open owner decision), or open tasks / live missions
 --   departments holding / research, a kept agent in it, or its venture kept
--- Nothing is deleted. A kept row is logged as 'kept' with the reason, so the owner sees exactly what was left running and why. Re-applying never re-decides (owner changes stick).
-do $$
+create or replace function public.fz_reseed_decisions() returns table (entity text, key text, decision text, status text, reason text)
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
 declare
   live_agents text[] := array['jarvis', 'jarvis-chat', 'jarvis-core', 'jarvis-hands', 'builder', 'research', 'auditor', 'compliance-qa', 'mission-manager', 'donna-ops',
                               'new-ventures-researcher', 'new-ventures-auditor', 'donna-researcher', 'donna-auditor', 'real-estate-researcher', 'real-estate-auditor',
                               'day-job-sales-researcher', 'day-job-sales-auditor'];
   live_ventures text[] := array['idea-lab', 'donna', 'real-estate', 'day-job-sales'];
-  v record; why text; n_arch int := 0; n_kept int := 0;
+  kept_v uuid[] := '{}'; kept_vslug text[] := '{}'; kept_a text[] := '{}'; v record; why text;
 begin
-  if exists (select 1 from public.fz_org_archive where entity = 'reseed') then return; end if;
-  insert into public.fz_workspace_offices (workspace_id, office_id) select id, 'f0000000-0000-4000-8000-000000000007' from public.client_workspaces on conflict do nothing;
-  -- ventures first (agents and departments follow their venture)
-  for v in select * from public.ventures order by slug loop
+  for v in select * from public.ventures x order by x.slug loop
     why := case
       when v.slug = any (live_ventures) then 'mission engine venture team (hq_missions.VENTURE_TEAM)'
       when v.status = 'active' then 'active venture'
@@ -714,44 +763,55 @@ begin
       when exists (select 1 from public.tasks t where t.venture_id = v.id and t.status in ('todo', 'doing', 'blocked')) then 'has open tasks'
       when exists (select 1 from public.missions m where m.venture_id = v.id and m.status not in ('completed', 'rejected', 'abandoned', 'failed')) then 'has a live mission'
     end;
-    if why is not null then
-      insert into public.fz_org_archive (entity, key, decision, prior_status, new_status, reason) values ('venture', v.slug, 'kept', v.status, v.status, why); n_kept := n_kept + 1;
-    else
-      insert into public.fz_org_archive (entity, key, decision, prior_status, new_status, reason) values ('venture', v.slug, 'archived', v.status, v.status, 'old plan, not live (status ' || v.status || ')');
-      update public.ventures set archived_at = now() where id = v.id; n_arch := n_arch + 1;
-    end if;
+    if why is not null then kept_v := kept_v || v.id; kept_vslug := kept_vslug || v.slug; end if;
+    entity := 'venture'; key := v.slug; status := v.status; decision := case when why is null then 'archived' else 'kept' end; reason := coalesce(why, 'old plan, not live (status ' || v.status || ')');
+    return next;
   end loop;
-  for v in select * from public.agents order by slug loop
+  for v in select * from public.agents x order by x.slug loop
     why := case
       when v.slug = any (live_agents) then 'used by live code'
       when exists (select 1 from public.tasks t where t.assigned_agent = v.slug and t.status in ('todo', 'doing', 'blocked')) then 'has open tasks'
       when exists (select 1 from public.llm_calls c where c.agent_slug = v.slug and c.started_at > now() - interval '14 days') then 'made a model call in the last 14 days'
-      when exists (select 1 from public.ventures x join public.fz_org_archive a on a.entity = 'venture' and a.key = x.slug and a.decision = 'kept'
-                    where x.id = v.venture_id or x.manager_agent = v.slug) then 'belongs to or manages a kept venture'
+      when v.venture_id = any (kept_v) or exists (select 1 from public.ventures x where x.manager_agent = v.slug and x.id = any (kept_v)) then 'belongs to or manages a kept venture'
     end;
-    if why is not null then
-      insert into public.fz_org_archive (entity, key, decision, prior_status, new_status, reason) values ('agent', v.slug, 'kept', v.status, v.status, why); n_kept := n_kept + 1;
-    else
-      insert into public.fz_org_archive (entity, key, decision, prior_status, new_status, reason) values ('agent', v.slug, 'archived', v.status, 'paused', 'old plan, not live');
-      update public.agents set status = 'paused', archived_at = now() where slug = v.slug; n_arch := n_arch + 1;
-    end if;
+    if why is not null then kept_a := kept_a || v.slug; end if;
+    entity := 'agent'; key := v.slug; status := v.status; decision := case when why is null then 'archived' else 'kept' end; reason := coalesce(why, 'old plan, not live');
+    return next;
   end loop;
-  for v in select * from public.departments order by slug loop
+  for v in select * from public.departments x order by x.slug loop
     why := case
       when v.slug in ('holding', 'research') then 'core department (holding / research)'
-      when exists (select 1 from public.agents a join public.fz_org_archive l on l.entity = 'agent' and l.key = a.slug and l.decision = 'kept' where a.department_slug = v.slug) then 'a kept agent works in it'
-      when exists (select 1 from public.ventures x join public.fz_org_archive l on l.entity = 'venture' and l.key = x.slug and l.decision = 'kept' where x.id = v.venture_id) then 'its venture is kept'
+      when exists (select 1 from public.agents a where a.department_slug = v.slug and a.slug = any (kept_a)) then 'a kept agent works in it'
+      when v.venture_id = any (kept_v) then 'its venture is kept'
     end;
-    if why is not null then
-      insert into public.fz_org_archive (entity, key, decision, prior_status, new_status, reason) values ('department', v.slug, 'kept', v.status, v.status, why); n_kept := n_kept + 1;
-    else
-      insert into public.fz_org_archive (entity, key, decision, prior_status, new_status, reason)
-        values ('department', v.slug, 'archived', v.status, case when v.status = 'active' then 'paused' else v.status end, 'old plan, not live');
-      update public.departments set status = case when status = 'active' then 'paused' else status end, archived_at = now() where slug = v.slug; n_arch := n_arch + 1;
-    end if;
+    entity := 'department'; key := v.slug; status := v.status; decision := case when why is null then 'archived' else 'kept' end; reason := coalesce(why, 'old plan, not live');
+    return next;
   end loop;
-  insert into public.fz_org_archive (entity, key, decision, reason) values ('reseed', 'm1', 'run', format('%s archived, %s kept', n_arch, n_kept));
-  insert into public.audit_log (actor, action, target, detail) values ('migration', 'org_reseed', 'fz_org_archive', jsonb_build_object('archived', n_arch, 'kept', n_kept));
+end $$;
+revoke all on function public.fz_reseed_decisions() from public, anon, authenticated;
+
+-- read-only: what the rule archives on TODAY's data (before apply: run the function body by hand; after apply: what a new pass would add). Owner input for any later pausing.
+create or replace function public.fz_reseed_preview() returns table (entity text, key text, status text, reason text, already_logged boolean)
+language sql stable security definer set search_path to 'pg_catalog' as $$
+  select d.entity, d.key, d.status, d.reason, exists (select 1 from public.fz_org_archive a where a.entity = d.entity and a.key = d.key)
+    from public.fz_reseed_decisions() d where d.decision = 'archived' order by 1, 2
+$$;
+revoke all on function public.fz_reseed_preview() from public, anon, authenticated;
+
+do $$
+declare n_arch int; n_kept int;
+begin
+  if exists (select 1 from public.fz_org_archive where entity = 'reseed') then return; end if;
+  insert into public.fz_workspace_offices (workspace_id, office_id) select id, 'f0000000-0000-4000-8000-000000000007' from public.client_workspaces on conflict do nothing;
+  create temp table fz_d on commit drop as select * from public.fz_reseed_decisions();
+  insert into public.fz_org_archive (entity, key, decision, prior_status, new_status, reason) select entity, key, decision, status, status, reason from fz_d;
+  update public.ventures x set archived_at = now() from fz_d d where d.entity = 'venture' and d.decision = 'archived' and d.key = x.slug;
+  update public.agents x set archived_at = now() from fz_d d where d.entity = 'agent' and d.decision = 'archived' and d.key = x.slug;
+  update public.departments x set archived_at = now() from fz_d d where d.entity = 'department' and d.decision = 'archived' and d.key = x.slug;
+  select count(*) filter (where decision = 'archived'), count(*) filter (where decision = 'kept') into n_arch, n_kept from fz_d;
+  drop table fz_d;
+  insert into public.fz_org_archive (entity, key, decision, reason) values ('reseed', 'm1', 'run', format('%s archived (stamp only, no status change), %s kept', n_arch, n_kept));
+  insert into public.audit_log (actor, action, target, detail) values ('migration', 'org_reseed', 'fz_org_archive', jsonb_build_object('archived', n_arch, 'kept', n_kept, 'status_changes', 0));
 end $$;
 
 -- ---------------------------------------------------------------------------------------------------------------------------- reports
@@ -792,7 +852,8 @@ begin
   end loop;
 end $$;
 grant execute on function public.fz_claims(), public.fz_identity_now(), public.current_identity(), public.current_office(), public.current_office_id(), public.is_group_scope(),
-  public.fz_readable_offices(text), public.fz_writable_offices(text), public.fz_readable_workspaces(text), public.fz_whoami() to fz_jarvis, fz_office_agent, fz_auditor;
+  public.fz_readable_offices(text), public.fz_writable_offices(text), public.fz_readable_workspaces(text), public.fz_whoami(), public.fz_agent_in_office(text, uuid)
+  to fz_jarvis, fz_office_agent, fz_auditor;
 grant execute on function public.fz_authorize_action(text, integer, text, text, text, uuid, uuid, jsonb) to fz_jarvis, fz_office_agent;
 
 -- ---------------------------------------------------------------------------------------------------------------------------- backup classification (PROTECTED: owner approval)
@@ -859,3 +920,4 @@ language sql immutable set search_path to 'pg_catalog' as $$
   ) v (table_name, data_class, note)
 $$;
 revoke all on function public.backup_classification() from public, anon, authenticated;
+reset lock_timeout;

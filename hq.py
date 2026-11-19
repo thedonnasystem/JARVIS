@@ -62,8 +62,9 @@ def auth_headers() -> tuple[str, str]:
 # `_request(..., identity="jarvis")`. The tokens are minted by the owner (ops/mint_scoped_tokens.html) and installed as ONE variable:
 #   FZ_SCOPED_TOKENS   JSON object {"<identity>": "<jwt>", ...}; each JWT has role fz_jarvis / fz_office_agent / fz_auditor and the claim identity=<identity>
 #   FZ_GATEWAY_APIKEY  the project's anon / publishable key for the `apikey` header (Supabase's gateway checks it; the scoped JWT goes in Authorization)
-# Not configured, unreadable, expired or for another identity: the call keeps the service key, exactly as before (additive; nothing breaks before install).
-# Configured: the call uses the scoped token and is NEVER retried with the service key when the database refuses it (a refusal is the scoping working).
+# FZ_SCOPED_TOKENS unset or empty (nothing installed): the call keeps the service key, exactly as before (additive; nothing breaks before install).
+# FZ_SCOPED_TOKENS set (even unreadable): the call uses this identity's token or FAILS (ScopedTokenError) when the token is missing, malformed, expired, for another role or
+# identity; it never silently widens to the service key once tokens are installed, and a call the database refuses is never retried with the service key.
 SCOPED_TOKENS_ENV = "FZ_SCOPED_TOKENS"
 SCOPED_GATEWAY_ENV = "FZ_GATEWAY_APIKEY"
 SCOPED_ROLES = ("fz_jarvis", "fz_office_agent", "fz_auditor")
@@ -88,27 +89,36 @@ def _jwt_claims(token: str) -> dict | None:
         return None
 
 
-def _scoped_tokens() -> dict:
+def _scoped_tokens() -> dict | None:
+    """None = nothing installed (unset, empty or an empty JSON object). A value that is set but not a JSON object of strings is 'installed but broken': {"": ""}
+    (no identity can match it, so every scoped call refuses instead of widening)."""
     raw = os.environ.get(SCOPED_TOKENS_ENV, "")
     if raw != _scoped_cache["raw"]:
-        tokens = {}
+        tokens = None
         if raw.strip():
             try:
                 parsed = json.loads(raw)
-                tokens = {str(k): str(v).strip() for k, v in parsed.items() if isinstance(v, str)} if isinstance(parsed, dict) else {}
             except ValueError:
-                logger.warning("HQ: %s is not a JSON object; scoped identities are off (service key used)", SCOPED_TOKENS_ENV)
+                parsed = None
+            if isinstance(parsed, dict) and all(isinstance(v, str) for v in parsed.values()):
+                tokens = {str(k): v.strip() for k, v in parsed.items()} or None
+            else:
+                logger.warning("HQ: %s is set but is not a JSON object of tokens; scoped calls will refuse (no service key fallback)", SCOPED_TOKENS_ENV)
+                tokens = {"": ""}
         _scoped_cache.update(raw=raw, tokens=tokens)
     return _scoped_cache["tokens"]
 
 
 def scoped_token_state(identity: str, now: float | None = None) -> tuple[str, str | None]:
-    """(state, token). state: ok | unset | malformed | wrongrole | wrongidentity | hassub | servicekey | expired. Only 'ok' returns the token."""
+    """(state, token). state: off (nothing installed) | ok | missing | malformed | wrongrole | wrongidentity | hassub | servicekey | expired. Only 'ok' returns the token."""
     import math
     import time
-    tok = _scoped_tokens().get(identity, "")
+    tokens = _scoped_tokens()
+    if tokens is None:
+        return "off", None
+    tok = tokens.get(identity, "")
     if not tok:
-        return "unset", None
+        return "missing", None
     if HQ_SUPABASE_SERVICE_KEY and tok == HQ_SUPABASE_SERVICE_KEY:
         return "servicekey", None
     c = _jwt_claims(tok)
@@ -139,8 +149,9 @@ def scoped_gateway_key() -> str | None:
 
 
 class as_identity:
-    """Context manager: requests inside it run as `identity` when its scoped token is installed and valid; otherwise they keep the service key (require=False, the
-    default) or raise ScopedTokenError (require=True). `.scoped` says which happened. An override already in force (the backup identity) is never replaced."""
+    """Context manager: requests inside it run as `identity`. Nothing installed: they keep the service key (or raise with require=True). Tokens installed: this identity's
+    token is used, and a missing / invalid one raises ScopedTokenError (never a silent fallback). `.scoped` says which happened. An override already in force (the
+    backup identity) is never replaced."""
 
     def __init__(self, identity: str, require: bool = False):
         self.identity, self.require, self.scoped, self._resets = identity, require, False, None
@@ -151,13 +162,13 @@ class as_identity:
                 raise ScopedTokenError("another identity is already in force for this call")
             return self
         state, tok = scoped_token_state(self.identity)
+        if state == "off" and not self.require:
+            return self                                                    # nothing installed yet: today's behaviour
         if state != "ok":
-            if self.require:
-                raise ScopedTokenError(f"no usable scoped token for {self.identity} ({state})")
-            if state != "unset" and (self.identity, state) not in _scoped_warned:
+            if (self.identity, state) not in _scoped_warned:
                 _scoped_warned.add((self.identity, state))
-                logger.warning("HQ: scoped token for %s not used (%s); falling back to the service key", self.identity, state)
-            return self
+                logger.warning("HQ: scoped token for %s refused (%s); the call is not sent", self.identity, state)
+            raise ScopedTokenError(f"no usable scoped token for {self.identity} ({state})")
         gw = scoped_gateway_key()
         self._resets = (AUTH_OVERRIDE.set(tok), APIKEY_OVERRIDE.set(gw))
         self.scoped = True

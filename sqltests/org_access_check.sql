@@ -58,6 +58,7 @@ begin
   if exists (select 1 from public.fz_offices where kind = 'office' and status <> 'dormant') then raise exception 'O1 an office does not start dormant'; end if;
   if (select string_agg(slug, ',' order by slug) from public.fz_offices where kind = 'office') <> 'b2b-records,donna,ff-marketing,fruition-factory,monopoly,pimp-ai,the-trap,wolf-squad' then raise exception 'O1 office slugs'; end if;
   if exists (select 1 from public.fz_identities where kind = 'office_manager' and status <> 'dormant') then raise exception 'O1 an office identity does not start dormant'; end if;
+  if exists (select 1 from public.fz_identities where slug in ('jarvis-chat', 'jarvis-core', 'jarvis-hands') and status <> 'dormant') then raise exception 'O1 unminted Jarvis helper identities must start dormant'; end if;
   if (select count(*) from public.fz_identities where slug in ('owner', 'jarvis', 'jarvis-chat', 'jarvis-core', 'jarvis-hands', 'auditor', 'backup-reader', 'release')) <> 8 then raise exception 'O1 core identities missing'; end if;
 
   -- O2 a dormant office identity gets nothing
@@ -145,10 +146,26 @@ begin
   if pg_temp.as_id('fz_jarvis', cj, 'select count(*)::text from public.fz_identities') not like 'ERR:permission denied%' then raise exception 'O6 identities readable'; end if;
 
   -- O7 writes: tasks only; office stamped; author stamped; no cross-office write, no delete, no protected columns
-  res := pg_temp.as_id('fz_office_agent', ca, format($q$insert into public.tasks (title, office_id, status) values ('A writes into B', %L, 'todo') returning office_id::text || '|' || created_by$q$, B));
-  if res <> 'OK:' || A || '|' || AI then raise exception 'O7 office A insert was not pinned to office A: %', res; end if;
-  if pg_temp.as_id('fz_office_agent', ca, format($q$with u as (update public.tasks set status = 'done' where id = %L returning 1) select count(*)::text from u$q$, tb)) <> 'OK:0' then raise exception 'O7 office A updated office B task'; end if;
-  if pg_temp.as_id('fz_office_agent', ca, format($q$with u as (update public.tasks set status = 'done', result = 'ok' where id = %L returning 1) select count(*)::text from u$q$, ta)) <> 'OK:1' then raise exception 'O7 office A cannot update its own task'; end if;
+  res := pg_temp.as_id('fz_office_agent', ca, format($q$insert into public.tasks (title, office_id) values ('A writes into B', %L) returning office_id::text || '|' || created_by || '|' || status$q$, B));
+  if res <> 'OK:' || A || '|' || AI || '|todo' then raise exception 'O7 office A insert was not pinned to office A: %', res; end if;
+  if pg_temp.as_id('fz_office_agent', ca, format($q$with u as (update public.tasks set detail = 'x' where id = %L returning 1) select count(*)::text from u$q$, tb)) <> 'OK:0' then raise exception 'O7 office A updated office B task'; end if;
+  if pg_temp.as_id('fz_office_agent', ca, format($q$with u as (update public.tasks set detail = 'more detail', priority = 2 where id = %L returning 1) select count(*)::text from u$q$, ta)) <> 'OK:1' then raise exception 'O7 office A cannot update its own task'; end if;
+  -- S1: no status / result writes (a "done" task with a crafted result is engine input), no task for an agent of another office or the group, no mission tasks
+  if pg_temp.as_id('fz_office_agent', ca, format($q$update public.tasks set status = 'done' where id = %L$q$, ta)) not like 'ERR:permission denied%' then raise exception 'O7 status writable'; end if;
+  if pg_temp.as_id('fz_office_agent', ca, format($q$update public.tasks set result = 'x' where id = %L$q$, ta)) not like 'ERR:permission denied%' then raise exception 'O7 result writable'; end if;
+  if pg_temp.as_id('fz_office_agent', ca, $q$insert into public.tasks (title, status, result) values ('pre-done', 'done', 'x')$q$) not like 'ERR:permission denied%' then raise exception 'O7 status / result insertable'; end if;
+  foreach res in array array['builder', 'jarvis-hands', 'fz-test-b'] loop
+    if pg_temp.as_id('fz_office_agent', ca, format($q$insert into public.tasks (title, assigned_agent) values ('deputy', %L)$q$, res)) not like 'ERR:new row violates row-level security%' then raise exception 'O7 office A assigned a task to %', res; end if;
+    if pg_temp.as_id('fz_office_agent', ca, format($q$update public.tasks set assigned_agent = %L where id = %L$q$, res, ta)) not like 'ERR:new row violates row-level security%' then raise exception 'O7 office A reassigned its task to %', res; end if;
+  end loop;
+  if pg_temp.as_id('fz_office_agent', ca, $q$insert into public.tasks (title, assigned_agent) values ('own agent', 'fz-test-a') returning assigned_agent$q$) <> 'OK:fz-test-a' then raise exception 'O7 office A cannot assign its own agent'; end if;
+  if pg_temp.as_id('fz_jarvis', cj, format($q$insert into public.tasks (title, office_id, assigned_agent) values ('cross', %L, 'builder')$q$, B)) not like 'ERR:new row violates row-level security%' then raise exception 'O7 jarvis put a group agent on an office task'; end if;
+  if pg_temp.as_id('fz_jarvis', cj, $q$insert into public.tasks (title, office_id) values ('dormant office', 'f0000000-0000-4000-8000-000000000004')$q$) not like 'ERR:new row violates row-level security%' then raise exception 'O7 jarvis wrote into a dormant office (N2)'; end if;
+  insert into public.missions (title, objective) values ('Mission G', 'Group mission objective') returning id into wb;
+  insert into public.tasks (title, mission_id) values ('mission step', wb) returning id into tb;
+  if pg_temp.as_id('fz_jarvis', cj, format($q$update public.tasks set detail = 'injected' where id = %L$q$, tb)) not like 'ERR:scoped write refused: mission tasks%' then raise exception 'O7 jarvis edited a mission task'; end if;
+  select id into tb from public.tasks where title = 'Task B';
+  select id into wb from public.client_workspaces where slug = 'fz-ws-b';
   if pg_temp.as_id('fz_office_agent', ca, format($q$update public.tasks set office_id = %L where id = %L$q$, B, ta)) not like 'ERR:permission denied%' then raise exception 'O7 office_id updatable'; end if;
   if pg_temp.as_id('fz_office_agent', ca, format($q$update public.tasks set mission_id = null where id = %L$q$, ta)) not like 'ERR:permission denied%' then raise exception 'O7 mission_id updatable'; end if;
   if pg_temp.as_id('fz_office_agent', ca, format($q$delete from public.tasks where id = %L$q$, ta)) not like 'ERR:permission denied%' then raise exception 'O7 delete allowed'; end if;
@@ -162,7 +179,7 @@ begin
 
   -- O8 owner-only and money functions: the scoped roles execute EXACTLY the allowlist (nothing inherited, nothing else)
   allow_a := array['current_identity()', 'current_office()', 'current_office_id()', 'fz_claims()', 'fz_identity_now()', 'fz_readable_offices(text)', 'fz_readable_workspaces(text)',
-                   'fz_whoami()', 'fz_writable_offices(text)', 'is_group_scope()'];
+                   'fz_whoami()', 'fz_writable_offices(text)', 'is_group_scope()', 'fz_agent_in_office(text,uuid)'];
   allow_o := allow_a || array['fz_authorize_action(text,integer,text,text,text,uuid,uuid,jsonb)'];
   allow_j := allow_o;
   foreach res in array array['fz_jarvis', 'fz_office_agent', 'fz_auditor'] loop
@@ -206,6 +223,23 @@ begin
   res := pg_temp.as_id('fz_jarvis', cj, $q$select public.fz_authorize_action('advertising', 100, 'fz-ads-2')::text$q$);
   if res not like '%"decision": "deny"%' or res not like '%Dry-run%' then raise exception 'O9 dry-run ignored: %', res; end if;
   if exists (select 1 from public.approval_requests where ref = 'fz-loan-1') then raise exception 'O9 the gate created an approval'; end if;
+  -- B1: a scoped call never consumes an owner approval and never writes an allow row (allows count toward the caps); the service path keeps today's behaviour
+  insert into public.approval_requests (actor, action, cents, ref, recommendation, status, decided_at) values ('donna-ops', 'send_email', 0, 'fz-ref-1', 'x', 'approved', now()),
+                                                                                                           ('donna-ops', 'take_loan', 0, 'fz-ref-2', 'x', 'approved', now());
+  update public.system_state set mode = 'approve_first' where id = 1;
+  select count(*) into n from public.action_log where decision = 'allow';
+  foreach res in array array[$q$select public.fz_authorize_action('send_email', 0, 'fz-ref-1')::text$q$, $q$select public.fz_authorize_action('take_loan', 0, 'fz-ref-2')::text$q$,
+                             $q$select public.fz_authorize_action('research', 0, 'fz-ref-3')::text$q$] loop
+    if pg_temp.as_id('fz_jarvis', cj, res) like '%"decision": "allow"%' and res not like '%research%' then raise exception 'B1 jarvis got allow: %', res; end if;
+    perform pg_temp.as_id('fz_office_agent', ca, res);
+  end loop;
+  if pg_temp.as_id('fz_jarvis', cj, $q$select public.fz_authorize_action('research')::text$q$) not like '%"evaluated_only": true%' then raise exception 'B1 scoped allow not marked evaluated_only'; end if;
+  if (select count(*) from public.approval_requests where ref in ('fz-ref-1', 'fz-ref-2') and status = 'approved') <> 2 then raise exception 'B1 a scoped call consumed an owner approval'; end if;
+  if (select count(*) from public.action_log where decision = 'allow') <> n then raise exception 'B1 a scoped call wrote an allow row (counts toward caps)'; end if;
+  if not exists (select 1 from public.action_log where ref = 'fz-ref-1' and decision = 'ask_owner' and actor = 'jarvis') then raise exception 'B1 the ask was not logged'; end if;
+  res := pg_temp.svc($q$select public.fz_authorize_action('send_email', 0, 'fz-ref-1', null, 'donna-ops', null, null, '{"identity": "owner"}')::text$q$);   -- the service path: unchanged
+  if res not like '%"decision": "allow"%' or (select status from public.approval_requests where ref = 'fz-ref-1') <> 'used' then raise exception 'B1 service path changed: %', res; end if;
+  if (select detail ->> 'identity' from public.action_log where ref = 'fz-ref-1' and decision = 'allow' order by id desc limit 1) <> 'service' then raise exception 'S3 service caller set detail.identity'; end if;
   update public.system_state set kill_switch = true where id = 1;      -- (mode is restored by the rollback)
   res := pg_temp.as_id('fz_jarvis', cj, $q$select public.fz_authorize_action('research')::text$q$);
   if res not like '%"decision": "deny"%' or res not like '%Kill switch%' then raise exception 'O9 kill switch ignored: %', res; end if;
@@ -217,16 +251,20 @@ begin
   if pg_temp.as_id('fz_office_agent', ca, $q$select public.fz_authorize_action('research', 0, null, 'donna')::text$q$) not like 'ERR:office mismatch%' then raise exception 'O10 office A acted for donna'; end if;
   res := pg_temp.as_id('fz_office_agent', ca, $q$select public.fz_authorize_action('research', 0, 'fz-r1', null, 'owner')::text$q$);
   if res not like '%"decision": "allow"%' or res not like '%"office": "b2b-records"%' then raise exception 'O10 green research refused for office A: %', res; end if;
-  if (select actor || '|' || (detail ->> 'office') from public.action_log where ref = 'fz-r1' order by id desc limit 1) <> AI || '|b2b-records' then raise exception 'O10 actor spoofed or office not logged'; end if;
-  if pg_temp.svc($q$select public.fz_set_office_policy('b2b-records', 'research', false, null, null, 'jarvis')::text$q$) not like 'OK:%' then raise exception 'O10 bot cannot tighten'; end if;
-  res := pg_temp.as_id('fz_office_agent', ca, $q$select public.fz_authorize_action('research')::text$q$);
+  if exists (select 1 from public.action_log where ref = 'fz-r1') then raise exception 'O10 a scoped allow was logged'; end if;
+  if pg_temp.svc($q$select public.fz_set_office_policy('b2b-records', 'research', false, null, null, 'owner')::text$q$) not like 'OK:%' then raise exception 'O10 bot cannot tighten'; end if;
+  if (select updated_by from public.fz_office_action_policy where action = 'research') <> 'bot:owner' then raise exception 'S3 the bot recorded itself as the owner'; end if;
+  res := pg_temp.as_id('fz_office_agent', ca, $q$select public.fz_authorize_action('research', 0, 'fz-r1b', null, 'owner')::text$q$);
   if res not like '%"decision": "deny"%' or res not like '%office rule%' then raise exception 'O10 office rule ignored: %', res; end if;
+  if (select actor || '|' || (detail ->> 'office') from public.action_log where ref = 'fz-r1b' order by id desc limit 1) <> AI || '|b2b-records' then raise exception 'O10 actor spoofed or office not logged'; end if;
   if pg_temp.as_id('fz_office_agent', cb, $q$select public.fz_authorize_action('research')::text$q$) not like '%"decision": "allow"%' then raise exception 'O10 office B affected by office A rule'; end if;
   if pg_temp.svc($q$select public.fz_set_office_policy('b2b-records', 'research', true)::text$q$) not like 'ERR:only the owner can relax%' then raise exception 'O10 bot relaxed an office rule'; end if;
   if pg_temp.svc($q$select public.fz_set_office_policy('b2b-records', 'advertising', true, 999999)::text$q$) not like 'ERR:office limit%above the group limit%' then raise exception 'O10 office limit above group accepted'; end if;
   if pg_temp.svc($q$select public.fz_set_office_policy('b2b-records', 'no_such_action', false)::text$q$) not like 'ERR:unknown action%' then raise exception 'O10 unknown action accepted'; end if;
-  perform public.fz_set_office_policy('b2b-records', 'research', true, null, 1, 'owner');   -- the signed-in owner relaxes (and sets a 1-per-day office cap)
-  if pg_temp.as_id('fz_office_agent', ca, $q$select public.fz_authorize_action('research')::text$q$) not like '%office%daily limit%' then raise exception 'O10 office daily cap ignored (fz-r1 already counted today)'; end if;
+  perform public.fz_set_office_policy('b2b-records', 'research', true, null, 1, 'x');   -- the signed-in owner relaxes (and sets a 1-per-day office cap)
+  if (select updated_by from public.fz_office_action_policy where action = 'research') <> 'owner' then raise exception 'S3 owner change not recorded as owner'; end if;
+  if pg_temp.svc($q$select public.fz_authorize_action('research', 0, 'fz-r2', 'b2b-records', 'jarvis')::text$q$) not like '%"decision": "allow"%' then raise exception 'O10 service path for the office'; end if;   -- counted (service path)
+  if pg_temp.as_id('fz_office_agent', ca, $q$select public.fz_authorize_action('research')::text$q$) not like '%office%daily limit%' then raise exception 'O10 office daily cap ignored'; end if;
   if pg_temp.as_id('fz_auditor', cu, $q$select public.fz_authorize_action('research')::text$q$) not like 'ERR:%' then raise exception 'O10 auditor used the gate'; end if;
 
   -- O11 token checks (each refused token sees 0 rows and whoami says no)
@@ -293,7 +331,11 @@ begin
   if exists (select 1 from public.fz_org_archive a where a.entity = 'agent' and a.key in ('jarvis', 'jarvis-chat', 'jarvis-core', 'jarvis-hands') and a.decision <> 'kept') then raise exception 'O15 a Jarvis agent was archived'; end if;
   if exists (select 1 from public.fz_org_archive a join public.agents g on g.slug = a.key where a.entity = 'agent' and a.decision = 'kept' and g.archived_at is not null) then
     raise exception 'O15 a kept agent was stamped archived'; end if;
-  if exists (select 1 from public.fz_org_archive a join public.agents g on g.slug = a.key where a.entity = 'agent' and a.decision = 'archived' and (g.status <> 'paused' or g.archived_at is null)) then raise exception 'O15 archived agent not paused + stamped'; end if;
+  if exists (select 1 from public.fz_org_archive a join public.agents g on g.slug = a.key where a.entity = 'agent' and a.decision = 'archived' and g.archived_at is null) then raise exception 'O15 archived agent not stamped'; end if;
+  if exists (select 1 from public.fz_org_archive a where a.entity in ('agent', 'department', 'venture') and a.new_status is distinct from a.prior_status) then raise exception 'S4 the re-seed changed a status'; end if;
+  if (select (detail ->> 'status_changes')::int from public.audit_log where action = 'org_reseed' order by id desc limit 1) <> 0 then raise exception 'S4 re-seed audit'; end if;
+  -- the preview is read-only and agrees with the rule; it lists exactly what the log archived (for rows that existed at the re-seed)
+  if exists (select 1 from public.fz_reseed_preview() p where p.already_logged and not exists (select 1 from public.fz_org_archive a where a.entity = p.entity and a.key = p.key and a.decision = 'archived')) then raise exception 'S4 preview disagrees with the log'; end if;
   if exists (select 1 from public.fz_org_archive a where a.entity = 'agent' and not exists (select 1 from public.agents g where g.slug = a.key)) then raise exception 'O15 an agent row was deleted'; end if;
   if exists (select 1 from public.fz_org_archive a where a.entity = 'venture' and not exists (select 1 from public.ventures g where g.slug = a.key)) then raise exception 'O15 a venture row was deleted'; end if;
   if exists (select 1 from public.fz_org_archive a where a.entity = 'department' and not exists (select 1 from public.departments g where g.slug = a.key)) then raise exception 'O15 a department row was deleted'; end if;

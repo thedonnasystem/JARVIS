@@ -1,5 +1,6 @@
 -- Rollback of migrations/20261127_org_access_v1.sql (FENDEZY GROUP Phase 1, M1 "Org & Access core"). Idempotent. Run from the repo root (psql -f ops/rollback_org_access.sql).
 -- What it does, in order:
+--   0. copies the re-seed log (fz_org_archive) into one audit_log row and names every agent whose status changed after the re-seed (left as it is);
 --   1. un-archives: every agent / department the re-seed archived gets its PRIOR status back (only if nobody changed it since) and its archived_at stamp cleared;
 --   2. removes the scoped-role policies, grants and the tasks stamp trigger; RLS goes back OFF only on the tables this migration switched it on for (marked by its
 --      fz_service_all policy; on Supabase those tables already had RLS on, so nothing changes there);
@@ -12,6 +13,15 @@ begin;
 do $$
 declare r record; t regclass;
 begin
+  -- 0. keep the re-seed record: the whole fz_org_archive goes into ONE audit_log row (audit history is never dropped), and agents whose status changed since the re-seed are named
+  if to_regclass('public.fz_org_archive') is not null then
+    insert into public.audit_log (actor, action, target, detail)
+      select 'rollback', 'org_archive_export', 'fz_org_archive', jsonb_build_object('rows', coalesce(jsonb_agg(to_jsonb(a) order by a.id), '[]'::jsonb)) from public.fz_org_archive a;
+    for r in select a.key, a.new_status, g.status from public.fz_org_archive a join public.agents g on g.slug = a.key
+              where a.entity = 'agent' and g.status is distinct from a.new_status order by a.key loop
+      raise notice 'agent % changed status after the re-seed (% -> %): left as it is now', r.key, r.new_status, r.status;
+    end loop;
+  end if;
   -- 1. un-archive
   if to_regclass('public.fz_org_archive') is not null then
     if exists (select 1 from pg_attribute where attrelid = 'public.agents'::regclass and attname = 'archived_at' and not attisdropped) then
@@ -53,7 +63,7 @@ alter table public.memory drop column if exists office_id;
 drop function if exists public.fz_authorize_action(text, integer, text, text, text, uuid, uuid, jsonb), public.fz_set_office_policy(text, text, boolean, integer, integer, text),
   public.fz_owner_set_office_status(text, text), public.fz_owner_set_identity(text, text, text, boolean), public.fz_owner_set_workspace_office(uuid, text),
   public.fz_revoke_identity(text, text), public.fz_org_status(), public.fz_unregistered_tables(), public.fz_whoami(), public.fz_stamp_scoped_write(),
-  public.fz_readable_workspaces(text), public.fz_writable_offices(text), public.fz_readable_offices(text), public.is_group_scope(), public.current_office_id(),
+  public.fz_readable_workspaces(text), public.fz_agent_in_office(text, uuid), public.fz_policy_preview(text, integer), public.fz_reseed_preview(), public.fz_reseed_decisions(), public.fz_writable_offices(text), public.fz_readable_offices(text), public.is_group_scope(), public.current_office_id(),
   public.current_office(), public.current_identity();
 drop table if exists public.fz_office_action_policy, public.fz_workspace_offices, public.fz_org_archive, public.fz_table_registry, public.fz_identities, public.fz_offices;
 drop function if exists public.fz_office_policy_guard(), public.fz_append_only(), public.fz_identity_now(), public.fz_claims();
