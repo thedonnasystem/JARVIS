@@ -42,7 +42,7 @@ begin
     revoke all on schema public from fz_jarvis, fz_office_agent, fz_auditor;
   end if;
 end $$;
--- 3. columns, functions, tables
+-- 3. columns, functions, tables (the roles are dropped at the end; roles are cluster-wide, so a role still used by ANOTHER database on the same server is kept with no privilege here)
 drop index if exists public.agents_office_id, public.departments_office_id, public.ventures_office_id, public.missions_office_id, public.tasks_office_id, public.memory_office_id;
 alter table public.agents drop column if exists office_id, drop column if exists archived_at;
 alter table public.departments drop column if exists office_id, drop column if exists archived_at;
