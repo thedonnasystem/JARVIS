@@ -132,27 +132,27 @@ Budget, activation and creative approval (owner-only, unchanged); client sign-of
 
 ## 13. FF Marketing execution (Jarvis runs the launch), built, needs release
 
-One tap per client launch; then Jarvis runs paid ads, posts, works the leads and reports, alone, inside the numbers you approved.
+One tap per client launch (at most 30 days); then Jarvis runs paid ads, posts, works the leads and reports, alone, inside the numbers you approved.
 
 ### Run it
-1. `/ffm launch <slug> <daily $> <total $> [days] [start YYYY-MM-DD]` (after `/ffm pack`). You get ONE message: platforms, daily budget, total cap, dates, what will post. Tap Approve.
-2. Jarvis then (every 5 minutes, plain code): creates the Meta campaign (spend cap = your total), ad sets and ads PAUSED, then switches them on; deploys the landing page; posts the organic calendar; reads new leads, answers within minutes and runs the follow-ups; once a day pauses losing ads and moves budget to winners; Monday report to you plus a client draft.
-3. `/ffm status <slug>`, `/ffm stop <slug>` (pauses all ads), `/ffm budget <slug> <daily $> <total $>` (more money = a new tap), `/ffm lead <id> replied|booked|stop|lost`.
-At the cap every ad is paused and you are told once. Nothing above the cap or the daily budget is possible: the database refuses it.
+1. Once per client: `/ffm sender <slug> <from email> | <sender name> | <brand> | <mailing address>` (the CLIENT's own CASL identity; its emails never carry Donna's).
+2. `/ffm launch <slug> <daily $> <total $> [days, max 30] [start YYYY-MM-DD]` (after `/ffm pack`; total cap at least $100, not above the workspace monthly budget). You get ONE message: platforms, daily budget (an average: Meta may spend up to ~75% more on a single day), total cap (the hard stop), dates, and `/ffm plan <id>`, which lists every ad, post and email. Tap Approve.
+3. Jarvis then (every 5 minutes, plain code): Meta campaign (spend cap = your total), ad sets and ads created PAUSED, then switched on; landing page; organic posts; new leads answered (first email within about 5 minutes when live) and followed up; daily optimizing; Monday report to you plus a client draft.
+4. `/ffm status <slug>`, `/ffm stop <slug>` (pauses on Meta first, tells you if Meta did not confirm), `/ffm budget <slug> <daily $> <total $>` (a new tap; the new cap is set on Meta and ad sets are cut before anything resumes), `/ffm lead <id> replied|booked|stop|lost`.
+At the cap every ad is paused and you are told once. Kill switch: nothing runs; Jarvis only pauses live ads.
 
-### Go live (in this order; until then everything runs as DRY RUN with simulated receipts)
-1. Merge and release this PR (migration `20261126_ffm_run_v1`, its rollback is `ops/rollback_ffm_run.sql`).
-2. Connect accounts for division `ffm`: `/ffm connectads` (Meta ad account, official login), `/connect meta-facebook ffm` (the Page the ads run from), `/connect netlify ffm <yoursite>.netlify.app <Netlify personal access token>` (landing page), plus any page you want posts on (`/connect linkedin ffm`, `/connect x-twitter ffm`).
-3. Switch those connectors on (owner-only `hands_owner_set_connector`) and the hand itself (`hands_owner_enable`), as in section 11.
-4. Per client: onboarding inputs `consent_wording` and `booking_link`, a registered consent wording version, workspace budget and activation (unchanged owner steps). Paid ads stay simulated until the workspace is `active`.
-5. Leave the kill switch off and set the mode from `dry_run` to a live mode (`auto_in_caps`).
-6. For emails to leads: the outbox gate must be open (suppression verified) and each lead's consent verified (sealed form capture). Each follow-up is drafted in the outbox; the outbox rules (your approval per email, CASL footer) still decide the send.
+### Go live (in this order). A launch approved in dry-run mode stays DRY RUN to its end: launch again after going live.
+1. Merge and release this PR (migration `20261126_ffm_run_v1`, rollback `ops/rollback_ffm_run.sql`).
+2. Connect for division `ffm`: `/ffm connectads` (Meta ad account), `/connect meta-facebook ffm` (the Page), `/connect netlify ffm <yoursite>.netlify.app <Netlify token>`, optionally LinkedIn / X.
+3. Switch those connectors on (`hands_owner_set_connector`) and the hand (`hands_owner_enable`), as in section 11. Set `META_APP_SECRET` (appsecret proof) and `RESEND_API_KEY`, and verify the client's sending domain in Resend.
+4. Per client: `/ffm sender`, onboarding inputs `consent_wording` and `booking_link`, a registered consent wording version, workspace budget and activation (unchanged owner steps).
+5. Kill switch off; mode from `dry_run` to `auto_in_caps` (emails send only when the policy engine allows `send_email`).
+6. Outreach gate open (suppression verified) and consent captures sealed by the form endpoint: until then leads are stored as `needs_consent` and never emailed.
+7. `/ffm launch ...` and tap Approve.
 
 ### Limits (plain)
-- Follow-ups are email drafts in the outbox, not automatic sends; SMS is a stub (no consent-checked SMS sender exists).
-- A lead from the landing page or a Meta form is contacted only with verified consent: the form endpoint that seals captures (signing key) is not built, so until then leads are stored and marked `needs_consent`.
-- Instagram, TikTok and YouTube posts need an image or video; the pack has none, so those posts are skipped (Facebook, LinkedIn, X post text).
-- Leads are read by polling (Netlify form submissions, Meta lead-form leads every 5 minutes); there is no public webhook endpoint.
-- Ad targeting is the brief's city (25 km) or Canada; refine in Ads Manager if needed. Meta special ad categories are set for mortgage, insurance and real estate.
-- Kill switch: everything stops; the only call Jarvis still makes is pausing a live campaign (it stops spend).
-- The launch tap approves the hand actions for the exact approved post texts and page (owner-approved by the launch, recorded as `owner:launch:<id>`): review that design before release.
+- Emails send automatically under the launch approval (approved texts, re-checked at send time: consent, opt-out, suppression, outreach gate, kill switch, mode, policy caps). No per-email tap. Unsubscribe is a mailto link to the client's address; the client (or you, `/ffm lead <id> stop`) records it: replies are not read automatically.
+- The sealing form endpoint (capture signing key) is not built: until it is, no lead has verified consent, so no email goes out.
+- SMS is a stub. Instagram, TikTok and YouTube posts need media and are skipped. Leads are polled (no webhook). Targeting: the brief's city (25 km) or Canada.
+- The launch tap approves the hand actions for the exact approved posts and page (`owner:launch:<id>`) and the emails: review that design before release.
+- `hq_mail.live()` checks for a mode named `live`, which does not exist (modes are dry_run / approve_first / auto_in_caps / exceptions_only), so the legacy outbox sender never sends today. Not changed here; FF Marketing does not use that path.

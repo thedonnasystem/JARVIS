@@ -177,6 +177,19 @@ def _post(row: dict) -> bool:
     reply_to = os.environ.get("MAIL_REPLY_TO")
     if reply_to:
         payload["reply_to"] = reply_to
+    return _provider(payload)
+
+
+def send_prepared(from_addr: str, from_name: str, to: str, subject: str, text: str, unsubscribe: str) -> bool:
+    """The provider call for a message whose every check was already made by its caller (the FF Marketing sender: hq_ffm_run.send_emails after
+    ffm_run_claim_email). From the CLIENT's own address (verified in Resend by the owner), with a List-Unsubscribe header. Not the outbox path."""
+    if not os.environ.get("RESEND_API_KEY"):
+        return False
+    return _provider({"from": f"{from_name} <{from_addr}>", "to": [to.strip()], "subject": subject[:200], "text": text, "reply_to": from_addr,
+                      "headers": {"List-Unsubscribe": f"<{unsubscribe}>"}})
+
+
+def _provider(payload: dict) -> bool:
     req = urllib.request.Request(API, data=json.dumps(payload).encode(), method="POST", headers={
         "Authorization": "Bearer " + os.environ["RESEND_API_KEY"], "Content-Type": "application/json"})
     try:

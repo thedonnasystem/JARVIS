@@ -648,7 +648,11 @@ async def ffm_cmd(update, context) -> None:
             return await _reply(update, await asyncio.to_thread(queue_organic, args[1].lower(), args[2]))
         import hq_ffm_run     # execution: one owner approval per launch, then Jarvis runs ads, posts, leads and reports
         if sub in hq_ffm_run.SUBCOMMANDS:
-            return await _reply(update, await asyncio.to_thread(hq_ffm_run.command, sub, args[1:]))
+            text = await asyncio.to_thread(hq_ffm_run.command, sub, args[1:])
+            if sub == "plan":           # every ad, post and email: may be longer than one Telegram message
+                import hq_core
+                return await hq_core.reply(update, text)
+            return await _reply(update, text)
         if sub == "connectads":
             if len(args) > 1:
                 return await _reply(update, await asyncio.to_thread(hq_ffm_run.connect_ads_finish, args[1]))

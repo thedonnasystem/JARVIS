@@ -1,28 +1,28 @@
 """FF Marketing EXECUTION v1: after ONE owner approval per client launch, Jarvis runs the paid ads, posts the content, works the leads and reports, alone.
 
-Owner flow (Telegram, owner only):  /ffm launch <slug> <daily $> <total $> [days] [YYYY-MM-DD]  ->  one message with Approve / Reject (platforms, daily budget,
-total cap, dates, what will post; the numbers are written by the database)  ->  one tap  ->  Jarvis runs it. /ffm status | stop | budget | lead.
+Owner flow (Telegram, owner only): /ffm sender (the client's CASL identity, once) -> /ffm launch <slug> <daily $> <total $> [days <= 30] [YYYY-MM-DD] -> one
+message with Approve / Reject (numbers written by the database; /ffm plan <id> lists every ad, post and email) -> one tap, recorded ONLY through
+ffm_run_owner_decide (message + single-use nonce, via hq_commands.apply_decision) -> Jarvis runs it. /ffm status | stop | budget | lead | plan | connectads.
 
-Every tick (TICK_SECONDS, plain code, no model call) for each approved launch, each step behind public.ffm_run_gate (kill switch, mode, dates, approved budget,
-connector on, account connected, workspace active, hands executor on):
-  ads      Meta Marketing API: campaign (spend cap = the approved total) -> ad sets -> ads, all created PAUSED, then switched on. Hourly insights are stored;
-           once a day losers are paused and the daily budget is shifted to the winners. The DATABASE refuses any ad-set budget sum above the approved daily
-           budget or the remaining cap, and marks the launch capped when spend reaches the cap: Jarvis then pauses everything. More money = a new owner tap.
-  content  organic posts on their calendar day and the landing page go through the hands path (hand_actions approved by the launch approval, only for the
-           exact approved text / page hash; hands_start re-checks kill switch, mode, connector, rate limit; executor gate).
-  leads    Netlify form submissions (landing page) and Meta lead-form leads are polled every tick -> ffm_run_intake_lead (consent fields required, ws_guard,
-           ffm_record_consent) -> touch 1 at once, then the approved follow-ups (days 0, 1, 3, 6, 10). Email only: each touch is a DRAFT in the existing
-           outbox when ffm_contact_status allows (consent, suppression, outreach gate); the outbox rules decide the send. SMS: no consent-checked SMS sender
-           exists, so SmsNotBuilt is a stub. Reply / booking / opt-out (/ffm lead) stops the sequence; opt-out withdraws consent (suppression).
-  report   Monday: spend, leads, cost per lead, best ads to the owner (owner_messages kind 'brief', "sir") plus a client-facing draft (never sent to the client).
-While system_state.mode is dry_run, or a connector is off / not connected, every step runs SIMULATED: fake platform ids, simulated spend that still counts
-against the cap, receipts labelled DRY RUN. Kill switch on: nothing runs; the only call allowed is PAUSING live ads (it stops spend).
+Every tick (TICK_SECONDS, plain code, no model call):
+  ads      Meta Marketing API: campaign (spend cap = the approved total) -> ad sets -> ads, all created PAUSED; the database approves each switch-on before it
+           is made on Meta. Hourly numbers (a real campaign is always read from Meta, never simulated), daily optimizer (pause losers, shift budget). A new
+           approved budget is applied on Meta first (spend cap, then ad-set cuts) before anything resumes. At the cap everything is paused.
+  pause    cap / end / stop / kill switch: a REAL campaign is paused on Meta directly with the stored token whatever else is switched off; the books say paused
+           only after Meta confirmed; a failure is retried every tick, also for launches that are already stopped or ended.
+  content  posts on their calendar day and the landing page through the hands path (only the exact approved text / page hash).
+  leads    Netlify form + Meta lead-form leads -> ffm_run_intake_lead (consent fields required, ws_guard) -> touch 1 at once, then the approved follow-ups.
+           Emails are queued with the CLIENT's own sender profile and CASL footer and sent by send_emails() after ffm_run_claim_email re-checks everything
+           at send time; the policy engine's send_email caps apply. Not the legacy outbox / Donna path. SMS: stub (SmsNotBuilt).
+  report   Monday: owner brief ("sir") + client draft (never sent to the client).
+A launch approved while the system is in dry-run mode runs SIMULATED to its end (receipts labelled DRY RUN); after going live, launch again.
 Nothing here edits a money control, the kill switch, the mode, a cap, an executor, a permission or a privacy guard.
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -48,7 +48,7 @@ CTA_CODES = {"Learn More": "LEARN_MORE", "Book Now": "BOOK_NOW", "Get Quote": "G
              "Call Now": "CALL_NOW", "Get Offer": "GET_OFFER", "Send Message": "SEND_MESSAGE"}
 SPECIAL = {"mortgage": ["FINANCIAL_PRODUCTS_SERVICES"], "insurance": ["FINANCIAL_PRODUCTS_SERVICES"], "real_estate": ["HOUSING"]}   # Meta special ad categories
 ADS_SCOPES = "ads_management,ads_read,leads_retrieval,pages_show_list,pages_read_engagement,pages_manage_ads,business_management"
-SUBCOMMANDS = ("launch", "status", "stop", "budget", "lead")
+SUBCOMMANDS = ("launch", "status", "stop", "budget", "lead", "plan", "sender")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -74,19 +74,30 @@ def parse_money(s: str) -> int:
 
 # ------------------------------------------------------------------------------------------------------------------- Meta Marketing API
 class MetaAds:
-    """Official Marketing API (Graph v21.0) on the owner-connected ad account. Every object is created PAUSED; the token never leaves this object."""
+    """Official Marketing API (Graph v21.0) on the owner-connected ad account. Every object is created PAUSED. The token goes in the Authorization header
+    (never in a URL) together with appsecret_proof when META_APP_SECRET is set; it never leaves this object."""
 
-    def __init__(self, token: str, account: str, call=A.http):
-        self._tok, self.account, self.call = A.Secret(token), account if str(account).startswith("act_") else f"act_{account}", call
+    def __init__(self, token: str, account: str, call=A.http, app_secret: str | None = None):
+        import os
+        self._tok, self.call = A.Secret(token), call
+        self.account = account if str(account).startswith("act_") else f"act_{account}"
+        secret = app_secret if app_secret is not None else os.environ.get("META_APP_SECRET")
+        self._proof = hmac.new(secret.encode(), token.encode(), hashlib.sha256).hexdigest() if secret else None
+
+    def _auth(self) -> dict:
+        return {"Authorization": "Bearer " + self._tok.reveal()}
+
+    def _proofed(self, d: dict) -> dict:
+        return {**d, "appsecret_proof": self._proof} if self._proof else dict(d)
 
     def _post(self, path: str, form: dict) -> dict:
-        s, b, _ = self.call("POST", f"{A.GRAPH}/{path}", form={**form, "access_token": self._tok.reveal()})
+        s, b, _ = self.call("POST", f"{A.GRAPH}/{path}", headers=self._auth(), form=self._proofed(form))
         if s != 200 or not isinstance(b, dict) or not (b.get("id") or b.get("success")):
             raise A._err("Meta Ads", s, b)
         return b
 
     def _get(self, path: str, params: dict) -> dict:
-        s, b, _ = self.call("GET", f"{A.GRAPH}/{path}?" + urllib.parse.urlencode({**params, "access_token": self._tok.reveal()}))
+        s, b, _ = self.call("GET", f"{A.GRAPH}/{path}?" + urllib.parse.urlencode(self._proofed(params)), headers=self._auth())
         if s != 200 or not isinstance(b, dict):
             raise A._err("Meta Ads", s, b)
         return b
@@ -106,6 +117,13 @@ class MetaAds:
                                                              "special_ad_categories": json.dumps(special), "spend_cap": str(int(cap_cents)),
                                                              "is_adset_budget_sharing_enabled": "false"})["id"])
 
+    def set_spend_cap(self, campaign: str, cap_cents: int) -> None:
+        self._post(campaign, {"spend_cap": str(int(cap_cents))})
+
+    def lifetime_spend(self, campaign: str) -> int:
+        rows = self._get(f"{campaign}/insights", {"fields": "spend", "date_preset": "maximum"}).get("data") or []
+        return sum(int(round(float(r.get("spend") or 0) * 100)) for r in rows)
+
     def ad_set(self, campaign: str, name: str, daily_cents: int, start: str, end: str, targeting: dict) -> str:
         return str(self._post(f"{self.account}/adsets", {"name": name, "campaign_id": campaign, "daily_budget": str(int(daily_cents)), "billing_event": "IMPRESSIONS",
                                                           "optimization_goal": "LINK_CLICKS", "bid_strategy": "LOWEST_COST_WITHOUT_CAP", "targeting": json.dumps(targeting),
@@ -122,7 +140,7 @@ class MetaAds:
     def set_budget(self, ad_set: str, daily_cents: int) -> None:
         self._post(ad_set, {"daily_budget": str(int(daily_cents))})
 
-    def insights(self, campaign: str, day: date, ads=None) -> list[dict]:
+    def insights(self, campaign: str, day: date, ads=None, fraction: float = 1.0) -> list[dict]:
         b = self._get(f"{campaign}/insights", {"level": "ad", "fields": "ad_id,spend,impressions,clicks,actions",
                                                "time_range": json.dumps({"since": day.isoformat(), "until": day.isoformat()}), "limit": "200"})
         out = []
@@ -142,7 +160,7 @@ class MetaAds:
 
 class SimAds:
     """DRY RUN stand-in with the same interface: no network, ids 'sim:...', deterministic simulated delivery (spend follows the ad-set budgets and the hour
-    of the day; an ad whose reference hashes to 0 mod 4 never converts, so the optimizer has a loser to find)."""
+    of the day; an ad whose reference hashes to 0 mod 4 never converts, so the optimizer has a loser to find). Used ONLY for simulated objects."""
     simulated = True
 
     def __init__(self):
@@ -158,6 +176,12 @@ class SimAds:
     def campaign(self, name, cap_cents, special):
         self.calls.append(("campaign", cap_cents))
         return self._id("campaign")
+
+    def set_spend_cap(self, campaign, cap_cents):
+        self.calls.append(("spend_cap", campaign, cap_cents))
+
+    def lifetime_spend(self, campaign):
+        return 0
 
     def ad_set(self, campaign, name, daily_cents, start, end, targeting):
         self.calls.append(("ad_set", daily_cents))
@@ -231,11 +255,22 @@ def build_plan(ws: dict, pack_row: dict, inputs: dict, consent_version: str | No
 
 
 # ------------------------------------------------------------------------------------------------------------------- the engine
+class NotLive(Exception):
+    """The executor gate answered dry run for a live step: nothing was done; the step is retried."""
+
+
+def resend_post(c: dict) -> tuple[bool, str | None]:
+    """One email through the single provider call site (hq_mail), from the CLIENT's own address, with List-Unsubscribe."""
+    import hq_mail
+    ok = hq_mail.send_prepared(c["from"], c["from_name"], c["to"], c["subject"], c["body"], c["unsubscribe"])
+    return ok, (None if ok else "provider refused or not configured")
+
+
 class Engine:
     """One object per tick. Everything external is injectable (tests use fakes): rpc(name, args), get(path), http, token(vault_ref) -> dict,
-    executor_run (hq_executor.run), send_owner(body, kind), now."""
+    executor_run (hq_executor.run), send_owner(body, kind), authorize(email id) -> bool, mail_post(claim) -> (ok, ref), now."""
 
-    def __init__(self, rpc=None, get=None, http=None, token=None, executor_run=None, send_owner=None, now=None, sim=None):
+    def __init__(self, rpc=None, get=None, http=None, token=None, executor_run=None, send_owner=None, now=None, sim=None, authorize=None, mail_post=None):
         import hq_executor
         self.rpc = rpc or E._rpc
         self.get = get or E._get
@@ -243,6 +278,9 @@ class Engine:
         self.token = token or (lambda ref: __import__("hq_hands")._load_token(ref))
         self.executor_run = executor_run or hq_executor.run
         self.send_owner = send_owner or (lambda body, kind="brief": hq_core.send_owner(body, urgency="low", kind=kind, from_agent="jarvis"))
+        self.authorize = authorize or (lambda ref: __import__("hq_policy").authorize(AGENT, "send_email", ref=ref).allowed)
+        self._mail_injected = mail_post is not None
+        self.mail_post = mail_post or resend_post
         self.now = now or datetime.now(hq_core.TZ)
         self.sim = sim or SimAds()
         self.log: list[str] = []
@@ -264,6 +302,9 @@ class Engine:
     def gate(self, launch, step, connector=None) -> dict:
         return self.call("ffm_run_gate", {"p_launch": launch["id"], "p_step": step, "p_connector": connector}) or {}
 
+    def budget(self, launch) -> dict:
+        return self.call("ffm_run_budget", {"p_launch": launch["id"]}) or {}
+
     def objects(self, launch) -> list[dict]:
         return self.get(f"/rest/v1/ffm_run_objects?launch_id=eq.{launch['id']}&select=id,level,plan_ref,parent_id,external_id,status,daily_cents,simulated&order=created_at") or []
 
@@ -271,23 +312,32 @@ class Engine:
         rows = self.get(f"/rest/v1/hand_accounts?connector=eq.{connector}&division=eq.{DIVISION}&status=eq.connected&select=id,external_id,handle,token_vault_ref&order=updated_at.desc&limit=1")
         return rows[0] if rows else None
 
+    def meta_direct(self):
+        """The connected ad account with its stored token, for calls that must work whatever the gate says (pause, read real numbers). None if not connected."""
+        acc = self.account("meta-ads")
+        if not acc:
+            return None
+        return MetaAds(self.token(acc.get("token_vault_ref"))["access_token"], acc.get("external_id"), self.http)
+
     def ads_client(self, g: dict):
-        if not g.get("live"):
-            return self.sim
         acc = g.get("account") or {}
         return MetaAds(self.token(acc.get("token_vault_ref"))["access_token"], acc.get("external_id"), self.http)
 
-    def live(self, g: dict, purpose: str, work):
-        """A live step through the existing executor gate (registry, caps, kill switch, mode). -> (result, simulated)."""
-        out = self.executor_run(EXECUTOR, AGENT, g["task_id"], 1, purpose, lambda run_id: (work(), 0))
-        return (None, True) if out.get("dry_run") else (out.get("result"), False)
+    def live(self, l, step: str, purpose: str, work):
+        """A live platform write through the existing executor gate (registry, caps, kill switch, mode). -> (result, task id). Raises NotLive (task closed)."""
+        task = self.call("ffm_run_task", {"p_launch": l["id"], "p_step": step})
+        self._task = task
+        out = self.executor_run(EXECUTOR, AGENT, task, 1, purpose, lambda run_id: (work(), 0))
+        if out.get("dry_run"):
+            raise NotLive("the executor gate answered dry run; nothing was done")
+        return out.get("result"), task
+
+    @staticmethod
+    def _camp(objs):
+        return next((o for o in objs if o["level"] == "campaign"), None)
 
     # ---- the tick
     def tick(self) -> list[str]:
-        try:
-            self.call("ffm_run_sync_decisions", {})
-        except Exception as e:
-            logger.warning("ffm run: decisions not synced: %s", str(e)[:120])
         launches = self.get("/rest/v1/ffm_run_launches?status=in.(approved,running,capped)&select=id,workspace_id,campaign_id,plan,status,starts_on,ends_on,landing_url,paid_platforms,organic_platforms") or []
         for l in launches:
             try:
@@ -295,16 +345,34 @@ class Engine:
             except Exception as e:      # one launch never blocks the others; the next tick retries
                 logger.warning("ffm run: launch %s step failed: %s", str(l["id"])[:8], str(e)[:200])
                 self.log.append(f"error:{type(e).__name__}")
+        # real ads of a launch that is no longer running (stopped, ended, a pause that Meta did not confirm): pause them, whatever else is switched off
+        seen = {l["id"] for l in launches}
+        stray = {r["launch_id"] for r in (self.get("/rest/v1/ffm_run_objects?simulated=is.false&status=eq.active&select=launch_id") or [])} - seen
+        for lid in sorted(stray):
+            try:
+                l = (self.get(f"/rest/v1/ffm_run_launches?id=eq.{lid}&select=id,workspace_id,status") or [None])[0]
+                if l:
+                    self.pause_all(l, "stopped", notify=False)
+            except Exception as e:
+                logger.warning("ffm run: stray pause failed: %s", str(e)[:200])
+        try:
+            self.send_emails()
+        except Exception as e:
+            logger.warning("ffm run: email sender failed: %s", str(e)[:200])
         return self.log
 
     def run_launch(self, l: dict) -> None:
         probe = self.gate(l, "report")
         if probe.get("kill"):
-            return self.emergency_pause(l)
+            self.pause_all(l, "kill", notify=False)
+            return
         if not probe.get("ok"):
             return
         today = _today(self.now)
-        if "meta" in (l.get("paid_platforms") or []) and l["status"] in ("approved", "running"):
+        paid = "meta" in (l.get("paid_platforms") or [])
+        if paid and not self.sync_budget(l):
+            return                                  # a new approved budget is applied on Meta before anything else runs
+        if paid and l["status"] in ("approved", "running"):
             if l["plan"].get("landing"):
                 self.deploy_landing(l)
             self.launch_ads(l)
@@ -334,18 +402,17 @@ class Engine:
         if live:
             page = (self.account("meta-facebook") or {}).get("external_id")
             if not link or not page:      # noted once a day, retried every tick
-                return self.receipt(l, "launch", "waiting:" + _today(self.now).isoformat(), False, True, task=g.get("task_id"),
+                return self.receipt(l, "launch", "waiting:" + _today(self.now).isoformat(), False, True,
                                     detail="waiting for " + ("the landing page url" if not link else "a connected Facebook Page for ffm"))
         plan, b = l["plan"], g["budget"]
         sets = sorted({a["set"] for a in plan["ads"]})
         sets = sets[: max(1, min(len(sets), b["daily_cents"] // MIN_SET_CENTS))]
         share = min(b["daily_cents"], b["remaining_cents"]) // len(sets)
         if share < MIN_SET_CENTS:
-            return self.receipt(l, "launch", "ads", not live, False, detail="refused: less than $1.00 a day per ad set is left", task=g.get("task_id"))
-        client = self.ads_client(g)
+            return self.receipt(l, "launch", "ads", not live, False, detail="refused: less than $1.00 a day per ad set is left")
+        client = self.ads_client(g) if live else self.sim
         have = {(o["level"], o["plan_ref"]): o for o in self.objects(l)}
-        start = f"{l['starts_on']}T00:00:00-0500"
-        end = f"{l['ends_on']}T23:59:00-0500"
+        start, end = f"{l['starts_on']}T00:00:00-0500", f"{l['ends_on']}T23:59:00-0500"
 
         def work():
             sim = not live
@@ -374,50 +441,128 @@ class Engine:
                     oid = self.call("ffm_run_put_object", {"p_launch": l["id"], "p_level": "ad", "p_ref": a["ref"], "p_parent": set_obj[a["set"]]["id"], "p_external": ext, "p_status": "paused", "p_daily": None, "p_simulated": sim})
                     o = {"id": oid, "external_id": ext}
                 ad_obj[a["ref"]] = o
-            # everything exists paused; now switch on (ads, ad sets, campaign). The database re-checks the budget rule on every switch.
+            # everything exists paused; the DATABASE approves each switch-on (budget rule) BEFORE it is made on Meta
             for o in list(ad_obj.values()) + list(set_obj.values()) + [c]:
-                client.set_status(o["external_id"], True)
                 self.call("ffm_run_set_object", {"p_object": o["id"], "p_status": "active", "p_daily": None})
+                client.set_status(o["external_id"], True)
             return c["external_id"]
 
+        task = None
         try:
             if live:
-                ref, sim = self.live(g, "ffm launch ads", work)
+                ref, task = self.live(l, "launch", "ffm launch ads", work)
             else:
-                ref, sim = work(), True
+                ref = work()
         except Exception as e:
-            return self.receipt(l, "launch", "ads", not live, False, detail=f"failed: {A.HandError.__name__ if isinstance(e, A.HandError) else type(e).__name__}: {str(e)[:160]}", task=g.get("task_id"))
-        self.receipt(l, "launch", "ads", sim, True, ref=ref, task=g.get("task_id"),
+            return self.receipt(l, "launch", "ads", not live, False, detail=f"failed: {type(e).__name__}: {str(e)[:160]}", task=getattr(self, "_task", None) if live else None)
+        self.receipt(l, "launch", "ads", not live, True, ref=ref, task=task,
                      detail=f"created a campaign with spend cap {money(b['total_cap_cents'])}, then {len(sets)} ad sets at {money(share)} a day each, then {sum(1 for a in plan['ads'] if a['set'] in sets)} ads; all paused, then switched on")
 
-    def resume_ads(self, l):
-        """After the owner approved more budget for a capped launch: switch the paused campaign back on (the database re-checks the budget rule)."""
+    def sync_budget(self, l) -> bool:
+        """A NEW approved budget (seq > 1) is applied on Meta before anything resumes: the campaign spend cap first (never below what Meta reports as spent),
+        then every ad set cut to fit the new daily budget. True when nothing is pending."""
+        b = self.budget(l)
+        if not b or int(b.get("seq", 1)) <= 1:
+            return True
+        item = f"seq:{b['seq']}"
+        if self.done(l, "budget", item):
+            return True
         objs = self.objects(l)
-        camp = next((o for o in objs if o["level"] == "campaign"), None)
+        camp = self._camp(objs)
+        if not camp:
+            self.receipt(l, "budget", item, True, True, detail="no campaign yet: the new budget applies at launch")
+            return True
+        sets = [o for o in objs if o["level"] == "ad_set" and o["status"] != "stopped"]
+        day = min(int(b["daily_cents"]), int(b["remaining_cents"]))
+        total = sum(int(s["daily_cents"] or 0) for s in sets)
+        cuts = {}
+        if total > day:
+            for s in sets:
+                cuts[s["id"]] = max(MIN_SET_CENTS, int(int(s["daily_cents"] or 0) * day / total))
+            keep = sorted(sets, key=lambda s: -(s["daily_cents"] or 0))
+            while keep and sum(cuts[s["id"]] for s in keep) > day:
+                keep.pop()                                   # smallest set out
+            for s in sets:
+                if s not in keep:
+                    cuts[s["id"]] = None                     # stopped
+        prev = (self.get(f"/rest/v1/ffm_run_budgets?launch_id=eq.{l['id']}&status=eq.superseded&nonce_used_at=not.is.null&select=total_cap_cents,seq&order=seq.desc&limit=1") or [{}])[0]
+        raising = int(b["total_cap_cents"]) > int(prev.get("total_cap_cents") or 0)
+        live_camp = not camp.get("simulated", True)
+        if live_camp:
+            g = self.gate(l, "optimize", "meta-ads")
+            if raising and not g.get("live"):
+                self.receipt(l, "budget", f"wait:{b['seq']}:{_today(self.now).isoformat()}", False, True, detail=f"new cap waits until live ({g.get('why_simulated') or g.get('reason')})")
+                return False
+            client = self.meta_direct()
+            if client is None:
+                self.receipt(l, "budget", f"{item}:try", False, False, detail="no connected ad account: the new budget cannot be applied on Meta")
+                return False
+        else:
+            client = self.sim
+        by_id = {s["id"]: s for s in sets}
+
+        def work():
+            spent = client.lifetime_spend(camp["external_id"])
+            cap = max(int(b["total_cap_cents"]), spent)
+            client.set_spend_cap(camp["external_id"], cap)                  # 1. the cap first
+            for sid, cents in cuts.items():                                   # 2. cuts: Meta first, then the books (never the other way round)
+                s = by_id[sid]
+                if cents is None:
+                    client.set_status(s["external_id"], False)
+                    self.call("ffm_run_set_object", {"p_object": sid, "p_status": "stopped", "p_daily": None})
+                elif cents < int(s["daily_cents"] or 0):
+                    client.set_budget(s["external_id"], cents)
+                    self.call("ffm_run_set_object", {"p_object": sid, "p_status": s["status"] if s["status"] != "active" or l["status"] in ("approved", "running") else "paused", "p_daily": cents})
+            return cap
+
+        task = None
+        try:
+            if live_camp and raising:
+                cap, task = self.live(l, "budget", "ffm budget change", work)
+            else:
+                cap = work()
+        except Exception as e:
+            self.receipt(l, "budget", f"{item}:try", not live_camp, False, detail=f"failed: {str(e)[:160]}", task=task or (getattr(self, "_task", None) if live_camp and raising else None))
+            return False
+        self.receipt(l, "budget", item, not live_camp, True, task=task, ref=camp["external_id"],
+                     detail=f"spend cap set to {money(cap)}; {sum(1 for v in cuts.values() if v)} ad sets cut and {sum(1 for v in cuts.values() if v is None)} stopped to fit {money(day)} a day")
+        return True
+
+    def resume_ads(self, l):
+        """After a new approved budget for a capped launch (already applied by sync_budget): switch the paused campaign back on. The database approves each
+        switch-on before it is made on Meta."""
+        objs = self.objects(l)
+        camp = self._camp(objs)
         if not camp or camp["status"] != "paused" or not self.done(l, "launch", "ads"):
             return
-        b = self.call("ffm_run_budget", {"p_launch": l["id"]}) or {}
+        b = self.budget(l)
         item = f"budget:{b.get('seq', 1)}"
-        if self.done(l, "resume", item):
+        if int(b.get("seq", 1)) <= 1 or self.done(l, "resume", item) or not self.done(l, "budget", f"seq:{b.get('seq')}"):
             return
         g = self.gate(l, "launch", "meta-ads")
         if not g.get("ok"):
             return
-        live = bool(g.get("live")) and not camp.get("simulated", True)
+        live = not camp.get("simulated", True)
+        if live and not g.get("live"):
+            return
         client = self.ads_client(g) if live else self.sim
 
         def work():
             for o in [o for o in objs if o["level"] == "ad"] + [o for o in objs if o["level"] == "ad_set"] + [camp]:
                 if o["status"] == "paused":
-                    client.set_status(o["external_id"], True)
                     self.call("ffm_run_set_object", {"p_object": o["id"], "p_status": "active", "p_daily": None})
+                    client.set_status(o["external_id"], True)
             return camp["external_id"]
 
+        task = None
         try:
-            ref, sim = self.live(g, "ffm resume", work) if live else (work(), True)
+            if live:
+                ref, task = self.live(l, "resume", "ffm resume", work)
+            else:
+                ref = work()
         except Exception as e:
-            return self.receipt(l, "resume", item, not live, False, detail=f"failed: {str(e)[:160]}", task=g.get("task_id"))
-        self.receipt(l, "resume", item, sim, True, ref=ref, task=g.get("task_id"), detail=f"switched back on after the new budget ({money(b.get('total_cap_cents'))} cap)")
+            return self.receipt(l, "resume", item, not live, False, detail=f"failed: {str(e)[:160]}", task=getattr(self, "_task", None) if live else None)
+        self.receipt(l, "resume", item, not live, True, ref=ref, task=task, detail=f"switched back on after the new budget ({money(b.get('total_cap_cents'))} cap)")
 
     def _ad_rows(self, l):
         objs = self.objects(l)
@@ -431,7 +576,8 @@ class Engine:
         return objs, sets, ads
 
     def metrics(self, l, today):
-        """Hourly: pull insights (yesterday + today), store them; the database caps the launch at the approved total."""
+        """Hourly numbers (yesterday + today). A REAL campaign is read from Meta with the stored token (read-only, whatever the gate says) and is never given
+        simulated numbers; a simulated campaign gets simulated numbers. The database caps the launch at the approved total."""
         hour_item = self.now.strftime("%Y-%m-%dT%H")
         if self.done(l, "metrics", hour_item):
             return
@@ -439,49 +585,47 @@ class Engine:
         if not g.get("ok"):
             return
         objs, sets, ads = self._ad_rows(l)
-        camp = next((o for o in objs if o["level"] == "campaign"), None)
-        live = bool(g.get("live")) and not (camp or {}).get("simulated", True)
-        client = self.ads_client(g) if live else self.sim
+        camp = self._camp(objs)
+        if not camp:
+            return
+        real = not camp.get("simulated", True)
+        client = self.meta_direct() if real else self.sim
+        if client is None:
+            return                              # real campaign, no token to read it with: skip (never simulate a real campaign)
         by_ext = {a["external_id"]: a for a in ads}
         capped = False
-
-        def work():
-            nonlocal capped
+        try:
             for day, frac in ((today - timedelta(days=1), 1.0), (today, (self.now.hour * 60 + self.now.minute) / 1440)):
                 if day < date.fromisoformat(str(l["starts_on"])):
                     continue
-                rows = client.insights(camp["external_id"], day, ads=ads, fraction=frac) if not live else client.insights(camp["external_id"], day)
+                rows = client.insights(camp["external_id"], day) if real else client.insights(camp["external_id"], day, ads=ads, fraction=frac)
                 for r in rows:
                     a = by_ext.get(r["ad_id"])
-                    if not a:
+                    if not a or bool(a.get("simulated", True)) == real:
                         continue
                     res = self.call("ffm_run_put_metrics", {"p_object": a["id"], "p_day": day.isoformat(), "p_spend": r["spend_cents"], "p_impressions": r["impressions"],
-                                                            "p_clicks": r["clicks"], "p_leads": r["leads"], "p_simulated": not live}) or {}
+                                                            "p_clicks": r["clicks"], "p_leads": r["leads"], "p_simulated": not real}) or {}
                     capped = capped or bool(res.get("capped"))
-            return camp["external_id"]
-
-        if not camp:
-            return
-        try:
-            ref, sim = self.live(g, "ffm insights", work) if live else (work(), True)
         except Exception as e:
-            return self.receipt(l, "metrics", hour_item, not live, False, detail=f"failed: {str(e)[:160]}", task=g.get("task_id"))
-        b = self.call("ffm_run_budget", {"p_launch": l["id"]}) or {}
-        self.receipt(l, "metrics", hour_item, sim, True, ref=ref, task=g.get("task_id"), detail=f"spent {money(b.get('spent_cents'))} of {money(b.get('total_cap_cents'))}")
+            return self.receipt(l, "metrics", hour_item, not real, False, detail=f"failed: {str(e)[:160]}")
+        b = self.budget(l)
+        self.receipt(l, "metrics", hour_item, not real, True, ref=camp["external_id"], detail=f"spent {money(b.get('spent_cents'))} of {money(b.get('total_cap_cents'))}")
         if capped or (b and b.get("remaining_cents", 0) < MIN_SET_CENTS):
             self.pause_all(l, "cap", b)
 
     def optimize(self, l, today):
         """Daily: pause losers, shift the approved daily budget to the winners. Never above the approved daily budget or the remaining cap (the database
-        refuses it anyway); never pauses the last running ad."""
+        refuses it anyway); never pauses the last running ad. A real campaign is changed only through a live gate."""
         g = self.gate(l, "optimize", "meta-ads")
         if not g.get("ok"):
             return
         objs, sets, ads = self._ad_rows(l)
-        camp = next((o for o in objs if o["level"] == "campaign"), None)
+        camp = self._camp(objs)
         if not camp or g.get("status") != "running":          # the gate reads the launch status now (it may have been capped this tick)
             return
-        live = bool(g.get("live")) and not camp.get("simulated", True)
+        live = not camp.get("simulated", True)
+        if live and not g.get("live"):
+            return self.receipt(l, "optimize", today.isoformat(), False, True, detail=f"SKIPPED: not live ({g.get('why_simulated')})")
         client = self.ads_client(g) if live else self.sim
         tot = {r["object_id"]: r for r in self._totals(l)}
         active = [a for a in ads if a["status"] == "active"]
@@ -518,20 +662,29 @@ class Engine:
             for s in dead_sets:
                 client.set_status(s["external_id"], False)
                 self.call("ffm_run_set_object", {"p_object": s["id"], "p_status": "paused", "p_daily": None})
-            # decreases first, then increases: the sum never passes the approved daily budget, and the database checks every raise before the platform call
+            # decreases first (Meta, then the books), then increases (the books approve first, then Meta): never above the approved day
             for sid, cents in sorted(alloc.items(), key=lambda kv: kv[1] - (sets[kv[0]]["daily_cents"] or 0)):
-                if cents == sets[sid]["daily_cents"]:
+                old = sets[sid]["daily_cents"] or 0
+                if cents == old:
                     continue
-                self.call("ffm_run_set_object", {"p_object": sid, "p_status": "active", "p_daily": cents})
-                client.set_budget(sets[sid]["external_id"], cents)
-                changes.append(f"set {sets[sid]['plan_ref']} from {money(sets[sid]['daily_cents'])} to {money(cents)} a day")
+                if cents < old:
+                    client.set_budget(sets[sid]["external_id"], cents)
+                    self.call("ffm_run_set_object", {"p_object": sid, "p_status": "active", "p_daily": cents})
+                else:
+                    self.call("ffm_run_set_object", {"p_object": sid, "p_status": "active", "p_daily": cents})
+                    client.set_budget(sets[sid]["external_id"], cents)
+                changes.append(f"set {sets[sid]['plan_ref']} from {money(old)} to {money(cents)} a day")
             return camp["external_id"]
 
+        task = None
         try:
-            ref, sim = self.live(g, "ffm optimize", work) if live else (work(), True)
+            if live:
+                ref, task = self.live(l, "optimize", "ffm optimize", work)
+            else:
+                ref = work()
         except Exception as e:
-            return self.receipt(l, "optimize", today.isoformat(), not live, False, detail=f"failed: {str(e)[:160]}", task=g.get("task_id"))
-        self.receipt(l, "optimize", today.isoformat(), sim, True, ref=ref, task=g.get("task_id"), detail=("; ".join(changes) or "no change")[:250])
+            return self.receipt(l, "optimize", today.isoformat(), not live, False, detail=f"failed: {str(e)[:160]}", task=getattr(self, "_task", None) if live else None)
+        self.receipt(l, "optimize", today.isoformat(), not live, True, ref=ref, task=task, detail=("; ".join(changes) or "no change")[:250])
 
     def _totals(self, l):
         rows = self.get(f"/rest/v1/ffm_run_metrics?launch_id=eq.{l['id']}&select=object_id,spend_cents,leads,clicks") or []
@@ -542,56 +695,39 @@ class Engine:
                 t[k] += int(r.get(k) or 0)
         return list(out.values())
 
-    def pause_all(self, l, why: str, b=None):
-        """Cap reached or launch ended: one PAUSE on the campaign (stops every ad) and every object marked paused. The owner is told once."""
-        b = b or self.call("ffm_run_budget", {"p_launch": l["id"]}) or {}
-        item = f"{why}:{b.get('seq', 1)}"
-        if self.done(l, "pause", item):
-            return
+    def pause_all(self, l, why: str, b=None, notify=True) -> bool:
+        """Cap, end, stop, kill switch: pause every running object. A REAL campaign is paused on Meta directly with the stored token, whatever the kill switch,
+        mode, connector, executor or workspace say (pausing only stops spend); the books are marked paused only after Meta confirmed it. A failure is
+        recorded as failed and retried next tick. -> True when nothing real is left running."""
         objs = self.objects(l)
-        camp = next((o for o in objs if o["level"] == "campaign"), None)
-        g = self.gate(l, "pause", "meta-ads")
-        live = bool(g.get("live")) and camp is not None and not camp.get("simulated", True)
-        client = self.ads_client(g) if live else self.sim
-
-        def work():
-            if camp:
-                client.set_status(camp["external_id"], False)
-            for o in objs:
-                if o["status"] == "active":
-                    self.call("ffm_run_set_object", {"p_object": o["id"], "p_status": "paused", "p_daily": None})
-            return (camp or {}).get("external_id")
-
-        if g.get("ok"):
-            ref, sim = self.live(g, "ffm pause", work) if live else (work(), True)
-        else:
-            ref, sim = None, True
-        if self.receipt(l, "pause", item, sim, True, ref=ref, task=g.get("task_id"), detail=f"{why}: all ads paused at {money(b.get('spent_cents'))} spent"):
-            if why == "cap":
-                self.send_owner(f"Sir, {self._name(l)} reached its approved cap ({money(b.get('spent_cents'))} of {money(b.get('total_cap_cents'))}). "
-                                f"All ads are paused. To continue: /ffm budget {self._slug(l)} <daily $> <new total $> (one tap to approve).", "money")
-
-    def emergency_pause(self, l):
-        """Kill switch on: the ONLY external call is pausing a live campaign (it stops spend). No executor run: the kill switch refuses executor runs."""
-        objs = self.objects(l)
-        camp = next((o for o in objs if o["level"] == "campaign" and o["status"] == "active"), None)
-        if not camp or camp.get("simulated", True):
-            return
-        item = "kill:" + self.now.strftime("%Y-%m-%dT%H")
-        if self.done(l, "pause", item):
-            return
-        acc = self.account("meta-ads")
-        ok, detail = False, "kill switch: no connected ad account to pause with"
-        if acc:
+        active = [o for o in objs if o["status"] == "active"]
+        if not active:
+            return True
+        b = b or self.budget(l)
+        item = f"{why}:{b.get('seq', 1)}:{self.now.strftime('%Y%m%dT%H%M')}"
+        real = [o for o in active if not o.get("simulated", True)]
+        if real:
+            camp = self._camp(objs)
             try:
-                MetaAds(self.token(acc["token_vault_ref"])["access_token"], acc["external_id"], self.http).set_status(camp["external_id"], False)
-                for o in objs:
-                    if o["status"] == "active":
-                        self.call("ffm_run_set_object", {"p_object": o["id"], "p_status": "paused", "p_daily": None})
-                ok, detail = True, "kill switch: campaign paused (spend stopped)"
+                client = self.meta_direct()
+            except Exception:
+                client = None
+            if client is None or camp is None:
+                self.receipt(l, "pause", item, False, False, detail=f"{why}: cannot pause on Meta (no connected ad account); retrying")
+                return False
+            try:
+                client.set_status(camp["external_id"], False)        # one pause on the campaign stops every ad set and ad
             except Exception as e:
-                detail = f"kill switch: pause failed: {str(e)[:150]}"
-        self.receipt(l, "pause", item, False, ok, ref=camp["external_id"], detail=detail)
+                self.receipt(l, "pause", item, False, False, ref=camp["external_id"], detail=f"{why}: Meta did not confirm the pause ({str(e)[:120]}); retrying")
+                return False
+        for o in active:
+            self.call("ffm_run_set_object", {"p_object": o["id"], "p_status": "paused", "p_daily": None})
+        self.receipt(l, "pause", item, not real, True, ref=(self._camp(objs) or {}).get("external_id"),
+                     detail=f"{why}: all ads paused{' on Meta (confirmed)' if real else ''} at {money(b.get('spent_cents'))} spent")
+        if why == "cap" and notify and self.receipt(l, "notice", f"cap:{b.get('seq', 1)}", not real, True, detail="owner told"):
+            self.send_owner(f"Sir, {self._name(l)} reached its approved cap ({money(b.get('spent_cents'))} of {money(b.get('total_cap_cents'))}). "
+                            f"All ads are paused{' on Meta' if real else ' (dry run)'}. To continue: /ffm budget {self._slug(l)} <daily $> <new total $> (one tap to approve).", "money")
+        return True
 
     def finish(self, l, why):
         self.pause_all(l, why)
@@ -657,8 +793,9 @@ class Engine:
         try:
             r = self.call("ffm_run_intake_lead", {"p_launch": l["id"], "p_source": source, "p_source_ref": ref, "p_name": keep["name"], "p_email": keep["email"],
                                                   "p_phone": keep["phone"], "p_consent": consent, "p_by": "ffm-run"}) or {}
-        except Exception as e:
-            self.receipt(l, "leads", re.sub(r"[^A-Za-z0-9_.:-]", "-", ref)[:80], True, False, detail=f"lead refused: {'sensitive data' if isinstance(e, E.SensitiveDataRefused) else str(e)[:150]}")
+        except Exception as e:      # recorded ONCE per submission: the poller skips a refused submission from then on
+            self.receipt(l, "intake", re.sub(r"[^A-Za-z0-9_.:-]", "-", ref)[:80], False, True,
+                         detail=f"REFUSED: {'sensitive data' if isinstance(e, E.SensitiveDataRefused) else str(e)[:150]}")
             return {"ok": False, "reason": str(e)[:200]}
         if r.get("ok") and not r.get("duplicate"):
             self.work_leads(l, only=r["lead_id"])
@@ -679,7 +816,8 @@ class Engine:
             except Exception as e:
                 self.receipt(l, "leads", "poll:" + conn + ":" + self.now.strftime("%Y%m%dT%H"), False, False, detail=f"poll failed: {str(e)[:150]}")
                 continue
-            new = [r for r in (self.intake(l, *f) for f in found) if r.get("ok") and not r.get("duplicate")]
+            fresh = [f for f in found if not self.done(l, "intake", re.sub(r"[^A-Za-z0-9_.:-]", "-", f[1])[:80])]
+            new = [r for r in (self.intake(l, *f) for f in fresh) if r.get("ok") and not r.get("duplicate")]
             if new:              # a receipt only when something arrived (polling every few minutes would otherwise fill the table)
                 self.receipt(l, "leads", "poll:" + conn + ":" + self.now.strftime("%Y%m%dT%H%M"), False, True, detail=f"{len(new)} new lead(s)")
 
@@ -725,10 +863,32 @@ class Engine:
             body = t["body"] + (f"\n\nBook a time: {booking}" if booking.startswith("https://") else "")
             r = self.call("ffm_run_touch", {"p_lead": d["lead_id"], "p_touch": n, "p_subject": t["subject"], "p_body": body, "p_live": bool(g.get("live"))}) or {}
             if r.get("ok"):
-                sim = r.get("status") != "drafted"
-                det = {"drafted": "email drafted in the outbox (its rules decide the send)", "simulated": f"would email touch {n}",
+                sim = r.get("status") != "queued"
+                det = {"queued": "email queued from the client's sender (sent after the send-time checks)", "simulated": f"would email touch {n}",
                        "skipped": f"SKIPPED: not contactable ({r.get('reason')})"}.get(r.get("status"), r.get("status"))
-                self.receipt(l, "followup", f"{d['lead_id'][:8]}:{n}", sim, True, ref=f"outbox:{r['outbox_id']}" if r.get("outbox_id") else None, detail=det)
+                self.receipt(l, "followup", f"{d['lead_id'][:8]}:{n}", sim, True, ref=f"email:{r['email_id']}" if r.get("email_id") else None, detail=det)
+
+    def send_emails(self, limit: int = 10) -> int:
+        """The FF Marketing sender: queued follow-ups, each re-checked by ffm_run_claim_email at send time (kill switch, live mode, dry-run launch, the lead's
+        sequence, consent / withdrawal / suppression / outreach gate, this client's CASL footer) and allowed by the policy engine ('send_email' caps).
+        Nothing is sent without RESEND_API_KEY. -> emails sent."""
+        import os
+        if not os.environ.get("RESEND_API_KEY") and not self._mail_injected:
+            return 0
+        sent = 0
+        for row in self.get(f"/rest/v1/ffm_run_emails?status=eq.queued&select=id&order=created_at&limit={int(limit)}") or []:
+            if not self.authorize(row["id"]):
+                continue
+            c = self.call("ffm_run_claim_email", {"p_id": row["id"]}) or {}
+            if not c.get("ok"):
+                continue
+            try:
+                ok, ref = self.mail_post(c)
+            except Exception as e:
+                ok, ref = False, type(e).__name__
+            self.call("ffm_run_email_result", {"p_id": row["id"], "p_ok": bool(ok), "p_ref": ref if ok else None, "p_reason": None if ok else str(ref)[:120]})
+            sent += 1 if ok else 0
+        return sent
 
     # ---- REPORT RESULTS
     def weekly_report(self, l, today, final=False):
@@ -798,14 +958,14 @@ def propose(slug: str, daily_cents: int, total_cents: int, days: int = 30, start
     ver = (get(f"/rest/v1/ffm_consent_wordings?workspace_id=eq.{ws['id']}&select=version&order=registered_at.desc&limit=1") or [{}])[0].get("version")
     plan, _ = build_plan(ws, rows[0], inputs, ver)
     start = start or _today(now or datetime.now(hq_core.TZ))
-    end = start + timedelta(days=max(1, min(int(days), 366)) - 1)
+    end = start + timedelta(days=max(1, min(int(days), 30)) - 1)          # one tap covers at most 30 days
     organic = sorted({p["platform"] for p in plan["posts"]})
     r = E._call("ffm_run_propose", {"p_ws": ws["id"], "p_pack": rows[0]["id"], "p_daily": daily_cents, "p_total": total_cents, "p_starts": start.isoformat(),
                                     "p_ends": end.isoformat(), "p_paid": ["meta"] if plan["ads"] else [], "p_organic": organic, "p_plan": plan, "p_by": "owner:telegram"}, rpc) or {}
     missing = [] if plan.get("landing") else ["the client's consent wording (onboarding item consent_wording) and a registered wording version, for the landing page"]
     return (f"Sir, the launch for {ws['name']} is in your messages for one tap: {len(plan['ads'])} ads, {len(plan['posts'])} posts, {len(plan['touches'])} follow-ups, "
             f"{money(daily_cents)}/day, cap {money(total_cents)}, {start} to {end}." + (f" Not included until provided: {'; '.join(missing)}." if missing else "")
-            + f" (launch {str(r.get('launch_id', ''))[:8]})")
+            + f" Everything that will run: /ffm plan {str(r.get('launch_id', ''))[:8]}.")
 
 
 def current_launch(slug: str, get) -> tuple[dict | None, dict | None]:
@@ -866,9 +1026,29 @@ def command(sub: str, args: list[str], rpc=None, get=None, now=None) -> str:
             ws, l = current_launch(args[0].lower(), get)
             if not l:
                 return "Sir, no launch in progress there."
+            eng = Engine(rpc=rpc, get=get, now=now)
+            lw = {**l, "workspace_id": ws["id"]}
+            real = any(not o.get("simulated", True) and o["status"] == "active" for o in eng.objects(lw))
+            paused = eng.pause_all(lw, "stopped", notify=False)          # pause FIRST, then mark the launch stopped
             E._call("ffm_run_stop", {"p_launch": l["id"], "p_by": "owner:telegram"}, rpc)
-            Engine(rpc=rpc, get=get, now=now).pause_all({**l, "workspace_id": ws["id"]}, "stopped")
-            return f"Sir, the {ws['name']} launch is stopped and its ads are paused. Leads already in follow-up keep their sequence; /ffm lead <id> stop ends one."
+            if real and not paused:
+                return (f"Sir, the {ws['name']} launch is stopped, but Meta did NOT confirm the pause: its ads may still be spending. I retry every 5 minutes; "
+                        "pause the campaign in Ads Manager if you want it off right now.")
+            what = "Its ads are paused on Meta (confirmed)." if real else "No live ads were running (dry run)."
+            return f"Sir, the {ws['name']} launch is stopped. {what} Leads already in follow-up keep their sequence; /ffm lead <id> stop ends one."
+        if sub == "plan" and args:
+            return plan_text(args[0], get)
+        if sub == "sender" and len(args) >= 2:
+            parts = [x.strip() for x in " ".join(args[1:]).split("|")]
+            if len(parts) != 4:
+                return "Sir, use: /ffm sender <slug> <from email> | <sender name> | <brand> | <mailing address>"
+            ws = E.workspace(args[0].lower(), get)
+            if not ws:
+                return f"Sir, no workspace '{args[0]}'."
+            E._call("ffm_run_set_sender", {"p_ws": ws["id"], "p_from_email": parts[0], "p_sender_name": parts[1], "p_brand": parts[2], "p_mailing_address": parts[3],
+                                           "p_by": "owner:telegram"}, rpc)
+            return (f"Sir, {ws['name']}'s emails will come from {parts[0]} with its own CASL footer and unsubscribe link. "
+                    "The client's sending domain must be verified in Resend before anything is sent.")
         if sub == "budget" and len(args) >= 3:
             ws, l = current_launch(args[0].lower(), get)
             if not l or l["status"] == "proposed":
@@ -881,8 +1061,50 @@ def command(sub: str, args: list[str], rpc=None, get=None, now=None) -> str:
         return f"Sir, refused by the privacy screen: {str(e)[:160]}"
     except (ValueError, RuntimeError) as e:
         return f"Sir, not done: {str(e)[:200]}"
-    return ("Sir, FF Marketing execution: /ffm launch <slug> <daily $> <total $> [days] [start YYYY-MM-DD], /ffm status <slug>, /ffm stop <slug>, "
-            "/ffm budget <slug> <daily $> <total $>, /ffm lead <id> replied|booked|stop|lost.")
+    return ("Sir, FF Marketing execution: /ffm sender <slug> <from> | <name> | <brand> | <address>, /ffm launch <slug> <daily $> <total $> [days, max 30] [start YYYY-MM-DD], "
+            "/ffm plan <launch id>, /ffm status <slug>, /ffm stop <slug>, /ffm budget <slug> <daily $> <total $>, /ffm lead <id> replied|booked|stop|lost.")
+
+
+def plan_text(ref: str, get=None) -> str:
+    """Everything a launch will run: every ad, post and email text, and the landing page hash (what the one tap approves)."""
+    get = get or E._get
+    s = re.sub(r"[^0-9a-f]", "", (ref or "").lower())[:8]
+    rows = []
+    if len(s) >= 6:
+        rows = get(f"/rest/v1/ffm_run_launches?id=gte.{s.ljust(8, '0')}-0000-0000-0000-000000000000&id=lte.{s.ljust(8, 'f')}-ffff-ffff-ffff-ffffffffffff"
+                   "&select=id,plan,plan_sha256,starts_on,ends_on,status&limit=2") or []
+    if len(rows) != 1:
+        ws = E.workspace(ref.lower(), get)
+        rows = get(f"/rest/v1/ffm_run_launches?workspace_id=eq.{ws['id']}&select=id,plan,plan_sha256,starts_on,ends_on,status&order=created_at.desc&limit=1") if ws else []
+    if not rows:
+        return "Sir, I could not find that launch."
+    l, p = rows[0], rows[0]["plan"]
+    out = [f"Sir, launch {l['id'][:8]} ({l['status']}, {l['starts_on']} to {l['ends_on']}), plan {l['plan_sha256'][:12]}:", "ADS:"]
+    out += [f"{a['ref']} [{a['set']}, {a['cta']}] {a['headline']} - {a['body']}" for a in p.get("ads", [])]
+    out += ["POSTS:"] + [f"{x['ref']} day {x['day']} {x['platform']}: {x['text']}" for x in p.get("posts", [])]
+    out += ["EMAILS (plus the client's CASL footer and the booking link):"] + [f"{t['touch']} day {t['day']}: {t['subject']} - {t['body']}" for t in p.get("touches", [])]
+    out += [f"LANDING PAGE: {'sha256 ' + p['landing_sha256'] if p.get('landing') else 'none'}"]
+    return "\n".join(out)
+
+
+def decide(msg_id: str, approved: bool, rpc=None, get=None) -> str:
+    """The owner's tap on a launch / budget approval (called only by hq_commands.apply_decision, the owner-only handler that the Telegram button and the
+    PWA's Approve both reach). The single-use nonce is read with the service key and presented to ffm_run_owner_decide, which checks it."""
+    get = get or E._get
+    if not _UUID.match(str(msg_id or "")):
+        return "Not changed: bad message id."
+    rows = get(f"/rest/v1/ffm_run_budgets?owner_message_id=eq.{msg_id}&select=id,approval_nonce&limit=1") or []
+    if not rows:
+        return "Not changed: no launch budget is waiting on this message."
+    try:
+        r = E._call("ffm_run_owner_decide", {"p_message": msg_id, "p_nonce": rows[0]["approval_nonce"], "p_approved": bool(approved), "p_by": "owner:telegram"}, rpc) or {}
+    except Exception as e:
+        return f"Not changed: {str(e)[:150]}"
+    if not r.get("ok"):
+        return f"Not changed: {r.get('reason')}."
+    if r.get("status") == "rejected":
+        return "Rejected. Nothing will run."
+    return ("Approved. I run it from here, inside the approved numbers." + (" It runs as DRY RUN (simulated) because the system is in dry-run mode." if r.get("dry_run") else ""))
 
 
 # ------------------------------------------------------------------------------------------------------------------- Meta ad account connection (official OAuth)

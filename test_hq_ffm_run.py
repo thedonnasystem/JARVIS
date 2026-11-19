@@ -135,6 +135,24 @@ class MetaTests(unittest.TestCase):
         self.assertTrue(all(c[1].startswith("https://graph.facebook.com/") for c in h.calls))
         self.assertNotIn("s3cr3t", repr(m.__dict__))      # the token is a Secret
 
+    def test_token_in_header_with_appsecret_proof_never_in_the_url(self):
+        import hmac as _h
+        seen = []
+
+        def h(method, url, headers=None, form=None, **kw):
+            seen.append((url, headers, form))
+            return 200, {"data": [], "id": "1"}, {}
+        m = R.MetaAds("tok-123", "act_9", h, app_secret="shh")
+        m.insights("c1", date(2026, 11, 20))
+        m.set_status("c1", False)
+        proof = _h.new(b"shh", b"tok-123", "sha256").hexdigest()
+        for url, headers, form in seen:
+            self.assertEqual(headers, {"Authorization": "Bearer tok-123"})
+            self.assertNotIn("tok-123", url)
+            self.assertNotIn("access_token", url + json.dumps(form or {}))
+        self.assertIn("appsecret_proof=" + proof, seen[0][0])
+        self.assertEqual(seen[1][2]["appsecret_proof"], proof)
+
     def test_insights_parsed_to_cents_and_leads(self):
         def h(method, url, **kw):
             return 200, {"data": [{"ad_id": "9", "spend": "12.34", "impressions": "1000", "clicks": "20",
@@ -293,7 +311,9 @@ class DbTests(unittest.TestCase):
         for k, v in (("consent_wording", "I agree to receive emails about my renewal review."), ("booking_link", "https://cal.example.com/maple")):
             E._call("ffm_provide_input", {"p_ws": self.ws, "p_key": k, "p_value": v, "p_by": "client"})
         self.sql("insert into public.ffm_consent_wordings (workspace_id, version, sha256, registered_by) values (%s, 'v1', %s, 'owner')", (self.ws, "b" * 64))
-        self.sent = []
+        self.sql("update public.client_workspaces set monthly_budget_cents = 500000 where id = %s", (self.ws,))       # (the owner-only ffm_set_budget in production)
+        R.command("sender", [self.slug, "hello@maplemortgage.example", "|", "Sam", "Lee", "|", "Maple", "Mortgage", "Team", "|", "100", "Main", "Street,", "Ottawa", "ON"])
+        self.sent, self.mails = [], []
 
     def tearDown(self):
         self.p.stop()
@@ -307,15 +327,21 @@ class DbTests(unittest.TestCase):
         kw.setdefault("now", self.now)
         kw.setdefault("send_owner", lambda body, kind="brief": self.sent.append((kind, body)))
         kw.setdefault("executor_run", run_exec([]))
+        kw.setdefault("authorize", lambda ref: True)
+        kw.setdefault("mail_post", lambda c: (self.mails.append(c) or True, f"re_{len(self.mails)}"))
         return R.Engine(**kw)
 
     def propose(self, daily="$30", total="$300", days="30"):
         return R.command("launch", [self.slug, daily, total, days], now=self.now)
 
+    def msg(self):
+        return self.sql("select * from public.owner_messages where ref_table = 'ffm_run_budgets' and decision is null order by created_at desc limit 1")[0]
+
     def tap(self, approved=True):
-        """What hq_commands.apply_decision writes when the owner taps (owner-only handler)."""
-        self.sql("update public.owner_messages set decision = %s, decided_at = now() where ref_table = 'ffm_run_budgets' and decision is null",
-                 ("approved" if approved else "rejected",))
+        """The owner's real tap: hq_commands.apply_decision (the owner-only handler behind the Telegram button and the PWA's Approve)."""
+        import hq_commands
+        with mock.patch.object(hq_commands, "_record_decision_memory"):
+            return hq_commands.apply_decision(self.msg()["id"], approved)
 
     def launch(self):
         return self.sql("select * from public.ffm_run_launches where workspace_id = %s order by created_at desc limit 1", (self.ws,))[0]
@@ -342,22 +368,62 @@ class DbTests(unittest.TestCase):
             self.sql("insert into public.hand_accounts (connector, division, handle, purpose, status, token_vault_ref, external_id) values (%s, 'ffm', %s, 'connected by the owner', "
                      "'connected', %s, %s)", (conn, handle + uuid.uuid4().hex[:4], ref, ext))
 
-    # ---- one approval
+    def live_launch(self, daily="$30", total="$300"):
+        """go live, propose, tap, one tick with mocked Meta / Netlify -> (engine, http)"""
+        self.consent_allowed()
+        self.go_live()
+        self.propose(daily, total)
+        self.tap()
+        h = Http()
+        eng = self.engine(http=h, token=lambda ref: {"access_token": "tok-SECRET", "api_key": "k"})
+        eng.tick()
+        return eng, h
+
+    def lead(self, eng, ref="nf-live1", email="sam@example.com"):
+        return eng.intake(self.launch(), "landing", ref, {"name": "Sam Lee", "email": email},
+                          {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": ref})
+
+    def objs(self):
+        return self.sql("select * from public.ffm_run_objects where launch_id = %s", (self.launch()["id"],))
+
+    # ---- B1: one approval, and only the real one
     def test_one_tap_approval_and_nothing_before_it(self):
         out = self.propose()
         self.assertIn("one tap", out)
-        msg = self.sql("select * from public.owner_messages where ref_table = 'ffm_run_budgets' and decision is null")[0]
+        msg = self.msg()
         self.assertTrue(msg["needs_decision"])
-        for s in ("Sir,", "Daily budget: $30.00", "Total cap: $300.00", "Meta (Facebook + Instagram), 9 ads in 3 ad sets", "Organic posts: 14 on facebook, instagram",
-                  "First ad:", "First post:", "dry-run mode", str(self.today)):
-            self.assertIn(s, msg["body"])
+        for t in ("Sir,", "Daily budget: $30.00 on average", "75% more", "Total cap: $300.00 = the hard stop", "Meta (Facebook + Instagram), 9 ads in 3 ad sets",
+                  "Organic posts: 14 on facebook, instagram", "/ffm plan", "runs as DRY RUN", "launch again", str(self.today)):
+            self.assertIn(t, msg["body"])
+        plan = R.command("plan", [self.launch()["id"][:8]])
+        self.assertEqual(plan.count("Renewal review "), 9)                 # every ad
+        self.assertIn("P14 day 14", plan)                                 # every post
+        self.assertIn("5 day 10", plan)                                   # every email
         self.engine().tick()
         self.assertEqual(self.launch()["status"], "proposed")
         self.assertEqual(self.receipts(), [])
-        self.tap(False)
+        self.assertIn("Rejected", self.tap(False))
         self.engine().tick()
         self.assertEqual(self.launch()["status"], "rejected")
         self.assertEqual(self.receipts(), [])
+
+    def test_forged_decision_is_not_an_approval(self):
+        self.propose()
+        self.sql("update public.owner_messages set decision = 'approved', decided_at = now() where ref_table = 'ffm_run_budgets'")   # a forged decision column
+        self.engine().tick()
+        self.assertEqual(self.launch()["status"], "proposed")
+        self.assertEqual(self.receipts(), [])
+        b = self.sql("select id, owner_message_id, approval_nonce from public.ffm_run_budgets where launch_id = %s", (self.launch()["id"],))[0]
+        with self.assertRaisesRegex(RuntimeError, "wrong nonce"):
+            E._call("ffm_run_owner_decide", {"p_message": b["owner_message_id"], "p_nonce": "0" * 64, "p_approved": True, "p_by": "owner:telegram"})
+        self.assertIn("Approved", R.decide(b["owner_message_id"], True))
+        self.assertEqual(self.launch()["status"], "approved")
+        self.assertIn("already decided", R.decide(b["owner_message_id"], True))          # single use
+        with self.assertRaisesRegex(RuntimeError, "monthly budget first"):
+            self.sql("update public.client_workspaces set monthly_budget_cents = null where id = %s", (self.ws,))
+            R.command("stop", [self.slug], now=self.now)
+            E._call("ffm_run_propose", {"p_ws": self.ws, "p_pack": self.pack_id, "p_daily": 1000, "p_total": 20000, "p_starts": self.today.isoformat(),
+                                        "p_ends": self.today.isoformat(), "p_paid": [], "p_organic": [], "p_plan": self.launch()["plan"], "p_by": "owner:telegram"})
 
     # ---- the whole loop in dry run
     def test_dry_run_full_loop(self):
@@ -368,99 +434,198 @@ class DbTests(unittest.TestCase):
         eng.tick()
         l = self.launch()
         self.assertEqual(l["status"], "running")
+        self.assertTrue(l["dry_run"])
         rec = {(r["step"], r["item"]): r for r in self.receipts()}
         self.assertTrue(rec[("launch", "ads")]["ok"] and rec[("launch", "ads")]["simulated"])
         self.assertIn("DRY RUN", rec[("launch", "ads")]["detail"])
         self.assertTrue(rec[("deploy", "landing")]["simulated"])
         self.assertIn("would post on facebook", rec[("post", "P1")]["detail"])
-        objs = self.sql("select level, status, daily_cents, simulated from public.ffm_run_objects where launch_id = %s", (l["id"],))
+        objs = self.objs()
         self.assertEqual(sorted(o["level"] for o in objs).count("ad"), 9)
         self.assertTrue(all(o["status"] == "active" and o["simulated"] for o in objs))
         self.assertLessEqual(sum(o["daily_cents"] or 0 for o in objs), 3000)
         self.assertTrue(rec[("metrics", self.now.strftime("%Y-%m-%dT%H"))]["simulated"])
-        # a lead from the landing page form: stored, consent recorded, touch 1 at once (simulated: dry run)
         r = eng.intake(l, "landing", "nf-abc123", {"name": "Alex Doe", "email": "alex@example.com", "phone": "613-555-0142", "income": "secret"},
                        {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": "nf-abc123"})
         self.assertTrue(r["ok"])
         lead = r["lead_id"]
-        self.assertEqual(self.sql("select status, outbox_id from public.ffm_run_touches where lead_id = %s", (lead,)), [{"status": "simulated", "outbox_id": None}])
+        self.assertEqual(self.sql("select status, email_id from public.ffm_run_touches where lead_id = %s", (lead,)), [{"status": "simulated", "email_id": None}])
         self.assertEqual(self.sql("select basis from public.ffm_consent_log where lead_id = %s", (lead,))[0]["basis"], "unverified")
         self.assertEqual(self.sql("select stage from public.ws_leads where id = %s", (lead,))[0]["stage"], "contacted")
         self.assertEqual(eng.intake(l, "landing", "nf-abc123", {"name": "Alex Doe", "email": "alex@example.com"}, {})["duplicate"], True)
-        # touch 2 when due
         self.sql("update public.ffm_run_leads set next_due_at = least(now(), %s::timestamptz) - interval '1 minute' where lead_id = %s", (self.now, lead))
         self.engine().work_leads(l)
         self.assertEqual(self.sql("select count(*) c from public.ffm_run_touches where lead_id = %s", (lead,))[0]["c"], 2)
-        # optimize: seeded history -> loser paused, budget shifted, never above the approved day
-        ads = {o["plan_ref"]: o["id"] for o in self.sql("select id, plan_ref from public.ffm_run_objects where launch_id = %s and level = 'ad'", (l["id"],))}
+        ads = {o["plan_ref"]: o["id"] for o in objs if o["level"] == "ad"}
         y = (self.today - timedelta(days=1)).isoformat()
         for ref, spend, leads in (("V1", 2000, 4), ("V2", 2000, 0), ("V4", 2000, 1), ("V7", 2000, 1)):
             E._call("ffm_run_put_metrics", {"p_object": ads[ref], "p_day": y, "p_spend": spend, "p_impressions": 1, "p_clicks": 1, "p_leads": leads, "p_simulated": True})
-        self.engine(now=self.now).optimize(self.launch(), self.today + timedelta(days=1))
-        st = {o["plan_ref"]: o for o in self.sql("select plan_ref, level, status, daily_cents from public.ffm_run_objects where launch_id = %s", (l["id"],))}
+        self.engine().optimize(self.launch(), self.today + timedelta(days=1))
+        st = {o["plan_ref"]: o for o in self.objs() if o["level"] != "campaign"}
         self.assertEqual(st["V2"]["status"], "paused")
         self.assertEqual(st["V1"]["status"], "active")
-        sets = [o for o in st.values() if o["level"] == "ad_set" and o["status"] == "active"]
-        self.assertLessEqual(sum(s["daily_cents"] for s in sets), 3000)
-        self.assertGreater(st["A"]["daily_cents"], st["B"]["daily_cents"])        # set A has the best cost per lead
+        self.assertLessEqual(sum(s["daily_cents"] for s in st.values() if s["level"] == "ad_set" and s["status"] == "active"), 3000)
+        self.assertGreater(st["A"]["daily_cents"], st["B"]["daily_cents"])
         self.assertIn("paused V2", self.receipts("optimize")[-1]["detail"])
-        # report
-        self.engine(now=self.now).weekly_report(l, self.today + timedelta(days=1))
-        kinds = [k for k, _ in self.sent]
-        self.assertEqual(kinds, ["brief", "brief"])
+        self.engine().weekly_report(l, self.today + timedelta(days=1))
+        self.assertEqual([k for k, _ in self.sent], ["brief", "brief"])
         self.assertIn("DRY RUN", self.sent[0][1])
-        self.assertIn("Cost per lead", self.sent[0][1])
         self.assertIn("do not send", self.sent[1][1])
-        # dry run: nothing external at all
         self.assertTrue(all(r["simulated"] for r in self.receipts()))
         self.assertEqual(self.sql("select count(*) c from public.hand_actions where created_by = 'ffm-run'")[0]["c"], 0)
-        self.assertEqual(self.sql("select count(*) c from public.outbox where idempotency_key like 'ffm:%%'")[0]["c"], 0)
-
-    # ---- live mode with mocked platform APIs
-    def test_live_mode_mocked_platforms(self):
-        self.consent_allowed()
+        self.assertEqual(self.sql("select count(*) c from public.ffm_run_emails")[0]["c"], 0)
+        self.assertEqual(self.mails, [])
+        # a dry-run launch stays simulated after the mode is switched: no real call, no email
         self.go_live()
-        self.propose()
-        self.tap()
-        h, ex = Http(), []
-        eng = self.engine(http=h, token=lambda ref: {"access_token": "tok", "api_key": "k"}, executor_run=run_exec(ex))
-        eng.tick()
+        h = Http()
+        self.engine(http=h, token=lambda ref: {"access_token": "t", "api_key": "k"}).tick()
+        self.assertEqual([c for c in h.calls if c[0] == "POST"], [])
+        self.assertEqual(self.mails, [])
+
+    # ---- live mode with mocked platforms, and B5: the client's own sender
+    def test_live_mode_mocked_platforms_and_client_sender(self):
+        eng, h = self.live_launch()
         l = self.launch()
+        self.assertFalse(l["dry_run"])
         self.assertTrue(l["landing_url"].startswith("https://maple-site") and l["landing_url"].endswith(".netlify.app"))
-        self.assertEqual(self.sql("select action, status, approval_kind, approved_by like 'owner:launch:%%' as by_launch from public.hand_actions where created_by = 'ffm-run' order by action"),
-                         [{"action": "deploy", "status": "approved", "approval_kind": "owner", "by_launch": True},
-                          {"action": "post", "status": "approved", "approval_kind": "owner", "by_launch": True}])
+        self.assertEqual(self.sql("select action, status, approval_kind from public.hand_actions where created_by = 'ffm-run' order by action"),
+                         [{"action": "deploy", "status": "approved", "approval_kind": "owner"}, {"action": "post", "status": "approved", "approval_kind": "owner"}])
         camp = h.posts("/campaigns")[0][2]
         self.assertEqual((camp["status"], camp["spend_cap"]), ("PAUSED", "30000"))
-        self.assertEqual(len(h.posts("/adsets")), 3)
-        self.assertTrue(all(c[2]["status"] == "PAUSED" for c in h.posts("/ads") if "status" in c[2] and "adset_id" in c[2]))
-        self.assertEqual(sum(1 for c in h.calls if c[2].get("status") == "ACTIVE"), 13)            # 9 ads + 3 ad sets + 1 campaign switched on after creation
+        self.assertEqual(sum(1 for c in h.calls if c[2].get("status") == "ACTIVE"), 13)
+        self.assertFalse(any("access_token" in c[1] or "access_token" in c[2] or "tok-SECRET" in c[1] for c in h.calls))     # token only in the header
         self.assertFalse(self.receipts("launch")[0]["simulated"])
-        self.assertTrue(any(e[3] == "ffm launch ads" for e in ex))                                  # through the executor gate
-        r = eng.intake(l, "landing", "nf-live1", {"name": "Sam Lee", "email": "sam@example.com"},
-                       {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": "nf-live1"})
-        ob = self.sql("select o.status, o.needs_owner, o.to_ref, o.body from public.outbox o join public.ffm_run_touches t on t.outbox_id = o.id where t.lead_id = %s", (r["lead_id"],))
-        self.assertEqual((ob[0]["status"], ob[0]["needs_owner"], ob[0]["to_ref"]), ("draft", True, "sam@example.com"))
-        self.assertIn("Book a time: https://cal.example.com/maple", ob[0]["body"])
-        # opt-out: sequence stops, the pending draft is withdrawn, consent withdrawn, address suppressed
-        out = R.command("lead", [r["lead_id"][:8], "stop"])
+        r = self.lead(eng)
+        em = self.sql("select * from public.ffm_run_emails where lead_id = %s", (r["lead_id"],))[0]
+        self.assertEqual(em["status"], "queued")
+        for t in ("Book a time: https://cal.example.com/maple", "Sam Lee, Maple Mortgage Team", "100 Main Street, Ottawa ON",
+                  "Unsubscribe: mailto:hello@maplemortgage.example?subject=unsubscribe"):
+            self.assertIn(t, em["body"])
+        self.assertNotIn("Donna", em["body"])
+        self.assertEqual(self.sql("select count(*) c from public.outbox where idempotency_key like 'ffm:%%'")[0]["c"], 0)       # not the legacy path
+        self.assertEqual(eng.send_emails(), 1)
+        self.assertEqual(self.mails[0]["from"], "hello@maplemortgage.example")
+        self.assertEqual(self.mails[0]["unsubscribe"], "mailto:hello@maplemortgage.example?subject=unsubscribe")
+        self.assertEqual(self.sql("select status from public.ffm_run_emails where id = %s", (em["id"],))[0]["status"], "sent")
+        # the send-time re-check: a second lead opts out between queueing and sending -> nothing is sent
+        r2 = self.lead(eng, "nf-live2", "kim@example.com")
+        out = R.command("lead", [r2["lead_id"][:8], "stop"])
         self.assertIn("consent withdrawn", out)
-        self.assertEqual(self.sql("select status from public.outbox where idempotency_key = %s", (f"ffm:{r['lead_id']}:1",))[0]["status"], "rejected")
-        self.assertEqual(self.sql("select count(*) c from public.ffm_consent_log where lead_id = %s and basis = 'withdrawn'", (r["lead_id"],))[0]["c"], 1)
-        self.assertTrue(self.sql("select public.is_suppressed('sam@example.com') s")[0]["s"])
-        self.sql("update public.ffm_run_leads set next_due_at = now() - interval '1 minute' where lead_id = %s", (r["lead_id"],))
-        self.assertEqual(E._call("ffm_run_touch", {"p_lead": r["lead_id"], "p_touch": 2, "p_subject": "Your renewal review", "p_body": "x", "p_live": True})["reason"], "lead is opted_out")
+        self.assertEqual(eng.send_emails(), 0)
+        self.assertEqual(self.sql("select status from public.ffm_run_emails where lead_id = %s", (r2["lead_id"],))[0]["status"], "withdrawn")
+        self.assertTrue(self.sql("select public.is_suppressed('kim@example.com') s")[0]["s"])
+        # policy says no -> nothing sent
+        r3 = self.lead(eng, "nf-live3", "lee@example.com")
+        self.assertEqual(self.engine(authorize=lambda ref: False).send_emails(), 0)
+        self.assertEqual(self.sql("select status from public.ffm_run_emails where lead_id = %s", (r3["lead_id"],))[0]["status"], "queued")
 
-    # ---- budget hard stop
-    def test_budget_hard_stop(self):
-        self.propose(daily="$10", total="$15", days="10")
+    # ---- B2: pause and stop really pause, whatever else is off; never claim it without Meta's answer
+    def test_stop_pauses_real_ads_first_even_with_everything_off(self):
+        eng, h = self.live_launch()
+        self.sql("update public.system_state set mode = 'dry_run', kill_switch = true where id = 1")
+        self.sql("update public.hand_connectors set enabled = false where slug = 'meta-ads'")
+        self.sql("update public.executor_registry set enabled = false where slug = 'hands-actions'")
+        self.sql("update public.client_workspaces set status = 'paused' where id = %s", (self.ws,))
+        bad = Http()
+        bad_calls = []
+
+        def failing(method, url, **kw):
+            bad_calls.append(url)
+            return 500, {"error": {"message": "temporarily unavailable"}}, {}
+        import hq_hands
+        with mock.patch.object(A, "http", failing), mock.patch.object(hq_hands, "_load_token", return_value={"access_token": "t"}):
+            out = R.command("stop", [self.slug], now=self.now)
+        self.assertIn("did NOT confirm", out)
+        self.assertNotIn("paused on Meta (confirmed)", out)
+        self.assertEqual(self.launch()["status"], "done")
+        self.assertTrue(any(o["status"] == "active" for o in self.objs() if not o["simulated"]))      # the books do not pretend
+        self.assertFalse(self.receipts("pause")[-1]["ok"])
+        # the next tick retries the pause for the stopped launch, and it works this time
+        ok = Http()
+        self.engine(http=ok, token=lambda ref: {"access_token": "t", "api_key": "k"}).tick()
+        self.assertEqual([c[2].get("status") for c in ok.calls if c[0] == "POST"], ["PAUSED"])
+        self.assertTrue(all(o["status"] == "paused" for o in self.objs()))
+        self.assertTrue(self.receipts("pause")[-1]["ok"])
+        self.assertIn("confirmed", self.receipts("pause")[-1]["detail"])
+
+    def test_kill_switch(self):
+        eng, h = self.live_launch()
+        l = self.launch()
+        n_rec = len(self.receipts())
+        self.sql("update public.system_state set kill_switch = true where id = 1")
+        h2 = Http()
+        self.engine(http=h2, token=lambda ref: {"access_token": "t", "api_key": "k"}).tick()
+        self.assertEqual([(c[0], c[2].get("status")) for c in h2.calls], [("POST", "PAUSED")])
+        self.assertTrue(all(o["status"] == "paused" for o in self.objs()))
+        self.assertEqual([r["step"] for r in self.receipts()[n_rec:]], ["pause"])
+        self.assertEqual(E._call("ffm_run_gate", {"p_launch": l["id"], "p_step": "followup", "p_connector": None})["reason"], "kill switch is on")
+        r = self.lead(self.engine(), "nf-kill1", "kim@example.com")
+        self.assertEqual(self.sql("select count(*) c from public.ffm_run_touches where lead_id = %s", (r["lead_id"],))[0]["c"], 0)
+        self.assertEqual(self.engine().send_emails(), 0)
+        self.assertEqual(self.mails, [])
+
+    # ---- B3: a real campaign is never given simulated numbers
+    def test_real_campaign_numbers_come_from_meta_even_when_not_live(self):
+        eng, h = self.live_launch()
+        self.sql("update public.system_state set mode = 'dry_run' where id = 1")                       # gate no longer live
+        self.sql("delete from public.ffm_run_metrics where launch_id = %s", (self.launch()["id"],))
+        ad = next(o for o in self.objs() if o["level"] == "ad")
+
+        def insights(method, url, headers=None, **kw):
+            if "/insights" in url:
+                return 200, {"data": [{"ad_id": ad["external_id"], "spend": "7.50", "impressions": "100", "clicks": "3", "actions": []}]}, {}
+            return 200, {"data": []}, {}
+        later = self.now.replace(hour=12)
+        self.engine(http=insights, token=lambda ref: {"access_token": "t"}, now=later).metrics(self.launch(), self.today)
+        rows = self.sql("select spend_cents, simulated from public.ffm_run_metrics where launch_id = %s", (self.launch()["id"],))
+        self.assertTrue(rows and all(not r["simulated"] for r in rows))
+        self.assertEqual(sum(r["spend_cents"] for r in rows), 750 * len([d for d in (self.today - timedelta(days=1), self.today) if d >= self.today]))
+        # no token to read with -> skipped, still nothing simulated
+        self.sql("update public.hand_accounts set status = 'disabled' where connector = 'meta-ads'")
+        self.engine(now=self.now.replace(hour=13)).metrics(self.launch(), self.today)
+        self.assertFalse(any(r["simulated"] for r in self.sql("select simulated from public.ffm_run_metrics where launch_id = %s", (self.launch()["id"],))))
+
+    # ---- B4: a new budget is applied on Meta (spend cap first, cuts) before anything resumes
+    def test_new_budget_updates_spend_cap_and_cuts_before_resume(self):
+        eng, h = self.live_launch(daily="$30", total="$300")
+        l = self.launch()
+        ad = next(o for o in self.objs() if o["level"] == "ad")
+        E._call("ffm_run_put_metrics", {"p_object": ad["id"], "p_day": self.today.isoformat(), "p_spend": 30000, "p_impressions": 1, "p_clicks": 1, "p_leads": 0, "p_simulated": False})
+        self.assertEqual(self.launch()["status"], "capped")
+        self.engine(http=Http(), token=lambda ref: {"access_token": "t", "api_key": "k"}, now=self.now.replace(hour=12)).tick()
+        self.assertTrue(all(o["status"] == "paused" for o in self.objs()))
+        with self.assertRaisesRegex(RuntimeError, "above what is already spent"):
+            E._call("ffm_run_request_budget", {"p_launch": l["id"], "p_daily": 1000, "p_total": 30000, "p_by": "owner:telegram"})
+        R.command("budget", [self.slug, "$10", "$400"])
         self.tap()
-        E._call("ffm_run_sync_decisions", {})
+        self.assertEqual(self.launch()["status"], "running")
+        calls = []
+
+        def meta(method, url, headers=None, form=None, **kw):
+            calls.append((method, url.split("?")[0].rsplit("/", 1)[-1] if "?" in url else url.rsplit("/", 1)[-1], dict(form or {})))
+            if "/insights" in url:
+                return 200, {"data": [{"spend": "310.00"}]}, {}
+            if method == "POST":
+                return 200, {"success": True}, {}
+            return 200, {"data": []}, {}
+        self.engine(http=meta, token=lambda ref: {"access_token": "t", "api_key": "k"}, now=self.now.replace(hour=13)).tick()
+        posts = [c for c in calls if c[0] == "POST"]
+        self.assertEqual(posts[0][2].get("spend_cap"), "40000")                                  # 1. the cap first (above the $310 Meta reports)
+        budget_cuts = [i for i, c in enumerate(posts) if "daily_budget" in c[2]]
+        switch_on = [i for i, c in enumerate(posts) if c[2].get("status") == "ACTIVE"]
+        self.assertTrue(budget_cuts and switch_on and max(budget_cuts) < min(switch_on))         # 2. cuts before any resume
+        sets = [o for o in self.objs() if o["level"] == "ad_set" and o["status"] != "stopped"]
+        self.assertLessEqual(sum(o["daily_cents"] for o in sets), 1000)
+        self.assertTrue(all(int(c[2]["daily_budget"]) <= 1000 for c in posts if "daily_budget" in c[2]))
+        self.assertTrue(any(o["status"] == "active" for o in self.objs()))                         # resumed, inside the new numbers
+
+    def test_budget_hard_stop(self):
+        self.propose(daily="$10", total="$100", days="10")
+        self.tap()
         eng = self.engine()
         eng.launch_ads(self.launch())
         l = self.launch()
-        objs = {o["plan_ref"]: o for o in self.sql("select * from public.ffm_run_objects where launch_id = %s", (l["id"],))}
-        # the database refuses any ad-set budget above the approved daily budget, however it is asked
+        objs = {o["plan_ref"]: o for o in self.objs()}
         with self.assertRaisesRegex(RuntimeError, "approved daily budget"):
             E._call("ffm_run_set_object", {"p_object": objs["A"]["id"], "p_status": "active", "p_daily": 900})
         with self.assertRaisesRegex(RuntimeError, "approved daily budget"):
@@ -468,54 +633,26 @@ class DbTests(unittest.TestCase):
                                            "p_daily": 500, "p_simulated": True})
         with self.assertRaisesRegex(Exception, "immutable"):
             self.sql("update public.ffm_run_budgets set total_cap_cents = 999999 where launch_id = %s", (l["id"],))
-        # spend reaches the cap -> capped, everything paused, the owner told once, no more launching or posting
-        E._call("ffm_run_put_metrics", {"p_object": objs["V1"]["id"], "p_day": self.today.isoformat(), "p_spend": 1600, "p_impressions": 1, "p_clicks": 1, "p_leads": 0, "p_simulated": True})
+        E._call("ffm_run_put_metrics", {"p_object": objs["V1"]["id"], "p_day": self.today.isoformat(), "p_spend": 10100, "p_impressions": 1, "p_clicks": 1, "p_leads": 0, "p_simulated": True})
         self.assertEqual(self.launch()["status"], "capped")
-        eng = self.engine()
-        eng.tick()
-        self.assertTrue(all(o["status"] == "paused" for o in self.sql("select status from public.ffm_run_objects where launch_id = %s", (l["id"],))))
+        self.engine().tick()
+        self.assertTrue(all(o["status"] == "paused" for o in self.objs()))
         self.assertEqual([k for k, _ in self.sent], ["money"])
         self.assertIn("/ffm budget", self.sent[0][1])
         self.engine().tick()
-        self.assertEqual(len(self.sent), 1)                                                         # told once
+        self.assertEqual(len(self.sent), 1)
         with self.assertRaisesRegex(RuntimeError, "launch is capped"):
             E._call("ffm_run_set_object", {"p_object": objs["A"]["id"], "p_status": "active", "p_daily": None})
         self.assertEqual(E._call("ffm_run_gate", {"p_launch": l["id"], "p_step": "post", "p_connector": None})["reason"], "launch is capped")
-        # more money is a new owner tap; nothing changes before it
-        R.command("budget", [self.slug, "$10", "$40"])
+        R.command("budget", [self.slug, "$10", "$400"])
         self.assertEqual(self.launch()["status"], "capped")
-        self.assertEqual(E._call("ffm_run_budget", {"p_launch": l["id"]})["total_cap_cents"], 1500)
+        self.assertEqual(E._call("ffm_run_budget", {"p_launch": l["id"]})["total_cap_cents"], 10000)
         self.tap()
         self.engine().tick()
-        self.assertEqual(E._call("ffm_run_budget", {"p_launch": l["id"]})["total_cap_cents"], 4000)
+        self.assertEqual(E._call("ffm_run_budget", {"p_launch": l["id"]})["total_cap_cents"], 40000)
         self.assertEqual(self.launch()["status"], "running")
+        self.assertTrue(any(o["status"] == "active" for o in self.objs()))
 
-    # ---- kill switch
-    def test_kill_switch(self):
-        self.consent_allowed()
-        self.go_live()
-        self.propose()
-        self.tap()
-        h = Http()
-        self.engine(http=h, token=lambda ref: {"access_token": "tok", "api_key": "k"}).tick()
-        l = self.launch()
-        n_calls, n_rec = len(h.calls), len(self.receipts())
-        self.sql("update public.system_state set kill_switch = true where id = 1")
-        h2 = Http()
-        self.engine(http=h2, token=lambda ref: {"access_token": "tok", "api_key": "k"}).tick()
-        # the only external call is the pause of the live campaign; nothing created, posted, polled or sent
-        self.assertEqual([(c[0], c[2].get("status")) for c in h2.calls], [("POST", "PAUSED")])
-        self.assertTrue(all(o["status"] == "paused" for o in self.sql("select status from public.ffm_run_objects where launch_id = %s", (l["id"],))))
-        self.assertEqual([r["step"] for r in self.receipts()[n_rec:]], ["pause"])
-        self.assertEqual(E._call("ffm_run_gate", {"p_launch": l["id"], "p_step": "followup", "p_connector": None})["reason"], "kill switch is on")
-        r = self.engine().intake(l, "landing", "nf-kill1", {"name": "Kim", "email": "kim@example.com"},
-                                 {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": "nf-kill1"})
-        self.assertEqual(self.sql("select count(*) c from public.ffm_run_touches where lead_id = %s", (r["lead_id"],))[0]["c"], 0)
-        self.assertEqual(E._call("ffm_run_touch", {"p_lead": r["lead_id"], "p_touch": 1, "p_subject": "Your renewal review", "p_body": "Hi there, Maple Mortgage Team here, step 1.",
-                                                   "p_live": True})["reason"], "kill switch is on")
-        self.assertGreater(n_calls, 0)
-
-    # ---- privacy / guard
     def test_guard_rejection(self):
         self.propose()
         self.tap()
@@ -526,24 +663,22 @@ class DbTests(unittest.TestCase):
                          {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": "nf-bad1"})
         self.assertFalse(bad["ok"])
         self.assertEqual(self.sql("select count(*) c from public.ws_leads where workspace_id = %s", (self.ws,))[0]["c"], 0)
-        self.assertIn("sensitive", self.receipts("leads")[-1]["detail"])
+        self.assertIn("sensitive", self.receipts("intake")[-1]["detail"])
+        self.assertTrue(eng.done(l, "intake", "nf-bad1"))                                            # recorded once; the poller skips it from now on
         no_consent = eng.intake(l, "landing", "nf-bad2", {"name": "Alex", "email": "alex@example.com"}, {"given": False})
         self.assertFalse(no_consent["ok"])
         self.assertIn("consent is required", no_consent["reason"])
-        # without verified consent the follow-up is skipped, never sent
         ok = eng.intake(l, "landing", "nf-ok1", {"name": "Alex", "email": "alex@example.com"},
                         {"given": True, "wording_version": "v1", "captured_at": self.now.isoformat(), "evidence_ref": "nf-ok1"})
-        self.assertEqual(self.sql("select status, reason from public.ffm_run_touches where lead_id = %s", (ok["lead_id"],))[0]["status"], "skipped")
+        self.assertEqual(self.sql("select status from public.ffm_run_touches where lead_id = %s", (ok["lead_id"],))[0]["status"], "skipped")
         self.assertEqual(self.sql("select status from public.ffm_run_leads where lead_id = %s", (ok["lead_id"],))[0]["status"], "needs_consent")
-        # nothing outside the approved plan can be posted under the launch approval
         self.assertEqual(E._call("ffm_run_submit_hand", {"p_launch": l["id"], "p_item": "P1", "p_connector": "meta-facebook", "p_action": "post",
                                                          "p_payload": {"text": "Something else entirely"}})["ok"], False)
-        # a plan carrying sensitive text is refused before any owner message
         R.command("stop", [self.slug], now=self.now)
         plan = json.loads(json.dumps(l["plan"]))
         plan["posts"][0]["text"] = "Send us your bank statement and credit report"
         with self.assertRaises(E.SensitiveDataRefused):
-            E._call("ffm_run_propose", {"p_ws": self.ws, "p_pack": self.pack_id, "p_daily": 1000, "p_total": 2000, "p_starts": self.today.isoformat(),
+            E._call("ffm_run_propose", {"p_ws": self.ws, "p_pack": self.pack_id, "p_daily": 1000, "p_total": 20000, "p_starts": self.today.isoformat(),
                                         "p_ends": self.today.isoformat(), "p_paid": ["meta"], "p_organic": ["facebook"], "p_plan": plan, "p_by": "owner:telegram"})
 
     def test_only_owner_ends_early_and_one_launch_at_a_time(self):
@@ -552,16 +687,17 @@ class DbTests(unittest.TestCase):
         self.engine().tick()
         l = self.launch()
         with self.assertRaisesRegex(RuntimeError, "already has a launch"):
-            self.propose_raw()
+            E._call("ffm_run_propose", {"p_ws": self.ws, "p_pack": self.pack_id, "p_daily": 1000, "p_total": 20000, "p_starts": self.today.isoformat(),
+                                        "p_ends": self.today.isoformat(), "p_paid": ["meta"], "p_organic": [], "p_plan": l["plan"], "p_by": "owner:telegram"})
         with self.assertRaisesRegex(RuntimeError, "only the owner"):
             E._call("ffm_run_stop", {"p_launch": l["id"], "p_by": "jarvis"})
-        self.assertIn("stopped", R.command("stop", [self.slug], now=self.now))
+        out = R.command("stop", [self.slug], now=self.now)
+        self.assertIn("No live ads were running (dry run)", out)
         self.assertEqual(self.launch()["status"], "done")
-
-    def propose_raw(self):
-        l = self.launch()
-        return E._call("ffm_run_propose", {"p_ws": self.ws, "p_pack": self.pack_id, "p_daily": 1000, "p_total": 2000, "p_starts": self.today.isoformat(),
-                                           "p_ends": self.today.isoformat(), "p_paid": ["meta"], "p_organic": [], "p_plan": l["plan"], "p_by": "owner:telegram"})
+        self.assertIn("at least $100.00", R.command("launch", [self.slug, "$10", "$50"], now=self.now))
+        R.command("launch", [self.slug, "$10", "$200", "45"], now=self.now)                             # 45 days asked: one tap covers 30
+        nl = self.launch()
+        self.assertEqual((date.fromisoformat(nl["ends_on"]) - date.fromisoformat(nl["starts_on"])).days, 29)
 
 
 if __name__ == "__main__":

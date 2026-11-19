@@ -180,22 +180,28 @@ function	ffm_run_ask_owner(uuid,text)	-	-	execute	security_definer		-
 function	ffm_run_budget(uuid)	-	-	execute	security_definer		-
 function	ffm_run_budget_fixed()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	ffm_run_check_budget(uuid)	-	-	execute	security_definer		-
+function	ffm_run_claim_email(uuid)	-	-	execute	security_definer		-
+function	ffm_run_email_result(uuid,boolean,text,text)	-	-	execute	security_definer		-
+function	ffm_run_footer(uuid)	-	-	execute	security_definer		-
 function	ffm_run_gate(uuid,text,text)	-	-	execute	security_definer		-
 function	ffm_run_intake_lead(uuid,text,text,text,text,text,jsonb,text)	-	-	execute	security_definer		-
 function	ffm_run_lead_event(uuid,text,text)	-	-	execute	security_definer		-
 function	ffm_run_live_mode()	-	-	execute	security_definer		-
 function	ffm_run_money(integer)	-	-	execute	invoker		-
+function	ffm_run_owner_decide(uuid,text,boolean,text)	-	-	execute	security_definer		-
 function	ffm_run_propose(uuid,uuid,integer,integer,date,date,text[],text[],jsonb,text)	-	-	execute	security_definer		-
 function	ffm_run_put_metrics(uuid,date,integer,integer,integer,integer,boolean)	-	-	execute	security_definer		-
 function	ffm_run_put_object(uuid,text,text,uuid,text,text,integer,boolean)	-	-	execute	security_definer		-
 function	ffm_run_receipt(uuid,text,text,boolean,boolean,text,text,uuid)	-	-	execute	security_definer		-
 function	ffm_run_report(uuid,date,date)	-	-	execute	security_definer		-
 function	ffm_run_request_budget(uuid,integer,integer,text)	-	-	execute	security_definer		-
+function	ffm_run_sender(uuid)	-	-	execute	security_definer		-
 function	ffm_run_set_landing(uuid,text)	-	-	execute	security_definer		-
 function	ffm_run_set_object(uuid,text,integer)	-	-	execute	security_definer		-
+function	ffm_run_set_sender(uuid,text,text,text,text,text)	-	-	execute	security_definer		-
 function	ffm_run_stop(uuid,text)	-	-	execute	security_definer		-
 function	ffm_run_submit_hand(uuid,text,text,text,jsonb)	-	-	execute	security_definer		-
-function	ffm_run_sync_decisions()	-	-	execute	security_definer		-
+function	ffm_run_task(uuid,text)	-	-	execute	security_definer		-
 function	ffm_run_touch(uuid,integer,text,text,boolean)	-	-	execute	security_definer		-
 function	ffm_sender_attest(bigint,bigint,text)	-	-	execute	security_definer	bot-callable BY DESIGN: monotonic against ffm_sender_mark, cannot open a closed gate, anchor needs an unconsumed owner marker	-
 function	ffm_set_budget(uuid,integer)	-	-	execute	security_definer		-
@@ -434,6 +440,7 @@ table	ffm_restore_markers	-	-	select	rls=true		-
 table	ffm_route_log	-	-	select	rls=true		-
 table	ffm_routing_rules	-	-	select	rls=true		-
 table	ffm_run_budgets	-	-	select	rls=true		-
+table	ffm_run_emails	-	-	select	rls=true		-
 table	ffm_run_launches	-	-	select	rls=true		-
 table	ffm_run_leads	-	-	select	rls=true		-
 table	ffm_run_metrics	-	-	select	rls=true		-
@@ -474,7 +481,7 @@ table	missions	delete,insert,references,select,trigger,truncate,update	delete,in
 table	model_prices	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	org_changes	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	outbox	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
-table	owner_messages	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	owner_messages	-	-	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	payment_instructions	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	predictions	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	push_config	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-

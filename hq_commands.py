@@ -748,6 +748,12 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         out = hq_accounts.decide(ref_id, approved, by="owner:telegram")
         _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
         return out
+    elif ref_table == "ffm_run_budgets" and ref_id:
+        # FF Marketing launch / budget approval: recorded ONLY through ffm_run_owner_decide (message, kind and a single-use nonce); the decision column is not enough
+        import hq_ffm_run
+        out = hq_ffm_run.decide(msg_id, approved)
+        _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
+        return out
     elif ref_table == "hand_actions" and ref_id:
         import hq_hands
         out = hq_hands.decide(ref_id, approved, by="owner:telegram")
