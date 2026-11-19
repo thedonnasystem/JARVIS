@@ -48,7 +48,7 @@ CTA_CODES = {"Learn More": "LEARN_MORE", "Book Now": "BOOK_NOW", "Get Quote": "G
              "Call Now": "CALL_NOW", "Get Offer": "GET_OFFER", "Send Message": "SEND_MESSAGE"}
 SPECIAL = {"mortgage": ["FINANCIAL_PRODUCTS_SERVICES"], "insurance": ["FINANCIAL_PRODUCTS_SERVICES"], "real_estate": ["HOUSING"]}   # Meta special ad categories
 ADS_SCOPES = "ads_management,ads_read,leads_retrieval,pages_show_list,pages_read_engagement,pages_manage_ads,business_management"
-SUBCOMMANDS = ("launch", "status", "stop", "budget", "lead", "plan", "sender")
+SUBCOMMANDS = ("launch", "status", "stop", "budget", "lead", "plan", "sender", "autosend")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -262,7 +262,7 @@ class NotLive(Exception):
 def resend_post(c: dict) -> tuple[bool, str | None]:
     """One email through the single provider call site (hq_mail), from the CLIENT's own address, with List-Unsubscribe."""
     import hq_mail
-    ok = hq_mail.send_prepared(c["from"], c["from_name"], c["to"], c["subject"], c["body"], c["unsubscribe"])
+    ok = hq_mail.send_prepared(c["from"], c["from_name"], c["to"], c["subject"], c["body"], c["unsubscribe"], idempotency_key=f"ffm-email-{c['id']}")
     return ok, (None if ok else "provider refused or not configured")
 
 
@@ -270,7 +270,7 @@ class Engine:
     """One object per tick. Everything external is injectable (tests use fakes): rpc(name, args), get(path), http, token(vault_ref) -> dict,
     executor_run (hq_executor.run), send_owner(body, kind), authorize(email id) -> bool, mail_post(claim) -> (ok, ref), now."""
 
-    def __init__(self, rpc=None, get=None, http=None, token=None, executor_run=None, send_owner=None, now=None, sim=None, authorize=None, mail_post=None):
+    def __init__(self, rpc=None, get=None, http=None, token=None, executor_run=None, send_owner=None, now=None, sim=None, authorize=None, mail_post=None, attest=None):
         import hq_executor
         self.rpc = rpc or E._rpc
         self.get = get or E._get
@@ -280,6 +280,7 @@ class Engine:
         self.send_owner = send_owner or (lambda body, kind="brief": hq_core.send_owner(body, urgency="low", kind=kind, from_agent="jarvis"))
         self.authorize = authorize or (lambda ref: __import__("hq_policy").authorize(AGENT, "send_email", ref=ref).allowed)
         self._mail_injected = mail_post is not None
+        self.attest = attest or (lambda: __import__("hq_gatemark").attest(force=True))
         self.mail_post = mail_post or resend_post
         self.now = now or datetime.now(hq_core.TZ)
         self.sim = sim or SimAds()
@@ -377,6 +378,7 @@ class Engine:
                 self.deploy_landing(l)
             self.launch_ads(l)
             self.resume_ads(l)
+            self.resume_after_kill(l)
         if l["status"] in ("approved", "running"):
             self.post_due(l, today)
         self.poll_leads(l)
@@ -529,15 +531,33 @@ class Engine:
         return True
 
     def resume_ads(self, l):
-        """After a new approved budget for a capped launch (already applied by sync_budget): switch the paused campaign back on. The database approves each
-        switch-on before it is made on Meta."""
+        """After a new approved budget for a capped launch (already applied on Meta by sync_budget): switch the paused campaign back on."""
         objs = self.objects(l)
         camp = self._camp(objs)
         if not camp or camp["status"] != "paused" or not self.done(l, "launch", "ads"):
             return
         b = self.budget(l)
-        item = f"budget:{b.get('seq', 1)}"
-        if int(b.get("seq", 1)) <= 1 or self.done(l, "resume", item) or not self.done(l, "budget", f"seq:{b.get('seq')}"):
+        if int(b.get("seq", 1)) <= 1 or not self.done(l, "budget", f"seq:{b.get('seq')}"):
+            return
+        self._resume(l, objs, camp, b, f"budget:{b.get('seq', 1)}", f"after the new budget ({money(b.get('total_cap_cents'))} cap)")
+
+    def resume_after_kill(self, l):
+        """The kill switch is off again: a launch that the kill switch paused (and nothing else since) is switched back on, only through the same gate and
+        budget checks as any switch-on (launch running, dates, approved budget with room left, live gate for a real campaign; the database re-checks the budget rule)."""
+        objs = self.objects(l)
+        camp = self._camp(objs)
+        if not camp or camp["status"] != "paused":
+            return
+        last = (self.get(f"/rest/v1/ffm_run_receipts?launch_id=eq.{l['id']}&step=eq.pause&ok=is.true&select=id,item&order=id.desc&limit=1") or [None])[0]
+        if not last or not str(last["item"]).startswith("kill:"):
+            return                          # paused for another reason (cap, stop, end): never resumed here
+        b = self.budget(l)
+        if not b or int(b.get("remaining_cents") or 0) < MIN_SET_CENTS:
+            return
+        self._resume(l, objs, camp, b, f"kill:{last['id']}", "after the kill switch was switched off")
+
+    def _resume(self, l, objs, camp, b, item, why):
+        if self.done(l, "resume", item):
             return
         g = self.gate(l, "launch", "meta-ads")
         if not g.get("ok"):
@@ -562,7 +582,7 @@ class Engine:
                 ref = work()
         except Exception as e:
             return self.receipt(l, "resume", item, not live, False, detail=f"failed: {str(e)[:160]}", task=getattr(self, "_task", None) if live else None)
-        self.receipt(l, "resume", item, not live, True, ref=ref, task=task, detail=f"switched back on after the new budget ({money(b.get('total_cap_cents'))} cap)")
+        self.receipt(l, "resume", item, not live, True, ref=ref, task=task, detail=f"switched back on {why}")
 
     def _ad_rows(self, l):
         objs = self.objects(l)
@@ -869,19 +889,35 @@ class Engine:
                 self.receipt(l, "followup", f"{d['lead_id'][:8]}:{n}", sim, True, ref=f"email:{r['email_id']}" if r.get("email_id") else None, detail=det)
 
     def send_emails(self, limit: int = 10) -> int:
-        """The FF Marketing sender: queued follow-ups, each re-checked by ffm_run_claim_email at send time (kill switch, live mode, dry-run launch, the lead's
-        sequence, consent / withdrawal / suppression / outreach gate, this client's CASL footer) and allowed by the policy engine ('send_email' caps).
-        Nothing is sent without RESEND_API_KEY. -> emails sent."""
+        """The FF Marketing sender. Automatic sending is OFF per client by default: waiting emails are batched into ONE owner message per launch per tick
+        (ffm_run_ask_emails) and go only after his tap. Each email is re-checked by ffm_run_claim_email at send time (kill switch, live mode, dry-run launch,
+        the lead's sequence, consent / withdrawal / suppression / outreach gate, this client's CASL footer, the owner's approval while autosend is off) and
+        allowed by the policy engine ('send_email' caps). The sender's external high-water mark is checked once per batch (hq_gatemark.attest(force=True)).
+        One Idempotency-Key per email row. Nothing is sent without RESEND_API_KEY. -> emails sent."""
         import os
+        waiting = self.get("/rest/v1/ffm_run_emails?status=eq.queued&batch_id=is.null&owner_ok_at=is.null&select=launch_id&limit=200") or []
+        for lid in sorted({r["launch_id"] for r in waiting}):
+            try:
+                self.call("ffm_run_ask_emails", {"p_launch": lid})
+            except Exception as e:
+                logger.warning("ffm run: email batch not asked: %s", str(e)[:120])
         if not os.environ.get("RESEND_API_KEY") and not self._mail_injected:
             return 0
+        rows = self.get(f"/rest/v1/ffm_run_emails?status=eq.queued&select=id&order=created_at&limit={int(limit)}") or []
+        if not rows:
+            return 0
+        a = self.attest()
+        if not a.get("ok"):
+            logger.warning("ffm run: sender gate not attested (%s); nothing sent", a.get("reason"))
+            return 0
         sent = 0
-        for row in self.get(f"/rest/v1/ffm_run_emails?status=eq.queued&select=id&order=created_at&limit={int(limit)}") or []:
+        for row in rows:
             if not self.authorize(row["id"]):
                 continue
             c = self.call("ffm_run_claim_email", {"p_id": row["id"]}) or {}
             if not c.get("ok"):
                 continue
+            c["id"] = row["id"]
             try:
                 ok, ref = self.mail_post(c)
             except Exception as e:
@@ -1036,6 +1072,14 @@ def command(sub: str, args: list[str], rpc=None, get=None, now=None) -> str:
                         "pause the campaign in Ads Manager if you want it off right now.")
             what = "Its ads are paused on Meta (confirmed)." if real else "No live ads were running (dry run)."
             return f"Sir, the {ws['name']} launch is stopped. {what} Leads already in follow-up keep their sequence; /ffm lead <id> stop ends one."
+        if sub == "autosend" and len(args) >= 2 and args[1].lower() in ("on", "off"):
+            ws = E.workspace(args[0].lower(), get)
+            if not ws:
+                return f"Sir, no workspace '{args[0]}'."
+            on = args[1].lower() == "on"
+            E._call("ffm_run_set_autosend", {"p_ws": ws["id"], "p_on": on, "p_by": "owner:telegram"}, rpc)
+            return (f"Sir, automatic emails are ON for {ws['name']}: follow-ups to leads with verified consent go out without a tap (still re-checked at send time)."
+                    if on else f"Sir, automatic emails are OFF for {ws['name']}: every follow-up waits for your tap (one message per launch lists them).")
         if sub == "plan" and args:
             return plan_text(args[0], get)
         if sub == "sender" and len(args) >= 2:
@@ -1088,23 +1132,44 @@ def plan_text(ref: str, get=None) -> str:
 
 
 def decide(msg_id: str, approved: bool, rpc=None, get=None) -> str:
+    return decide_status(msg_id, approved, rpc, get)[1]
+
+
+def decide_status(msg_id: str, approved: bool, rpc=None, get=None) -> tuple[bool, str]:
     """The owner's tap on a launch / budget approval (called only by hq_commands.apply_decision, the owner-only handler that the Telegram button and the
     PWA's Approve both reach). The single-use nonce is read with the service key and presented to ffm_run_owner_decide, which checks it."""
     get = get or E._get
     if not _UUID.match(str(msg_id or "")):
-        return "Not changed: bad message id."
+        return False, "Not changed: bad message id."
     rows = get(f"/rest/v1/ffm_run_budgets?owner_message_id=eq.{msg_id}&select=id,approval_nonce&limit=1") or []
     if not rows:
-        return "Not changed: no launch budget is waiting on this message."
+        return False, "Not changed: no launch budget is waiting on this message."
     try:
         r = E._call("ffm_run_owner_decide", {"p_message": msg_id, "p_nonce": rows[0]["approval_nonce"], "p_approved": bool(approved), "p_by": "owner:telegram"}, rpc) or {}
     except Exception as e:
-        return f"Not changed: {str(e)[:150]}"
+        return False, f"Not changed: {str(e)[:150]}"
     if not r.get("ok"):
-        return f"Not changed: {r.get('reason')}."
+        return False, f"Not changed: {r.get('reason')}."
     if r.get("status") == "rejected":
-        return "Rejected. Nothing will run."
-    return ("Approved. I run it from here, inside the approved numbers." + (" It runs as DRY RUN (simulated) because the system is in dry-run mode." if r.get("dry_run") else ""))
+        return True, "Rejected. Nothing will run."
+    return True, ("Approved. I run it from here, inside the approved numbers." + (" It runs as DRY RUN (simulated) because the system is in dry-run mode." if r.get("dry_run") else ""))
+
+
+def decide_emails_status(msg_id: str, approved: bool, rpc=None, get=None) -> tuple[bool, str]:
+    """The owner's tap on a batch of waiting client emails (automatic sending off). Same path and checks as decide()."""
+    get = get or E._get
+    if not _UUID.match(str(msg_id or "")):
+        return False, "Not changed: bad message id."
+    rows = get(f"/rest/v1/ffm_run_email_batches?owner_message_id=eq.{msg_id}&select=id,approval_nonce&limit=1") or []
+    if not rows:
+        return False, "Not changed: no email batch is waiting on this message."
+    try:
+        r = E._call("ffm_run_decide_emails", {"p_message": msg_id, "p_nonce": rows[0]["approval_nonce"], "p_approved": bool(approved), "p_by": "owner:telegram"}, rpc) or {}
+    except Exception as e:
+        return False, f"Not changed: {str(e)[:150]}"
+    if not r.get("ok"):
+        return False, f"Not changed: {r.get('reason')}."
+    return True, (f"Approved: {r.get('emails')} email(s) go out after the send-time checks." if r.get("status") == "approved" else f"Rejected: {r.get('emails')} email(s) withdrawn.")
 
 
 # ------------------------------------------------------------------------------------------------------------------- Meta ad account connection (official OAuth)

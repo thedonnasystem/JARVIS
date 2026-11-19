@@ -11418,12 +11418,14 @@ grant execute on function public.ffm_engine_save_pack(uuid, text, jsonb, uuid, i
 
 -- ===== 20261126_ffm_run_v1.sql =====
 -- FF Marketing EXECUTION v1 (builds on 20261117_client_workspaces_v1, 20261118_ffm_onboarding_v1, 20261121_*consent*, 20261124_jarvis_hands_v1, 20261125_ffm_engine_v1).
--- Additive: 8 tables, 1 connector row (meta-ads, DISABLED), 28 functions, company_profile rows 'ffm-<slug>' (client sender identity), and ONE tightening of an existing grant (owner_messages, below). Changes no existing
+-- Additive: 10 tables, 1 connector row (meta-ads, DISABLED), 32 functions, company_profile rows 'ffm-<slug>' (client sender identity), and ONE tightening of an existing grant (owner_messages, below). Changes no existing
 -- function, control, cap, mode or kill switch.
 --   * ONE owner approval per launch: ffm_run_propose writes the launch (the exact plan, screened, sha256) and its FIRST budget row and asks the owner on Telegram.
 --     The approval is recorded ONLY by ffm_run_owner_decide (service_role only): it checks the message id, kind, sender and reference and consumes a single-use
---     nonce stored with the budget row (no API role can read it). A trigger refuses any approved budget that did not come through it. owner_messages.decision
---     alone is never trusted. Proposals need a workspace monthly budget, a client sender profile, a total cap of at least $100 and cover at most 30 days.
+--     nonce stored with the budget row. The nonce blocks replayed, stale and wrong-message taps; it does NOT stop the service key itself (service_role can
+--     read it): service-role trust is the same as hands_decide. anon / authenticated are fully blocked. What a misused service key could approve is bounded
+--     by the owner-set workspace monthly budget, the 30-day limit per approval and (for live paid ads) the owner's workspace activation. A trigger refuses
+--     any approved budget that did not come through ffm_run_owner_decide; owner_messages.decision alone is never trusted. Proposals need a workspace monthly budget, a client sender profile, a total cap of at least $100 and cover at most 30 days.
 --   * owner_messages: anon / authenticated lose every table privilege (the PWA reads and decides only through SECURITY DEFINER app_* functions; the bot uses
 --     the service key). This closes the forged-decision path for every module, not only this one.
 --   * ffm_run_budgets is the per-launch APPROVED-BUDGET table: amounts immutable (trigger); a change is a new row + a new tap; a new total must stay above spend.
@@ -11564,12 +11566,34 @@ create table if not exists public.ffm_run_emails (
   created_at timestamptz not null default now(),
   claimed_at timestamptz,
   sent_at timestamptz,
+  batch_id uuid,                    -- the owner's approval batch (autosend OFF)
+  owner_ok_at timestamptz,          -- set only by ffm_run_decide_emails (approved batch)
   unique (lead_id, touch)
+);
+
+-- per-workspace owner setting: automatic client emails. Default OFF (no row = off): every email waits for the owner's tap (batched per launch).
+create table if not exists public.ffm_run_settings (
+  workspace_id uuid primary key references public.client_workspaces(id) on delete restrict,
+  ffm_autosend boolean not null default false,
+  set_by text not null check (set_by ~ '^owner:'),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.ffm_run_email_batches (
+  id uuid primary key default gen_random_uuid(),
+  launch_id uuid not null references public.ffm_run_launches(id) on delete restrict,
+  status text not null default 'proposed' check (status in ('proposed', 'approved', 'rejected')),
+  approval_nonce text not null default (replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '')) check (approval_nonce ~ '^[0-9a-f]{64}$'),
+  owner_message_id uuid,
+  n_emails integer not null default 0,
+  created_at timestamptz not null default now(),
+  decided_at timestamptz,
+  decided_by text
 );
 create index if not exists ffm_run_emails_status_idx on public.ffm_run_emails (status, created_at);
 
 do $$ declare t text; begin
-  foreach t in array array['ffm_run_launches', 'ffm_run_budgets', 'ffm_run_objects', 'ffm_run_metrics', 'ffm_run_receipts', 'ffm_run_leads', 'ffm_run_touches', 'ffm_run_emails'] loop
+  foreach t in array array['ffm_run_launches', 'ffm_run_budgets', 'ffm_run_objects', 'ffm_run_metrics', 'ffm_run_receipts', 'ffm_run_leads', 'ffm_run_touches', 'ffm_run_emails', 'ffm_run_settings', 'ffm_run_email_batches'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from public, anon, authenticated', t);
     execute format('grant select on public.%I to service_role', t);
@@ -11731,8 +11755,10 @@ begin
     || 'Dates: ' || p_starts || ' to ' || p_ends || '.' || chr(10)
     || 'Organic posts: ' || n_posts || case when n_posts > 0 then ' on ' || array_to_string(coalesce(p_organic, '{}'), ', ') else '' end || '.' || chr(10)
     || 'Landing page: ' || case when coalesce((p_plan ->> 'landing')::boolean, false) then 'deployed to your connected Netlify site' else 'not deployed (consent wording missing)' end || '.' || chr(10)
-    || 'Leads: up to ' || n_touch || ' emails over 10 days from the client''s own sender profile, sent automatically and only to people with verified consent '
-    || '(the first within about 5 minutes when live); stops on reply, booking or opt-out. Every email carries the client''s CASL footer and an unsubscribe link.' || chr(10)
+    || 'Leads: up to ' || n_touch || ' emails over 10 days from the client''s own sender profile, only to people with verified consent; stops on reply, booking or opt-out. '
+    || case when public.ffm_run_autosend(p_ws) then 'Automatic sending is ON for this client: they go without a tap (the first within about 5 minutes when live).'
+            else 'Automatic sending is OFF for this client: each batch of emails waits for your tap (/ffm autosend ' || w.slug || ' on to change that).' end
+    || ' Every email carries the client''s CASL footer and an unsubscribe link.' || chr(10)
     || 'Everything that will run (every ad, post and email): /ffm plan ' || left(v_id::text, 8) || ' (plan ' || left(v_sha, 12) || ').' || chr(10)
     || 'Approve = I run it alone inside these numbers (daily optimizing, weekly report to you). Anything above the cap comes back to you.'
     || case when public.ffm_run_live_mode() then '' else chr(10) || 'The system is in dry-run mode, so this launch runs as DRY RUN (simulated receipts) to its end. After you connect the accounts and switch the mode, launch again to run it live.' end;
@@ -11773,8 +11799,9 @@ revoke all on function public.ffm_run_request_budget(uuid, integer, integer, tex
 grant execute on function public.ffm_run_request_budget(uuid, integer, integer, text) to service_role;
 
 -- THE approval path. Called only by the bot's owner-only decision handler (hq_commands.apply_decision -> hq_ffm_run.decide; the PWA's Approve goes through the same
--- handler via app_send). It checks the message (id, kind, sender, reference) and a single-use nonce stored with the proposal: service_role only (no API role can
--- call it or read the nonce). owner_messages.decision is never trusted on its own.
+-- handler via app_send). It checks the message (id, kind, sender, reference) and a single-use nonce stored with the proposal. service_role only: anon /
+-- authenticated can neither call it nor read the nonce. The nonce stops replayed, stale and wrong-message taps, not the service key (same trust as
+-- hands_decide); the bound is the owner-set monthly budget, 30 days per approval and workspace activation. owner_messages.decision is never trusted on its own.
 create or replace function public.ffm_run_owner_decide(p_message uuid, p_nonce text, p_approved boolean, p_by text) returns jsonb
 language plpgsql security definer set search_path to 'public' as $$
 declare m public.owner_messages; bd public.ffm_run_budgets; l public.ffm_run_launches; b jsonb; v_launch uuid;
@@ -12172,6 +12199,7 @@ begin
   elsif coalesce((cs ->> 'allowed')::boolean, false) is not true then why := 'not contactable: ' || coalesce(cs ->> 'reason', '?');
   elsif s is null or position(s ->> 'mailing_address' in e.body) = 0 or position('unsubscribe' in lower(e.body)) = 0 then why := 'no CASL footer of this client';
   elsif public.normalize_addr(v_to) is null then why := 'no usable address';
+  elsif not public.ffm_run_autosend(l.workspace_id) and e.owner_ok_at is null then why := 'waiting for the owner (automatic sending is off)';
   end if;
   if why is not null then
     if why like 'not contactable%' or why like 'lead is%' then update public.ffm_run_emails set status = 'withdrawn', reason = left(why, 120) where id = p_id; end if;
@@ -12250,6 +12278,87 @@ begin
 end $$;
 revoke all on function public.ffm_run_report(uuid, date, date) from public, anon, authenticated;
 grant execute on function public.ffm_run_report(uuid, date, date) to service_role;
+
+-- ---------------------------------------------------------------------------------------------------------------------------- owner setting: automatic client emails
+-- ffm_autosend is OFF by default. While it is off, every queued email waits for an owner tap: ffm_run_ask_emails batches a launch's waiting emails into ONE
+-- owner message (at most one open batch per launch), and ffm_run_decide_emails (single-use nonce, like ffm_run_owner_decide) approves or withdraws them.
+-- ffm_run_claim_email refuses an unapproved email while autosend is off. Only the owner switches it (p_by 'owner:...', recorded by the owner-only handler;
+-- same service-role trust as hands_decide).
+create or replace function public.ffm_run_autosend(p_ws uuid) returns boolean
+language sql stable security definer set search_path to 'public' as $$
+  select coalesce((select ffm_autosend from public.ffm_run_settings where workspace_id = p_ws), false)
+$$;
+revoke all on function public.ffm_run_autosend(uuid) from public, anon, authenticated;
+grant execute on function public.ffm_run_autosend(uuid) to service_role;
+
+create or replace function public.ffm_run_set_autosend(p_ws uuid, p_on boolean, p_by text) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+begin
+  if p_by is null or p_by !~ '^owner:' then raise exception 'only the owner switches automatic client emails' using errcode = '42501'; end if;
+  perform public.ffm_open_ws(p_ws);
+  insert into public.ffm_run_settings (workspace_id, ffm_autosend, set_by) values (p_ws, coalesce(p_on, false), left(p_by, 60))
+  on conflict (workspace_id) do update set ffm_autosend = excluded.ffm_autosend, set_by = excluded.set_by, updated_at = now();
+  insert into public.audit_log (actor, action, target, detail) values (left(p_by, 60), 'ffm_run_autosend_set', 'workspace/' || p_ws, jsonb_build_object('on', coalesce(p_on, false)));
+  return jsonb_build_object('ok', true, 'autosend', coalesce(p_on, false));
+end $$;
+revoke all on function public.ffm_run_set_autosend(uuid, boolean, text) from public, anon, authenticated;
+grant execute on function public.ffm_run_set_autosend(uuid, boolean, text) to service_role;
+
+-- one owner message per launch listing the waiting emails (recipient masked, touch, subject); at most one open batch per launch
+create or replace function public.ffm_run_ask_emails(p_launch uuid) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare l public.ffm_run_launches; w public.client_workspaces; v_b uuid; v_msg uuid; n int; v_lines text := ''; r record;
+begin
+  select * into l from public.ffm_run_launches where id = p_launch for update;
+  if l.id is null then raise exception 'unknown launch'; end if;
+  if public.ffm_run_autosend(l.workspace_id) then return jsonb_build_object('ok', false, 'reason', 'autosend is on'); end if;
+  if exists (select 1 from public.ffm_run_email_batches where launch_id = p_launch and status = 'proposed') then return jsonb_build_object('ok', false, 'reason', 'a batch is already waiting'); end if;
+  select * into w from public.client_workspaces where id = l.workspace_id;
+  insert into public.ffm_run_email_batches (launch_id) values (p_launch) returning id into v_b;
+  update public.ffm_run_emails set batch_id = v_b
+   where id in (select id from public.ffm_run_emails where launch_id = p_launch and status = 'queued' and batch_id is null and owner_ok_at is null order by created_at limit 20);
+  get diagnostics n = row_count;
+  if n = 0 then delete from public.ffm_run_email_batches where id = v_b; return jsonb_build_object('ok', true, 'emails', 0); end if;
+  for r in select e.touch, e.subject, wl.email from public.ffm_run_emails e join public.ws_leads wl on wl.id = e.lead_id where e.batch_id = v_b order by e.created_at loop
+    v_lines := v_lines || chr(10) || '- touch ' || r.touch || ' to ' || coalesce(left(split_part(r.email, '@', 1), 1) || '***@' || split_part(r.email, '@', 2), '?') || ': "' || left(r.subject, 80) || '"';
+  end loop;
+  insert into public.owner_messages (from_agent, kind, channel, body, needs_decision, ref_table, ref_id)
+  values ('jarvis', 'proposal', 'telegram', left('Sir, ' || n || ' follow-up email(s) for ' || w.name || ' wait for your tap (automatic sending is off for this client):' || v_lines || chr(10)
+    || 'Approve sends them (each is still re-checked at send time: consent, opt-out, suppression, kill switch). Reject withdraws them. '
+    || '/ffm autosend ' || w.slug || ' on lets future emails go without a tap.', 3900), true, 'ffm_run_email_batches', v_b) returning id into v_msg;
+  update public.ffm_run_email_batches set owner_message_id = v_msg, n_emails = n where id = v_b;
+  return jsonb_build_object('ok', true, 'emails', n, 'batch_id', v_b, 'message_id', v_msg);
+end $$;
+revoke all on function public.ffm_run_ask_emails(uuid) from public, anon, authenticated;
+grant execute on function public.ffm_run_ask_emails(uuid) to service_role;
+
+create or replace function public.ffm_run_decide_emails(p_message uuid, p_nonce text, p_approved boolean, p_by text) returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare m public.owner_messages; bt public.ffm_run_email_batches; n int;
+begin
+  if p_by is null or p_by !~ '^owner:' then raise exception 'ffm_run_decide_emails: only the owner decides' using errcode = '42501'; end if;
+  select * into m from public.owner_messages where id = p_message;
+  if m.id is null or m.kind <> 'proposal' or m.from_agent <> 'jarvis' or not m.needs_decision or m.ref_table <> 'ffm_run_email_batches' or m.ref_id is null then
+    raise exception 'ffm_run_decide_emails: not an email approval message' using errcode = '42501';
+  end if;
+  perform 1 from public.ffm_run_launches where id = (select launch_id from public.ffm_run_email_batches where id = m.ref_id) for update;   -- the launch first
+  select * into bt from public.ffm_run_email_batches where id = m.ref_id for update;
+  if bt.id is null or bt.owner_message_id is distinct from p_message then raise exception 'ffm_run_decide_emails: message and batch do not match' using errcode = '42501'; end if;
+  if bt.status <> 'proposed' then return jsonb_build_object('ok', false, 'reason', 'already decided'); end if;
+  if p_nonce is null or p_nonce <> bt.approval_nonce then raise exception 'ffm_run_decide_emails: wrong nonce' using errcode = '42501'; end if;
+  if coalesce(p_approved, false) then
+    update public.ffm_run_emails set owner_ok_at = now() where batch_id = bt.id and status = 'queued';
+  else
+    update public.ffm_run_emails set status = 'withdrawn', reason = 'owner rejected' where batch_id = bt.id and status = 'queued';
+  end if;
+  get diagnostics n = row_count;
+  update public.ffm_run_email_batches set status = case when p_approved then 'approved' else 'rejected' end, decided_at = now(), decided_by = left(p_by, 60) where id = bt.id;
+  insert into public.audit_log (actor, action, target, detail) values (left(p_by, 60), case when p_approved then 'ffm_run_emails_approved' else 'ffm_run_emails_rejected' end,
+    'launch/' || bt.launch_id, jsonb_build_object('batch', bt.id, 'emails', n));
+  return jsonb_build_object('ok', true, 'status', case when p_approved then 'approved' else 'rejected' end, 'emails', n);
+end $$;
+revoke all on function public.ffm_run_decide_emails(uuid, text, boolean, text) from public, anon, authenticated;
+grant execute on function public.ffm_run_decide_emails(uuid, text, boolean, text) to service_role;
 
 -- ===== 20261112_lockdown_v1.sql =====
 -- Security lockdown (found on first live apply): functions made with plain CREATE FUNCTION are executable by anon/authenticated by default.

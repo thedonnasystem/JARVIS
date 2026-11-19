@@ -137,9 +137,13 @@ One tap per client launch (at most 30 days); then Jarvis runs paid ads, posts, w
 ### Run it
 1. Once per client: `/ffm sender <slug> <from email> | <sender name> | <brand> | <mailing address>` (the CLIENT's own CASL identity; its emails never carry Donna's).
 2. `/ffm launch <slug> <daily $> <total $> [days, max 30] [start YYYY-MM-DD]` (after `/ffm pack`; total cap at least $100, not above the workspace monthly budget). You get ONE message: platforms, daily budget (an average: Meta may spend up to ~75% more on a single day), total cap (the hard stop), dates, and `/ffm plan <id>`, which lists every ad, post and email. Tap Approve.
-3. Jarvis then (every 5 minutes, plain code): Meta campaign (spend cap = your total), ad sets and ads created PAUSED, then switched on; landing page; organic posts; new leads answered (first email within about 5 minutes when live) and followed up; daily optimizing; Monday report to you plus a client draft.
+3. Jarvis then (every 5 minutes, plain code): Meta campaign (spend cap = your total), ad sets and ads created PAUSED, then switched on; landing page; organic posts; new leads followed up by email; daily optimizing; Monday report to you plus a client draft.
+   Client emails: automatic sending is OFF per client by default, so the emails waiting for a launch come to you as ONE message per launch (Approve sends them, Reject withdraws them). `/ffm autosend <slug> on` lets that client's emails go without a tap (first email within about 5 minutes when live); `off` turns it back.
 4. `/ffm status <slug>`, `/ffm stop <slug>` (pauses on Meta first, tells you if Meta did not confirm), `/ffm budget <slug> <daily $> <total $>` (a new tap; the new cap is set on Meta and ad sets are cut before anything resumes), `/ffm lead <id> replied|booked|stop|lost`.
-At the cap every ad is paused and you are told once. Kill switch: nothing runs; Jarvis only pauses live ads.
+At the cap every ad is paused and you are told once. Kill switch: nothing runs; Jarvis only pauses live ads. When you switch the kill switch off, a launch that the kill switch paused is switched back on (only inside its approved budget and dates, re-checked); a launch stopped or capped is not.
+
+### Unsubscribes (CASL)
+Every email has an unsubscribe link (mailto to the client's address) and asks people to reply "unsubscribe". Those replies land in the CLIENT's inbox: they are not read automatically. Record each one with `/ffm lead <id> stop` (it withdraws consent and suppresses the address). CASL requires an unsubscribe to take effect within 10 business days, so you (or the client) must record them within that time.
 
 ### Go live (in this order). A launch approved in dry-run mode stays DRY RUN to its end: launch again after going live.
 1. Merge and release this PR (migration `20261126_ffm_run_v1`, rollback `ops/rollback_ffm_run.sql`).
@@ -151,7 +155,8 @@ At the cap every ad is paused and you are told once. Kill switch: nothing runs; 
 7. `/ffm launch ...` and tap Approve.
 
 ### Limits (plain)
-- Emails send automatically under the launch approval (approved texts, re-checked at send time: consent, opt-out, suppression, outreach gate, kill switch, mode, policy caps). No per-email tap. Unsubscribe is a mailto link to the client's address; the client (or you, `/ffm lead <id> stop`) records it: replies are not read automatically.
+- Emails: with automatic sending OFF (default) each batch waits for your tap; with it ON they go under the launch approval. Either way each is re-checked at send time (consent, opt-out, suppression, outreach gate, kill switch, mode, policy caps, the sender's gate mark) and carries a per-email idempotency key (no duplicate on a provider retry).
+- Approval security: the approval checks the message and a single-use nonce, which blocks replayed, stale and wrong-message taps. It does not stop someone holding the bot's service key (same trust as hands approvals today); anon / app users are fully blocked. What such a key could approve is bounded by your workspace monthly budget, 30 days per approval and your workspace activation.
 - The sealing form endpoint (capture signing key) is not built: until it is, no lead has verified consent, so no email goes out.
 - SMS is a stub. Instagram, TikTok and YouTube posts need media and are skipped. Leads are polled (no webhook). Targeting: the brief's city (25 km) or Canada.
 - The launch tap approves the hand actions for the exact approved posts and page (`owner:launch:<id>`) and the emails: review that design before release.

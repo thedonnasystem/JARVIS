@@ -176,11 +176,14 @@ function	ffm_require_owner()	-	-	execute	security_definer		-
 function	ffm_revoke_approval(uuid)	-	-	execute	security_definer		-
 function	ffm_route_preview(uuid,uuid)	-	-	execute	security_definer	dry run only	-
 function	ffm_run_append_only()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	ffm_run_ask_emails(uuid)	-	-	execute	security_definer		-
 function	ffm_run_ask_owner(uuid,text)	-	-	execute	security_definer		-
+function	ffm_run_autosend(uuid)	-	-	execute	security_definer		-
 function	ffm_run_budget(uuid)	-	-	execute	security_definer		-
 function	ffm_run_budget_fixed()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	ffm_run_check_budget(uuid)	-	-	execute	security_definer		-
 function	ffm_run_claim_email(uuid)	-	-	execute	security_definer		-
+function	ffm_run_decide_emails(uuid,text,boolean,text)	-	-	execute	security_definer		-
 function	ffm_run_email_result(uuid,boolean,text,text)	-	-	execute	security_definer		-
 function	ffm_run_footer(uuid)	-	-	execute	security_definer		-
 function	ffm_run_gate(uuid,text,text)	-	-	execute	security_definer		-
@@ -196,6 +199,7 @@ function	ffm_run_receipt(uuid,text,text,boolean,boolean,text,text,uuid)	-	-	exec
 function	ffm_run_report(uuid,date,date)	-	-	execute	security_definer		-
 function	ffm_run_request_budget(uuid,integer,integer,text)	-	-	execute	security_definer		-
 function	ffm_run_sender(uuid)	-	-	execute	security_definer		-
+function	ffm_run_set_autosend(uuid,boolean,text)	-	-	execute	security_definer		-
 function	ffm_run_set_landing(uuid,text)	-	-	execute	security_definer		-
 function	ffm_run_set_object(uuid,text,integer)	-	-	execute	security_definer		-
 function	ffm_run_set_sender(uuid,text,text,text,text,text)	-	-	execute	security_definer		-
@@ -440,12 +444,14 @@ table	ffm_restore_markers	-	-	select	rls=true		-
 table	ffm_route_log	-	-	select	rls=true		-
 table	ffm_routing_rules	-	-	select	rls=true		-
 table	ffm_run_budgets	-	-	select	rls=true		-
+table	ffm_run_email_batches	-	-	select	rls=true		-
 table	ffm_run_emails	-	-	select	rls=true		-
 table	ffm_run_launches	-	-	select	rls=true		-
 table	ffm_run_leads	-	-	select	rls=true		-
 table	ffm_run_metrics	-	-	select	rls=true		-
 table	ffm_run_objects	-	-	select	rls=true		-
 table	ffm_run_receipts	-	-	select	rls=true		-
+table	ffm_run_settings	-	-	select	rls=true		-
 table	ffm_run_touches	-	-	select	rls=true		-
 table	ffm_secrets	-	-	-	rls=true		-
 table	ffm_sender_mark	-	-	select	rls=true		-

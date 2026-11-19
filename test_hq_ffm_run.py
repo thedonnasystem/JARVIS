@@ -201,6 +201,23 @@ class MiscTests(unittest.TestCase):
         self.assertIn("do not send", c)
         self.assertIn("Renewal review 1", c)
 
+    def test_one_idempotency_key_per_email_row(self):
+        import hq_mail
+        seen = []
+
+        class Resp:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+        with mock.patch.dict(os.environ, {"RESEND_API_KEY": "k"}), mock.patch.object(hq_mail.urllib.request, "urlopen", lambda req, timeout=20: (seen.append(req), Resp())[1]):
+            ok, _ = R.resend_post({"id": "e-1", "from": "a@b.example", "from_name": "A", "to": "c@d.example", "subject": "s", "body": "b", "unsubscribe": "mailto:a@b.example"})
+            R.resend_post({"id": "e-1", "from": "a@b.example", "from_name": "A", "to": "c@d.example", "subject": "s", "body": "b", "unsubscribe": "mailto:a@b.example"})
+        self.assertTrue(ok)
+        self.assertEqual([r.get_header("Idempotency-key") for r in seen], ["ffm-email-e-1", "ffm-email-e-1"])     # a retry carries the same key
+        self.assertIn('"List-Unsubscribe": "<mailto:a@b.example>"', seen[0].data.decode())
+
     def test_sms_is_a_stub(self):
         self.assertTrue(issubclass(R.SmsNotBuilt, A.HandError))
 
@@ -313,7 +330,7 @@ class DbTests(unittest.TestCase):
         self.sql("insert into public.ffm_consent_wordings (workspace_id, version, sha256, registered_by) values (%s, 'v1', %s, 'owner')", (self.ws, "b" * 64))
         self.sql("update public.client_workspaces set monthly_budget_cents = 500000 where id = %s", (self.ws,))       # (the owner-only ffm_set_budget in production)
         R.command("sender", [self.slug, "hello@maplemortgage.example", "|", "Sam", "Lee", "|", "Maple", "Mortgage", "Team", "|", "100", "Main", "Street,", "Ottawa", "ON"])
-        self.sent, self.mails = [], []
+        self.sent, self.mails, self.attests = [], [], []
 
     def tearDown(self):
         self.p.stop()
@@ -329,19 +346,20 @@ class DbTests(unittest.TestCase):
         kw.setdefault("executor_run", run_exec([]))
         kw.setdefault("authorize", lambda ref: True)
         kw.setdefault("mail_post", lambda c: (self.mails.append(c) or True, f"re_{len(self.mails)}"))
+        kw.setdefault("attest", lambda: (self.attests.append(1) or {"ok": True}))
         return R.Engine(**kw)
 
     def propose(self, daily="$30", total="$300", days="30"):
         return R.command("launch", [self.slug, daily, total, days], now=self.now)
 
-    def msg(self):
-        return self.sql("select * from public.owner_messages where ref_table = 'ffm_run_budgets' and decision is null order by created_at desc limit 1")[0]
+    def msg(self, ref="ffm_run_budgets"):
+        return self.sql("select * from public.owner_messages where ref_table = %s and decision is null order by created_at desc limit 1", (ref,))[0]
 
-    def tap(self, approved=True):
+    def tap(self, approved=True, ref="ffm_run_budgets"):
         """The owner's real tap: hq_commands.apply_decision (the owner-only handler behind the Telegram button and the PWA's Approve)."""
         import hq_commands
         with mock.patch.object(hq_commands, "_record_decision_memory"):
-            return hq_commands.apply_decision(self.msg()["id"], approved)
+            return hq_commands.apply_decision(self.msg(ref)["id"], approved)
 
     def launch(self):
         return self.sql("select * from public.ffm_run_launches where workspace_id = %s order by created_at desc limit 1", (self.ws,))[0]
@@ -503,7 +521,22 @@ class DbTests(unittest.TestCase):
             self.assertIn(t, em["body"])
         self.assertNotIn("Donna", em["body"])
         self.assertEqual(self.sql("select count(*) c from public.outbox where idempotency_key like 'ffm:%%'")[0]["c"], 0)       # not the legacy path
+        # automatic sending is OFF by default: one owner message for the launch lists the waiting email; nothing goes before his tap
+        eng = self.engine()
+        self.assertEqual(eng.send_emails(), 0)
+        self.assertEqual(self.mails, [])
+        batch = self.msg("ffm_run_email_batches")
+        self.assertEqual(batch["ref_table"], "ffm_run_email_batches")
+        self.assertIn("1 follow-up email(s) for Maple Mortgage Team wait for your tap", batch["body"])
+        self.assertIn("s***@example.com", batch["body"])
+        self.assertNotIn("sam@example.com", batch["body"])
+        self.assertEqual(eng.send_emails(), 0)                                                     # still one open batch, no second message
+        self.assertEqual(self.sql("select count(*) c from public.owner_messages where ref_table = 'ffm_run_email_batches'")[0]["c"], 1)
+        self.assertIn("Approved: 1 email", self.tap(ref="ffm_run_email_batches"))
+        self.attests.clear()
         self.assertEqual(eng.send_emails(), 1)
+        self.assertEqual(len(self.attests), 1)                                                     # the sender's gate mark: once per batch
+        self.assertEqual(self.mails[0]["id"], em["id"])                                            # the Idempotency-Key is per email row
         self.assertEqual(self.mails[0]["from"], "hello@maplemortgage.example")
         self.assertEqual(self.mails[0]["unsubscribe"], "mailto:hello@maplemortgage.example?subject=unsubscribe")
         self.assertEqual(self.sql("select status from public.ffm_run_emails where id = %s", (em["id"],))[0]["status"], "sent")
@@ -514,6 +547,14 @@ class DbTests(unittest.TestCase):
         self.assertEqual(eng.send_emails(), 0)
         self.assertEqual(self.sql("select status from public.ffm_run_emails where lead_id = %s", (r2["lead_id"],))[0]["status"], "withdrawn")
         self.assertTrue(self.sql("select public.is_suppressed('kim@example.com') s")[0]["s"])
+        # the owner switches automatic sending on: the next email goes without a tap; with the gate mark failing nothing goes at all
+        self.assertIn("ON", R.command("autosend", [self.slug, "on"]))
+        r4 = self.lead(eng, "nf-live4", "max@example.com")
+        self.assertEqual(self.engine(attest=lambda: {"ok": False, "reason": "hwm_unavailable"}).send_emails(), 0)
+        self.assertEqual(self.engine().send_emails(), 1)
+        self.assertEqual(self.sql("select status from public.ffm_run_emails where lead_id = %s", (r4["lead_id"],))[0]["status"], "sent")
+        with self.assertRaisesRegex(RuntimeError, "only the owner"):
+            E._call("ffm_run_set_autosend", {"p_ws": self.ws, "p_on": True, "p_by": "jarvis"})
         # policy says no -> nothing sent
         r3 = self.lead(eng, "nf-live3", "lee@example.com")
         self.assertEqual(self.engine(authorize=lambda ref: False).send_emails(), 0)
@@ -563,6 +604,34 @@ class DbTests(unittest.TestCase):
         self.assertEqual(self.sql("select count(*) c from public.ffm_run_touches where lead_id = %s", (r["lead_id"],))[0]["c"], 0)
         self.assertEqual(self.engine().send_emails(), 0)
         self.assertEqual(self.mails, [])
+
+    def test_kill_switch_off_resumes_only_what_the_kill_switch_paused(self):
+        eng, h = self.live_launch()
+        self.sql("update public.system_state set kill_switch = true where id = 1")
+        self.engine(http=Http(), token=lambda ref: {"access_token": "t", "api_key": "k"}).tick()
+        self.assertTrue(all(o["status"] == "paused" for o in self.objs()))
+        self.sql("update public.system_state set kill_switch = false where id = 1")
+        h2 = Http()
+        self.engine(http=h2, token=lambda ref: {"access_token": "t", "api_key": "k"}, now=self.now.replace(hour=12)).tick()
+        self.assertTrue(all(o["status"] == "active" for o in self.objs()))
+        self.assertEqual(sum(1 for c in h2.calls if c[2].get("status") == "ACTIVE"), 13)
+        self.assertTrue(self.receipts("resume")[-1]["item"].startswith("kill:"))
+        # a stop is never undone by this: pause by /ffm stop, then nothing resumes
+        R.command("stop", [self.slug], now=self.now)
+        h3 = Http()
+        self.engine(http=h3, token=lambda ref: {"access_token": "t", "api_key": "k"}, now=self.now.replace(hour=13)).tick()
+        self.assertFalse(any(c[2].get("status") == "ACTIVE" for c in h3.calls))
+
+    def test_failed_decision_releases_the_tap(self):
+        self.propose()
+        m = self.msg()
+        self.assertIn("Approved", self.tap())
+        import hq_commands
+        self.sql("update public.owner_messages set decision = null, decided_at = null where id = %s", (m["id"],))   # a second tap on the same message
+        with mock.patch.object(hq_commands, "_record_decision_memory"):
+            out = hq_commands.apply_decision(m["id"], True)
+        self.assertIn("already decided", out)
+        self.assertIsNone(self.sql("select decision from public.owner_messages where id = %s", (m["id"],))[0]["decision"])
 
     # ---- B3: a real campaign is never given simulated numbers
     def test_real_campaign_numbers_come_from_meta_even_when_not_live(self):

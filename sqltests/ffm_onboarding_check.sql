@@ -61,7 +61,7 @@ begin
     if not has_function_privilege('service_role', f, 'execute') then raise exception 'F6 service_role cannot execute %', f; end if;
   end loop;
   select count(*) into n from pg_proc where pronamespace = 'public'::regnamespace and proname like 'ffm\_%';
-  if n <> 96 then raise exception 'F6b expected 96 ffm functions (+28 execution: ffm_run_* of 20261126_ffm_run_v1; +6 engine: ffm_engine_screen, ffm_engine_screen_texts, ffm_engine_leaves, ffm_engine_create_workspace, ffm_engine_save_brief, ffm_engine_save_pack; +ffm_cc_len; 21 onboarding + 7 consent + 12 evidence (+ffm_lp, ffm_key_problem) + 11 suppression integrity (-ffm_suppression_mac, +ffm_sup_message) + 10 restore-closed gate (epoch guard, bump, instance_fp, gate_core_ok, owner_record_restore, gate_state, sender_attest, set_gate_config, lead_identifier_guard, set_phone_outreach)), found %', n; end if;
+  if n <> 100 then raise exception 'F6b expected 100 ffm functions (+32 execution: ffm_run_* of 20261126_ffm_run_v1; +6 engine: ffm_engine_screen, ffm_engine_screen_texts, ffm_engine_leaves, ffm_engine_create_workspace, ffm_engine_save_brief, ffm_engine_save_pack; +ffm_cc_len; 21 onboarding + 7 consent + 12 evidence (+ffm_lp, ffm_key_problem) + 11 suppression integrity (-ffm_suppression_mac, +ffm_sup_message) + 10 restore-closed gate (epoch guard, bump, instance_fp, gate_core_ok, owner_record_restore, gate_state, sender_attest, set_gate_config, lead_identifier_guard, set_phone_outreach)), found %', n; end if;
 
   -- two clients
   insert into public.client_workspaces (slug, name, vertical) values ('f-mortgage', 'Test Mortgage Broker', 'mortgage') returning id into a;

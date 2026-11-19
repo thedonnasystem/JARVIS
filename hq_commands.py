@@ -751,7 +751,19 @@ def apply_decision(msg_id: str, approved: bool) -> str:
     elif ref_table == "ffm_run_budgets" and ref_id:
         # FF Marketing launch / budget approval: recorded ONLY through ffm_run_owner_decide (message, kind and a single-use nonce); the decision column is not enough
         import hq_ffm_run
-        out = hq_ffm_run.decide(msg_id, approved)
+        ok, out = hq_ffm_run.decide_status(msg_id, approved)
+        if not ok:  # fail closed: release the tap so the same message can be decided again (as the outbox branch does)
+            hq._request("PATCH", f"/rest/v1/owner_messages?id=eq.{_q(msg_id)}", {"decision": None, "decided_at": None}, prefer="return=minimal")
+            return out
+        _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
+        return out
+    elif ref_table == "ffm_run_email_batches" and ref_id:
+        # FF Marketing client emails waiting for the owner (automatic sending off): same single-use nonce path
+        import hq_ffm_run
+        ok, out = hq_ffm_run.decide_emails_status(msg_id, approved)
+        if not ok:
+            hq._request("PATCH", f"/rest/v1/owner_messages?id=eq.{_q(msg_id)}", {"decision": None, "decided_at": None}, prefer="return=minimal")
+            return out
         _record_decision_memory(msg, verdict, msg_id, ref_table, ref_id)
         return out
     elif ref_table == "hand_actions" and ref_id:

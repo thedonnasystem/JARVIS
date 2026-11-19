@@ -11,10 +11,11 @@ drop function if exists public.ffm_run_report(uuid, date, date), public.ffm_run_
   public.ffm_run_submit_hand(uuid, text, text, text, jsonb), public.ffm_run_put_metrics(uuid, date, integer, integer, integer, integer, boolean),
   public.ffm_run_set_object(uuid, text, integer), public.ffm_run_put_object(uuid, text, text, uuid, text, text, integer, boolean), public.ffm_run_receipt(uuid, text, text, boolean, boolean, text, text, uuid),
   public.ffm_run_gate(uuid, text, text), public.ffm_run_task(uuid, text), public.ffm_run_owner_decide(uuid, text, boolean, text),
-  public.ffm_run_set_sender(uuid, text, text, text, text, text), public.ffm_run_footer(uuid), public.ffm_run_sender(uuid), public.ffm_run_claim_email(uuid), public.ffm_run_email_result(uuid, boolean, text, text), public.ffm_run_request_budget(uuid, integer, integer, text),
+  public.ffm_run_set_sender(uuid, text, text, text, text, text), public.ffm_run_footer(uuid), public.ffm_run_sender(uuid), public.ffm_run_autosend(uuid), public.ffm_run_set_autosend(uuid, boolean, text),
+  public.ffm_run_ask_emails(uuid), public.ffm_run_decide_emails(uuid, text, boolean, text), public.ffm_run_claim_email(uuid), public.ffm_run_email_result(uuid, boolean, text, text), public.ffm_run_request_budget(uuid, integer, integer, text),
   public.ffm_run_propose(uuid, uuid, integer, integer, date, date, text[], text[], jsonb, text), public.ffm_run_check_budget(uuid), public.ffm_run_ask_owner(uuid, text),
   public.ffm_run_money(integer), public.ffm_run_budget(uuid), public.ffm_run_live_mode();
-drop table if exists public.ffm_run_emails, public.ffm_run_touches, public.ffm_run_leads, public.ffm_run_metrics, public.ffm_run_receipts, public.ffm_run_objects, public.ffm_run_budgets, public.ffm_run_launches;
+drop table if exists public.ffm_run_email_batches, public.ffm_run_settings, public.ffm_run_emails, public.ffm_run_touches, public.ffm_run_leads, public.ffm_run_metrics, public.ffm_run_receipts, public.ffm_run_objects, public.ffm_run_budgets, public.ffm_run_launches;
 drop function if exists public.ffm_run_budget_fixed(), public.ffm_run_append_only();
 do $$ begin
   if to_regclass('public.hand_connectors') is not null then
