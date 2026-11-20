@@ -243,7 +243,7 @@ function	fz_money_proposal_guard()	-	-	execute	security_definer	trigger function
 function	fz_money_report()	-	-	execute	security_definer		-
 function	fz_money_require_owner()	-	-	execute	security_definer		-
 function	fz_money_stamp()	-	-	execute	security_definer		-
-function	fz_office_money_row(uuid)	-	-	execute	security_definer		-
+function	fz_office_available_cents(uuid)	-	-	execute	security_definer		-
 function	fz_office_policy_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	fz_office_refusal(uuid,text,integer)	-	-	execute	security_definer		-
 function	fz_org_status()	-	-	execute	security_definer		-
