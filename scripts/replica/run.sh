@@ -15,7 +15,16 @@ for f in 01_tables 02_constraints 03_funcs; do psql "$REPLICA_URL" -q -v ON_ERRO
 guards_before=""
 for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
   if [ "$f" = "20261122_insurance_classifier_v1.sql" ]; then guards_before="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.ws_guard()'::regprocedure)) || ' ' || md5(pg_get_functiondef('public.ffm_guard()'::regprocedure))")"; fi
+  # office money M2: the money controls (protected functions + ACLs, triggers, money table contents + ACLs, capital_snapshot, the authorize_action / reserve_spend decision
+  # matrix) must be IDENTICAL right before and right after it is applied (sqltests/include/money_fingerprint.sql; the sqltest repeats this for rollback and re-apply)
+  if [ "$f" = "20261128_office_money_v1.sql" ]; then psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/include/money_fingerprint.sql" -c "select k || ' ' || md5(v) from pg_temp.fz_money_fp() order by k" >"${TMPDIR:-/tmp}/money_fp_before" 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "MONEY FINGERPRINT FAILED"; exit 1; }; fi
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED: $f"; exit 1; }
+  if [ "$f" = "20261128_office_money_v1.sql" ]; then
+    psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/include/money_fingerprint.sql" -c "select k || ' ' || md5(v) from pg_temp.fz_money_fp() order by k" >"${TMPDIR:-/tmp}/money_fp_after" 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "MONEY FINGERPRINT FAILED"; exit 1; }
+    [ "$(wc -l <"${TMPDIR:-/tmp}/money_fp_before")" -ge 300 ] || { echo "MONEY FINGERPRINT too small"; exit 1; }
+    diff "${TMPDIR:-/tmp}/money_fp_before" "${TMPDIR:-/tmp}/money_fp_after" >/dev/null || { diff "${TMPDIR:-/tmp}/money_fp_before" "${TMPDIR:-/tmp}/money_fp_after" | head -20; echo "OFFICE MONEY CHANGED THE MONEY CONTROLS (fingerprint before vs after $f)"; exit 1; }
+    echo "money controls identical before and after $f ($(wc -l <"${TMPDIR:-/tmp}/money_fp_after") fingerprint rows)"
+  fi
   echo "applied $f"
 done
 echo "re-applying every migration (must be safe to run twice)"
@@ -123,6 +132,7 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
 done
 echo "insurance rollback drill OK (and the migrations re-apply cleanly afterwards)"
 echo "jarvis hands rollback drill: ops/rollback_jarvis_hands.sql removes the hand objects (twice = idempotent), restores the export policy, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_office_money.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "OFFICE MONEY ROLLBACK (before the hands rollback) FAILED"; exit 1; }   # office money depends on org access
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_org_access.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ORG ACCESS ROLLBACK (before the hands rollback) FAILED"; exit 1; }   # org access re-creates the hands backup classification
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_hands.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS HANDS ROLLBACK FAILED to run"; exit 1; }
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_hands.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS HANDS ROLLBACK is not idempotent"; exit 1; }
@@ -134,6 +144,7 @@ done
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/jarvis_hands_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "jarvis_hands_check failed after the rollback + re-apply"; exit 1; }
 echo "jarvis hands rollback drill OK"
 echo "jarvis core rollback drill: ops/rollback_jarvis_core.sql removes the core objects (twice = idempotent), keeps the export policy classified, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_office_money.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "OFFICE MONEY ROLLBACK (before the core rollback) FAILED"; exit 1; }   # office money depends on org access
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_org_access.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ORG ACCESS ROLLBACK (before the core rollback) FAILED"; exit 1; }   # org access depends on hands
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_hands.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS HANDS ROLLBACK (before the core rollback) FAILED"; exit 1; }   # hands depend on the core
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_core.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS CORE ROLLBACK FAILED to run"; exit 1; }
@@ -180,7 +191,29 @@ if python3 -c "import psycopg2" 2>/dev/null; then   # the REAL hq._request token
   n_skip="$(cd "$root" && FZ_DB_TESTS=1 REPLICA_URL="$REPLICA_URL" python3 -m unittest -v test_hq_scoped.DbTests 2>&1 | grep -c 'skipped' || true)"
   [ "$n_skip" = "0" ] || { echo "SCOPED IDENTITY DB TESTS were skipped"; exit 1; }
 elif [ -n "${REQUIRE_INTEGRATION:-}" ]; then echo "psycopg2 missing but REQUIRE_INTEGRATION is set"; exit 1; fi
+echo "office money rollback drill: ops/rollback_office_money.sql keeps the allocation record in audit_log, removes the M2 views / functions / tables / registry rows and the stamp job (twice = idempotent), restores the org-access backup classification exactly, leaves M1 and every money control in place, then everything re-applies"
+mc0="$(psql "$REPLICA_URL" -At -c "select md5(string_agg(p.oid::regprocedure::text || md5(pg_get_functiondef(p.oid)) || coalesce(p.proacl::text, ''), ',' order by p.oid::regprocedure::text)) from pg_proc p where p.pronamespace='public'::regnamespace and p.prokind='f' and p.proname in ('authorize_action','reserve_spend','settle_spend','release_spend','capital_snapshot','reserve_llm_budget','settle_llm_call','app_set_kill','fz_authorize_action','fz_policy_preview')")|$(psql "$REPLICA_URL" -At -c "select count(*) from pg_trigger t where not t.tgisinternal and t.tgrelid in ('public.ledger'::regclass,'public.llm_calls'::regclass,'public.spend_reservations'::regclass,'public.action_log'::regclass,'public.approval_requests'::regclass,'public.capital_policy'::regclass,'public.system_state'::regclass,'public.action_policy'::regclass)")"
+ex0="$(psql "$REPLICA_URL" -At -c "select count(*) from public.audit_log where action='office_money_export'")"
+for i in 1 2; do
+  (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_office_money.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "OFFICE MONEY ROLLBACK FAILED (run $i)"; exit 1; }
+done
+om="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and (proname like 'fz\_money%' or proname in ('fz_reserve_office_spend','fz_unallocated_cents','fz_office_money_row','fz_propose_office_money','fz_owner_allocate','fz_owner_clawback','fz_owner_set_reinvest','fz_owner_decide_office_proposal','fz_owner_attribute_ledger')))||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname in ('fz_money_config','fz_office_allocations','fz_office_money_policy','fz_office_money_proposals','fz_money_attribution','fz_office_money','fz_office_allocation_log'))||'/'||(select count(*) from public.fz_table_registry where relname in ('fz_money_config','fz_office_allocations','fz_office_money_policy','fz_office_money_proposals','fz_money_attribution'))||'/'||(select count(*) from cron.job where jobname='fz-money-stamp')||'/'||(select count(*) from public.fz_offices)||'/'||(select count(*) from public.audit_log where action='office_money_export')-$ex0||'/'||(select public.backup_export_policy()->>'unclassified')")"
+[ "$om" = "0/0/0/0/9/1/[]" ] || { echo "OFFICE MONEY ROLLBACK DRILL FAILED: $om (want 0/0/0/0/9/1/[]: no M2 object, M1 offices kept, the record kept once (second run is a no-op), nothing unclassified)"; exit 1; }
+mc1="$(psql "$REPLICA_URL" -At -c "select md5(string_agg(p.oid::regprocedure::text || md5(pg_get_functiondef(p.oid)) || coalesce(p.proacl::text, ''), ',' order by p.oid::regprocedure::text)) from pg_proc p where p.pronamespace='public'::regnamespace and p.prokind='f' and p.proname in ('authorize_action','reserve_spend','settle_spend','release_spend','capital_snapshot','reserve_llm_budget','settle_llm_call','app_set_kill','fz_authorize_action','fz_policy_preview')")|$(psql "$REPLICA_URL" -At -c "select count(*) from pg_trigger t where not t.tgisinternal and t.tgrelid in ('public.ledger'::regclass,'public.llm_calls'::regclass,'public.spend_reservations'::regclass,'public.action_log'::regclass,'public.approval_requests'::regclass,'public.capital_policy'::regclass,'public.system_state'::regclass,'public.action_policy'::regclass)")"
+[ "$mc0" = "$mc1" ] || { echo "OFFICE MONEY ROLLBACK DRILL FAILED: the money controls changed ($mc0 vs $mc1)"; exit 1; }
+c1="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.backup_classification()'::regprocedure))")"
+for f in 20261127_org_access_v1.sql 20261121_postlock_backup_identity_v1.sql 20261122_postlock_backup_identity_v2.sql; do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "OFFICE MONEY ROLLBACK DRILL: could not re-apply $f"; exit 1; }
+done
+c2="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.backup_classification()'::regprocedure))")"
+[ "$c1" = "$c2" ] || { echo "OFFICE MONEY ROLLBACK DRILL FAILED: backup_classification() is not the org-access text ($c1 vs $c2)"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the office money rollback: $f"; exit 1; }
+done
+psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/office_money_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "office_money_check failed after the rollback + re-apply"; exit 1; }
+echo "office money rollback drill OK (M2 removed, record kept, M1 and the money controls untouched, org-access classification exact, then the migrations re-apply and the checks pass again)"
 echo "org access rollback drill: ops/rollback_org_access.sql un-archives, removes the scoped roles / policies / columns / fz objects (twice = idempotent), restores the jarvis-hands backup classification exactly, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_office_money.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "OFFICE MONEY ROLLBACK (before the org access rollback) FAILED"; exit 1; }   # office money depends on org access
 arch="$(psql "$REPLICA_URL" -At -c "select coalesce(string_agg(entity || ':' || key || ':' || prior_status, ',' order by entity, key), '') from public.fz_org_archive where decision = 'archived' and entity in ('agent', 'department')")"
 for i in 1 2; do
   (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_org_access.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ORG ACCESS ROLLBACK FAILED (run $i)"; exit 1; }
