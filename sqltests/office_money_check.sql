@@ -69,7 +69,7 @@ create temp table fzm_fp_without as select * from pg_temp.fz_money_fp();
 \ir ../ops/rollback_office_money.sql
 do $$
 begin
-  if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and (proname like 'fz\_money%' or proname in ('fz_reserve_office_spend', 'fz_unallocated_cents', 'fz_office_money_row',
+  if (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and (proname like 'fz\_money%' or proname in ('fz_reserve_office_spend', 'fz_unallocated_cents', 'fz_office_available_cents',
         'fz_propose_office_money', 'fz_owner_allocate', 'fz_owner_clawback', 'fz_owner_set_reinvest', 'fz_owner_decide_office_proposal', 'fz_owner_attribute_ledger'))) <> 0
      or to_regclass('public.fz_office_money') is not null or to_regclass('public.fz_office_allocation_log') is not null
      or exists (select 1 from pg_class where relnamespace = 'public'::regnamespace and relname in ('fz_money_config', 'fz_office_allocations', 'fz_office_money_policy', 'fz_office_money_proposals', 'fz_money_attribution'))
@@ -100,7 +100,7 @@ declare
   AI text := 'office:b2b-records:manager'; BI text := 'office:donna:manager';
   ca jsonb; cb jsonb; cj jsonb; cu jsonb; cd jsonb; res text; r record; d jsonb; d2 jsonb; d3 jsonb; v_free bigint; pid uuid; pid2 uuid; va uuid; vb uuid; vc uuid; lid uuid; lid2 uuid; rid uuid;
   n int; n2 int; c int; st text; ks boolean; mt text[] := array['fz_money_config', 'fz_office_allocations', 'fz_office_money_policy', 'fz_office_money_proposals', 'fz_money_attribution'];
-  m2_funcs text[] := array['fz_money_owner_only', 'fz_money_proposal_guard', 'fz_money_attribution_guard', 'fz_money_stamp', 'fz_office_money_row', 'fz_unallocated_cents', 'fz_money_report',
+  m2_funcs text[] := array['fz_money_owner_only', 'fz_money_proposal_guard', 'fz_money_attribution_guard', 'fz_money_stamp', 'fz_office_available_cents', 'fz_unallocated_cents', 'fz_money_report',
                            'fz_money_require_owner', 'fz_money_office', 'fz_money_do_allocate', 'fz_money_do_clawback', 'fz_money_do_reinvest', 'fz_owner_allocate', 'fz_owner_clawback',
                            'fz_owner_set_reinvest', 'fz_owner_decide_office_proposal', 'fz_owner_attribute_ledger', 'fz_propose_office_money', 'fz_reserve_office_spend'];
   allow_a text[] := array['current_identity()', 'current_office()', 'current_office_id()', 'fz_claims()', 'fz_identity_now()', 'fz_readable_offices(text)', 'fz_readable_workspaces(text)',

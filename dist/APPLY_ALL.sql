@@ -13575,12 +13575,13 @@ end $$;
 revoke all on function public.fz_money_stamp() from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------------------------------------------------------- reads for the owner and the bot
--- one office's row (service / owner). Internal helper: the scoped roles read the view instead.
-create or replace function public.fz_office_money_row(p_office uuid) returns public.fz_office_money
+-- one office's available balance (service / owner). Internal helper: the scoped roles read the view instead. Returns a plain number on purpose: a function returning the
+-- VIEW's row type cannot be restored from the off-site backup (the restore does not recreate these views; found by the backup drill).
+create or replace function public.fz_office_available_cents(p_office uuid) returns bigint
 language sql stable security definer set search_path to 'pg_catalog' as $$
-  select * from public.fz_office_money where office_id = p_office
+  select available_cents from public.fz_office_money where office_id = p_office
 $$;
-revoke all on function public.fz_office_money_row(uuid) from public, anon, authenticated;
+revoke all on function public.fz_office_available_cents(uuid) from public, anon, authenticated;
 
 -- group capital that is not earmarked for an office: the capital controller's available cash minus every office's positive available balance
 create or replace function public.fz_unallocated_cents() returns bigint
@@ -13626,13 +13627,14 @@ begin
 end $$;
 revoke all on function public.fz_money_require_owner() from public, anon, authenticated;
 
-create or replace function public.fz_money_office(p_office text) returns public.fz_offices
+-- the id of an office (never the group). Returns a plain uuid (no table row type in a signature: restorable from the off-site backup).
+create or replace function public.fz_money_office(p_office text) returns uuid
 language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-declare o public.fz_offices;
+declare v uuid;
 begin
-  select * into o from public.fz_offices where slug = p_office and kind = 'office';
-  if not found then raise exception 'unknown office % (the group itself is not allocated to)', coalesce(p_office, '?'); end if;
-  return o;
+  select id into v from public.fz_offices where slug = p_office and kind = 'office';
+  if v is null then raise exception 'unknown office % (the group itself is not allocated to)', coalesce(p_office, '?'); end if;
+  return v;
 end $$;
 revoke all on function public.fz_money_office(text) from public, anon, authenticated;
 
@@ -13642,7 +13644,7 @@ language plpgsql security definer set search_path to 'pg_catalog' as $$
 declare o public.fz_offices; v_free bigint; v_id bigint;
 begin
   perform public.fz_money_require_owner();
-  o := public.fz_money_office(p_office);
+  select * into o from public.fz_offices where id = public.fz_money_office(p_office);
   if coalesce(p_cents, 0) <= 0 then raise exception 'allocation must be above $0'; end if;
   perform pg_advisory_xact_lock(7333);                                    -- the capital controller's lock: no reservation lands between the check and the allocation
   perform public.fz_money_stamp();
@@ -13653,7 +13655,7 @@ begin
   end if;
   insert into public.fz_office_allocations (office_id, kind, cents, reason, proposal_id, by) values (o.id, 'allocate', p_cents, btrim(p_reason), p_proposal, 'owner') returning id into v_id;
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'office_allocate', 'fz_offices/' || o.slug, jsonb_build_object('cents', p_cents, 'allocation_id', v_id, 'proposal', p_proposal));
-  return jsonb_build_object('office', o.slug, 'allocation_id', v_id, 'kind', 'allocate', 'cents', p_cents, 'available_cents', (public.fz_office_money_row(o.id)).available_cents);
+  return jsonb_build_object('office', o.slug, 'allocation_id', v_id, 'kind', 'allocate', 'cents', p_cents, 'available_cents', public.fz_office_available_cents(o.id));
 end $$;
 revoke all on function public.fz_money_do_allocate(text, integer, text, uuid) from public, anon, authenticated;
 
@@ -13662,10 +13664,10 @@ language plpgsql security definer set search_path to 'pg_catalog' as $$
 declare o public.fz_offices; v_avail bigint; v_c bigint; v_id bigint;
 begin
   perform public.fz_money_require_owner();
-  o := public.fz_money_office(p_office);
+  select * into o from public.fz_offices where id = public.fz_money_office(p_office);
   perform pg_advisory_xact_lock(7333);
   perform public.fz_money_stamp();
-  v_avail := (public.fz_office_money_row(o.id)).available_cents;
+  v_avail := public.fz_office_available_cents(o.id);
   v_c := coalesce(p_cents, v_avail);                                      -- no amount: everything available
   if v_c is null or v_c <= 0 then raise exception 'Nothing to claw back: % has $% available.', o.title, to_char(greatest(coalesce(v_avail, 0), 0) / 100.0, 'FM999,999,990.00'); end if;
   if v_c > v_avail then
@@ -13673,7 +13675,7 @@ begin
   end if;
   insert into public.fz_office_allocations (office_id, kind, cents, reason, proposal_id, by) values (o.id, 'clawback', v_c, btrim(p_reason), p_proposal, 'owner') returning id into v_id;
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'office_clawback', 'fz_offices/' || o.slug, jsonb_build_object('cents', v_c, 'allocation_id', v_id, 'proposal', p_proposal));
-  return jsonb_build_object('office', o.slug, 'allocation_id', v_id, 'kind', 'clawback', 'cents', v_c, 'available_cents', (public.fz_office_money_row(o.id)).available_cents);
+  return jsonb_build_object('office', o.slug, 'allocation_id', v_id, 'kind', 'clawback', 'cents', v_c, 'available_cents', public.fz_office_available_cents(o.id));
 end $$;
 revoke all on function public.fz_money_do_clawback(text, integer, text, uuid) from public, anon, authenticated;
 
@@ -13682,7 +13684,7 @@ language plpgsql security definer set search_path to 'pg_catalog' as $$
 declare o public.fz_offices; v_old int;
 begin
   perform public.fz_money_require_owner();
-  o := public.fz_money_office(p_office);
+  select * into o from public.fz_offices where id = public.fz_money_office(p_office);
   if p_pct is null or p_pct < 0 or p_pct > 100 then raise exception 'reinvestment must be 0 to 100 %%'; end if;
   select reinvest_pct into v_old from public.fz_office_money_policy where office_id = o.id;
   insert into public.fz_office_money_policy (office_id, reinvest_pct, updated_by, updated_at) values (o.id, p_pct, 'owner', now())
@@ -13772,7 +13774,7 @@ begin
   if coalesce(nullif(current_setting('role', true), ''), 'none') in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
     raise exception 'money proposals are made on the service path' using errcode = '42501';
   end if;
-  o := public.fz_money_office(p_office);
+  select * into o from public.fz_offices where id = public.fz_money_office(p_office);
   if v_by ilike 'owner%' then v_by := 'bot:' || v_by; end if;                -- a caller cannot record itself as the owner
   update public.fz_office_money_proposals set status = 'expired', decided_at = now(), decided_by = 'expiry' where status = 'pending' and expires_at <= now();
   if (select count(*) from public.fz_office_money_proposals where office_id = o.id and status = 'pending') >= 3 then
@@ -13803,7 +13805,7 @@ create or replace function public.fz_reserve_office_spend(p_office text, p_actor
                                                           p_alternatives text, p_cents integer, p_recurring boolean default false, p_monthly_cents integer default null,
                                                           p_days_to_benefit integer default null, p_venture uuid default null, p_mission uuid default null) returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare o public.fz_offices; m public.fz_office_money; v_reason text; res jsonb; v_cents int := coalesce(p_cents, 0);
+declare o public.fz_offices; v_avail bigint; v_reason text; res jsonb; v_cents int := coalesce(p_cents, 0);
 begin
   if coalesce(nullif(current_setting('role', true), ''), 'none') in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
     raise exception 'the office spend gate is service-path only: a scoped identity evaluates with fz_authorize_action and never reserves' using errcode = '42501';
@@ -13817,17 +13819,17 @@ begin
     if o.status <> 'active' then
       v_reason := format('Office %s is %s: it spends nothing until the owner activates it.', o.title, o.status);
     else
-      m := public.fz_office_money_row(o.id);
-      if v_cents > 0 and coalesce(m.available_cents, 0) < v_cents then
+      v_avail := public.fz_office_available_cents(o.id);
+      if v_cents > 0 and coalesce(v_avail, 0) < v_cents then
         v_reason := format('Office %s has $%s available, the cost is $%s. Ask the owner for an allocation (fz_propose_office_money).', o.title,
-                           to_char(greatest(coalesce(m.available_cents, 0), 0) / 100.0, 'FM999,999,990.00'), to_char(v_cents / 100.0, 'FM999,999,990.00'));
+                           to_char(greatest(coalesce(v_avail, 0), 0) / 100.0, 'FM999,999,990.00'), to_char(v_cents / 100.0, 'FM999,999,990.00'));
       end if;
     end if;
     if v_reason is not null then
       insert into public.action_log (actor, action, tier, decision, reason, cents, venture_id, mission_id, ref, detail)
         values (coalesce(nullif(btrim(p_actor), ''), 'unknown'), p_action, (select tier from public.action_policy where action = p_action), 'deny', v_reason, greatest(v_cents, 0),
-                p_venture, p_mission, p_vendor, jsonb_build_object('office', o.slug, 'layer', 'office_money', 'available_cents', m.available_cents));
-      return jsonb_build_object('decision', 'deny', 'reason', v_reason, 'office', o.slug, 'available_cents', m.available_cents);
+                p_venture, p_mission, p_vendor, jsonb_build_object('office', o.slug, 'layer', 'office_money', 'available_cents', v_avail));
+      return jsonb_build_object('decision', 'deny', 'reason', v_reason, 'office', o.slug, 'available_cents', v_avail);
     end if;
   end if;
   res := public.reserve_spend(p_actor, p_action, p_vendor, p_purpose, p_expected_benefit, p_alternatives, p_cents, p_recurring, p_monthly_cents, p_days_to_benefit, p_venture, p_mission);
@@ -13844,7 +13846,7 @@ do $$
 declare f regprocedure;
 begin
   for f in select p.oid::regprocedure from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in
-             ('fz_money_owner_only', 'fz_money_proposal_guard', 'fz_money_attribution_guard', 'fz_money_stamp', 'fz_office_money_row', 'fz_unallocated_cents', 'fz_money_report',
+             ('fz_money_owner_only', 'fz_money_proposal_guard', 'fz_money_attribution_guard', 'fz_money_stamp', 'fz_office_available_cents', 'fz_unallocated_cents', 'fz_money_report',
               'fz_money_require_owner', 'fz_money_office', 'fz_money_do_allocate', 'fz_money_do_clawback', 'fz_money_do_reinvest', 'fz_owner_allocate', 'fz_owner_clawback',
               'fz_owner_set_reinvest', 'fz_owner_decide_office_proposal', 'fz_owner_attribute_ledger', 'fz_propose_office_money', 'fz_reserve_office_spend') loop
     execute format('revoke all on function %s from fz_jarvis, fz_office_agent, fz_auditor', f);
