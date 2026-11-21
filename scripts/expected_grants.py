@@ -26,7 +26,7 @@ def from_db(url):
     out = subprocess.run(["psql", url, "-At", "-v", "ON_ERROR_STOP=1", "-c", QUERY], capture_output=True, text=True)
     if out.returncode != 0:
         sys.exit(f"expected_grants: cannot query the replica: {out.stderr.strip()[:300]}")
-    return [l for l in out.stdout.splitlines() if l]
+    return sorted(l for l in out.stdout.splitlines() if l)   # sorted here, not by the database: its collation differs between hosts (CI vs local)
 
 
 def from_tsv():
@@ -60,6 +60,8 @@ def main():
         items = from_db(a.url); write(items); print(f"wrote {len(items)} expected grants"); return 0
     tsv, mig = from_tsv(), from_mig()
     bad = 0
+    if tsv != sorted(tsv):
+        print("expected_grants: ops/expected_grants.tsv is not sorted (regenerate with --write)"); bad = 1
     if tsv != mig:
         print("expected_grants: ops/expected_grants.tsv and the migration block differ:", sorted(set(tsv) ^ set(mig))[:20]); bad = 1
     if a.url:
