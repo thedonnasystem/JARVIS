@@ -237,6 +237,7 @@ function	fz_money_attribution_guard()	-	-	execute	security_definer	trigger funct
 function	fz_money_do_allocate(text,integer,text,uuid)	-	-	execute	security_definer		-
 function	fz_money_do_clawback(text,integer,text,uuid)	-	-	execute	security_definer		-
 function	fz_money_do_reinvest(text,integer)	-	-	execute	security_definer		-
+function	fz_money_mark_office_allow(uuid,uuid,text)	-	-	execute	security_definer		-
 function	fz_money_office(text)	-	-	execute	security_definer		-
 function	fz_money_owner_only()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	fz_money_proposal_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-

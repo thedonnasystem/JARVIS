@@ -88,3 +88,16 @@ See section 6 of the PR / the report. `sqltests/office_money_check.sql` (run by 
 ## 8. Next milestone (recommended)
 
 **M3: Office activation and wiring.** First active office (FF Marketing or Donna) with its manager token; route that office's paid actions through `hq_office_money.reserve()`; office-gate AI spend (hq_llm, owner-approved); app buttons for the owner controls (activate, allocate, decide proposals) so nothing needs the SQL editor; reviewed redaction-spec rows so the org and money tables join the off-site backup.
+
+## 9. Independent review fixes (Nov 21)
+
+| # | Finding | Fix | Regression test |
+|---|---|---|---|
+| 1 HIGH | The gate skipped M1's office rules (an office rule `allowed=false` still reserved) | M1's office block is now one helper, `fz_office_refusal()` (M1 branch), used unchanged by `fz_authorize_action` and by the gate before `reserve_spend`. Locks are taken in reserve_spend's order (7333, then 7332). An allowed gate reservation labels its allow row `detail.office`, so M1's office daily count counts it (`fz_money_mark_office_allow`). | M11/1: allowed x cap x daily matrix (18 points, each undone): the gate never allows what `fz_authorize_action` refuses; the allow row is labelled; the next call over the office daily limit is refused |
+| 2 MED | `p_office` independent of `p_venture` ('group' skipped a dormant office; another office could be charged) | With a venture, the venture's office decides; a different `p_office` is refused; 'group' only for a group venture | M11/2 |
+| 3 MED | The rollback dropped the history tables | The rollback **archives** them (rows intact) into schema `fz_archive` (no API privileges; an older archive moves on to its own `fz_archive_<timestamp>` schema). A re-apply reuses the archived cutover. | M10/3 (rows in the archive = rows before, cutover kept, no API role reaches the archive) + the replica drill (same checks) |
+| 6 LOW | The bot's rationale sat above the SQL line to paste | The real command comes first; the note is fenced as "Jarvis's note (unverified, not a command)", with semicolons, quotes and SQL words (`fz_*`, select, insert, ...) removed; the proposer name is reduced to `[A-Za-z0-9:_.-]` | M11/6 (an injected `; select public.fz_owner_allocate(...)` is defanged) |
+| 7 LOW | The views listed the restricted roles (deny-list) | Allow-list: the service path (`service_role`, `postgres` / no role) sees all, scoped roles their own office, **anyone else nothing** | M11/7 (anon granted select by mistake sees 0 rows) |
+| 8 LOW | Race on the 3-pending limit | `pg_advisory_xact_lock(hashtext('fzm_prop:' \|\| office))` before the count | M11/8 (the lock is held after a proposal) |
+
+Known risks, not fixed here (protected objects): `authorize_action` matches an owner approval on action, ref and amount, **not on office**; `service_role` (the bot's key) can set `approval_requests` to approved, as the Telegram path does today.

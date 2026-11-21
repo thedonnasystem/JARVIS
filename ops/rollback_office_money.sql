@@ -4,9 +4,9 @@
 -- What it does, in order:
 --   0. keeps the record: every allocation, reinvestment rule, proposal and owner / gate attribution, the attribution counts and the office balances go into ONE audit_log
 --      row (audit history is never dropped); unschedules the stamp job;
---   1. drops the two views, the fz money functions and the five fz money tables, and their rows in the M1 table registry;
+--   1. drops the two views and the fz money functions; ARCHIVES the five fz money tables (rows intact) into schema fz_archive; removes their rows in the M1 registry;
 --   2. restores backup_classification() INLINE to the exact 20261127_org_access_v1 text.
--- DESTRUCTIVE only for what M2 added (office allocations, rules, proposals, attribution: virtual accounting, no money). Nothing else is touched: the ledger, model calls,
+-- Deletes no history: the allocation / proposal / attribution / cutover rows stay in fz_archive (owner only). Only code (views, functions, triggers) is dropped. Nothing else is touched: the ledger, model calls,
 -- reservations, capital policy, action policy, approvals, the kill switch and mode were never changed by M2 (no trigger was ever added to them).
 -- Must run BEFORE ops/rollback_org_access.sql (M2 depends on M1's offices).
 \if :{?fz_in_txn}
@@ -38,10 +38,34 @@ drop function if exists public.fz_reserve_office_spend(text, text, text, text, t
   public.fz_owner_decide_office_proposal(uuid, boolean, text), public.fz_owner_set_reinvest(text, integer), public.fz_owner_clawback(text, integer, text),
   public.fz_owner_allocate(text, integer, text), public.fz_money_do_reinvest(text, integer), public.fz_money_do_clawback(text, integer, text, uuid),
   public.fz_money_do_allocate(text, integer, text, uuid), public.fz_money_office(text), public.fz_money_require_owner(), public.fz_money_report(),
-  public.fz_unallocated_cents(), public.fz_office_available_cents(uuid), public.fz_money_stamp();
+  public.fz_unallocated_cents(), public.fz_office_available_cents(uuid), public.fz_money_stamp(), public.fz_money_mark_office_allow(uuid, uuid, text);
 drop function if exists public.fz_office_money_row(uuid);   -- name used before the backup-drill fix (never released)
 drop view if exists public.fz_office_allocation_log, public.fz_office_money;
-drop table if exists public.fz_money_attribution, public.fz_office_money_proposals, public.fz_office_money_policy, public.fz_office_allocations, public.fz_money_config;
+-- review fix 3: the five tables are HISTORY (allocations, proposals, decisions, attribution, the cutover): they are ARCHIVED, never dropped. They move, rows intact, into
+-- schema fz_archive (no API role has any privilege on it; it is outside the public schema the API, the backup export and the registry look at). A table already archived
+-- by an earlier rollback moves on to its own dated schema fz_archive_<timestamp> (also without API privileges). Re-applying the migration reuses the archived cutover (attribution keeps its start date).
+do $$
+declare t text; tr record; v_suffix text := to_char(clock_timestamp(), 'YYYYMMDDHH24MISSUS');
+begin
+  create schema if not exists fz_archive;
+  revoke all on schema fz_archive from public;
+  execute 'revoke all on schema fz_archive from anon, authenticated, service_role';
+  if exists (select 1 from pg_roles where rolname = 'fz_jarvis') then execute 'revoke all on schema fz_archive from fz_jarvis, fz_office_agent, fz_auditor'; end if;
+  foreach t in array array['fz_money_attribution', 'fz_office_money_proposals', 'fz_office_money_policy', 'fz_office_allocations', 'fz_money_config'] loop
+    continue when to_regclass('public.' || t) is null;
+    for tr in select tgname from pg_trigger where tgrelid = ('public.' || t)::regclass and not tgisinternal loop   -- the guards belong to M2 / M1 functions that go away
+      execute format('drop trigger %I on public.%I', tr.tgname, t);
+    end loop;
+    execute format('revoke all on public.%I from public, anon, authenticated, service_role', t);
+    if exists (select 1 from pg_roles where rolname = 'fz_jarvis') then execute format('revoke all on public.%I from fz_jarvis, fz_office_agent, fz_auditor', t); end if;
+    if to_regclass('fz_archive.' || t) is not null then             -- an earlier archive of the same table: move it (with its indexes and sequence) to its own dated schema
+      execute format('create schema if not exists %I', 'fz_archive_' || v_suffix);
+      execute format('revoke all on schema %I from public, anon, authenticated, service_role', 'fz_archive_' || v_suffix);
+      execute format('alter table fz_archive.%I set schema %I', t, 'fz_archive_' || v_suffix);
+    end if;
+    execute format('alter table public.%I set schema fz_archive', t);
+  end loop;
+end $$;
 drop function if exists public.fz_money_attribution_guard(), public.fz_money_proposal_guard(), public.fz_money_owner_only();
 -- 2. backup classification: the exact 20261127_org_access_v1 text
 create or replace function public.backup_classification() returns table (table_name text, data_class text, note text)

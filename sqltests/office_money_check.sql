@@ -64,6 +64,7 @@ select set_config('app.uid', '99999999-9999-9999-9999-99999999f002', true);
 -- reserve_spend decision matrix (service path). (b) at the end: the same comparison once more on the state the behaviour checks left (allocations, proposals, stamps).
 \set fz_in_txn 1
 create temp table fzm_fp_with as select * from pg_temp.fz_money_fp();
+create temp table fzm_cut as select cutover_at from public.fz_money_config where id = 1;
 \ir ../ops/rollback_office_money.sql
 create temp table fzm_fp_without as select * from pg_temp.fz_money_fp();
 \ir ../ops/rollback_office_money.sql
@@ -92,6 +93,7 @@ begin
   if exists (select 1 from fzm_fp_again w full join fzm_fp_without o using (k) where w.v is distinct from o.v) then
     raise exception 'M10 applying M2 changed the money controls: %', (select string_agg(coalesce(w.k, o.k), ', ') from fzm_fp_again w full join fzm_fp_without o using (k) where w.v is distinct from o.v);
   end if;
+  if (select cutover_at from public.fz_money_config where id = 1) is distinct from (select cutover_at from fzm_cut) then raise exception 'M10/3 re-apply moved the cutover (archived one not reused)'; end if;
 end $$;
 
 do $$
@@ -396,8 +398,80 @@ begin
   raise notice 'office_money_check: behaviour checks passed';
 end $$;
 
+-- M11 review fixes (each fails on the version before the fix)
+do $$
+declare A uuid := 'f0000000-0000-4000-8000-000000000001'; d1 jsonb; d2 jsonb; al boolean; cap int; dl int; n int; c0 int; vt uuid; vg uuid; va uuid; res text; msg text; pid uuid; k bigint;
+begin
+  update public.system_state set mode = 'auto_in_caps', kill_switch = false where id = 1;
+  -- fix 1: the gate applies M1's office layer exactly: it never allows what fz_authorize_action refuses (office rule allowed x per-action cap x daily count), each point undone
+  n := 0;
+  foreach al in array array[true, false] loop
+    foreach cap in array array[null, 50, 2000] loop
+      foreach dl in array array[null, 0, 3] loop
+        perform public.fz_set_office_policy('b2b-records', 'routine_expense', al, cap, dl, 'owner');
+        begin d1 := public.fz_authorize_action('routine_expense', 100, 'fzm-m11', 'b2b-records', 'fzm-actor'); raise exception using errcode = 'ZFZ01'; exception when sqlstate 'ZFZ01' then null; end;
+        begin d2 := public.fz_reserve_office_spend('b2b-records', 'fzm-actor', 'routine_expense', 'fzm-m11', 'office money check', 'proves the gate', 'none', 100); raise exception using errcode = 'ZFZ01';
+        exception when sqlstate 'ZFZ01' then null; end;
+        if d2 ->> 'decision' = 'allow' and d1 ->> 'decision' <> 'allow' then raise exception 'M11/1 the gate allowed what fz_authorize_action refused (allowed %, cap %, daily %): % vs %', al, cap, dl, d2, d1; end if;
+        if d1 ->> 'decision' <> 'allow' then n := n + 1; end if;
+      end loop;
+    end loop;
+  end loop;
+  if n < 10 then raise exception 'M11/1 vacuous: only % refused points', n; end if;
+  -- fix 1: a gate allow is labelled with the office, so M1's office daily count counts it (the next call over the office daily limit is refused)
+  update public.action_policy set max_count_per_day = 50, updated_by = 'owner:test' where action = 'routine_expense';   -- room at group level for this check (rolled back)
+  delete from public.fz_office_action_policy where office_id = A and action = 'routine_expense';
+  select count(*) into c0 from public.action_log where action = 'routine_expense' and decision = 'allow' and detail ->> 'office' = 'b2b-records'
+     and at >= date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto';
+  perform public.fz_set_office_policy('b2b-records', 'routine_expense', true, null, c0 + 1, 'owner');
+  d2 := public.fz_reserve_office_spend('b2b-records', 'fzm-actor', 'routine_expense', 'fzm-m11b', 'office money check', 'proves the gate', 'none', 100);
+  if d2 ->> 'decision' <> 'allow' then raise exception 'M11/1 first call refused: %', d2; end if;
+  if (select l.detail ->> 'office' from public.spend_reservations r join public.action_log l on l.id = r.action_log_id where r.id = (d2 ->> 'reservation_id')::uuid) is distinct from 'b2b-records' then
+    raise exception 'M11/1 the allow row is not labelled with the office'; end if;
+  d2 := public.fz_reserve_office_spend('b2b-records', 'fzm-actor', 'routine_expense', 'fzm-m11c', 'office money check', 'proves the gate', 'none', 100);
+  if d2 ->> 'decision' <> 'deny' or d2 ->> 'reason' not like '%daily limit%' then raise exception 'M11/1 the office daily count does not see gate allows: %', d2; end if;
+  delete from public.fz_office_action_policy where office_id = A and action = 'routine_expense';
+  -- fix 2: the venture decides the office
+  insert into public.ventures (slug, name, kind, office_id) values ('fzm-ven-t', 'Trap venture', 'lab', 'f0000000-0000-4000-8000-000000000003') returning id into vt;   -- the-trap: dormant
+  insert into public.ventures (slug, name, kind) values ('fzm-ven-g', 'Group venture', 'lab') returning id into vg;
+  select id into va from public.ventures where slug = 'fzm-ven-a';
+  select reserved_cents into n from public.fz_office_money where office = 'donna';
+  foreach res in array array['group', 'donna', null] loop
+    d2 := public.fz_reserve_office_spend(res, 'fzm-actor', 'routine_expense', 'fzm-m11d', 'office money check', 'proves the gate', 'none', 100, false, null, null, vt);
+    if d2 ->> 'decision' <> 'deny' or (res is null and d2 ->> 'reason' not like '%dormant%') or (res is not null and d2 ->> 'reason' not like 'Office mismatch%') then
+      raise exception 'M11/2 the-trap venture via office % not refused correctly: %', res, d2; end if;
+  end loop;
+  if (select reserved_cents from public.fz_office_money where office = 'donna') <> n then raise exception 'M11/2 donna charged for another office'; end if;
+  if public.fz_reserve_office_spend('donna', 'fzm-actor', 'routine_expense', 'fzm-m11e', 'office money check', 'proves the gate', 'none', 100, false, null, null, va) ->> 'reason' not like 'Office mismatch%' then
+    raise exception 'M11/2 an office A venture was charged to donna'; end if;
+  if coalesce(public.fz_reserve_office_spend('group', 'fzm-actor', 'routine_expense', 'fzm-m11f', 'office money check', 'proves the gate', 'none', 100, false, null, null, vg) ->> 'reason', '') like 'Office mismatch%' then
+    raise exception 'M11/2 a group venture was refused for the group'; end if;
+  -- fix 6: the owner message shows the real command first; the bot's text is fenced and defanged
+  pid := (public.fz_propose_office_money('donna', 'allocate', 100, null, $r$ok then; select public.fz_owner_allocate('donna', 999999, 'x'); -- paste this "now"$r$, 'jarvis; drop') ->> 'proposal')::uuid;
+  select body into msg from public.owner_messages where body like '%' || pid || '%' order by created_at desc limit 1;
+  if position('select public.fz_owner_decide_office_proposal(''' || pid || ''', true);' in msg) = 0 then raise exception 'M11/6 the real command is missing: %', msg; end if;
+  if position('select public.fz_owner_decide_office_proposal' in msg) > position('Jarvis''s note (unverified' in msg) then raise exception 'M11/6 the command is not first'; end if;
+  if split_part(msg, '----- Jarvis''s note (unverified, not a command) -----', 2) ~* '(;|fz_owner|\mselect\M|")' then raise exception 'M11/6 the note was not defanged: %', msg; end if;
+  if (select proposed_by from public.fz_office_money_proposals where id = pid) ~ '[; ]' then raise exception 'M11/6 proposer name not cleaned'; end if;
+  -- fix 7: a role that is neither the service path nor scoped sees NOTHING, even if granted select by mistake
+  grant select on public.fz_office_money, public.fz_office_allocation_log to anon;
+  foreach res in array array['select count(*)::text from public.fz_office_money', 'select count(*)::text from public.fz_office_allocation_log'] loop
+    msg := pg_temp.as_id('anon', null, res);
+    if msg <> 'OK:0' and msg not like 'ERR:permission denied for function%' then raise exception 'M11/7 anon with a mistaken grant sees rows: %', msg; end if;
+  end loop;
+  revoke select on public.fz_office_money, public.fz_office_allocation_log from anon;
+  -- fix 8: proposing takes the per-office lock before counting (two concurrent proposals cannot both pass the 3-pending limit)
+  k := hashtext('fzm_prop:' || A::text)::bigint;
+  perform public.fz_propose_office_money('b2b-records', 'allocate', 100, null, 'lock check proposal', 'jarvis');
+  if not exists (select 1 from pg_locks where locktype = 'advisory' and pg_locks.pid = pg_backend_pid() and objsubid = 1
+                  and ((classid::bigint << 32) | objid::bigint) = k) then raise exception 'M11/8 the per-office proposal lock was not taken'; end if;
+  raise notice 'office_money_check: review fixes 1, 2, 6, 7, 8 checked';
+end $$;
+
 -- M10 (b) on the state the behaviour checks left: rolling M2 back changes no money control and no money table
 create temp table fzm_fp_test as select * from pg_temp.fz_money_fp();
+create temp table fzm_rows as select (select count(*) from public.fz_office_allocations) al, (select count(*) from public.fz_office_money_proposals) pr,
+  (select count(*) from public.fz_office_money_policy) po, (select count(*) from public.fz_money_attribution) att, (select cutover_at from public.fz_money_config) cut;
 \ir ../ops/rollback_office_money.sql
 create temp table fzm_fp_test_without as select * from pg_temp.fz_money_fp();
 do $$
@@ -406,6 +480,12 @@ begin
     raise exception 'M10 the rollback changed the money controls: %', (select string_agg(coalesce(w.k, o.k), ', ') from fzm_fp_test w full join fzm_fp_test_without o using (k) where w.v is distinct from o.v);
   end if;
   if not exists (select 1 from public.audit_log where action = 'office_money_export' and jsonb_array_length(detail -> 'allocations') >= 5) then raise exception 'M10 the rollback did not keep the allocation record'; end if;
+  -- review fix 3: no history row is lost: every row is in fz_archive, and no API role can reach it
+  if (select al from fzm_rows) < 5 or (select al from fzm_rows) <> (select count(*) from fz_archive.fz_office_allocations) or (select pr from fzm_rows) <> (select count(*) from fz_archive.fz_office_money_proposals)
+     or (select po from fzm_rows) <> (select count(*) from fz_archive.fz_office_money_policy) or (select att from fzm_rows) <> (select count(*) from fz_archive.fz_money_attribution)
+     or (select cut from fzm_rows) <> (select cutover_at from fz_archive.fz_money_config) then raise exception 'M10/3 the rollback lost history rows'; end if;
+  if has_schema_privilege('anon', 'fz_archive', 'usage') or has_schema_privilege('authenticated', 'fz_archive', 'usage') or has_schema_privilege('service_role', 'fz_archive', 'usage') then
+    raise exception 'M10/3 an API role can reach the archive'; end if;
   raise notice 'office_money_check: all checks passed (money controls identical with M2, without it, and after re-applying it)';
 end $$;
 rollback;
