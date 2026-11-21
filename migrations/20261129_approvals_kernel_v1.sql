@@ -104,7 +104,7 @@ create trigger fz_office_money_proposals_audit after update on public.fz_office_
 create or replace function public.fz_prepare_office_payment(p_actor text, p_payee text, p_cents integer, p_purpose text, p_alternatives text,
                                                             p_due date default null, p_venture_slug text default null) returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare o public.fz_offices; v_avail bigint; v_reason text; v_cents int := coalesce(p_cents, 0); res jsonb;
+declare o public.fz_offices; v_avail bigint; v_reason text; v_cents int := coalesce(p_cents, 0); res jsonb; v_res uuid;
 begin
   if coalesce(nullif(current_setting('role', true), ''), 'none') in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
     raise exception 'the office payment gate is service-path only' using errcode = '42501';
@@ -133,7 +133,11 @@ begin
   end if;
   res := public.prepare_payment(p_actor, p_payee, p_cents, p_purpose, p_alternatives, p_due, p_venture_slug);
   if o.id is not null and res ->> 'decision' = 'allow' then                -- stamp the reservation to the office and label its allow row (the office daily count counts it)
-    perform public.fz_money_mark_office_allow((select reservation_id from public.payment_instructions where id = (res ->> 'instruction_id')::uuid), o.id, p_actor);
+    -- inline (second review N1: no separately callable definer helper)
+    select reservation_id into v_res from public.payment_instructions where id = (res ->> 'instruction_id')::uuid;
+    insert into public.fz_money_attribution (source, source_id, office_id, how, by) values ('reservation', v_res, o.id, 'office_gate', left(coalesce(p_actor, ''), 60)) on conflict do nothing;
+    update public.action_log l set detail = coalesce(l.detail, '{}'::jsonb) || jsonb_build_object('office', o.slug, 'layer', 'office_gate')
+     where l.id = (select r.action_log_id from public.spend_reservations r where r.id = v_res) and l.decision = 'allow';
   end if;
   return res || jsonb_build_object('office', coalesce(o.slug, 'group'));
 end $$;
