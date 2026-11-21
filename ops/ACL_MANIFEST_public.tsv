@@ -256,7 +256,10 @@ function	fz_owner_set_office_status(text,text)	-	-	execute	security_definer		-
 function	fz_owner_set_reinvest(text,integer)	-	-	execute	security_definer		-
 function	fz_owner_set_workspace_office(uuid,text)	-	-	execute	security_definer		-
 function	fz_policy_preview(text,integer)	-	-	execute	security_definer		-
+function	fz_prepare_office_payment(text,text,integer,text,text,date,text)	-	-	execute	security_definer		-
 function	fz_propose_office_money(text,text,integer,integer,text,text)	-	-	execute	security_definer		-
+function	fz_queue_audit_proposal()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	fz_queue_expire(integer)	-	-	execute	security_definer		-
 function	fz_readable_offices(text)	-	-	execute	security_definer		-
 function	fz_readable_workspaces(text)	-	-	execute	security_definer		-
 function	fz_reseed_decisions()	-	-	execute	security_definer		-
@@ -577,6 +580,7 @@ table	ws_place_catalog	-	-	select	rls=true		-
 view	agent_scorecard	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 view	ffm_funnel_v	-	-	select	rls=false		-
 view	ffm_spend_v	-	-	select	rls=false		-
+view	fz_approval_queue	-	-	select	rls=false		-
 view	fz_office_allocation_log	-	-	select	rls=false		-
 view	fz_office_money	-	-	select	rls=false		-
 view	setter_standing	-	-	delete,insert,references,select,trigger,truncate,update	rls=false		-
