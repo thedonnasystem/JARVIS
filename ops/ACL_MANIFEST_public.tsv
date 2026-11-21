@@ -230,6 +230,10 @@ function	forbid_policy_delete()	-	-	execute	invoker	trigger function: cannot be 
 function	forecast_bias_text()	-	-	execute	invoker		-
 function	fz_agent_in_office(text,uuid)	-	-	execute	security_definer		-
 function	fz_append_only()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	fz_audit_chain_extend(integer)	-	-	execute	security_definer		-
+function	fz_audit_link(text,text)	-	-	execute	invoker		-
+function	fz_audit_row_hash(bigint,timestamp with time zone,text,text,text,jsonb)	-	-	execute	invoker		-
+function	fz_audit_verify()	-	-	execute	security_definer		-
 function	fz_authorize_action(text,integer,text,text,text,uuid,uuid,jsonb)	-	-	execute	security_definer		-
 function	fz_claims()	-	-	execute	invoker		-
 function	fz_identity_now()	-	-	execute	security_definer		-
@@ -247,16 +251,19 @@ function	fz_office_available_cents(uuid)	-	-	execute	security_definer		-
 function	fz_office_policy_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	fz_office_refusal(uuid,text,integer)	-	-	execute	security_definer		-
 function	fz_org_status()	-	-	execute	security_definer		-
+function	fz_owner_ack_security(text)	-	-	execute	security_definer		-
 function	fz_owner_allocate(text,integer,text)	-	-	execute	security_definer		-
 function	fz_owner_attribute_ledger(uuid,text,text)	-	-	execute	security_definer		-
 function	fz_owner_clawback(text,integer,text)	-	-	execute	security_definer		-
 function	fz_owner_decide_office_proposal(uuid,boolean,text)	-	-	execute	security_definer		-
+function	fz_owner_register_token(text,text,timestamp with time zone,text)	-	-	execute	security_definer		-
 function	fz_owner_set_identity(text,text,text,boolean)	-	-	execute	security_definer		-
 function	fz_owner_set_office_status(text,text)	-	-	execute	security_definer		-
 function	fz_owner_set_reinvest(text,integer)	-	-	execute	security_definer		-
 function	fz_owner_set_workspace_office(uuid,text)	-	-	execute	security_definer		-
 function	fz_policy_preview(text,integer)	-	-	execute	security_definer		-
 function	fz_prepare_office_payment(text,text,integer,text,text,date,text)	-	-	execute	security_definer		-
+function	fz_privileged_items()	-	-	execute	security_definer		-
 function	fz_propose_office_money(text,text,integer,integer,text,text)	-	-	execute	security_definer		-
 function	fz_queue_audit_proposal()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	fz_queue_expire(integer)	-	-	execute	security_definer		-
@@ -266,6 +273,9 @@ function	fz_reseed_decisions()	-	-	execute	security_definer		-
 function	fz_reseed_preview()	-	-	execute	security_definer		-
 function	fz_reserve_office_spend(text,text,text,text,text,text,text,integer,boolean,integer,integer,uuid,uuid)	-	-	execute	security_definer		-
 function	fz_revoke_identity(text,text)	-	-	execute	security_definer		-
+function	fz_security_alert(text,text,jsonb,text)	-	-	execute	security_definer		-
+function	fz_security_report(integer)	-	-	execute	security_definer		-
+function	fz_security_watch()	-	-	execute	security_definer		-
 function	fz_set_office_policy(text,text,boolean,integer,integer,text)	-	-	execute	security_definer		-
 function	fz_stamp_scoped_write()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	fz_unallocated_cents()	-	-	execute	security_definer		-
@@ -439,8 +449,10 @@ sequence	audit_log_id_seq	-	-	-			-
 sequence	ffm_redaction_epoch_seq	-	-	-			-
 sequence	ffm_restore_markers_id_seq	-	-	-			-
 sequence	ffm_run_receipts_id_seq	-	-	-			-
+sequence	fz_audit_chain_seq_seq	-	-	-			-
 sequence	fz_office_allocations_id_seq	-	-	-			-
 sequence	fz_org_archive_id_seq	-	-	-			-
+sequence	fz_security_alerts_id_seq	-	-	-			-
 sequence	jarvis_agent_wakes_id_seq	-	-	-			-
 sequence	jarvis_call_log_id_seq	-	-	-			-
 sequence	jarvis_changelog_id_seq	-	-	-			-
@@ -507,6 +519,7 @@ table	ffm_secrets	-	-	-	rls=true		-
 table	ffm_sender_mark	-	-	select	rls=true		-
 table	ffm_suppression_expected	-	-	-	rls=true		-
 table	ffm_suppression_hashes	-	-	-	rls=true		-
+table	fz_audit_chain	-	-	select	rls=true		-
 table	fz_identities	-	-	select	rls=true		-
 table	fz_money_attribution	-	-	select	rls=true		-
 table	fz_money_config	-	-	select	rls=true		-
@@ -516,7 +529,10 @@ table	fz_office_money_policy	-	-	select	rls=true		-
 table	fz_office_money_proposals	-	-	select	rls=true		-
 table	fz_offices	-	-	select	rls=true		-
 table	fz_org_archive	-	-	select	rls=true		-
+table	fz_security_alerts	-	-	select	rls=true		-
+table	fz_security_baseline	-	-	select	rls=true		-
 table	fz_table_registry	-	-	select	rls=true		-
+table	fz_token_registry	-	-	select	rls=true		-
 table	fz_workspace_offices	-	-	select	rls=true		-
 table	hand_accounts	-	-	select	rls=true		-
 table	hand_actions	-	-	select	rls=true		-
