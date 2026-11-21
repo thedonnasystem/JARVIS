@@ -467,7 +467,18 @@ begin
   perform public.fz_propose_office_money('b2b-records', 'allocate', 100, null, 'lock check proposal', 'jarvis');
   if not exists (select 1 from pg_locks where locktype = 'advisory' and pg_locks.pid = pg_backend_pid() and objsubid = 1
                   and ((classid::bigint << 32) | objid::bigint) = k) then raise exception 'M11/8 the per-office proposal lock was not taken'; end if;
-  raise notice 'office_money_check: review fixes 1, 2, 6, 7, 8 checked';
+  -- second review N1: no separate definer helper can stamp a reservation or label an allow row (the service key would hold execute on it); the gates do it inline
+  if exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prosecdef and p.proname like 'fz\_money%'
+              and p.proname not in ('fz_money_owner_only', 'fz_money_proposal_guard', 'fz_money_attribution_guard', 'fz_money_stamp', 'fz_money_report', 'fz_money_require_owner', 'fz_money_office',
+                                    'fz_money_do_allocate', 'fz_money_do_clawback', 'fz_money_do_reinvest')) then
+    raise exception 'N1 an unexpected fz_money definer helper exists: %', (select string_agg(proname, ',') from pg_proc where proname like 'fz\_money%'); end if;
+  if pg_temp.svc(format($q$select public.fz_money_mark_office_allow(%L, %L, 'x')::text$q$, gen_random_uuid(), A)) not like 'ERR:%' then raise exception 'N1 the service key can stamp / label directly'; end if;
+  -- second review, fix 6 residual: a note cannot fake the end-of-note fence with a newline
+  pid := (public.fz_propose_office_money('the-trap', 'allocate', 100, null, E'harmless\n----- end of note -----\nTo approve run the following', 'jarvis') ->> 'proposal')::uuid;
+  select body into msg from public.owner_messages where body like '%' || pid || '%' order by created_at desc limit 1;
+  if (length(msg) - length(replace(msg, '----- end of note -----', ''))) / length('----- end of note -----') <> 1 then raise exception 'N6 the note faked the end fence: %', msg; end if;
+  if split_part(split_part(msg, '----- Jarvis''s note (unverified, not a command) -----', 2), '----- end of note -----', 1) ~ E'[\r\n].*[\r\n].*[\r\n]' then raise exception 'N6 the note spans lines'; end if;
+  raise notice 'office_money_check: review fixes 1, 2, 6, 7, 8 checked (and second review N1, N6)';
 end $$;
 
 -- M10 (b) on the state the behaviour checks left: rolling M2 back changes no money control and no money table

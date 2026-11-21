@@ -38,7 +38,8 @@ drop function if exists public.fz_reserve_office_spend(text, text, text, text, t
   public.fz_owner_decide_office_proposal(uuid, boolean, text), public.fz_owner_set_reinvest(text, integer), public.fz_owner_clawback(text, integer, text),
   public.fz_owner_allocate(text, integer, text), public.fz_money_do_reinvest(text, integer), public.fz_money_do_clawback(text, integer, text, uuid),
   public.fz_money_do_allocate(text, integer, text, uuid), public.fz_money_office(text), public.fz_money_require_owner(), public.fz_money_report(),
-  public.fz_unallocated_cents(), public.fz_office_available_cents(uuid), public.fz_money_stamp(), public.fz_money_mark_office_allow(uuid, uuid, text);
+  public.fz_unallocated_cents(), public.fz_office_available_cents(uuid), public.fz_money_stamp();
+drop function if exists public.fz_money_mark_office_allow(uuid, uuid, text);   -- an earlier (never released) helper name
 drop function if exists public.fz_office_money_row(uuid);   -- name used before the backup-drill fix (never released)
 drop view if exists public.fz_office_allocation_log, public.fz_office_money;
 -- review fix 3: the five tables are HISTORY (allocations, proposals, decisions, attribution, the cutover): they are ARCHIVED, never dropped. They move, rows intact, into

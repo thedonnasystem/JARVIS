@@ -13799,6 +13799,7 @@ begin
   -- review fix 6: the real command comes FIRST; the bot's text is fenced below it as an unverified note, with semicolons, quotes and SQL words removed, so it cannot
   -- pass for a command to paste
   v_note := regexp_replace(left(btrim(p_rationale), 600), '[;`''"\\$]', '', 'g');
+  v_note := regexp_replace(regexp_replace(v_note, '[[:cntrl:]]+', ' ', 'g'), '-{2,}', '-', 'g');   -- second review: one line, no dash runs: the note cannot fake a fence
   v_note := regexp_replace(v_note, '(fz_[A-Za-z0-9_]*|\m(select|insert|update|delete|drop|grant|revoke|alter|create|truncate|begin|commit|rollback|set_config|execute|call|do)\M)', '[removed]', 'gi');
   if exists (select 1 from public.agents where slug = 'jarvis') then
     insert into public.owner_messages (from_agent, kind, channel, body)
@@ -13810,18 +13811,6 @@ begin
 end $$;
 revoke all on function public.fz_propose_office_money(text, text, integer, integer, text, text) from public, anon, authenticated;
 
--- after an allowed reservation through an office gate: stamp the reservation to the office, and label the allow row that reserve_spend() wrote (its action_log_id) with
--- detail.office, so M1's office daily count (fz_office_refusal) counts it like an fz_authorize_action allow. Internal (gates only).
-create or replace function public.fz_money_mark_office_allow(p_reservation uuid, p_office uuid, p_by text) returns void
-language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare v_slug text := (select slug from public.fz_offices where id = p_office);
-begin
-  insert into public.fz_money_attribution (source, source_id, office_id, how, by) values ('reservation', p_reservation, p_office, 'office_gate', left(coalesce(p_by, ''), 60))
-  on conflict do nothing;
-  update public.action_log l set detail = coalesce(l.detail, '{}'::jsonb) || jsonb_build_object('office', v_slug, 'layer', 'office_gate')
-   where l.id = (select r.action_log_id from public.spend_reservations r where r.id = p_reservation) and l.decision = 'allow';
-end $$;
-revoke all on function public.fz_money_mark_office_allow(uuid, uuid, text) from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------------------------------------------------------- the office spend gate
 -- In FRONT of the unchanged reserve_spend(). Office 'group' (or null): reserve_spend() exactly, the reservation stamped to the group. An office:
@@ -13874,7 +13863,13 @@ begin
   end if;
   res := public.reserve_spend(p_actor, p_action, p_vendor, p_purpose, p_expected_benefit, p_alternatives, p_cents, p_recurring, p_monthly_cents, p_days_to_benefit, p_venture, p_mission);
   if res ->> 'decision' = 'allow' and res ? 'reservation_id' then
-    perform public.fz_money_mark_office_allow((res ->> 'reservation_id')::uuid, o.id, p_actor);
+    -- stamp the reservation to the office and label the allow row reserve_spend() wrote (its action_log_id) with detail.office, so M1's office daily count counts it.
+    -- Inline on purpose (second review N1): a separate definer helper would be callable by the service key (the lockdown grants it every function) and could stamp any
+    -- reservation to any office or poison the office counts.
+    insert into public.fz_money_attribution (source, source_id, office_id, how, by) values ('reservation', (res ->> 'reservation_id')::uuid, o.id, 'office_gate', left(coalesce(p_actor, ''), 60))
+    on conflict do nothing;
+    update public.action_log l set detail = coalesce(l.detail, '{}'::jsonb) || jsonb_build_object('office', o.slug, 'layer', 'office_gate')
+     where l.id = (select r.action_log_id from public.spend_reservations r where r.id = (res ->> 'reservation_id')::uuid) and l.decision = 'allow';
   end if;
   return res || jsonb_build_object('office', o.slug);
 end $$;
@@ -13887,7 +13882,7 @@ begin
   for f in select p.oid::regprocedure from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in
              ('fz_money_owner_only', 'fz_money_proposal_guard', 'fz_money_attribution_guard', 'fz_money_stamp', 'fz_office_available_cents', 'fz_unallocated_cents', 'fz_money_report',
               'fz_money_require_owner', 'fz_money_office', 'fz_money_do_allocate', 'fz_money_do_clawback', 'fz_money_do_reinvest', 'fz_owner_allocate', 'fz_owner_clawback',
-              'fz_owner_set_reinvest', 'fz_owner_decide_office_proposal', 'fz_owner_attribute_ledger', 'fz_propose_office_money', 'fz_reserve_office_spend', 'fz_money_mark_office_allow') loop
+              'fz_owner_set_reinvest', 'fz_owner_decide_office_proposal', 'fz_owner_attribute_ledger', 'fz_propose_office_money', 'fz_reserve_office_spend') loop
     execute format('revoke all on function %s from fz_jarvis, fz_office_agent, fz_auditor', f);
   end loop;
 end $$;
