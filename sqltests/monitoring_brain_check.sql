@@ -72,7 +72,7 @@ begin
 end $$;
 
 do $$
-declare A uuid := 'f0000000-0000-4000-8000-000000000001'; B uuid := 'f0000000-0000-4000-8000-000000000002'; G uuid := 'f0000000-0000-4000-8000-000000000000';
+declare p3 uuid; A uuid := 'f0000000-0000-4000-8000-000000000001'; B uuid := 'f0000000-0000-4000-8000-000000000002'; G uuid := 'f0000000-0000-4000-8000-000000000000';
         r jsonb; r2 jsonb; res text; ca jsonb; cb jsonb; cj jsonb; fa uuid; fa2 uuid; fb uuid; fg uuid; p uuid; p2 uuid; n int; n2 int; h text;
 begin
   -- H2 health report: every check present, statuses valid, read-only; scoped roles refused
@@ -87,6 +87,15 @@ begin
   delete from public.fz_health_state;
   alter table public.fz_health_alerts disable trigger fz_health_alerts_append_only; delete from public.fz_health_alerts; alter table public.fz_health_alerts enable trigger fz_health_alerts_append_only;
   if (r ->> 'alerts_enabled')::boolean then raise exception 'H2 alerts must default OFF'; end if;
+  -- review LOW 4: the AI cap day is the Toronto day (as reserve_llm_budget), not the UTC day. A call between the two boundaries tells them apart.
+  perform set_config('TimeZone', 'UTC', true);                            -- as on Supabase (the scratch server may run in Toronto time, which would hide the bug)
+  insert into public.llm_calls (agent_slug, model, purpose, reserved_cents, actual_cents, status, started_at)
+    values ((select slug from public.agents order by slug limit 1), 'test-model', 'fzh toronto day', 777, 777, 'done',
+            greatest(date_trunc('day', now()), date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto') - interval '1 minute');
+  if (select (c ->> 'used_cents')::bigint from jsonb_array_elements(public.fz_health_report() -> 'checks') c where c ->> 'check' = 'ai_cap_day')
+     <> (select coalesce(sum(coalesce(actual_cents, reserved_cents, 0)), 0) from public.llm_calls where status in ('reserved', 'done')
+          and started_at >= (date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto')) then raise exception 'H2/4 the AI cap day is not the Toronto day'; end if;
+  perform set_config('TimeZone', 'America/Toronto', true);
   -- the kill switch is reflected (read only; the test flips it in-transaction)
   update public.system_state set kill_switch = true where id = 1;
   if (select c ->> 'status' from jsonb_array_elements(public.fz_health_report() -> 'checks') c where c ->> 'check' = 'kill_switch') <> 'warn' then raise exception 'H2 kill switch not reported'; end if;
@@ -108,23 +117,43 @@ begin
   alter role service_role nobypassrls;
   perform public.fz_owner_set_health_alerts(true);
   n2 := (select count(*) from public.owner_messages where kind = 'health');
+  -- review LOW 3: a status must hold for 2 consecutive runs before it alerts
+  r := public.fz_health_check();
+  if (r ->> 'alerts_sent')::int <> 0 or exists (select 1 from public.fz_health_alerts) then raise exception 'H3/3 the first run alerted before the status held: %', r; end if;
   r := public.fz_health_check();
   n := (select count(*) from public.fz_health_alerts);
-  if n <> (select count(*) from jsonb_array_elements(public.fz_health_report() -> 'checks') c where c ->> 'status' <> 'ok') then raise exception 'H3 first run must alert exactly the non-ok checks: % %', n, r; end if;
+  if n <> (select count(*) from jsonb_array_elements(public.fz_health_report() -> 'checks') c where c ->> 'status' <> 'ok') then raise exception 'H3 the second run must alert exactly the non-ok checks: % %', n, r; end if;
   if n > 0 and (select count(*) from public.owner_messages where kind = 'health') <> n2 + 1 then raise exception 'H3 one Telegram message per run with changes'; end if;
   r := public.fz_health_check();
   if (r ->> 'alerts_sent')::int <> 0 or (select count(*) from public.fz_health_alerts) <> n then raise exception 'H3 an unchanged status alerted again: %', r; end if;
+  -- a one-run flap never alerts
   update public.system_state set kill_switch = true where id = 1;
   r := public.fz_health_check();
-  if (r ->> 'alerts_sent')::int <> 1 or not exists (select 1 from public.fz_health_alerts where check_key = 'kill_switch' and status = 'warn') then raise exception 'H3 a change was not alerted: %', r; end if;
-  if (public.fz_health_check() ->> 'alerts_sent')::int <> 0 then raise exception 'H3 repeat'; end if;
-  -- a replayed transition (state rolled back to the previous status, e.g. a lost update or a re-run) must not alert twice: the dedupe key is stable
-  update public.fz_health_state set status = 'ok', generation = generation - 1 where check_key = 'kill_switch';
-  if (public.fz_health_check() ->> 'alerts_sent')::int <> 0 then raise exception 'H3/dedupe a replayed transition alerted again'; end if;
   update public.system_state set kill_switch = false where id = 1;
-  if (public.fz_health_check() ->> 'alerts_sent')::int <> 1 then raise exception 'H3 the recovery was not alerted'; end if;
+  r2 := public.fz_health_check();
+  if (r ->> 'alerts_sent')::int + (r2 ->> 'alerts_sent')::int <> 0 or (select pending_status from public.fz_health_state where check_key = 'kill_switch') is not null then
+    raise exception 'H3/3 a one-run flap alerted: % %', r, r2; end if;
+  -- held for 2 runs: one alert
   update public.system_state set kill_switch = true where id = 1;
-  if (public.fz_health_check() ->> 'alerts_sent')::int <> 1 then raise exception 'H3 the second flip must alert again (new generation)'; end if;
+  if (public.fz_health_check() ->> 'alerts_sent')::int <> 0 then raise exception 'H3/3 alerted on the first run of a change'; end if;
+  r := public.fz_health_check();
+  if (r ->> 'alerts_sent')::int <> 1 or not exists (select 1 from public.fz_health_alerts where check_key = 'kill_switch' and status = 'warn') then raise exception 'H3 a held change was not alerted: %', r; end if;
+  if (public.fz_health_check() ->> 'alerts_sent')::int <> 0 then raise exception 'H3 repeat'; end if;
+  -- a replayed transition (state rolled back to the previous status) must not alert twice: the dedupe key is stable
+  update public.fz_health_state set status = 'ok', generation = generation - 1, last_alert_at = null where check_key = 'kill_switch';
+  perform public.fz_health_check();
+  if (public.fz_health_check() ->> 'alerts_sent')::int <> 0 then raise exception 'H3/dedupe a replayed transition alerted again'; end if;
+  -- review LOW 3: at most one alert per check per hour (the recovery within the hour is recorded, not sent)
+  update public.system_state set kill_switch = false where id = 1;
+  update public.fz_health_state set last_alert_at = now() - interval '10 minutes' where check_key = 'kill_switch';
+  perform public.fz_health_check(); r := public.fz_health_check();
+  if (r ->> 'alerts_sent')::int <> 0 or (r ->> 'quiet')::int <> 1 or (select status from public.fz_health_state where check_key = 'kill_switch') <> 'ok' then
+    raise exception 'H3/3 a second alert within the hour: %', r; end if;
+  -- an hour later the next change alerts again (new generation)
+  update public.fz_health_state set last_alert_at = now() - interval '61 minutes' where check_key = 'kill_switch';
+  update public.system_state set kill_switch = true where id = 1;
+  perform public.fz_health_check();
+  if (public.fz_health_check() ->> 'alerts_sent')::int <> 1 then raise exception 'H3 the next change after an hour must alert (new generation)'; end if;
   update public.system_state set kill_switch = false where id = 1;
   if exists (select dedupe_key from public.fz_health_alerts group by 1 having count(*) > 1) then raise exception 'H3 duplicate dedupe keys'; end if;
   begin delete from public.fz_health_alerts; raise exception 'H3 alerts deleted'; exception when others then if sqlerrm like 'H3%' then raise; end if; end;
@@ -152,7 +181,8 @@ begin
   fa := substr(res, 4)::uuid;
   res := pg_temp.as_id('fz_office_agent', cb, 'select public.fz_brain_add(''pricing'', ''Donna office secret fact'', ''notes'', 0.6)::text');
   fb := substr(res, 4)::uuid;
-  fg := public.fz_brain_add('policy', 'Group-wide fact', 'owner', 0.9);
+  fg := public.fz_brain_add('policy', 'Group-wide fact', 'owner', 0.9, '{"url": "https://y.invalid/p?q=alice@example.com#f", "source_id": "alice@example.com", "client_email": "alice@example.com", "kind": "note"}');
+  if (select provenance::text from public.fz_brain_facts where id = fg) ~ '(alice|client_email|[?#])' then raise exception 'H4/2 an owner group fact kept raw provenance: %', (select provenance from public.fz_brain_facts where id = fg); end if;
   if (select office_id from public.fz_brain_facts where id = fa) <> A or (select created_by_office from public.fz_brain_facts where id = fa) <> A then raise exception 'H4 office A fact scope'; end if;
   if pg_temp.svc('select public.fz_brain_add(''t'', ''bot group fact'', ''s'', 0.5)::text') not like 'ERR:%group-wide facts come only from the owner%' then raise exception 'H4 the service key wrote a group fact'; end if;
   res := pg_temp.svc('select public.fz_brain_add(''t'', ''bot fact for donna'', ''s'', 0.5, ''{}'', null, ''jarvis'', ''donna'')::text');
@@ -199,7 +229,7 @@ begin
   insert into public.leads (venture_id, name, email) values ((select id from public.ventures order by created_at limit 1), 'Alice Smith', 'alice@example.com');
   -- H6 promotion: redacted, queued in M3, owner decides; Jarvis only if allowed and not its own; office B cannot propose A's fact; scoped/service cannot decide as owner
   insert into public.fz_brain_facts (office_id, topic, fact, source, confidence, provenance, created_by_office, created_by)
-    values (A, 'collections', 'Call Alice Smith on 416-555-0199 or alice@example.com; she pays late', 'notes', 0.7, '{"kind": "note", "client_email": "alice@example.com", "url": "https://x.invalid/a"}', A, 'test')
+    values (A, 'collections', 'Call Alice Smith on 416-555-0199 or alice@example.com; she pays late', 'notes', 0.7, '{"kind": "note", "client_email": "alice@example.com", "url": "https://x.invalid/a?token=alice@example.com#frag", "source_id": "alice@example.com"}', A, 'test')
     returning id into fa;
   res := pg_temp.as_id('fz_office_agent', cb, format('select public.fz_brain_propose_promotion(%L)::text', fa));
   if res not like 'ERR:%own facts%' then raise exception 'H6 office B proposed office A''s fact: %', res; end if;
@@ -211,6 +241,10 @@ begin
   if (select redaction_level from public.fz_brain_promotions where id = p) <> 'patterns' then raise exception 'H6 a scoped caller cannot have the full redaction'; end if;
   if h like '%Alice%' or h like '%Smith%' then raise exception 'H6 a client name is in the request text: %', h; end if;   -- (outside the backup identity the redaction is the strict pattern level, often [redacted:uncertain])
   if (select redacted_provenance from public.fz_brain_promotions where id = p) ? 'client_email' then raise exception 'H6 a client field was promoted'; end if;
+  -- review MED 2: provenance values are redacted, URLs lose query string and fragment
+  if (select redacted_provenance::text from public.fz_brain_promotions where id = p) ~ '(alice|token|frag|[?#])' then
+    raise exception 'H6/2 provenance values leak: %', (select redacted_provenance from public.fz_brain_promotions where id = p); end if;
+  if (select requested_by || '/' || requested_via from public.fz_brain_promotions where id = p) <> 'office:b2b-records:manager/scoped' then raise exception 'H6/1 the requester is not the caller identity'; end if;
   if not exists (select 1 from public.fz_approval_queue where request_type = 'brain_promotion' and source_id = p and status = 'pending' and office = 'b2b-records') then raise exception 'H6 not in the M3 queue'; end if;
   res := pg_temp.as_id('fz_office_agent', cb, format('select count(*) from public.fz_approval_queue where source_id = %L', p));
   if res <> 'OK:0' then raise exception 'H6 office B sees office A''s queue item: %', res; end if;
@@ -236,6 +270,13 @@ begin
   -- Jarvis: only with the owner setting, never its own request
   insert into public.fz_brain_facts (office_id, topic, fact, source, confidence, created_by_office, created_by) values (A, 't2', 'second fact', 's', 0.5, A, 'test') returning id into fa;
   p := public.fz_brain_propose_promotion(fa, 'jarvis');
+  -- review MED 1: the service key cannot pass itself off as an office (p_by is not trusted): its request is Jarvis-side and Jarvis may not decide it
+  insert into public.fz_brain_facts (office_id, topic, fact, source, confidence, created_by_office, created_by) values (A, 't3', 'third fact', 's', 0.5, A, 'test') returning id into fb;
+  res := pg_temp.svc(format('select public.fz_brain_propose_promotion(%L, ''office:b2b-records:manager'')::text', fb));
+  if res not like 'OK:%' then raise exception 'H6/1 service propose: %', res; end if;
+  p3 := substr(res, 4)::uuid;
+  if (select requested_by || '/' || requested_via from public.fz_brain_promotions where id = p3) <> 'jarvis/service' then
+    raise exception 'H6/1 the service key chose its requester: %', (select requested_by || '/' || requested_via from public.fz_brain_promotions where id = p3); end if;
   res := pg_temp.as_id('fz_office_agent', ca, format('select public.fz_brain_propose_promotion(%L, ''office:b2b-records:manager'')::text', fa2));   -- pattern-level redaction only
   p2 := substr(res, 4)::uuid;
   perform public.fz_owner_set_brain_jarvis_approval(true);
@@ -245,6 +286,7 @@ begin
   if (select redaction_level from public.fz_brain_promotions where id = p2) <> 'full' then raise exception 'H6 full pass'; end if;
   begin update public.fz_brain_promotions set redaction_level = 'patterns' where id = p2; raise exception 'H6 redaction weakened'; exception when insufficient_privilege then null; end;
   if pg_temp.svc(format('select public.fz_jarvis_decide_brain_promotion(%L, true)::text', p)) not like 'ERR:%its own request%' then raise exception 'H6 Jarvis approved its own request'; end if;
+  if pg_temp.svc(format('select public.fz_jarvis_decide_brain_promotion(%L, true)::text', p3)) not like 'ERR:%its own request%' then raise exception 'H6/1 Jarvis approved a service-path request labelled as an office'; end if;
   res := pg_temp.svc(format('select public.fz_jarvis_decide_brain_promotion(%L, false)::text', p2));
   if res not like 'OK:%rejected%' or (select decided_by from public.fz_brain_promotions where id = p2) <> 'jarvis' then raise exception 'H6 Jarvis (allowed) could not decide an office request: %', res; end if;
   perform public.fz_owner_set_brain_jarvis_approval(false);

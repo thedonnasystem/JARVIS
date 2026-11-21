@@ -32,7 +32,10 @@ create table if not exists public.fz_health_state (                     -- last 
   generation int not null default 1,
   detail jsonb not null default '{}',
   changed_at timestamptz not null default now(),
-  seen_at timestamptz not null default now()
+  seen_at timestamptz not null default now(),
+  pending_status text check (pending_status in ('ok', 'warn', 'bad')),   -- review LOW 3: a new status must hold for 2 consecutive runs
+  pending_runs int not null default 0,
+  last_alert_at timestamptz                                              -- review LOW 3: at most one alert per check per hour
 );
 create table if not exists public.fz_health_alerts (                    -- append-only
   id bigint generated always as identity primary key,
@@ -72,7 +75,8 @@ create table if not exists public.fz_brain_promotions (
   redacted_fact text not null,
   redacted_provenance jsonb not null default '{}',
   redaction_level text not null default 'patterns' check (redaction_level in ('patterns', 'full')),   -- full = with the client-name context (owner session / scheduler)
-  requested_by text not null,
+  requested_by text not null,                                            -- review MED 1: derived from the caller's role, never from a parameter
+  requested_via text not null default 'service' check (requested_via in ('service', 'scoped', 'owner')),
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected', 'expired')),
   created_at timestamptz not null default now(),
   expires_at timestamptz not null default now() + interval '7 days',
@@ -163,8 +167,8 @@ begin
   end if;
   if tg_op = 'UPDATE' then
     if old.status <> 'pending' then raise exception 'a promotion request is decided once' using errcode = '42501'; end if;
-    if (new.fact_id, new.office_id, new.redacted_provenance, new.requested_by, new.created_at, new.expires_at)
-       is distinct from (old.fact_id, old.office_id, old.redacted_provenance, old.requested_by, old.created_at, old.expires_at)
+    if (new.fact_id, new.office_id, new.redacted_provenance, new.requested_by, new.requested_via, new.created_at, new.expires_at)
+       is distinct from (old.fact_id, old.office_id, old.redacted_provenance, old.requested_by, old.requested_via, old.created_at, old.expires_at)
        or (old.redaction_level = 'full' and new.redaction_level <> 'full')                            -- never back to the weaker redaction
        or ((new.redacted_topic, new.redacted_fact) is distinct from (old.redacted_topic, old.redacted_fact)
            and not (old.redaction_level = 'patterns' and new.redaction_level = 'full' and new.status = 'pending')) then
@@ -206,8 +210,10 @@ begin
   select * into st from public.system_state where id = 1;
   cap := public.capital_snapshot();
   v_day_cap := coalesce(st.daily_spend_cap_cents, 0);                   -- the company daily AI cap (enforced by reserve_llm_budget; only read here)
+  if cap ->> 'mode' = 'low_cost' then v_day_cap := least(v_day_cap, coalesce((select low_cost_ai_cap_cents from public.capital_policy where id = 1), v_day_cap)); end if;
+  -- review LOW 4: the same Toronto-day boundary as reserve_llm_budget
   select coalesce(sum(coalesce(c.actual_cents, c.reserved_cents, 0)), 0) into v_day from public.llm_calls c
-   where c.status in ('reserved', 'done') and c.started_at >= date_trunc('day', now());
+   where c.status in ('reserved', 'done') and c.started_at >= (date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto');
   v_week_cap := coalesce((cap ->> 'weekly_limit_cents')::bigint, 0); v_week := coalesce((cap ->> 'week_spend_cents')::bigint, 0);
   s := case when v_day_cap <= 0 or v_day >= v_day_cap then 'bad' when v_day * 5 >= v_day_cap * 4 then 'warn' else 'ok' end;
   checks := checks || jsonb_build_object('check', 'ai_cap_day', 'status', s, 'used_cents', v_day, 'cap_cents', v_day_cap, 'headroom_cents', greatest(v_day_cap - v_day, 0));
@@ -242,7 +248,8 @@ revoke all on function public.fz_health_report() from public, anon, authenticate
 -- the scheduled check: records each check's status and, when alerts are on, tells Jarvis / the owner ONLY on a change (once per change)
 create or replace function public.fz_health_check() returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare r jsonb; c jsonb; old public.fz_health_state; n_changed int := 0; n_alerts int := 0; v_gen int; v_key text; v_lines text := '';
+declare r jsonb; c jsonb; old public.fz_health_state; n_changed int := 0; n_alerts int := 0; n_held int := 0; n_quiet int := 0; v_gen int; v_key text; v_lines text := '';
+        v_new text; v_runs int;
 begin
   if not public.fz_m6_owner_session() then
     raise exception 'the health check runs from the scheduler or the owner only' using errcode = '42501';
@@ -253,30 +260,45 @@ begin
   perform pg_advisory_xact_lock(hashtext('fz_health_check'));
   r := public.fz_health_report();
   for c in select * from jsonb_array_elements(r -> 'checks') loop
+    v_new := c ->> 'status';
     select * into old from public.fz_health_state where check_key = c ->> 'check' for update;
-    if not found then
-      insert into public.fz_health_state (check_key, status, detail) values (c ->> 'check', c ->> 'status', c);
-      v_gen := 1;
-      continue when c ->> 'status' = 'ok';                                -- a new check that is ok: recorded silently
-    elsif old.status = c ->> 'status' then
-      update public.fz_health_state set seen_at = now(), detail = c where check_key = old.check_key;
-      continue;                                                           -- no change: no alert
-    else
-      v_gen := old.generation + 1;
-      update public.fz_health_state set status = c ->> 'status', generation = v_gen, detail = c, changed_at = now(), seen_at = now() where check_key = old.check_key;
+    if not found then                                                     -- a new check starts from ok; a non-ok status then has to hold like any change
+      insert into public.fz_health_state (check_key, status, detail, pending_status, pending_runs)
+        values (c ->> 'check', 'ok', c, case when v_new <> 'ok' then v_new end, case when v_new <> 'ok' then 1 else 0 end);
+      if v_new <> 'ok' then n_held := n_held + 1; end if;
+      continue;
     end if;
+    if old.status = v_new then                                            -- unchanged (or a flap that came back): nothing pending, no alert
+      update public.fz_health_state set seen_at = now(), detail = c, pending_status = null, pending_runs = 0 where check_key = old.check_key;
+      continue;
+    end if;
+    v_runs := case when old.pending_status = v_new then old.pending_runs + 1 else 1 end;
+    if v_runs < 2 then                                                    -- review LOW 3: not yet held for 2 consecutive runs
+      update public.fz_health_state set seen_at = now(), detail = c, pending_status = v_new, pending_runs = v_runs where check_key = old.check_key;
+      n_held := n_held + 1;
+      continue;
+    end if;
+    v_gen := old.generation + 1;
     n_changed := n_changed + 1;
-    v_key := 'health:' || (c ->> 'check') || ':' || (c ->> 'status') || ':' || v_gen;
-    insert into public.fz_health_alerts (check_key, status, dedupe_key, detail) values (c ->> 'check', c ->> 'status', v_key, c) on conflict (dedupe_key) do nothing;
+    if old.last_alert_at is not null and old.last_alert_at > now() - interval '1 hour' then   -- review LOW 3: at most one alert per check per hour
+      update public.fz_health_state set status = v_new, generation = v_gen, detail = c, changed_at = now(), seen_at = now(), pending_status = null, pending_runs = 0
+       where check_key = old.check_key;
+      n_quiet := n_quiet + 1;
+      continue;
+    end if;
+    update public.fz_health_state set status = v_new, generation = v_gen, detail = c, changed_at = now(), seen_at = now(), pending_status = null, pending_runs = 0,
+           last_alert_at = now() where check_key = old.check_key;
+    v_key := 'health:' || (c ->> 'check') || ':' || v_new || ':' || v_gen;
+    insert into public.fz_health_alerts (check_key, status, dedupe_key, detail) values (c ->> 'check', v_new, v_key, c) on conflict (dedupe_key) do nothing;
     if found then
       n_alerts := n_alerts + 1;
-      v_lines := v_lines || E'\n- ' || (c ->> 'check') || ': ' || coalesce(old.status, 'new') || ' -> ' || upper(c ->> 'status');
+      v_lines := v_lines || E'\n- ' || (c ->> 'check') || ': ' || old.status || ' -> ' || upper(v_new);
     end if;
   end loop;
   if n_alerts > 0 and exists (select 1 from public.agents where slug = 'jarvis') then
     insert into public.owner_messages (from_agent, kind, channel, body) values ('jarvis', 'health', 'telegram', 'HEALTH changed (' || (r ->> 'overall') || '):' || v_lines || E'\nSend /health for details.');
   end if;
-  return jsonb_build_object('enabled', true, 'changed', n_changed, 'alerts_sent', n_alerts, 'overall', r ->> 'overall');
+  return jsonb_build_object('enabled', true, 'changed', n_changed, 'alerts_sent', n_alerts, 'held', n_held, 'quiet', n_quiet, 'overall', r ->> 'overall');
 end $$;
 revoke all on function public.fz_health_check() from public, anon, authenticated;
 
@@ -341,6 +363,22 @@ begin
 end $$;
 revoke all on function public.fz_brain_redact(text, integer) from public, anon, authenticated;
 
+-- review MED 2: provenance that reaches the group: only allowlisted keys, every value through the strict redaction, URLs without query string or fragment
+create or replace function public.fz_brain_clean_provenance(p jsonb) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare k text; v jsonb; t text; rr record; out_ jsonb := '{}'::jsonb;
+begin
+  for k, v in select e.key, e.value from jsonb_each(coalesce(p, '{}'::jsonb)) e where e.key in ('kind', 'source_table', 'source_id', 'url') loop
+    continue when jsonb_typeof(v) not in ('string', 'number');
+    t := left(v #>> '{}', 500);
+    if k = 'url' then t := regexp_replace(t, '[?#].*$', ''); end if;
+    select * into rr from public.fz_brain_redact(t, 500);
+    out_ := out_ || jsonb_build_object(k, rr.redacted);
+  end loop;
+  return out_;
+end $$;
+revoke all on function public.fz_brain_clean_provenance(jsonb) from public, anon, authenticated;
+
 -- append a fact. Scope: a scoped identity writes to its OWN office (p_office ignored). The service key writes for an office it names (p_office: an office slug,
 -- never 'group'): office knowledge stays office-scoped. A GROUP-wide fact is written only by the owner / a database session (fully redacted) or by an approved promotion.
 -- p_supersedes: an active fact in the same scope that this one replaces.
@@ -362,7 +400,7 @@ begin
     end if;
     select * into r from public.fz_brain_redact(v_topic, 120); v_topic := r.redacted;
     select * into r from public.fz_brain_redact(v_fact, 2000); v_fact := r.redacted;
-    v_prov := (select coalesce(jsonb_object_agg(k, v), '{}'::jsonb) from jsonb_each(v_prov) e(k, v) where k in ('kind', 'source_table', 'source_id', 'url'));
+    v_prov := public.fz_brain_clean_provenance(v_prov);
   end if;
   if p_supersedes is not null then
     select * into old from public.fz_brain_facts where id = p_supersedes for update;
@@ -385,8 +423,18 @@ revoke all on function public.fz_brain_add(text, text, text, numeric, jsonb, uui
 create or replace function public.fz_brain_propose_promotion(p_fact_id uuid, p_by text default 'jarvis') returns uuid
 language plpgsql security definer set search_path to 'pg_catalog' as $$
 declare f public.fz_brain_facts; v_id uuid; v_by text := left(regexp_replace(coalesce(p_by, ''), '[^A-Za-z0-9:_.-]', '', 'g'), 60); v_office uuid := public.fz_brain_caller_office(); rt record; rf record;
-        v_group uuid := (select id from public.fz_offices where slug = 'group');
+        v_group uuid := (select id from public.fz_offices where slug = 'group'); v_role text := coalesce(nullif(current_setting('role', true), ''), 'none');
+        v_req text; v_via text; i record;
 begin
+  -- review MED 1: who asked is decided by the caller's role, never by p_by (kept only as an unverified label in the audit row)
+  if v_role in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
+    select * into i from public.fz_identity_now();
+    v_req := coalesce(i.slug, 'unknown'); v_via := 'scoped';
+  elsif v_role in ('none', 'postgres') or coalesce(public.is_app_owner(), false) then
+    v_req := 'owner'; v_via := 'owner';
+  else
+    v_req := 'jarvis'; v_via := 'service';                              -- the service key / any bot caller is Jarvis-side
+  end if;
   select * into f from public.fz_brain_facts where id = p_fact_id;
   if not found or f.office_id is null or f.superseded_by is not null then raise exception 'only an active office fact can be promoted' using errcode = '22023'; end if;
   if v_office <> v_group and v_office <> f.office_id then raise exception 'an office proposes only its own facts' using errcode = '42501'; end if;
@@ -399,14 +447,14 @@ begin
   end if;
   select * into rt from public.fz_brain_redact(f.topic, 120);
   select * into rf from public.fz_brain_redact(f.fact, 2000);
-  insert into public.fz_brain_promotions (fact_id, office_id, redacted_topic, redacted_fact, redacted_provenance, redaction_level, requested_by)
+  insert into public.fz_brain_promotions (fact_id, office_id, redacted_topic, redacted_fact, redacted_provenance, redaction_level, requested_by, requested_via)
     values (f.id, f.office_id, rt.redacted, rf.redacted,
-            (select coalesce(jsonb_object_agg(k, v), '{}'::jsonb) from jsonb_each(f.provenance) e(k, v) where k in ('kind', 'source_table', 'source_id', 'url')),
+            public.fz_brain_clean_provenance(f.provenance),
             case when rt.level = 'full' and rf.level = 'full' then 'full' else 'patterns' end,
-            coalesce(nullif(v_by, ''), 'unknown'))
+            v_req, v_via)
     returning id into v_id;
-  insert into public.audit_log (actor, action, target, detail) values (coalesce(nullif(v_by, ''), 'unknown'), 'brain_promotion_requested', 'fz_brain_promotions:' || v_id,
-    jsonb_build_object('fact', f.id, 'office', f.office_id));
+  insert into public.audit_log (actor, action, target, detail) values (v_req, 'brain_promotion_requested', 'fz_brain_promotions:' || v_id,
+    jsonb_build_object('fact', f.id, 'office', f.office_id, 'via', v_via, 'claimed_by', nullif(v_by, '')));
   return v_id;
 end $$;
 revoke all on function public.fz_brain_propose_promotion(uuid, text) from public, anon, authenticated;
@@ -451,8 +499,9 @@ begin
     update public.fz_brain_promotions set status = 'expired', decided_at = now(), decided_by = 'expiry' where id = p.id;
     return jsonb_build_object('ok', false, 'status', 'expired');
   end if;
-  if p_decider = 'jarvis' and p.requested_by in ('jarvis', 'jarvis-core', 'jarvis-chat', 'jarvis-hands') then
-    raise exception 'Jarvis does not approve its own request: the owner decides' using errcode = '42501';
+  -- review MED 1: Jarvis decides only requests an OFFICE identity made (requested_via = 'scoped'); anything that came through the service path is Jarvis-side
+  if p_decider = 'jarvis' and (p.requested_via <> 'scoped' or p.requested_by like 'jarvis%') then
+    raise exception 'Jarvis does not approve its own request (it came through the service path): the owner decides' using errcode = '42501';
   end if;
   if p_approve and p.redaction_level <> 'full' then
     if v_owner then perform public.fz_brain_redact_pending(); select * into p from public.fz_brain_promotions where id = p_id; end if;
@@ -574,9 +623,17 @@ begin
     update public.fz_brain_facts f set supersedes = a.supersedes, superseded_by = a.superseded_by, superseded_at = a.superseded_at from fz_archive.fz_brain_facts a where a.id = f.id;
     alter table public.fz_brain_facts enable trigger fz_brain_facts_guard;
   end if;
+  -- an archive made by an earlier M6 build may lack the review columns: add them with the strictest default (a request of unknown origin is Jarvis-side)
+  if to_regclass('fz_archive.fz_brain_promotions') is not null then
+    alter table fz_archive.fz_brain_promotions add column if not exists requested_via text not null default 'service';
+  end if;
+  if to_regclass('fz_archive.fz_health_state') is not null then
+    alter table fz_archive.fz_health_state add column if not exists pending_status text, add column if not exists pending_runs int not null default 0,
+      add column if not exists last_alert_at timestamptz;
+  end if;
   if to_regclass('fz_archive.fz_brain_promotions') is not null and not exists (select 1 from public.fz_brain_promotions) then
     alter table public.fz_brain_promotions disable trigger fz_brain_promotions_guard;
-    insert into public.fz_brain_promotions (id, fact_id, office_id, redacted_topic, redacted_fact, redacted_provenance, redaction_level, requested_by, status, created_at, expires_at, decided_at, decided_by, group_fact_id) select id, fact_id, office_id, redacted_topic, redacted_fact, redacted_provenance, redaction_level, requested_by, status, created_at, expires_at, decided_at, decided_by, group_fact_id from fz_archive.fz_brain_promotions;
+    insert into public.fz_brain_promotions (id, fact_id, office_id, redacted_topic, redacted_fact, redacted_provenance, redaction_level, requested_by, requested_via, status, created_at, expires_at, decided_at, decided_by, group_fact_id) select id, fact_id, office_id, redacted_topic, redacted_fact, redacted_provenance, redaction_level, requested_by, requested_via, status, created_at, expires_at, decided_at, decided_by, group_fact_id from fz_archive.fz_brain_promotions;
     alter table public.fz_brain_promotions enable trigger fz_brain_promotions_guard;
   end if;
   if to_regclass('fz_archive.fz_health_alerts') is not null and not exists (select 1 from public.fz_health_alerts) then
@@ -584,7 +641,7 @@ begin
       select check_key, status, dedupe_key, detail, at from fz_archive.fz_health_alerts on conflict do nothing;
   end if;
   if to_regclass('fz_archive.fz_health_state') is not null and not exists (select 1 from public.fz_health_state) then
-    insert into public.fz_health_state (check_key, status, generation, detail, changed_at, seen_at) select check_key, status, generation, detail, changed_at, seen_at from fz_archive.fz_health_state;
+    insert into public.fz_health_state (check_key, status, generation, detail, changed_at, seen_at, pending_status, pending_runs, last_alert_at) select check_key, status, generation, detail, changed_at, seen_at, pending_status, pending_runs, last_alert_at from fz_archive.fz_health_state;
   end if;
   if to_regclass('fz_archive.fz_brain_config') is not null then
     update public.fz_brain_config c set jarvis_may_approve = a.jarvis_may_approve, updated_by = 'migration (restored)' from fz_archive.fz_brain_config a where a.id = c.id;

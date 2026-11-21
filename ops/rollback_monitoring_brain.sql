@@ -114,7 +114,7 @@ end $$;$f$; end if; end $m5$;
 drop function if exists public.fz_brain_report(text), public.fz_owner_set_brain_jarvis_approval(boolean), public.fz_jarvis_decide_brain_promotion(uuid, boolean),
   public.fz_owner_decide_brain_promotion(uuid, boolean), public.fz_brain_decide(uuid, boolean, text), public.fz_brain_propose_promotion(uuid, text),
   public.fz_brain_add(text, text, text, numeric, jsonb, uuid, text, text), public.fz_brain_read(text, integer), public.fz_brain_caller_office(),
-  public.fz_brain_redact_pending(), public.fz_brain_redact(text, integer),
+  public.fz_brain_redact_pending(), public.fz_brain_clean_provenance(jsonb), public.fz_brain_redact(text, integer),
   public.fz_owner_set_health_alerts(boolean), public.fz_health_check(), public.fz_health_report(), public.fz_brain_promotions_guard(), public.fz_brain_facts_guard(),
   public.fz_m6_config_guard(), public.fz_m6_owner_session();
 -- 3. backup classification: the exact 20261201_shared_services_v1 text

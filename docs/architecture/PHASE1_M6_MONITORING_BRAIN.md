@@ -56,6 +56,21 @@ Status: built and tested on a scratch replica. Not applied to production. Stacke
 - **#6:** the M5 office stamp (`fz_service_stamp_office`) now ignores a caller-given `office_id` unless the caller is the owner or a database session. Otherwise the office is derived as before, else the group. This one condition is the only change. The M6 rollback restores the M5 function text exactly. Tested in sqltest H8, and H1 checks the restore.
 - **#7:** the mission engine's live-mission cap (`create_mission`) now uses a complete, service-key read (`hq_missions._get_complete`), never a scoped read that could return fewer rows. Any other scoped read that returns fewer rows only means fewer rows are processed: no action is taken on an incomplete list. Tested in `test_hq_mission_scoped.py`, behind `FZ_SERVICES_SCOPED_READS=1`, and a mutant reverting it is killed.
 
+### M6 review fixes (one push)
+- **MED 1 (Jarvis self-approval).** The requester of a promotion is now derived from the caller's role, never from `p_by`:
+  - an office identity: its own slug, `requested_via = scoped`;
+  - the owner or a database session: `owner`;
+  - the service key or any other bot caller: `jarvis`, `service`.
+
+  `p_by` survives only as an unverified label in the audit row. Jarvis may decide only `scoped` requests. Office identities hold no grant yet (that is the owner decision on the M1 allowlist), so **the Jarvis approval path is unusable today and promotion is effectively owner-only**. It becomes usable only if the owner grants brain access to office identities and switches `jarvis_may_approve` on.
+- **MED 2 (provenance).** `fz_brain_clean_provenance()` builds provenance for both promotions and owner-added group facts:
+  - only allowlisted keys are kept (kind, source_table, source_id, url);
+  - every value goes through the strict redaction (`fz_brain_redact`);
+  - URLs lose their query string and fragment.
+- **LOW 3 (flapping).** A status must hold for 2 consecutive runs before it alerts (a one-run flap never alerts), and each check alerts at most once per hour. A change inside the hour is recorded as `quiet`, not sent.
+- **LOW 4 (cap day).** The AI cap day now uses the same Toronto-day boundary, and the same low-cost cap, as `reserve_llm_budget`.
+- **#5 skipped, as asked.** Office-identity access to `fz_brain_read` stays an owner decision.
+
 ## 2. Why this architecture
 - **Additive.** New tables and functions. The M3 queue view only gains a branch, and its decision paths are unchanged.
 - **The never-edit list is untouched.** No change to the money tables or controls, the caps, kill switch, mode, `authorize_action`, `action_policy`, executors, the redaction functions or the backup-identity guard (the last two are only called). The money fingerprint is identical with M6, without it and after a re-apply.
@@ -98,7 +113,7 @@ Status: built and tested on a scratch replica. Not applied to production. Stacke
   - query trimming;
   - an AST check that the two modules import only `hq` (no `hq_llm`) and make exactly one call, a POST to their report RPC;
   - the commands are owner-only and in the menu.
-- Mutation tests: 41 mutants (monitoring, alerts, dedupe, config guard, brain read/write/supersede, promotion, decisions, redaction strength, owner report, rollback / re-apply, money fingerprint, the Python modules, and the two folded-in M5 LOWs). All are killed. Mutant 0 is killed by the engine, because a STABLE function cannot write.
+- Mutation tests: 50 mutants (including the nine for the review fixes) (monitoring, alerts, dedupe, config guard, brain read/write/supersede, promotion, decisions, redaction strength, owner report, rollback / re-apply, money fingerprint, the Python modules, and the two folded-in M5 LOWs). All are killed. Mutant 0 is killed by the engine, because a STABLE function cannot write.
 
 ## 5. Risks
 - **Requests made by an office or the bot are redacted at the strict pattern level** (often `[redacted:uncertain]`) until the full pass runs, up to 10 minutes later. The owner's approval always runs the full pass first. This follows from the protected backup-identity rule, not from M6.

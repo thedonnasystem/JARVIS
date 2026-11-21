@@ -237,6 +237,7 @@ function	fz_audit_verify(boolean)	-	-	execute	security_definer		-
 function	fz_authorize_action(text,integer,text,text,text,uuid,uuid,jsonb)	-	-	execute	security_definer		-
 function	fz_brain_add(text,text,text,numeric,jsonb,uuid,text,text)	-	-	execute	security_definer		-
 function	fz_brain_caller_office()	-	-	execute	security_definer		-
+function	fz_brain_clean_provenance(jsonb)	-	-	execute	security_definer		-
 function	fz_brain_decide(uuid,boolean,text)	-	-	execute	security_definer		-
 function	fz_brain_facts_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	fz_brain_promotions_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
