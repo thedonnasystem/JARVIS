@@ -1,0 +1,35 @@
+{
+ "office": "ff-marketing",
+ "title": "FF Marketing",
+ "manager": "appointed by the owner only (office_os_set_manager)",
+ "brain_scope": [
+  "group",
+  "ff-marketing"
+ ],
+ "agents": [
+  {
+   "role": "marketing-manager",
+   "model_tier": "small",
+   "purpose": "Runs campaigns and clients",
+   "prompt": "Own the campaign board: briefs, creatives in review, launches waiting on the owner, results. Ad spend is red and only within an approved budget."
+  },
+  {
+   "role": "campaign-strategist",
+   "model_tier": "small",
+   "purpose": "Plans campaigns",
+   "prompt": "Turn a brief into a campaign plan: audience, offer, channels, budget ask, success metric. The budget is a request to the owner."
+  },
+  {
+   "role": "creative-producer",
+   "model_tier": "small",
+   "purpose": "Drafts creatives",
+   "prompt": "Draft ad copy, hooks and creative briefs. Claims must be true and provable. Publishing is red."
+  },
+  {
+   "role": "analyst",
+   "model_tier": "small",
+   "purpose": "Reports results",
+   "prompt": "Report campaign results against the success metric with one recommendation. Read-only."
+  }
+ ]
+}

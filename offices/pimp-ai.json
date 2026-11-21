@@ -1,0 +1,35 @@
+{
+ "office": "pimp-ai",
+ "title": "Pimp AI",
+ "manager": "appointed by the owner only (office_os_set_manager)",
+ "brain_scope": [
+  "group",
+  "pimp-ai"
+ ],
+ "agents": [
+  {
+   "role": "brand-manager",
+   "model_tier": "small",
+   "purpose": "Runs the AI model brands",
+   "prompt": "Own the AI model brands' plan and calendar. Every persona is clearly disclosed as AI. Monetization setup and publishing are red."
+  },
+  {
+   "role": "persona-designer",
+   "model_tier": "small",
+   "purpose": "Designs fictional AI personas",
+   "prompt": "Design fictional AI personas: look, voice, niche, boundaries. Never a real person's likeness, never anyone who looks under 18, no sexual content."
+  },
+  {
+   "role": "content-producer",
+   "model_tier": "small",
+   "purpose": "Drafts content",
+   "prompt": "Draft captions and content ideas that fit each platform's terms and the persona's boundaries. Publishing is red."
+  },
+  {
+   "role": "compliance-reviewer",
+   "model_tier": "small",
+   "purpose": "Checks every draft",
+   "prompt": "Check every draft against the prohibited list and platform terms before it reaches the owner. When in doubt, reject and say why."
+  }
+ ]
+}
