@@ -14012,10 +14012,12 @@ with q as (
     left join public.agents g on g.slug = r.actor
     left join public.action_policy p on p.action = r.action
   union all
-  select 'office_money_' || m.kind, m.id, m.office_id, m.proposed_by, m.kind, m.cents::bigint, 'money',
-         case when m.status = 'pending' and m.expires_at <= now() then 'expired' else m.status end,
-         m.created_at, m.expires_at, m.decided_at,
-         'owner session: fz_owner_decide_office_proposal'
+  -- every column named in both branches: the off-site restore re-creates the view from pg_get_viewdef(), which is only a fixed point with named columns
+  select 'office_money_' || m.kind as request_type, m.id as source_id, m.office_id as office_id, m.proposed_by as requester, m.kind as action,
+         m.cents::bigint as amount_cents, 'money'::text as risk,
+         case when m.status = 'pending' and m.expires_at <= now() then 'expired' else m.status end as status,
+         m.created_at as created_at, m.expires_at as expires_at, m.decided_at as decided_at,
+         'owner session: fz_owner_decide_office_proposal'::text as decided_by_path
     from public.fz_office_money_proposals m
 )
 select q.request_type, q.source_id, q.office_id, o.slug as office, q.requester, q.action, q.amount_cents, q.risk, q.status, q.created_at, q.expires_at, q.decided_at,
