@@ -5,8 +5,9 @@ Database side: migrations/20261203_office_os_v1.sql (profiles; owner-only office
 Repo side: offices/TEMPLATE.json (rules + prompt header) and offices/<slug>.json (each office's core agents).
 Nothing here activates, appoints, spends or sends: status is read-only, prompts are text, and brain reads are OFF unless FZ_BRAIN_FACTS=1.
 
-Shared brain (M6 fz_brain_facts, built by another milestone): an office agent reads group facts plus its OWN office only. The filter is put in the request AND
-re-checked on every returned row (a row of another office, or one without office_id, is dropped). With the flag unset no request is made at all.
+Shared brain (M6): the ONLY read path is RPC fz_brain_read(p_query, p_limit 1-50), which returns group facts plus the CALLER's own office facts (the brain tables have
+no API privileges). An office agent reads through its office identity (office:<slug>:manager, M1 scoped token): without installed tokens the service key reads, and the
+database then returns group facts only. Every returned fact is re-checked here (scope must be 'group' or the office's own slug). With FZ_BRAIN_FACTS unset no request is made.
 """
 from __future__ import annotations
 
@@ -71,7 +72,11 @@ def status_text(name: str, rpc=None) -> str:
     if not isinstance(s, dict) or s.get("office") != slug:
         return "Office status unreadable."
     a = s.get("autonomy") or {}
-    lines = [f"{s.get('title') or slug} ({slug}): {str(s.get('status')).upper()}" + (" (DRIFT: M1 says " + str(s.get("m1_status")) + ")" if s.get("drift") else ""),
+    lines = []
+    if s.get("drift"):
+        lines.append(f"!!! DRIFT ALERT: M1 says {s.get('m1_status')} but the office OS says {s.get('status')}. This office was changed outside office_os_activate. "
+                     f"If that was not you: office_os_deactivate('{slug}').")
+    lines += [f"{s.get('title') or slug} ({slug}): {str(s.get('status')).upper()}",
              f"Manager: {s.get('manager') or 'none appointed (owner only)'}",
              f"Available money: {_money(s.get('available_cents'))} (no fixed budget; allocate on need)"]
     if s.get("approval_status"):
@@ -80,33 +85,38 @@ def status_text(name: str, rpc=None) -> str:
         lines.append(f"Activation order: #{s['activation_rank']}")
     lines += [f"Mission: {s.get('mission')}", "Agents: " + ", ".join(s.get("agent_roles") or []), "Integrations: " + ", ".join(s.get("integrations") or []),
               f"Data class: {s.get('confidentiality')}"]
-    for t in ("green", "yellow", "red", "prohibited"):
+    for t in ("green", "yellow", "red"):
         lines.append(f"{t.capitalize()}: " + (", ".join(a.get(t) or []) or "-"))
+    lines.append("Prohibited (enforced as office blocks on activation): " + (", ".join(s.get("prohibited_enforced") or []) or "-"))
+    lines.append("Prohibited (advisory only: in prompts, not a database rule): " + (", ".join(s.get("prohibited_advisory") or []) or "-"))
     if s.get("status") != "active":
-        lines.append("To activate (owner only, one office at a time): appoint a manager, office_os_activate, tap Approve, office_os_activate again.")
+        lines.append("To activate (owner only, one office at a time): office_os_set_manager, office_os_activate, office_os_decide(<nonce>), office_os_activate again.")
     return "\n".join(lines)
 
 
 def brain_scope(office: str) -> list[str]:
-    """Office ids an office agent may read from the shared brain: the group and its own office. Nothing else, ever."""
+    """Scopes an office agent may read from the shared brain: the group and its own office. Nothing else, ever."""
     slug = resolve(office)
     if not slug:
         raise ValueError(f"unknown office {office!r}")
-    return [GROUP_ID, OFFICES[slug]]
+    return ["group", slug]
 
 
-def brain_facts(office: str, limit: int = 20, rpc=None) -> list[dict]:
-    """Shared-brain facts for an office agent (M6 interface: table fz_brain_facts with an office_id column). [] when the flag is off or on any error."""
+def brain_facts(office: str, query: str | None = None, limit: int = 20, rpc=None) -> list[dict]:
+    """Shared-brain facts for an office agent via M6's fz_brain_read. [] when the flag is off or on any error (fail closed)."""
     if os.environ.get(BRAIN_FLAG) != "1":
         return []
     scope = brain_scope(office)
-    q = "fz_brain_facts?select=*&office_id=in.(" + ",".join(urllib.parse.quote(i, safe="-") for i in scope) + f")&limit={max(1, min(int(limit), 100))}"
+    body = {"p_query": (str(query)[:200] if query else None), "p_limit": max(1, min(int(limit), 50))}
     try:
-        rows = (rpc or hq._request)("GET", "/rest/v1/" + q) or []
+        if rpc:
+            rows = rpc("POST", "/rest/v1/rpc/fz_brain_read", body)
+        else:
+            rows = hq._request("POST", "/rest/v1/rpc/fz_brain_read", body, identity=f"office:{scope[1]}:manager")
     except Exception as e:
         logger.warning("brain read failed (fail closed): %s", str(e)[:120])
         return []
-    return [r for r in rows if isinstance(r, dict) and r.get("office_id") in scope]
+    return [r for r in (rows if isinstance(rows, list) else []) if isinstance(r, dict) and r.get("scope") in scope]
 
 
 def system_prompt(profile: dict, role: str, facts: list[dict] | None = None) -> str:
@@ -123,5 +133,5 @@ def system_prompt(profile: dict, role: str, facts: list[dict] | None = None) -> 
     head = template()["prompt_header"].format(role=role, title=profile.get("title") or slug, mission=profile.get("mission") or "",
                                               **{t: ", ".join(a.get(t) or []) or "-" for t in ("green", "yellow", "red", "prohibited")})
     scope = set(brain_scope(slug))
-    fs = [str(f.get("fact") or f.get("text") or "")[:300] for f in (facts or []) if isinstance(f, dict) and f.get("office_id") in scope][:20]
+    fs = [str(f.get("fact") or "")[:300] for f in (facts or []) if isinstance(f, dict) and f.get("scope") in scope][:20]
     return head + "\n\n" + agent["prompt"] + ("\n\nKnown facts:\n" + "\n".join("- " + x for x in fs if x) if fs else "")

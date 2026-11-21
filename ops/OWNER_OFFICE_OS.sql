@@ -12,10 +12,11 @@
 -- select public.office_os_set_manager('donna', 'Donna lead');
 
 -- 2. Activate, ONE office at a time (approved order: donna, wolf-squad, ff-marketing):
---    a) ask: creates one approval item (Telegram message + /approvals); the office is 'prepared' and still cannot spend
+--    a) ask: creates one approval item (in /approvals) and returns a 64-character nonce only you can see; the office is 'prepared' and still cannot spend
 -- select public.office_os_activate('donna');
---    b) tap Approve on the Telegram message
---    c) run the same line again: the office becomes active (M1 status active). If you rejected it or it expired (3 days), it goes back to dormant.
+--    b) decide with that nonce (single use; false refuses). A Telegram tap does NOT activate anything.
+-- select public.office_os_decide('donna', '<nonce>', true);
+--    c) finish: the office becomes active (M1 status active); its prohibited actions that are policy actions become office blocks. Rejected / expired (3 days): back to dormant.
 -- select public.office_os_activate('donna');
 
 -- 3. Money only on need (M2; no fixed budgets): select public.fz_owner_allocate('donna', <cents>, 'why');

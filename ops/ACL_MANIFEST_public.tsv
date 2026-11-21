@@ -370,6 +370,8 @@ function	office_data()	-	-	execute	security_definer		-
 function	office_function_of(text,text)	-	-	execute	invoker		-
 function	office_os_activate(text)	-	-	execute	security_definer		-
 function	office_os_deactivate(text)	-	-	execute	security_definer		-
+function	office_os_decide(text,text,boolean)	-	-	execute	security_definer		-
+function	office_os_drift_check()	-	-	execute	security_definer		-
 function	office_os_set_manager(text,text)	-	-	execute	security_definer		-
 function	office_os_status(text)	-	-	execute	security_definer		-
 function	ops_alerts()	-	-	execute	security_definer		-

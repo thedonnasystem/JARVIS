@@ -7,7 +7,7 @@ Connecting something activates nothing: every office stays DORMANT until you act
 How to check progress at any time: ask Jarvis/Claude to run `python3 scripts/check_integrations.py` (or `--office donna`) on the Railway service. It shows only which variable **names** are set, never a value.
 
 Jarvis hands name FF Marketing's division `ffm` (Jarvis core's active divisions are donna, wolf-squad, ffm); the M1 office slug is `ff-marketing`. Use `ffm` in `/connect`.
-Set the Railway variable `HANDS_OAUTH_REDIRECT` to the bot's OAuth return page first if you have one: then every "Allow" returns by itself. Without it, the bot asks you to paste the address the browser lands on; that address carries a one-time code that expires in 15 minutes and is not a password. Never use `/connect <connector> <division> <site> <key>` (it puts an API key in a chat); skip API-key connectors such as Netlify in this session.
+**Nothing is ever pasted into a chat.** Step 0 below sets `HANDS_OAUTH_REDIRECT`; the code refuses every OAuth connect without it. The repo has no OAuth return page yet, so the redirect-based connectors (Meta, TikTok, LinkedIn, X) are prepared in this session (app + Railway variables) but **not** connected: their `/connect` would ask you to paste the landing address into Telegram, which this checklist does not allow. They connect once the return page is built (a build item, not yours). Google Calendar and YouTube use Google's device flow (you type a short code on google.com/device, never in a chat) and connect today. Never use `/connect <connector> <division> <site> <key>` (it puts an API key in a chat); skip API-key connectors such as Netlify.
 
 Where a step says "Railway variable": Railway -> FENDEZY project -> the bot service -> **Variables** -> **New Variable** -> name exactly as written -> paste the value from the provider tab -> **Add**. Railway redeploys by itself; one redeploy after the whole session is fine (the variables are saved before that).
 
@@ -54,6 +54,8 @@ Not built = nothing to connect today. Each one needs its own reviewed build (and
 
 ## 3. The session, in order
 
+0. **Required first: OAuth return address.** Railway variable `HANDS_OAUTH_REDIRECT` = the https address of the bot's OAuth return page (the same address is entered in each developer app below as the redirect / callback URL). Until the return page exists, use the address you will give it; the redirect connectors stay unconnected (see the note above).
+
 Core (all offices need these):
 1. **Anthropic**: console.anthropic.com -> API Keys -> Create Key -> Copy -> Railway variable `ANTHROPIC_API_KEY`. Skip if `/hq` already answers with AI replies.
 2. **Vault**: Bitwarden -> Secrets Manager -> Machine accounts -> New -> give it access to the Jarvis project -> Access tokens -> Create -> Copy -> Railway variables `BW_ACCESS_TOKEN`, then copy the organization id and project id from the page URL into `BW_ORGANIZATION_ID`, `BW_PROJECT_ID`.
@@ -65,13 +67,13 @@ Donna (activation 1):
 6. **Automation** (only if Donna uses n8n/Make today): copy the webhook URL / API key from n8n or Make into `N8N_BASE_URL` + `N8N_API_KEY` or `MAKE_WEBHOOK_URL`.
 
 Wolf Squad (activation 2):
-7. Uses Resend and Google from steps 4-5. **LinkedIn** (optional): linkedin.com/developers -> Create app -> Auth -> copy Client ID / Secret -> Railway variables `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`. Then in Telegram `/connect linkedin wolf-squad`, open the link, **Allow**.
+7. Uses Resend and Google from steps 4-5. **LinkedIn** (optional): linkedin.com/developers -> Create app -> Auth -> copy Client ID / Secret -> Railway variables `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`. Then in Add the step 0 address as the app's redirect URL. Connect later (needs the return page).
 
 FF Marketing (activation 3):
-8. **Meta**: developers.facebook.com -> My Apps -> Create App (Business) -> Settings -> Basic -> copy App ID / App Secret -> Railway variables `META_APP_ID`, `META_APP_SECRET`. Telegram `/connect meta-facebook ffm` and `/connect meta-instagram ffm`, open each link, pick the pages, **Allow**.
-9. **TikTok**: developers.tiktok.com -> Manage apps -> Create -> copy Client key / secret -> `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`. Telegram `/connect tiktok ffm`, **Authorize**.
-10. **YouTube**: uses Google from step 5. Telegram `/connect youtube ffm`, open the device link, **Allow**.
-11. **X** (optional): developer.x.com -> Projects & Apps -> your app -> Keys and tokens -> OAuth 2.0 Client ID (and secret) -> `X_CLIENT_ID`, `X_CLIENT_SECRET`. Telegram `/connect x-twitter ffm`, **Authorize**.
+8. **Meta**: developers.facebook.com -> My Apps -> Create App (Business) -> Settings -> Basic -> copy App ID / App Secret -> Railway variables `META_APP_ID`, `META_APP_SECRET`. Facebook Login -> Settings -> add the step 0 address as a Valid OAuth Redirect URI. Connect later (needs the return page).
+9. **TikTok**: developers.tiktok.com -> Manage apps -> Create -> copy Client key / secret -> `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`. Add the step 0 address as the redirect URI. Connect later (needs the return page).
+10. **YouTube**: uses Google from step 5. Telegram `/connect youtube ffm`, open google.com/device, type the code the bot shows, **Allow** (device flow: nothing is pasted into a chat).
+11. **X** (optional): developer.x.com -> Projects & Apps -> your app -> Keys and tokens -> OAuth 2.0 Client ID (and secret) -> `X_CLIENT_ID`, `X_CLIENT_SECRET`. Add the step 0 address as the callback URL. Connect later (needs the return page).
 
 Optional, any time:
 12. Free LLM backups: create keys on OpenRouter / Groq / Cerebras and paste into `OPENROUTER_API_KEY` / `GROQ_API_KEY` / `CEREBRAS_API_KEY`. They only route within the same $3.30/day cap.
@@ -88,6 +90,7 @@ Finish:
 
 Activation is yours only, one office at a time, in this order once you approve: **Donna, Wolf Squad, FF Marketing**. In the Supabase SQL editor, each line with your app user id (see `ops/OWNER_OFFICE_OS.sql`):
 1. Appoint the manager: `office_os_set_manager('donna', '<manager label>')`.
-2. Ask to activate: `office_os_activate('donna')` -> Telegram shows an approval message -> tap **Approve**.
-3. Run `office_os_activate('donna')` again -> the office is active. Check with `/office donna` in Telegram.
-4. Give it money only when it needs it: `fz_owner_allocate('donna', <cents>, 'why')` (M2). There are no fixed budgets.
+2. Ask to activate: `office_os_activate('donna')`. The result shows a 64-character **nonce** (only you can see it; Telegram shows a note, and tapping it does not activate anything).
+3. Decide: `office_os_decide('donna', '<nonce>', true)` (or `false` to refuse). Single use.
+4. Finish: `office_os_activate('donna')` again -> the office is active, and its prohibited actions that are real policy actions become office blocks. Check with `/office donna`.
+5. Give it money only when it needs it: `fz_owner_allocate('donna', <cents>, 'why')` (M2). There are no fixed budgets.

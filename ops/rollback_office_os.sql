@@ -3,8 +3,8 @@
 -- (sqltests/office_os_check.sql sets fz_in_txn and runs it INSIDE its own rolled-back transaction.)
 -- Order: FIRST of the Phase 1 rollbacks (before ops/rollback_shared_services.sql). M7 has no structural dependency on M1..M5, so any order works.
 -- 0. keeps the record: every profile (status, manager appointed, activation) goes into ONE audit_log row;
--- 1. ARCHIVES the profile table, rows intact, into fz_archive.fz_office_profiles (no API privileges; an older archive moves on to fz_archive_<timestamp>);
--- 2. drops the four office_os_* functions and the empty fz_office_os schema.
+-- 1. ARCHIVES the profile, decision and drift tables, rows intact, into fz_archive (fz_office_profiles, fz_office_decisions, fz_office_drift) (no API privileges; an older archive moves on to fz_archive_<timestamp>);
+-- 2. unschedules the drift job; drops the six office_os_* functions and the empty fz_office_os schema.
 -- Deletes no history. Does NOT change any M1 office status: an office activated through M7 stays active (M1 is the authority); deactivate first if wanted.
 -- A re-apply re-seeds the template and restores the manager appointments from the archive.
 \if :{?fz_in_txn}
@@ -32,13 +32,30 @@ begin
       if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on schema %I from %I', 'fz_archive_' || v_suffix, r); end if;
     end loop;
     execute format('alter table fz_archive.fz_office_profiles set schema %I', 'fz_archive_' || v_suffix);
+    foreach r in array array['fz_office_decisions', 'fz_office_drift'] loop
+      if to_regclass('fz_archive.' || r) is not null then execute format('alter table fz_archive.%I set schema %I', r, 'fz_archive_' || v_suffix); end if;
+    end loop;
   end if;
   alter table fz_office_os.fz_office_profiles set schema fz_archive;
+  foreach r in array array['fz_office_decisions', 'fz_office_drift'] loop
+    if to_regclass('fz_office_os.' || r) is not null then
+      if to_regclass('fz_archive.' || r) is not null then                 -- an older copy left by a rollback of an earlier version moves on too
+        execute format('create schema if not exists %I', 'fz_archive_' || v_suffix);
+        execute format('alter table fz_archive.%I set schema %I', r, 'fz_archive_' || v_suffix);
+      end if;
+      execute format('alter table fz_office_os.%I set schema fz_archive', r);
+    end if;
+  end loop;
+end $$;
+do $$ begin
+  if exists (select 1 from pg_namespace where nspname = 'cron') then perform cron.unschedule(jobid) from cron.job where jobname = 'office-os-drift'; end if;
 end $$;
 drop function if exists public.office_os_status(text);
 drop function if exists public.office_os_activate(text);
 drop function if exists public.office_os_deactivate(text);
 drop function if exists public.office_os_set_manager(text, text);
+drop function if exists public.office_os_decide(text, text, boolean);
+drop function if exists public.office_os_drift_check();
 drop schema if exists fz_office_os;
 \if :{?fz_in_txn}
 \else

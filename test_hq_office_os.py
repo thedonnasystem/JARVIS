@@ -20,7 +20,7 @@ import check_integrations  # noqa: E402
 PROFILE = {"office": "donna", "title": "Donna", "status": "active", "m1_status": "active", "drift": False, "manager": "Donna lead", "activation_rank": 1,
            "approval_status": "approved", "available_cents": 4950, "mission": "Run Donna, the AI agency.", "agent_roles": SEED.get("donna", {}).get("roles", []),
            "integrations": ["telegram"], "autonomy": {"green": ["research"], "yellow": [], "red": ["send_email"], "prohibited": ["email_without_consent"]},
-           "confidentiality": "client_restricted"}
+           "confidentiality": "client_restricted", "prohibited_enforced": ["deceptive_communication"], "prohibited_advisory": ["email_without_consent"]}
 
 
 class Template(unittest.TestCase):
@@ -55,13 +55,14 @@ class Status(unittest.TestCase):
         calls = []
         t = O.status_text("Donna", rpc=lambda *a: calls.append(a) or PROFILE)
         self.assertEqual(calls, [("POST", "/rest/v1/rpc/office_os_status", {"p_office": "donna"})])
-        for want in ("ACTIVE", "Manager: Donna lead", "$49.50", "Red: send_email", "Prohibited: email_without_consent", "#1"):
+        for want in ("ACTIVE", "Manager: Donna lead", "$49.50", "Red: send_email", "advisory only: in prompts, not a database rule): email_without_consent", "enforced as office blocks on activation): deceptive_communication", "#1"):
             self.assertIn(want, t)
         self.assertNotIn("DRIFT", t)
 
     def test_drift_dormant_unknown_and_errors(self):
         t = O.status_text("wolf", rpc=lambda *a: dict(PROFILE, office="wolf-squad", status="dormant", manager=None, drift=True, m1_status="active", available_cents=None))
-        self.assertIn("DRIFT", t)
+        self.assertTrue(t.startswith("!!! DRIFT ALERT: M1 says active but the office OS says dormant"))
+        self.assertIn("office_os_deactivate('wolf-squad')", t)
         self.assertIn("none appointed (owner only)", t)
         self.assertIn("n/a", t)
         self.assertIn("To activate", t)
@@ -72,33 +73,41 @@ class Status(unittest.TestCase):
 
 
 class Brain(unittest.TestCase):
-    ROWS = [{"office_id": O.GROUP_ID, "fact": "group fact"}, {"office_id": O.OFFICES["donna"], "fact": "donna fact"},
-            {"office_id": O.OFFICES["wolf-squad"], "fact": "wolf secret"}, {"fact": "no office"}, "junk"]
+    ROWS = [{"scope": "group", "fact": "group fact"}, {"scope": "donna", "fact": "donna fact"},
+            {"scope": "wolf-squad", "fact": "wolf secret"}, {"fact": "no scope"}, "junk"]
 
     def test_flag_off_makes_no_request(self):
+        calls = []
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop(O.BRAIN_FLAG, None)
-            calls = []
             self.assertEqual(O.brain_facts("donna", rpc=lambda *a: calls.append(a) or self.ROWS), [])
         with mock.patch.dict(os.environ, {O.BRAIN_FLAG: "yes"}):
             self.assertEqual(O.brain_facts("donna", rpc=lambda *a: calls.append(a) or self.ROWS), [])
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch.object(O.hq, "_request", side_effect=AssertionError("called")):
+            os.environ.pop(O.BRAIN_FLAG, None)
+            self.assertEqual(O.brain_facts("donna"), [])
         self.assertEqual(calls, [])
 
-    def test_scope_is_group_plus_own_office(self):
-        self.assertEqual(O.brain_scope("donna"), [O.GROUP_ID, O.OFFICES["donna"]])
-        for s in O.OFFICES:
-            self.assertEqual(len(O.brain_scope(s)), 2)
+    def test_rpc_and_scope(self):
+        self.assertEqual(O.brain_scope("donna"), ["group", "donna"])
         with self.assertRaises(ValueError):
             O.brain_scope("group")
         seen = []
         with mock.patch.dict(os.environ, {O.BRAIN_FLAG: "1"}):
-            got = O.brain_facts("donna", limit=500, rpc=lambda m, p: seen.append(p) or self.ROWS)
-        self.assertEqual([r["fact"] for r in got], ["group fact", "donna fact"])
-        ids = re.search(r"office_id=in\.\(([^)]*)\)", seen[0]).group(1).split(",")
-        self.assertEqual(ids, [O.GROUP_ID, O.OFFICES["donna"]])
-        self.assertIn("limit=100", seen[0])
+            got = O.brain_facts("donna", query="leads", limit=500, rpc=lambda m, p, b: seen.append((m, p, b)) or self.ROWS)
+        self.assertEqual([r["fact"] for r in got], ["group fact", "donna fact"])           # another office's fact is dropped even if the database returned it
+        self.assertEqual(seen, [("POST", "/rest/v1/rpc/fz_brain_read", {"p_query": "leads", "p_limit": 50})])
         with mock.patch.dict(os.environ, {O.BRAIN_FLAG: "1"}):
+            O.brain_facts("donna", limit=0, rpc=lambda m, p, b: seen.append(b) or [])
+            self.assertEqual(seen[-1], {"p_query": None, "p_limit": 1})
             self.assertEqual(O.brain_facts("donna", rpc=mock.Mock(side_effect=RuntimeError("x"))), [])
+            self.assertEqual(O.brain_facts("donna", rpc=lambda *a: {"error": "x"}), [])
+
+    def test_reads_through_the_office_identity(self):
+        with mock.patch.dict(os.environ, {O.BRAIN_FLAG: "1"}), mock.patch.object(O.hq, "_request", return_value=self.ROWS) as rq:
+            got = O.brain_facts("wolf")
+        rq.assert_called_once_with("POST", "/rest/v1/rpc/fz_brain_read", {"p_query": None, "p_limit": 20}, identity="office:wolf-squad:manager")
+        self.assertEqual([r["fact"] for r in got], ["group fact", "wolf secret"])
 
     def test_prompt(self):
         p = O.system_prompt(PROFILE, "client-success", facts=self.ROWS)
@@ -137,10 +146,9 @@ class Command(unittest.TestCase):
 
     def test_module_never_calls_an_owner_function_or_writes(self):
         src = open(O.__file__).read()
-        self.assertEqual(re.findall(r"/rpc/(\w+)", src), ["office_os_status"])
+        self.assertEqual(sorted(set(re.findall(r"/rpc/(\w+)", src))), ["fz_brain_read", "office_os_status"])
         for bad in ("fz_owner_", "\"PATCH\"", "\"DELETE\"", "\"PUT\""):
             self.assertNotIn(bad, src)
-        self.assertEqual(re.findall(r'"(POST|GET)"', src).count("POST"), 1)   # the one read RPC
 
 
 if __name__ == "__main__":
