@@ -191,7 +191,7 @@ begin
   if not exists (select 1 from cron.job where jobname = 'fz-queue-expire') then raise exception 'K6 expiry job not scheduled'; end if;
 
   -- K7 office payment gate only refuses: dormant / short refused; a funded office and the group get exactly prepare_payment()'s decision (modes x amounts, each undone)
-  if pg_temp.svc($q$select public.fz_prepare_office_payment('fzq', 'Payee', 100, 'a purpose', 'none', null, 'fzq-ven-c')::text$q$) !~ 'is dormant: it spends nothing' then raise exception 'K7 dormant office paid (or refused for another reason)'; end if;
+  if pg_temp.svc($q$select public.fz_prepare_office_payment('fzq', 'Payee', 100, 'a purpose', 'none', null, 'fzq-ven-c')::text$q$) !~ 'is dormant: its actions are refused' then raise exception 'K7 dormant office paid (or refused for another reason)'; end if;
   if pg_temp.svc($q$select public.fz_prepare_office_payment('fzq', 'Payee', 100, 'a purpose', 'none', null, 'fzq-ven-b')::text$q$) !~ 'has \$0.00 available' then raise exception 'K7 office at $0 paid'; end if;
   perform public.fz_owner_allocate('b2b-records', 500000, 'payment matrix');
   n := 0;
@@ -225,6 +225,60 @@ begin
     raise exception 'K7 the triggers on the money tables changed'; end if;
   if public.backup_export_policy() -> 'unclassified' <> '[]'::jsonb or exists (select 1 from public.fz_unregistered_tables()) then raise exception 'K7 backup / registry'; end if;
   raise notice 'approvals_kernel_check: behaviour checks passed';
+end $$;
+
+-- K9 review fixes (each fails on the version before the fix)
+do $$
+declare A uuid := 'f0000000-0000-4000-8000-000000000001'; d1 jsonb; d2 jsonb; al boolean; cap int; dl int; n int; c0 int; res text; msg text; pid uuid; c int;
+begin
+  update public.system_state set mode = 'auto_in_caps', kill_switch = false where id = 1;
+  update public.action_policy set max_count_per_day = 50, updated_by = 'owner:test' where action = 'payment_instruction';   -- room at group level (rolled back)
+  -- fix 1: the payment gate applies M1's office layer: never allows what fz_authorize_action refuses (allowed x cap x daily), each point undone
+  n := 0;
+  foreach al in array array[true, false] loop
+    foreach cap in array array[null, 50, 20000] loop
+      foreach dl in array array[null, 0, 5] loop
+        perform public.fz_set_office_policy('b2b-records', 'payment_instruction', al, cap, dl, 'owner');
+        begin d1 := public.fz_authorize_action('payment_instruction', 100, 'fzq-k9', 'b2b-records', 'fzq'); raise exception using errcode = 'ZFZ01'; exception when sqlstate 'ZFZ01' then null; end;
+        begin d2 := public.fz_prepare_office_payment('fzq', 'Payee', 100, 'a purpose', 'none', null, 'fzq-ven-a'); raise exception using errcode = 'ZFZ01'; exception when sqlstate 'ZFZ01' then null; end;
+        if d2 ->> 'decision' = 'allow' and d1 ->> 'decision' <> 'allow' then raise exception 'K9/1 the payment gate allowed what fz_authorize_action refused (allowed %, cap %, daily %): % vs %', al, cap, dl, d2, d1; end if;
+        if d1 ->> 'decision' <> 'allow' then n := n + 1; end if;
+      end loop;
+    end loop;
+  end loop;
+  if n < 10 then raise exception 'K9/1 vacuous: % refused points', n; end if;
+  -- fix 1: an allowed office payment is labelled with the office, so the office daily count counts it
+  delete from public.fz_office_action_policy where office_id = A and action = 'payment_instruction';
+  select count(*) into c0 from public.action_log where action = 'payment_instruction' and decision = 'allow' and detail ->> 'office' = 'b2b-records'
+     and at >= date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto';
+  perform public.fz_set_office_policy('b2b-records', 'payment_instruction', true, null, c0 + 1, 'owner');
+  d2 := public.fz_prepare_office_payment('fzq', 'Payee', 100, 'a purpose', 'none', null, 'fzq-ven-a');
+  if d2 ->> 'decision' <> 'allow' then raise exception 'K9/1 first payment refused: %', d2; end if;
+  if (select a.how from public.payment_instructions i join public.fz_money_attribution a on a.source = 'reservation' and a.source_id = i.reservation_id where i.id = (d2 ->> 'instruction_id')::uuid) <> 'office_gate' then
+    raise exception 'K9/1 payment reservation not stamped to the office'; end if;
+  d2 := public.fz_prepare_office_payment('fzq', 'Payee', 100, 'a purpose', 'none', null, 'fzq-ven-a');
+  if d2 ->> 'decision' <> 'deny' or d2 ->> 'reason' not like '%daily limit%' then raise exception 'K9/1 office daily count does not see gate payments: %', d2; end if;
+  delete from public.fz_office_action_policy where office_id = A and action = 'payment_instruction';
+  -- fix 4: the bot's key cannot choose the cap (5 stays); the owner / database session can
+  for c in 1..3 loop
+    insert into public.approval_requests (actor, action, cents, ref, recommendation, created_at) values ('fzq-agent-a', 'close_venture', 0, 'fzq-k9-' || c, 'cap 1 test', now() - make_interval(mins => 10 - c));
+  end loop;
+  perform pg_temp.svc('select public.fz_queue_expire(1)::text');
+  if (select count(*) from public.approval_requests where ref like 'fzq-k9-%' and status = 'pending') <> 3 then raise exception 'K9/4 the bot mass-expired requests with its own cap'; end if;
+  perform public.fz_queue_expire(1);                                       -- the database session (as the cron job)
+  if (select count(*) from public.approval_requests where ref like 'fzq-k9-%' and status = 'pending') <> 1 then raise exception 'K9/4 the owner cap was not honoured'; end if;
+  -- fix 5: a rejection is audited exactly once
+  pid := (public.fz_propose_office_money('donna', 'clawback', 100, null, 'rejection audit count check', 'jarvis') ->> 'proposal')::uuid;
+  perform public.fz_owner_decide_office_proposal(pid, false, 'no');
+  if (select count(*) from public.audit_log where target = 'fz_office_money_proposals/' || pid and action = 'office_money_rejected') <> 1 then raise exception 'K9/5 rejection not audited exactly once'; end if;
+  -- fix 7: anyone who is neither the service path nor scoped sees nothing, even with a mistaken grant
+  grant select on public.fz_approval_queue to anon;
+  grant execute on function public.is_group_scope(), public.current_office_id() to anon;   -- so the check cannot pass on a 'permission denied for function'
+  msg := pg_temp.as_id('anon', null, 'select count(*)::text from public.fz_approval_queue');
+  if msg <> 'OK:0' then raise exception 'K9/7 anon with a mistaken grant sees rows: %', msg; end if;
+  revoke select on public.fz_approval_queue from anon;
+  revoke execute on function public.is_group_scope(), public.current_office_id() from anon;
+  raise notice 'approvals_kernel_check: review fixes 1, 4, 5, 7 checked';
 end $$;
 
 -- K8 on the state the checks left: rolling M3 back changes no money control, deletes no request / proposal, keeps a queue snapshot

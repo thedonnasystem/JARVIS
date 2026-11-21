@@ -41,22 +41,26 @@ select q.request_type, q.source_id, q.office_id, o.slug as office, q.requester, 
        q.decided_by_path
   from q
   left join public.fz_offices o on o.id = q.office_id
- where coalesce(nullif(current_setting('role', true), ''), 'none') not in ('fz_jarvis', 'fz_office_agent', 'fz_auditor')
-    or (select public.is_group_scope())
-    or q.office_id = (select public.current_office_id());
+ where coalesce(nullif(current_setting('role', true), ''), 'none') in ('none', 'postgres', 'service_role')      -- review fix 7: an allowlist of who sees everything
+    or (coalesce(nullif(current_setting('role', true), ''), 'none') in ('fz_jarvis', 'fz_office_agent', 'fz_auditor')
+        and ((select public.is_group_scope()) or q.office_id = (select public.current_office_id())));   -- scoped: own office (group scope: all); anyone else: nothing
 
 revoke all on public.fz_approval_queue from public, anon, authenticated, service_role, fz_jarvis, fz_office_agent, fz_auditor;
 grant select on public.fz_approval_queue to service_role, fz_jarvis, fz_office_agent, fz_auditor;
 
 -- ---------------------------------------------------------------------------------------------------------------------------- expiry + cap (one rule for every type)
--- p_cap: pending requests allowed per office per type (action_approval: per action too). Returns how many it expired. Service (and the stamp job) only.
+-- p_cap: pending requests allowed per office per type (action_approval: per action too), honoured only for the owner / the database session (default 5).
+-- Returns how many it expired. Service path and cron only.
 create or replace function public.fz_queue_expire(p_cap integer default 5) returns integer
 language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare n int := 0; r record; v_cap int := greatest(coalesce(p_cap, 5), 1);
+declare n int := 0; r record; v_role text := coalesce(nullif(current_setting('role', true), ''), 'none'); v_cap int := 5;
 begin
-  if coalesce(nullif(current_setting('role', true), ''), 'none') in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
+  if v_role in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
     raise exception 'the approval queue is maintained on the service path only' using errcode = '42501';
   end if;
+  -- review fix 4: the cap is 5. Only the signed-in owner or the database's own session (the cron job / the owner's SQL session: no API role) may choose another one;
+  -- the bot's key (service_role) cannot mass-expire requests with a small cap.
+  if p_cap is not null and (coalesce(public.is_app_owner(), false) or v_role in ('none', 'postgres')) then v_cap := greatest(p_cap, 1); end if;
   -- 1. past expiry
   for r in update public.approval_requests set status = 'expired' where status = 'pending' and expires_at <= now() returning id, actor, action, cents loop
     insert into public.audit_log (actor, action, target, detail) values ('queue', 'approval_expired', 'approval_requests/' || r.id,
@@ -84,7 +88,8 @@ revoke all on function public.fz_queue_expire(integer) from public, anon, authen
 create or replace function public.fz_queue_audit_proposal() returns trigger
 language plpgsql security definer set search_path to 'pg_catalog' as $$
 begin
-  if new.status is distinct from old.status then
+  -- review fix 5: exactly one audit row per change. A rejection is already audited by fz_owner_decide_office_proposal (M2, 'office_money_rejected'), so it is skipped here.
+  if new.status is distinct from old.status and new.status <> 'rejected' then
     insert into public.audit_log (actor, action, target, detail) values (coalesce(new.decided_by, 'unknown'), 'office_money_' || new.status, 'fz_office_money_proposals/' || new.id,
       jsonb_build_object('from', old.status, 'to', new.status, 'kind', new.kind, 'office_id', new.office_id, 'cents', new.cents, 'reinvest_pct', new.reinvest_pct));
   end if;
@@ -99,7 +104,7 @@ create trigger fz_office_money_proposals_audit after update on public.fz_office_
 create or replace function public.fz_prepare_office_payment(p_actor text, p_payee text, p_cents integer, p_purpose text, p_alternatives text,
                                                             p_due date default null, p_venture_slug text default null) returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare o public.fz_offices; v_avail bigint; v_reason text; v_cents int := coalesce(p_cents, 0);
+declare o public.fz_offices; v_avail bigint; v_reason text; v_cents int := coalesce(p_cents, 0); res jsonb;
 begin
   if coalesce(nullif(current_setting('role', true), ''), 'none') in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
     raise exception 'the office payment gate is service-path only' using errcode = '42501';
@@ -108,10 +113,11 @@ begin
     select f.* into o from public.ventures v join public.fz_offices f on f.id = v.office_id where v.slug = p_venture_slug and f.kind = 'office';
   end if;
   if o.id is not null then
-    perform pg_advisory_xact_lock(7333);                                  -- the capital controller's lock: office check + reservation are one critical section
-    if o.status <> 'active' then
-      v_reason := format('Office %s is %s: it spends nothing until the owner activates it.', o.title, o.status);
-    else
+    perform pg_advisory_xact_lock(7333);                                  -- reserve_spend's lock, then authorize_action's: their order (no deadlock)
+    perform pg_advisory_xact_lock(7332);
+    -- review fix 1: M1's office layer exactly as fz_authorize_action applies it (status, office rule allowed / per-action cap / daily count)
+    v_reason := public.fz_office_refusal(o.id, 'payment_instruction', v_cents);
+    if v_reason is null then
       v_avail := public.fz_office_available_cents(o.id);
       if v_cents > 0 and coalesce(v_avail, 0) < v_cents then
         v_reason := format('Office %s has $%s available, the payment is $%s. Ask the owner for an allocation.', o.title,
@@ -125,7 +131,11 @@ begin
       return jsonb_build_object('decision', 'deny', 'reason', v_reason, 'office', o.slug, 'available_cents', v_avail);
     end if;
   end if;
-  return public.prepare_payment(p_actor, p_payee, p_cents, p_purpose, p_alternatives, p_due, p_venture_slug) || jsonb_build_object('office', coalesce(o.slug, 'group'));
+  res := public.prepare_payment(p_actor, p_payee, p_cents, p_purpose, p_alternatives, p_due, p_venture_slug);
+  if o.id is not null and res ->> 'decision' = 'allow' then                -- stamp the reservation to the office and label its allow row (the office daily count counts it)
+    perform public.fz_money_mark_office_allow((select reservation_id from public.payment_instructions where id = (res ->> 'instruction_id')::uuid), o.id, p_actor);
+  end if;
+  return res || jsonb_build_object('office', coalesce(o.slug, 'group'));
 end $$;
 revoke all on function public.fz_prepare_office_payment(text, text, integer, text, text, date, text) from public, anon, authenticated;
 

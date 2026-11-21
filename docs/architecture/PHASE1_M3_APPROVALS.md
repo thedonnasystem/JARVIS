@@ -72,3 +72,16 @@ No new table. One view (`fz_approval_queue`, metadata of confidential approval t
 ## 8. Next milestone (recommended)
 
 **M4: First live office.** Activate FF Marketing or Donna with its manager token, fund it, turn the flag on in a release, move Jarvis's read paths onto its scoped token, and add app buttons for the owner decisions (activate, allocate, decide proposals, approve actions) so nothing needs the SQL editor.
+
+## 9. Independent review fixes (Nov 21)
+
+| # | Finding | Fix | Regression test |
+|---|---|---|---|
+| 1 HIGH | The payment gate skipped M1's office rules | It applies `fz_office_refusal()` (M1) with the action `payment_instruction`, locks in reserve_spend's order, and stamps + labels the allowed reservation (`fz_money_mark_office_allow`), so the office daily count counts it | K9/1: allowed x cap x daily matrix (18 points, undone): never allows what `fz_authorize_action` refuses; the reservation is stamped; the next payment over the office daily limit is refused |
+| 4 LOW | `service_role` could call `fz_queue_expire(1)` and mass-expire | The cap is 5; a different cap is honoured only for the signed-in owner or the database session (cron / SQL editor) | K9/4 (the bot's cap 1 expires nothing; the database session's cap 1 does) |
+| 5 LOW | A rejection was audited twice | The trigger skips `rejected` (M2's decision function already audits it): exactly one row | K9/5 |
+| 7 LOW | The queue view listed the restricted roles | Allow-list, as M2 | K9/7 (anon granted select by mistake sees 0 rows) |
+
+Finding 4b (tell the owner in Telegram when he taps an already-expired approval) is **an owner decision**: the tap handler `hq_commands.apply_decision` is on the protected list. Today such a tap is harmless (`decide_approval` only changes pending requests) but silent.
+
+Known risks, not fixed here (protected objects): `authorize_action` matches an owner approval on action, ref and amount, **not on office**; `service_role` (the bot's key) can set `approval_requests` to approved (that is how the Telegram path works today).
