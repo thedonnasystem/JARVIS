@@ -153,8 +153,14 @@ begin
 
   -- S3 (review 2) no silent baseline: the first run already reports every item not on the reviewed list; standing findings are reported (and alerted once) every time
   select count(*) into n from public.owner_messages;
+  -- (after a rollback + re-apply the baseline is seeded from the archive: items it already holds as alerted / acknowledged are not new, but none may be 'expected')
+  select count(*) into g from public.fz_privileged_items() x where x.category = 'grant' and not x.item in (select public.fz_expected_grants())
+     and not exists (select 1 from public.fz_security_baseline b where b.item = x.item and b.status in ('alerted', 'acknowledged'));
   w := public.fz_security_watch();
-  if (w ->> 'new_items')::int <> (select count(*) from public.fz_privileged_items() x where x.category = 'grant' and not x.item in (select public.fz_expected_grants())) then raise exception 'S3 first run: %', w; end if;
+  if (w ->> 'new_items')::int <> g then raise exception 'S3 first run: % (want % new)', w, g; end if;
+  if exists (select 1 from public.fz_privileged_items() x where x.category = 'grant' and not x.item in (select public.fz_expected_grants())
+               and not exists (select 1 from public.fz_security_baseline b where b.item = x.item and b.status in ('alerted', 'acknowledged'))) then
+    raise exception 'S3 an item not on the reviewed list was silently baselined'; end if;
   if (w ->> 'standing')::int < 1 or not exists (select 1 from public.fz_security_alerts where kind = 'standing') then raise exception 'S3 standing findings not reported: %', w; end if;
   if not exists (select 1 from jsonb_array_elements_text(public.fz_security_report() -> 'standing') x where x = 'table:public.audit_log:service_role:UPDATE') then raise exception 'S3 service_role UPDATE on audit_log not standing'; end if;
   if (public.fz_security_watch() ->> 'alerts_sent')::int <> 0 then raise exception 'S3/5 a quiet run alerted again (dedupe)'; end if;
