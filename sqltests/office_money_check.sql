@@ -455,11 +455,13 @@ begin
   if (select proposed_by from public.fz_office_money_proposals where id = pid) ~ '[; ]' then raise exception 'M11/6 proposer name not cleaned'; end if;
   -- fix 7: a role that is neither the service path nor scoped sees NOTHING, even if granted select by mistake
   grant select on public.fz_office_money, public.fz_office_allocation_log to anon;
+  grant execute on function public.is_group_scope(), public.current_office_id() to anon;   -- so the check cannot pass on a 'permission denied for function'
   foreach res in array array['select count(*)::text from public.fz_office_money', 'select count(*)::text from public.fz_office_allocation_log'] loop
     msg := pg_temp.as_id('anon', null, res);
-    if msg <> 'OK:0' and msg not like 'ERR:permission denied for function%' then raise exception 'M11/7 anon with a mistaken grant sees rows: %', msg; end if;
+    if msg <> 'OK:0' then raise exception 'M11/7 anon with a mistaken grant sees rows: %', msg; end if;
   end loop;
   revoke select on public.fz_office_money, public.fz_office_allocation_log from anon;
+  revoke execute on function public.is_group_scope(), public.current_office_id() from anon;
   -- fix 8: proposing takes the per-office lock before counting (two concurrent proposals cannot both pass the 3-pending limit)
   k := hashtext('fzm_prop:' || A::text)::bigint;
   perform public.fz_propose_office_money('b2b-records', 'allocate', 100, null, 'lock check proposal', 'jarvis');
