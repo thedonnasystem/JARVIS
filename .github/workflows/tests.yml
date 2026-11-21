@@ -66,7 +66,7 @@ jobs:
     # the full gate: everything in `unit` plus the replica run (migrations, e2e, integration, rollback drill), the generated
     # function manifest, and the backup drill when the branch has one. --strict: a skipped required step is a failure.
     runs-on: ubuntu-latest
-    timeout-minutes: 75   # the integrated gate (replica + backup drill with paged export) takes ~45-50 min on hosted runners now (was cancelled at 50 on 6cba407)
+    timeout-minutes: 110   # the integrated gate (replica + backup drill with paged export): ~60 min at M4, over 75 with the M5 drills (cancelled at 75 on 4ad594f); was cancelled at 50 on 6cba407
     services:
       postgres:
         image: postgres:16
