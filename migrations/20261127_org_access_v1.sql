@@ -608,6 +608,32 @@ begin
 end $$;
 revoke all on function public.fz_policy_preview(text, integer) from public, anon, authenticated;
 
+-- The office layer, in one place (also used by the office spend gates of later milestones): why office p_office refuses p_action for p_cents now, or NULL.
+-- Refuses when the office is not active, or an office rule forbids the action, sets a lower per-action limit, or its daily count is reached (allows of this action
+-- logged with detail.office = the office). The caller takes the 7332 lock first. Read-only.
+create or replace function public.fz_office_refusal(p_office uuid, p_action text, p_cents integer) returns text
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare o public.fz_offices; op public.fz_office_action_policy; v_today int; v_start timestamptz; v_cents int := greatest(coalesce(p_cents, 0), 0);
+begin
+  select * into o from public.fz_offices where id = p_office;
+  if not found then return 'Unknown office: refused.'; end if;
+  if o.kind <> 'office' then return null; end if;                        -- the group itself has no office layer
+  if o.status <> 'active' then return format('Office %s is %s: its actions are refused until the owner activates it.', o.title, o.status); end if;
+  select * into op from public.fz_office_action_policy where office_id = o.id and action = p_action;
+  if not found then return null; end if;
+  if not op.allowed then return format('Not allowed in office %s (office rule).', o.title); end if;
+  if op.max_cents_per_action is not null and v_cents > op.max_cents_per_action then
+    return format('Over the %s office limit ($%s > $%s).', o.title, v_cents / 100.0, op.max_cents_per_action / 100.0);
+  end if;
+  if op.max_count_per_day is not null then
+    v_start := date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto';
+    select count(*) into v_today from public.action_log where action = p_action and decision = 'allow' and at >= v_start and detail ->> 'office' = o.slug;
+    if v_today >= op.max_count_per_day then return format('Office %s daily limit reached (%s per day).', o.title, op.max_count_per_day); end if;
+  end if;
+  return null;
+end $$;
+revoke all on function public.fz_office_refusal(uuid, text, integer) from public, anon, authenticated;
+
 -- The office-aware gate. Office layer first (can only refuse). Then:
 --   a SCOPED caller (fz roles) gets fz_policy_preview(): evaluate only. It never consumes an owner approval and never writes an allow row (allows count toward the caps);
 --     only refusals are logged. The real action still goes through authorize_action() on the service path when it is carried out.
@@ -616,8 +642,8 @@ revoke all on function public.fz_policy_preview(text, integer) from public, anon
 create or replace function public.fz_authorize_action(p_action text, p_cents integer default 0, p_ref text default null, p_office text default null, p_actor text default null,
                                                       p_venture uuid default null, p_mission uuid default null, p_detail jsonb default '{}'::jsonb) returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare r text := coalesce(nullif(current_setting('role', true), ''), 'none'); i record; o public.fz_offices; op public.fz_office_action_policy;
-        v_actor text; v_ident text; v_reason text; v_today int; v_start timestamptz; v_cents int := greatest(coalesce(p_cents, 0), 0); res jsonb;
+declare r text := coalesce(nullif(current_setting('role', true), ''), 'none'); i record; o public.fz_offices;
+        v_actor text; v_ident text; v_reason text; v_cents int := greatest(coalesce(p_cents, 0), 0); res jsonb;
 begin
   if r in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
     select * into i from public.fz_identity_now();
@@ -641,21 +667,7 @@ begin
   end if;
   if o.id is not null and o.kind = 'office' then
     perform pg_advisory_xact_lock(7332);                                  -- the same lock authorize_action takes: office counts and the group decision are one critical section
-    if o.status <> 'active' then
-      v_reason := format('Office %s is %s: its actions are refused until the owner activates it.', o.title, o.status);
-    else
-      select * into op from public.fz_office_action_policy where office_id = o.id and action = p_action;
-      if found then
-        v_start := date_trunc('day', now() at time zone 'America/Toronto') at time zone 'America/Toronto';
-        if not op.allowed then v_reason := format('Not allowed in office %s (office rule).', o.title);
-        elsif op.max_cents_per_action is not null and v_cents > op.max_cents_per_action then
-          v_reason := format('Over the %s office limit ($%s > $%s).', o.title, v_cents / 100.0, op.max_cents_per_action / 100.0);
-        elsif op.max_count_per_day is not null then
-          select count(*) into v_today from public.action_log where action = p_action and decision = 'allow' and at >= v_start and detail ->> 'office' = o.slug;
-          if v_today >= op.max_count_per_day then v_reason := format('Office %s daily limit reached (%s per day).', o.title, op.max_count_per_day); end if;
-        end if;
-      end if;
-    end if;
+    v_reason := public.fz_office_refusal(o.id, p_action, v_cents);
     if v_reason is not null then
       insert into public.action_log (actor, action, tier, decision, reason, cents, venture_id, mission_id, ref, detail)
         values (v_actor, p_action, (select tier from public.action_policy where action = p_action), 'deny', v_reason, v_cents, p_venture, p_mission, p_ref,

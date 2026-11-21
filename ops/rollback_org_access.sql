@@ -60,7 +60,7 @@ alter table public.ventures drop column if exists office_id, drop column if exis
 alter table public.missions drop column if exists office_id;
 alter table public.tasks drop column if exists office_id;
 alter table public.memory drop column if exists office_id;
-drop function if exists public.fz_authorize_action(text, integer, text, text, text, uuid, uuid, jsonb), public.fz_set_office_policy(text, text, boolean, integer, integer, text),
+drop function if exists public.fz_authorize_action(text, integer, text, text, text, uuid, uuid, jsonb), public.fz_office_refusal(uuid, text, integer), public.fz_set_office_policy(text, text, boolean, integer, integer, text),
   public.fz_owner_set_office_status(text, text), public.fz_owner_set_identity(text, text, text, boolean), public.fz_owner_set_workspace_office(uuid, text),
   public.fz_revoke_identity(text, text), public.fz_org_status(), public.fz_unregistered_tables(), public.fz_whoami(), public.fz_stamp_scoped_write(),
   public.fz_readable_workspaces(text), public.fz_agent_in_office(text, uuid), public.fz_policy_preview(text, integer), public.fz_reseed_preview(), public.fz_reseed_decisions(), public.fz_writable_offices(text), public.fz_readable_offices(text), public.is_group_scope(), public.current_office_id(),

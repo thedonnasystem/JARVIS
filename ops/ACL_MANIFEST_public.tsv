@@ -234,6 +234,7 @@ function	fz_authorize_action(text,integer,text,text,text,uuid,uuid,jsonb)	-	-	ex
 function	fz_claims()	-	-	execute	invoker		-
 function	fz_identity_now()	-	-	execute	security_definer		-
 function	fz_office_policy_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	fz_office_refusal(uuid,text,integer)	-	-	execute	security_definer		-
 function	fz_org_status()	-	-	execute	security_definer		-
 function	fz_owner_set_identity(text,text,text,boolean)	-	-	execute	security_definer		-
 function	fz_owner_set_office_status(text,text)	-	-	execute	security_definer		-
