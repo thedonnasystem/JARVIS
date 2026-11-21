@@ -1107,7 +1107,18 @@ async def hq_account_cmd(update, context) -> None:
 
 
 async def hq_office_cmd(update, context) -> None:
+    """/office  the corporate office. /office <name>  read-only status of one of the 8 offices (M7 office OS)."""
     if not _owner(update):
+        return
+    args = getattr(context, "args", None) or []
+    if args:
+        try:
+            import hq_office_os
+            text = hq_office_os.status_text(" ".join(args))
+        except Exception as e:
+            logger.exception("HQ office status failed")
+            text = f"Office status failed: {str(e)[:150]}"
+        await hq_core.reply_to(update.message, text[:4000])
         return
     await hq_core.reply_to(update.message, hq_office.office_text()[:4000])
 
@@ -1258,7 +1269,7 @@ MENU_HQUI = [("needs", "Everything waiting on you, ranked")]
 
 
 MENU = [
-    ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("gate", "Outreach gate and sender anchor"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office: the nine functions and who staffs them"), ("offices", "Office money: allocated, spent, revenue, profit, available"), ("approvals", "Everything waiting on your decision, one line each"), ("security", "Security report: audit chain, grants, identities, tokens"), ("services", "Shared services: owner office, tables, office stamp, scoped reads"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("gate", "Outreach gate and sender anchor"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office; /office <name>: one office's status, manager, agents, tiers"), ("offices", "Office money: allocated, spent, revenue, profit, available"), ("approvals", "Everything waiting on your decision, one line each"), ("security", "Security report: audit chain, grants, identities, tokens"), ("services", "Shared services: owner office, tables, office stamp, scoped reads"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
