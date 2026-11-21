@@ -31,6 +31,8 @@ echo "re-applying every migration (must be safe to run twice)"
 for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED on second apply: $f"; exit 1; }
 done
+# M4: the privileged grants of the fresh database are exactly the reviewed allowlist (ops/expected_grants.tsv == fz_expected_grants())
+python3 "$root/scripts/expected_grants.py" --url "$REPLICA_URL" --check || { echo "EXPECTED GRANTS CHECK FAILED (a grant changed: review it, then scripts/expected_grants.py --write)"; exit 1; }
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$here/e2e.sql" 2>&1 | grep -v NOTICE | cut -c1-200
 echo "perf: backup_snapshot() redaction cost on 2,000 audit rows + 200 tasks of 11.5k characters (budget 60 s, normal 5-8 s on the scratch machine)"
 "$root/scripts/perf_redaction.sh" "$REPLICA_URL" 2000 200 60 || { echo "PERF CHECK FAILED"; exit 1; }
@@ -203,13 +205,14 @@ grep -q "token rotation drill OK" "${TMPDIR:-/tmp}/replica.err" || { cat "${TMPD
 echo "token rotation drill OK"
 echo "security hardening rollback drill: ops/rollback_security_hardening.sql archives the chain / baseline / alerts / tokens (no row lost), removes the M4 functions and job (twice = idempotent), restores the office-money classification exactly, then everything re-applies"
 psql "$REPLICA_URL" -q -c "select public.fz_security_watch()" >/dev/null 2>&1 || true
-sr0="$(psql "$REPLICA_URL" -At -c "select (select count(*) from public.fz_audit_chain)||'/'||(select count(*) from public.fz_security_baseline)||'/'||(select count(*) from public.fz_security_alerts)||'/'||(select count(*) from public.fz_token_registry)")"
+sr0="$(psql "$REPLICA_URL" -At -c "select (select count(*) from public.fz_audit_chain)||'/'||(select count(*) from public.fz_audit_pending)||'/'||(select count(*) from public.fz_audit_state)||'/'||(select count(*) from public.fz_security_baseline)||'/'||(select count(*) from public.fz_security_fingerprints)||'/'||(select count(*) from public.fz_security_alerts)||'/'||(select count(*) from public.fz_token_registry)")"
+head0="$(psql "$REPLICA_URL" -At -c "select coalesce((select chain_hash from public.fz_audit_chain order by seq desc limit 1), 'none')")"
 for i in 1 2; do
   (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_security_hardening.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "SECURITY HARDENING ROLLBACK FAILED (run $i)"; exit 1; }
 done
-sr1="$(psql "$REPLICA_URL" -At -c "select (select count(*) from fz_archive.fz_audit_chain)||'/'||(select count(*) from fz_archive.fz_security_baseline)||'/'||(select count(*) from fz_archive.fz_security_alerts)||'/'||(select count(*) from fz_archive.fz_token_registry)")"
+sr1="$(psql "$REPLICA_URL" -At -c "select (select count(*) from fz_archive.fz_audit_chain)||'/'||(select count(*) from fz_archive.fz_audit_pending)||'/'||(select count(*) from fz_archive.fz_audit_state)||'/'||(select count(*) from fz_archive.fz_security_baseline)||'/'||(select count(*) from fz_archive.fz_security_fingerprints)||'/'||(select count(*) from fz_archive.fz_security_alerts)||'/'||(select count(*) from fz_archive.fz_token_registry)")"
 [ "$sr0" = "$sr1" ] || { echo "SECURITY HARDENING ROLLBACK DRILL FAILED: rows lost ($sr0 before, $sr1 archived)"; exit 1; }
-sh="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and proname in ('fz_audit_chain_extend','fz_audit_verify','fz_security_watch','fz_security_report','fz_privileged_items','fz_security_alert','fz_owner_ack_security','fz_owner_register_token','fz_audit_row_hash','fz_audit_link'))||'/'||(select count(*) from cron.job where jobname='fz-security-watch')||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname in ('fz_audit_chain','fz_security_baseline','fz_security_alerts','fz_token_registry'))||'/'||(select public.backup_export_policy()->>'unclassified')")"
+sh="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and proname in ('fz_audit_chain_extend','fz_audit_verify','fz_security_watch','fz_security_report','fz_privileged_items','fz_expected_grants','fz_security_alert','fz_owner_ack_security','fz_owner_register_token','fz_audit_row_hash','fz_audit_link'))||'/'||(select count(*) from cron.job where jobname='fz-security-watch')||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname in ('fz_audit_chain','fz_audit_pending','fz_audit_state','fz_security_baseline','fz_security_fingerprints','fz_security_alerts','fz_token_registry'))||'/'||(select public.backup_export_policy()->>'unclassified')")"
 [ "$sh" = "0/0/0/[]" ] || { echo "SECURITY HARDENING ROLLBACK DRILL FAILED: $sh"; exit 1; }
 c1="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.backup_classification()'::regprocedure))")"
 for f in 20261128_office_money_v1.sql 20261121_postlock_backup_identity_v1.sql 20261122_postlock_backup_identity_v2.sql; do
@@ -220,6 +223,7 @@ c2="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.backup_c
 for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the security hardening rollback: $f"; exit 1; }
 done
+[ "$(psql "$REPLICA_URL" -At -c "select coalesce((select chain_hash from public.fz_audit_chain order by seq desc limit 1), 'none')")" = "$head0" ] || { echo "SECURITY HARDENING ROLLBACK DRILL FAILED: the chain head was not seeded back from the archive"; exit 1; }
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/security_hardening_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "security_hardening_check failed after the rollback + re-apply"; exit 1; }
 echo "security hardening rollback drill OK (archived, nothing lost, office-money classification exact, then the migrations re-apply and the checks pass again)"
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_security_hardening.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "SECURITY HARDENING ROLLBACK (before the approvals kernel drill) FAILED"; exit 1; }   # security hardening uses the office money owner check

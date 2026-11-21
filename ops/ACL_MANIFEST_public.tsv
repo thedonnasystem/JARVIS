@@ -233,9 +233,10 @@ function	fz_append_only()	-	-	execute	invoker	trigger function: cannot be called
 function	fz_audit_chain_extend(integer)	-	-	execute	security_definer		-
 function	fz_audit_link(text,text)	-	-	execute	invoker		-
 function	fz_audit_row_hash(bigint,timestamp with time zone,text,text,text,jsonb)	-	-	execute	invoker		-
-function	fz_audit_verify()	-	-	execute	security_definer		-
+function	fz_audit_verify(boolean)	-	-	execute	security_definer		-
 function	fz_authorize_action(text,integer,text,text,text,uuid,uuid,jsonb)	-	-	execute	security_definer		-
 function	fz_claims()	-	-	execute	invoker		-
+function	fz_expected_grants()	-	-	execute	invoker		-
 function	fz_identity_now()	-	-	execute	security_definer		-
 function	fz_money_attribution_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	fz_money_do_allocate(text,integer,text,uuid)	-	-	execute	security_definer		-
@@ -273,7 +274,6 @@ function	fz_reseed_decisions()	-	-	execute	security_definer		-
 function	fz_reseed_preview()	-	-	execute	security_definer		-
 function	fz_reserve_office_spend(text,text,text,text,text,text,text,integer,boolean,integer,integer,uuid,uuid)	-	-	execute	security_definer		-
 function	fz_revoke_identity(text,text)	-	-	execute	security_definer		-
-function	fz_security_alert(text,text,jsonb,text)	-	-	execute	security_definer		-
 function	fz_security_report(integer)	-	-	execute	security_definer		-
 function	fz_security_watch()	-	-	execute	security_definer		-
 function	fz_set_office_policy(text,text,boolean,integer,integer,text)	-	-	execute	security_definer		-
@@ -520,6 +520,8 @@ table	ffm_sender_mark	-	-	select	rls=true		-
 table	ffm_suppression_expected	-	-	-	rls=true		-
 table	ffm_suppression_hashes	-	-	-	rls=true		-
 table	fz_audit_chain	-	-	select	rls=true		-
+table	fz_audit_pending	-	-	-	rls=true		-
+table	fz_audit_state	-	-	select	rls=true		-
 table	fz_identities	-	-	select	rls=true		-
 table	fz_money_attribution	-	-	select	rls=true		-
 table	fz_money_config	-	-	select	rls=true		-
@@ -531,6 +533,7 @@ table	fz_offices	-	-	select	rls=true		-
 table	fz_org_archive	-	-	select	rls=true		-
 table	fz_security_alerts	-	-	select	rls=true		-
 table	fz_security_baseline	-	-	select	rls=true		-
+table	fz_security_fingerprints	-	-	select	rls=true		-
 table	fz_table_registry	-	-	select	rls=true		-
 table	fz_token_registry	-	-	select	rls=true		-
 table	fz_workspace_offices	-	-	select	rls=true		-

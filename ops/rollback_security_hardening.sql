@@ -3,7 +3,7 @@
 -- (the sqltests set fz_in_txn and run it INSIDE their own rolled-back transaction.)
 -- Order: FIRST of the Phase 1 rollbacks (before ops/rollback_approvals_kernel.sql and ops/rollback_office_money.sql: it uses M2's owner check).
 -- 0. keeps the record: the chain head, the verify result and the alert / baseline / token counts go into ONE audit_log row; unschedules the watch job;
--- 1. ARCHIVES the four tables (rows intact) into schema fz_archive (no API privileges; an older archive moves on to fz_archive_<timestamp>); removes their registry rows;
+-- 1. ARCHIVES the seven tables (rows intact) into schema fz_archive (no API privileges; an older archive moves on to fz_archive_<timestamp>); removes their registry rows;
 -- 2. drops the M4 functions; restores backup_classification() INLINE to the exact 20261128_office_money_v1 text.
 -- Deletes no history. audit_log was never touched by M4.
 \if :{?fz_in_txn}
@@ -17,7 +17,7 @@ begin
     insert into public.audit_log (actor, action, target, detail)
       select 'rollback', 'security_hardening_export', 'fz_audit_chain', jsonb_build_object(
         'chain_rows', (select count(*) from public.fz_audit_chain), 'head', (select to_jsonb(c) from public.fz_audit_chain c order by seq desc limit 1),
-        'verify', case when to_regprocedure('public.fz_audit_verify()') is not null then public.fz_audit_verify() end,
+        'verify', case when to_regprocedure('public.fz_audit_verify(boolean)') is not null then public.fz_audit_verify(true) end,
         'alerts', (select count(*) from public.fz_security_alerts), 'baseline', (select count(*) from public.fz_security_baseline), 'tokens', (select count(*) from public.fz_token_registry));
   end if;
   if exists (select 1 from pg_namespace where nspname = 'cron') then
@@ -26,7 +26,7 @@ begin
   create schema if not exists fz_archive;
   revoke all on schema fz_archive from public;
   execute 'revoke all on schema fz_archive from anon, authenticated, service_role';
-  foreach t in array array['fz_audit_chain', 'fz_security_baseline', 'fz_security_alerts', 'fz_token_registry'] loop
+  foreach t in array array['fz_audit_chain', 'fz_audit_pending', 'fz_audit_state', 'fz_security_baseline', 'fz_security_fingerprints', 'fz_security_alerts', 'fz_token_registry'] loop
     continue when to_regclass('public.' || t) is null;
     for tr in select tgname from pg_trigger where tgrelid = ('public.' || t)::regclass and not tgisinternal loop
       execute format('drop trigger %I on public.%I', tr.tgname, t);
@@ -41,12 +41,12 @@ begin
     execute format('alter table public.%I set schema fz_archive', t);
   end loop;
   if to_regclass('public.fz_table_registry') is not null then
-    delete from public.fz_table_registry where relname in ('fz_audit_chain', 'fz_security_baseline', 'fz_security_alerts', 'fz_token_registry');
+    delete from public.fz_table_registry where relname in ('fz_audit_chain', 'fz_audit_pending', 'fz_audit_state', 'fz_security_baseline', 'fz_security_fingerprints', 'fz_security_alerts', 'fz_token_registry');
   end if;
 end $$;
 drop function if exists public.fz_security_report(integer), public.fz_owner_register_token(text, text, timestamptz, text), public.fz_owner_ack_security(text),
-  public.fz_security_watch(), public.fz_security_alert(text, text, jsonb, text), public.fz_privileged_items(), public.fz_audit_verify(), public.fz_audit_chain_extend(integer),
-  public.fz_audit_link(text, text), public.fz_audit_row_hash(bigint, timestamptz, text, text, text, jsonb);
+  public.fz_security_watch(), public.fz_security_alert(text, text, jsonb, text), public.fz_privileged_items(), public.fz_expected_grants(), public.fz_audit_verify(boolean),
+  public.fz_audit_verify(), public.fz_audit_chain_extend(integer), public.fz_audit_link(text, text), public.fz_audit_row_hash(bigint, timestamptz, text, text, text, jsonb);
 -- 2. backup classification: the exact 20261128_office_money_v1 text
 create or replace function public.backup_classification() returns table (table_name text, data_class text, note text)
 language sql immutable set search_path to 'pg_catalog' as $$

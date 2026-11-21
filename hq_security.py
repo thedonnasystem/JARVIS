@@ -19,7 +19,7 @@ def report() -> dict | None:
     except Exception as e:
         logger.info("security report unavailable: %s", e)
         return None
-    return r if isinstance(r, dict) and "privileged" in r else None
+    return r if isinstance(r, dict) and "standing" in r else None
 
 
 def security_text() -> str:
@@ -27,12 +27,18 @@ def security_text() -> str:
     if not r:
         return "Security report is not installed yet (migration pending)."
     chain = r.get("chain") or {}
-    priv = r.get("privileged") or []
-    new = [p for p in priv if str(p.get("status", "")).startswith("NEW") or p.get("status") == "alerted"]
-    lines = [f"Audit chain: {'OK' if chain.get('ok') else 'BROKEN'} ({int(chain.get('checked') or 0)} records checked"
-             + (f", {chain.get('break_count')} finding(s)" if not chain.get("ok") else "") + ")"]
-    lines.append(f"Privileged grants: {len(priv)} ({len(new)} new or not acknowledged)")
-    lines += [f"- {p.get('item')} [{p.get('status')}]" for p in new[:10]]
+    lines = [f"Audit chain: {'OK' if chain.get('ok') else 'BROKEN'} ({int(chain.get('checked') or 0)} links checked"
+             + (f", {chain.get('break_count')} finding(s)" if not chain.get("ok") else "") + (f", {chain.get('gaps')} gap(s)" if chain.get("gaps") else "") + ")"]
+    if chain.get("reinitialised_at"):
+        lines.append(f"Chain re-initialised {str(chain['reinitialised_at'])[:16]} (after a rollback)")
+    std = r.get("standing") or []
+    lines.append(f"STANDING findings: {len(std)} (API-role writes; fix them or apply ops/proposals/audit_ledger_append_only.sql)")
+    lines += [f"- {x}" for x in std[:8]] + ([f"- ... and {len(std) - 8} more"] if len(std) > 8 else [])
+    unexp = r.get("unexpected") or []
+    lines.append(f"Grants not on the reviewed list: {len(unexp)} (list has {int(r.get('expected_count') or 0)})")
+    lines += [f"- {p.get('item')} [{p.get('status')}]" for p in unexp[:8]] + ([f"- ... and {len(unexp) - 8} more"] if len(unexp) > 8 else [])
+    for c in (r.get("definer_changed") or [])[:3]:
+        lines.append(f"Definer function changed: {c.get('function')} at {str(c.get('changed_at') or '')[:16]}")
     nsp = r.get("definer_without_search_path") or []
     if nsp:
         lines.append(f"Definer functions without a pinned search_path: {len(nsp)}: " + ", ".join(nsp[:5]))
