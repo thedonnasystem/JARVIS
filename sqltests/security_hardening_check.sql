@@ -52,8 +52,10 @@ delete from fzs_tsv where item like '#%';
 -- S1 money controls unchanged: with M4 == after its rollback (twice) == after re-applying it
 \set fz_in_txn 1
 create temp table fzs_fp_with as select * from pg_temp.fz_money_fp();
+\ir ../ops/rollback_monitoring_brain.sql
 \ir ../ops/rollback_shared_services.sql
 \ir ../ops/rollback_security_hardening.sql
+\ir ../ops/rollback_monitoring_brain.sql
 \ir ../ops/rollback_shared_services.sql
 \ir ../ops/rollback_security_hardening.sql
 create temp table fzs_fp_without as select * from pg_temp.fz_money_fp();
@@ -251,6 +253,7 @@ end $$;
 create temp table fzs_rows as select (select count(*) from public.fz_audit_chain) c, (select count(*) from public.fz_security_alerts) a, (select count(*) from public.fz_security_baseline) b,
   (select count(*) from public.fz_token_registry) t, (select count(*) from public.fz_security_fingerprints) f, (select chain_hash from public.fz_audit_chain order by seq desc limit 1) head;
 create temp table fzs_fp_test as select * from pg_temp.fz_money_fp();
+\ir ../ops/rollback_monitoring_brain.sql
 \ir ../ops/rollback_shared_services.sql
 \ir ../ops/rollback_security_hardening.sql
 create temp table fzs_fp_test_without as select * from pg_temp.fz_money_fp();

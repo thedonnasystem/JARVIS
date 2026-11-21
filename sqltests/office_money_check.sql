@@ -65,11 +65,13 @@ select set_config('app.uid', '99999999-9999-9999-9999-99999999f002', true);
 \set fz_in_txn 1
 create temp table fzm_fp_with as select * from pg_temp.fz_money_fp();
 create temp table fzm_cut as select cutover_at from public.fz_money_config where id = 1;
+\ir ../ops/rollback_monitoring_brain.sql
 \ir ../ops/rollback_shared_services.sql
 \ir ../ops/rollback_security_hardening.sql
 \ir ../ops/rollback_approvals_kernel.sql
 \ir ../ops/rollback_office_money.sql
 create temp table fzm_fp_without as select * from pg_temp.fz_money_fp();
+\ir ../ops/rollback_monitoring_brain.sql
 \ir ../ops/rollback_shared_services.sql
 \ir ../ops/rollback_security_hardening.sql
 \ir ../ops/rollback_approvals_kernel.sql
@@ -491,6 +493,7 @@ end $$;
 create temp table fzm_fp_test as select * from pg_temp.fz_money_fp();
 create temp table fzm_rows as select (select count(*) from public.fz_office_allocations) al, (select count(*) from public.fz_office_money_proposals) pr,
   (select count(*) from public.fz_office_money_policy) po, (select count(*) from public.fz_money_attribution) att, (select cutover_at from public.fz_money_config) cut;
+\ir ../ops/rollback_monitoring_brain.sql
 \ir ../ops/rollback_shared_services.sql
 \ir ../ops/rollback_security_hardening.sql
 \ir ../ops/rollback_approvals_kernel.sql
