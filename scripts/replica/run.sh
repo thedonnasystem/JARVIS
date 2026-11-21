@@ -123,6 +123,7 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
 done
 echo "insurance rollback drill OK (and the migrations re-apply cleanly afterwards)"
 echo "jarvis hands rollback drill: ops/rollback_jarvis_hands.sql removes the hand objects (twice = idempotent), restores the export policy, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_org_access.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ORG ACCESS ROLLBACK (before the hands rollback) FAILED"; exit 1; }   # org access re-creates the hands backup classification
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_hands.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS HANDS ROLLBACK FAILED to run"; exit 1; }
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_hands.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS HANDS ROLLBACK is not idempotent"; exit 1; }
 jh="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and proname like 'hands\_%')||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'hand\_%' and relkind='r')||'/'||(select count(*) from public.executor_registry where slug like 'hands-%')||'/'||(select count(*) from public.backup_redaction_spec() where table_name like 'hand\_%')||'/'||(select public.backup_export_policy()->>'unclassified')")"
@@ -133,6 +134,7 @@ done
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/jarvis_hands_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "jarvis_hands_check failed after the rollback + re-apply"; exit 1; }
 echo "jarvis hands rollback drill OK"
 echo "jarvis core rollback drill: ops/rollback_jarvis_core.sql removes the core objects (twice = idempotent), keeps the export policy classified, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_org_access.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ORG ACCESS ROLLBACK (before the core rollback) FAILED"; exit 1; }   # org access depends on hands
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_hands.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS HANDS ROLLBACK (before the core rollback) FAILED"; exit 1; }   # hands depend on the core
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_core.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS CORE ROLLBACK FAILED to run"; exit 1; }
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_jarvis_core.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "JARVIS CORE ROLLBACK is not idempotent"; exit 1; }
@@ -172,4 +174,32 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
 done
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/ffm_run_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ffm_run_check failed after the rollback + re-apply"; exit 1; }
 echo "ffm execution rollback drill OK"
+if python3 -c "import psycopg2" 2>/dev/null; then   # the REAL hq._request token choice against the REAL RLS (pg_adapter plays PostgREST: role + claims), rolled back
+  echo "scoped identities through hq.py: offices isolated, fallback to the service path without tokens, stamped writes, refused approvals (test_hq_scoped.DbTests)"
+  (cd "$root" && FZ_DB_TESTS=1 REPLICA_URL="$REPLICA_URL" python3 -m unittest -q test_hq_scoped.DbTests >/dev/null 2>&1) || { (cd "$root" && FZ_DB_TESTS=1 REPLICA_URL="$REPLICA_URL" python3 -m unittest -q test_hq_scoped.DbTests 2>&1 | tail -20); echo "SCOPED IDENTITY DB TESTS FAILED"; exit 1; }
+  n_skip="$(cd "$root" && FZ_DB_TESTS=1 REPLICA_URL="$REPLICA_URL" python3 -m unittest -v test_hq_scoped.DbTests 2>&1 | grep -c 'skipped' || true)"
+  [ "$n_skip" = "0" ] || { echo "SCOPED IDENTITY DB TESTS were skipped"; exit 1; }
+elif [ -n "${REQUIRE_INTEGRATION:-}" ]; then echo "psycopg2 missing but REQUIRE_INTEGRATION is set"; exit 1; fi
+echo "org access rollback drill: ops/rollback_org_access.sql un-archives, removes the scoped roles / policies / columns / fz objects (twice = idempotent), restores the jarvis-hands backup classification exactly, then everything re-applies"
+arch="$(psql "$REPLICA_URL" -At -c "select coalesce(string_agg(entity || ':' || key || ':' || prior_status, ',' order by entity, key), '') from public.fz_org_archive where decision = 'archived' and entity in ('agent', 'department')")"
+for i in 1 2; do
+  (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_org_access.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ORG ACCESS ROLLBACK FAILED (run $i)"; exit 1; }
+done
+oa="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and (proname like 'fz\_%' or proname in ('current_identity','current_office','current_office_id','is_group_scope')))||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname like 'fz\_%')||'/'||(select count(*) from pg_policies where schemaname='public' and policyname like 'fz\_%')||'/'||(select count(*) from pg_attribute a join pg_class c on c.oid=a.attrelid where c.relnamespace='public'::regnamespace and a.attname in ('office_id','archived_at') and not a.attisdropped and c.relname in ('agents','departments','ventures','missions','tasks','memory','client_workspaces'))||'/'||(select count(*) from pg_roles r where r.rolname in ('fz_jarvis','fz_office_agent','fz_auditor') and (has_schema_privilege(r.rolname, 'public', 'usage') or exists (select 1 from pg_class c where c.relnamespace='public'::regnamespace and c.relkind in ('r','p','v','m') and has_table_privilege(r.rolname, c.oid, 'select,insert,update,delete')) or exists (select 1 from pg_proc p where p.pronamespace='public'::regnamespace and has_function_privilege(r.rolname, p.oid, 'execute'))))||'/'||(select count(*) from pg_trigger where tgname='tasks_fz_stamp')||'/'||(select public.backup_export_policy()->>'unclassified')")"
+[ "$oa" = "0/0/0/0/0/0/[]" ] || { echo "ORG ACCESS ROLLBACK DRILL FAILED: $oa"; exit 1; }
+if [ -n "$arch" ]; then
+  back="$(psql "$REPLICA_URL" -At -c "select string_agg(x, ',' order by x) from (select 'agent:' || slug || ':' || status x from public.agents union all select 'department:' || slug || ':' || status from public.departments) q where x = any (string_to_array('$arch', ','))")"
+  [ "$back" = "$arch" ] || { echo "ORG ACCESS ROLLBACK DRILL FAILED: archived rows not restored to their prior status (want $arch, got $back)"; exit 1; }
+fi
+c1="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.backup_classification()'::regprocedure))")"
+for f in 20261124_jarvis_hands_v1.sql 20261121_postlock_backup_identity_v1.sql 20261122_postlock_backup_identity_v2.sql; do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ORG ACCESS ROLLBACK DRILL: could not re-apply $f"; exit 1; }
+done
+c2="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.backup_classification()'::regprocedure))")"
+[ "$c1" = "$c2" ] || { echo "ORG ACCESS ROLLBACK DRILL FAILED: backup_classification() is not the jarvis-hands text ($c1 vs $c2)"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the org access rollback: $f"; exit 1; }
+done
+psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/org_access_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "org_access_check failed after the rollback + re-apply"; exit 1; }
+echo "org access rollback drill OK (archived rows restored, every M1 object removed, jarvis-hands classification exact, then the migrations re-apply and the checks pass again)"
 echo "REPLICA OK"

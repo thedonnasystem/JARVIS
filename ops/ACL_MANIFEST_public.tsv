@@ -103,6 +103,9 @@ function	create_agent(text,text,text,text,text,integer,text,text,text)	-	-	execu
 function	create_deal(uuid,integer,text,text)	-	-	execute	security_definer		-
 function	create_department(text,text,text,text)	-	-	execute	invoker		-
 function	create_venture(text,text,text,text,integer,text,text)	-	-	execute	invoker		-
+function	current_identity()	-	-	execute	security_definer		-
+function	current_office()	-	-	execute	security_definer		-
+function	current_office_id()	-	-	execute	security_definer		-
 function	daily_brief_core()	-	-	execute	invoker		-
 function	daily_brief_text()	-	-	execute	invoker		-
 function	dayjob_week_text()	-	-	execute	invoker		-
@@ -225,6 +228,28 @@ function	ffm_withdraw_consent(uuid,uuid,text,text,text,text)	-	-	execute	securit
 function	flag_underperformers()	-	-	execute	invoker		-
 function	forbid_policy_delete()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	forecast_bias_text()	-	-	execute	invoker		-
+function	fz_agent_in_office(text,uuid)	-	-	execute	security_definer		-
+function	fz_append_only()	-	-	execute	invoker	trigger function: cannot be called directly	-
+function	fz_authorize_action(text,integer,text,text,text,uuid,uuid,jsonb)	-	-	execute	security_definer		-
+function	fz_claims()	-	-	execute	invoker		-
+function	fz_identity_now()	-	-	execute	security_definer		-
+function	fz_office_policy_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	fz_office_refusal(uuid,text,integer)	-	-	execute	security_definer		-
+function	fz_org_status()	-	-	execute	security_definer		-
+function	fz_owner_set_identity(text,text,text,boolean)	-	-	execute	security_definer		-
+function	fz_owner_set_office_status(text,text)	-	-	execute	security_definer		-
+function	fz_owner_set_workspace_office(uuid,text)	-	-	execute	security_definer		-
+function	fz_policy_preview(text,integer)	-	-	execute	security_definer		-
+function	fz_readable_offices(text)	-	-	execute	security_definer		-
+function	fz_readable_workspaces(text)	-	-	execute	security_definer		-
+function	fz_reseed_decisions()	-	-	execute	security_definer		-
+function	fz_reseed_preview()	-	-	execute	security_definer		-
+function	fz_revoke_identity(text,text)	-	-	execute	security_definer		-
+function	fz_set_office_policy(text,text,boolean,integer,integer,text)	-	-	execute	security_definer		-
+function	fz_stamp_scoped_write()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	fz_unregistered_tables()	-	-	execute	security_definer		-
+function	fz_whoami()	-	-	execute	security_definer		-
+function	fz_writable_offices(text)	-	-	execute	security_definer		-
 function	guard_bank_balance()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	guard_capital_policy()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	hands_account_done(uuid,text,text)	-	-	execute	security_definer		-
@@ -244,6 +269,7 @@ function	hands_submit_action(text,uuid,text,jsonb,timestamp with time zone,boole
 function	hands_token_refreshed(uuid,text,timestamp with time zone)	-	-	execute	security_definer		-
 function	holding_pnl(integer)	-	-	execute	invoker		-
 function	is_app_owner()	-	execute	execute	security_definer		-
+function	is_group_scope()	-	-	execute	security_definer		-
 function	is_suppressed(text)	-	-	execute	security_definer		-
 function	jarvis_append_only()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	jarvis_automation_candidates(text[])	-	-	execute	security_definer		-
@@ -391,6 +417,7 @@ sequence	audit_log_id_seq	-	-	-			-
 sequence	ffm_redaction_epoch_seq	-	-	-			-
 sequence	ffm_restore_markers_id_seq	-	-	-			-
 sequence	ffm_run_receipts_id_seq	-	-	-			-
+sequence	fz_org_archive_id_seq	-	-	-			-
 sequence	jarvis_agent_wakes_id_seq	-	-	-			-
 sequence	jarvis_call_log_id_seq	-	-	-			-
 sequence	jarvis_changelog_id_seq	-	-	-			-
@@ -401,7 +428,7 @@ table	accounts_registry	delete,insert,references,select,trigger,truncate,update	
 table	action_log	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	action_policy	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	agent_runs	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
-table	agents	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	agents	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	alert_state	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	app_owners	-	-	select	rls=true		-
 table	approval_requests	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
@@ -417,7 +444,7 @@ table	contact_suppressions	insert,references,select,trigger	insert,references,se
 table	dayjob_days	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	dayjob_targets	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	deals	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
-table	departments	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	departments	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	escalations	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	evidence_sources	-	-	insert,references,select,trigger	rls=true		-
 table	executor_registry	-	-	select	rls=true		-
@@ -457,6 +484,12 @@ table	ffm_secrets	-	-	-	rls=true		-
 table	ffm_sender_mark	-	-	select	rls=true		-
 table	ffm_suppression_expected	-	-	-	rls=true		-
 table	ffm_suppression_hashes	-	-	-	rls=true		-
+table	fz_identities	-	-	select	rls=true		-
+table	fz_office_action_policy	-	-	select	rls=true		-
+table	fz_offices	-	-	select	rls=true		-
+table	fz_org_archive	-	-	select	rls=true		-
+table	fz_table_registry	-	-	select	rls=true		-
+table	fz_workspace_offices	-	-	select	rls=true		-
 table	hand_accounts	-	-	select	rls=true		-
 table	hand_actions	-	-	select	rls=true		-
 table	hand_connectors	-	-	select	rls=true		-
@@ -481,9 +514,9 @@ table	lead_replies	delete,insert,references,select,trigger,truncate,update	delet
 table	leads	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	ledger	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	llm_calls	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
-table	memory	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	memory	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	mission_outcomes	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
-table	missions	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	missions	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	model_prices	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	org_changes	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	outbox	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
@@ -500,13 +533,13 @@ table	setters	-	-	delete,insert,references,select,trigger,truncate,update	rls=tr
 table	spend_reservations	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	system_state	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	systems	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
-table	tasks	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	tasks	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	tool_registry	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
 table	venture_assets	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	venture_config	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	venture_goals	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	venture_procedures	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
-table	ventures	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=false		-
+table	ventures	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	waterfall_policy	-	-	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	web_messages	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	delete,insert,references,select,trigger,truncate,update	rls=true		-
 table	ws_approved_terms	-	-	select	rls=true		-

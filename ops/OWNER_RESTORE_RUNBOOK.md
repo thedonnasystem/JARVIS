@@ -11,6 +11,10 @@ do $$ begin create role anon nologin; exception when duplicate_object then null;
 do $$ begin create role authenticated nologin; exception when duplicate_object then null; end $$;
 do $$ begin create role service_role nologin; exception when duplicate_object then null; end $$;
 do $$ begin create role backup_reader nologin noinherit nobypassrls nocreatedb nocreaterole noreplication; exception when duplicate_object then null; end $$;   -- the backup identity (PR #16)
+do $$ begin create role fz_jarvis nologin noinherit nobypassrls nocreatedb nocreaterole noreplication; exception when duplicate_object then null; end $$;        -- Phase 1 M1 scoped identities (20261127_org_access_v1)
+do $$ begin create role fz_office_agent nologin noinherit nobypassrls nocreatedb nocreaterole noreplication; exception when duplicate_object then null; end $$;
+do $$ begin create role fz_auditor nologin noinherit nobypassrls nocreatedb nocreaterole noreplication; exception when duplicate_object then null; end $$;
+grant fz_jarvis, fz_office_agent, fz_auditor to authenticator;   -- only on Supabase/PostgREST (as in migration 20261127_org_access_v1), so the scoped tokens can switch to them
 grant backup_reader to authenticator;   -- only on Supabase/PostgREST (as in migration 20261121_postlock_backup_identity_v1), so BACKUP_READER_JWT can switch to it
 ```
 `backup_reader` is the backup identity added by the leak-redaction change; creating it on a database that does not have that change yet is harmless (it holds nothing). The restore drill does the same (`scripts/backup_drill.py`, check V9, restore into another cluster). A restore into the SAME project keeps the roles and needs none of this.
