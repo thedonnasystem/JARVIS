@@ -1,0 +1,68 @@
+{
+ "about": "Donna's first missions (owner direction v1). QUEUED, NOT RUN: hq_office_os.queue_missions('donna') creates them through hq_missions.create_mission only when Donna is ACTIVE (office_os_status) and the 'donna' venture exists; every step still passes the owner-approval and authorize_action rules. Fields are create_mission's arguments. No personal data.",
+ "office": "donna",
+ "inputs": "Missions 1 and 2 build on the completed Donna research summary.",
+ "missions": [
+  {
+   "key": "donna-m1-prospects",
+   "title": "Donna: Ottawa trades prospect list",
+   "venture": "donna",
+   "priority": 2,
+   "max_steps": 4,
+   "budget_cents": 0,
+   "objective": "Build a prospect list of Ottawa HVAC, plumbing and electrical businesses from PUBLIC business information only. For every entry record the CASL consent evidence: the URL where the business address or email is published, the date it was seen, and any 'no unsolicited messages' notice (such entries are excluded from outreach). No purchased lists, no personal data beyond published business contact details. Input: the completed research summary. Launch segment: Ottawa home-services trades (HVAC, plumbing, electrical). Law firms are the phase-2 test, not now. If this mission needs any spend, do not spend: file a funding request (hq_office_os.request_money: amount, purpose, expected return and payback, cheapest alternative considered, deadline). It is a proposal in the owner's /approvals queue only; existing limits still apply after approval ($25 per transaction, $75 per week, low-cost mode, hard stop).",
+   "checkpoint": {
+    "office": "donna",
+    "starts_after": "Donna active",
+    "external_contact": false
+   }
+  },
+  {
+   "key": "donna-m2-sales-kit",
+   "title": "Donna: sales kit (drafts only)",
+   "venture": "donna",
+   "priority": 2,
+   "max_steps": 6,
+   "budget_cents": 0,
+   "objective": "Draft Donna's sales kit, all as DRAFTS for the owner: (1) a missed-call audit script, (2) an owner callback script, (3) three CASL-compliant follow-up emails (sender identification, mailing address, working unsubscribe), (4) an offer sheet, (5) an onboarding checklist, (6) a pipeline tracker layout. Nothing is sent. Input: the completed research summary. Pricing (owner-set): Answer $497/mo + $497 setup; Capture $797/mo + $997 setup; Command $1,297/mo + $1,497 setup; Site $1,997 + $149/mo; Site Pro $3,997 + $249/mo; Bundle $997/mo for 12 months + $997 setup. The founding-client guarantee is PENDING owner approval: do not offer it. Launch segment: Ottawa home-services trades (HVAC, plumbing, electrical). Law firms are the phase-2 test, not now. If this mission needs any spend, do not spend: file a funding request (hq_office_os.request_money: amount, purpose, expected return and payback, cheapest alternative considered, deadline). It is a proposal in the owner's /approvals queue only; existing limits still apply after approval ($25 per transaction, $75 per week, low-cost mode, hard stop).",
+   "checkpoint": {
+    "office": "donna",
+    "starts_after": "Donna active",
+    "external_contact": false
+   }
+  },
+  {
+   "key": "donna-m3-demo-line",
+   "title": "Donna: demo line plan",
+   "venture": "donna",
+   "priority": 3,
+   "max_steps": 3,
+   "budget_cents": 0,
+   "objective": "Plan a demo phone/SMS line for the AI receptionist offer: provider options, monthly cost, setup steps, compliance notes. It needs a phone/SMS integration (not connected yet) and spend the owner approves: file a funding request for the demo line instead of spending, and stop at the plan until the owner approves both. If this mission needs any spend, do not spend: file a funding request (hq_office_os.request_money: amount, purpose, expected return and payback, cheapest alternative considered, deadline). It is a proposal in the owner's /approvals queue only; existing limits still apply after approval ($25 per transaction, $75 per week, low-cost mode, hard stop).",
+   "checkpoint": {
+    "office": "donna",
+    "starts_after": "Donna active",
+    "needs_owner": [
+     "phone/SMS integration",
+     "funding request approval"
+    ],
+    "external_contact": false
+   }
+  },
+  {
+   "key": "donna-m4-weekly-report",
+   "title": "Donna: weekly KPI report",
+   "venture": "donna",
+   "priority": 3,
+   "max_steps": 2,
+   "budget_cents": 0,
+   "objective": "Each week, report Donna's KPIs to the owner from the HQ ledger and pipeline: MRR, customer acquisition cost, conversion rate by stage, churn, and delivery status per client. Read-only; flag gaps in the data instead of estimating. If this mission needs any spend, do not spend: file a funding request (hq_office_os.request_money: amount, purpose, expected return and payback, cheapest alternative considered, deadline). It is a proposal in the owner's /approvals queue only; existing limits still apply after approval ($25 per transaction, $75 per week, low-cost mode, hard stop).",
+   "checkpoint": {
+    "office": "donna",
+    "starts_after": "Donna active",
+    "recurring": "weekly",
+    "external_contact": false
+   }
+  }
+ ]
+}

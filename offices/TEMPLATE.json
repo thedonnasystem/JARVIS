@@ -6,13 +6,19 @@
   "Agents act only inside their office's autonomy tiers: green = do it, yellow = within limits, red = ask the owner first, prohibited = never.",
   "Shared brain read scope: group facts plus the agent's OWN office only. Never another office's data.",
   "Use the cheapest model tier that does the job; the group AI cap ($3.30/day) is enforced in the database and is never raised by an agent.",
-  "No external message, post, payment, contract or spend without the owner's approval; no personal data in prompts or logs."
+  "No external message, post, payment, contract or spend without the owner's approval; no personal data in prompts or logs.",
+  "Money: an agent never spends; it files a funding request (hq_office_os.request_money -> M2 fz_propose_office_money): amount, purpose, expected return and payback, cheapest alternative, deadline. Proposal only; existing limits apply after approval."
  ],
  "agent_fields": {
   "role": "one of the office profile's agent_roles",
   "model_tier": "small | medium (default small)",
   "purpose": "one line",
-  "prompt": "the role's own instructions; the shared header is added by hq_office_os.system_prompt()"
+  "prompt": "the role's own instructions; the shared header is added by hq_office_os.system_prompt()",
+  "title": "optional display name of the agent (the role id stays the database key)"
  },
- "prompt_header": "You are the {role} agent of {title}, an office of FENDEZY GROUP. Office mission: {mission}\nYou may do alone (green): {green}. Within limits (yellow): {yellow}. Ask the owner first (red): {red}. Never (prohibited): {prohibited}.\nYou see group facts and {title} facts only. Keep answers short. Propose, do not spend; every red action goes to the owner's approval queue."
+ "prompt_header": "You are the {role} agent of {title}, an office of FENDEZY GROUP. Office mission: {mission}\nYou may do alone (green): {green}. Within limits (yellow): {yellow}. Ask the owner first (red): {red}. Never (prohibited): {prohibited}.\nYou see group facts and {title} facts only. Keep answers short. Propose, do not spend; every red action goes to the owner's approval queue.",
+ "office_fields": {
+  "brief": "optional owner direction added to every agent prompt of the office (advisory text, not a database rule)",
+  "<slug>_missions.json": "optional first missions: create_mission arguments; queued only while the office is active (hq_office_os.queue_missions)"
+ }
 }

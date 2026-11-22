@@ -134,4 +134,98 @@ def system_prompt(profile: dict, role: str, facts: list[dict] | None = None) -> 
                                               **{t: ", ".join(a.get(t) or []) or "-" for t in ("green", "yellow", "red", "prohibited")})
     scope = set(brain_scope(slug))
     fs = [str(f.get("fact") or "")[:300] for f in (facts or []) if isinstance(f, dict) and f.get("scope") in scope][:20]
-    return head + "\n\n" + agent["prompt"] + ("\n\nKnown facts:\n" + "\n".join("- " + x for x in fs if x) if fs else "")
+    brief = office_config(slug).get("brief")
+    return head + ("\n\n" + brief if brief else "") + "\n\n" + agent["prompt"] + ("\n\nKnown facts:\n" + "\n".join("- " + x for x in fs if x) if fs else "")
+
+
+# ---------------------------------------------------------------------------------------------------------------- office brief, missions, money requests
+def office_config(office: str) -> dict:
+    slug = resolve(office)
+    if not slug:
+        raise ValueError(f"unknown office {office!r}")
+    with open(os.path.join(DIR, f"{slug}.json")) as f:
+        return json.load(f)
+
+
+def _active(slug: str, rpc=None) -> tuple[bool, str]:
+    """(True, '') only when office_os_status says active and not drifting. Any error: refused (fail closed)."""
+    try:
+        s = (rpc or hq._request)("POST", "/rest/v1/rpc/office_os_status", {"p_office": slug})
+    except Exception as e:
+        return False, f"office status unreadable ({type(e).__name__})"
+    if not isinstance(s, dict) or s.get("office") != slug:
+        return False, "office status unreadable"
+    if s.get("status") != "active" or s.get("m1_status") != "active" or s.get("drift"):
+        return False, f"{slug} is {s.get('status')} (M1: {s.get('m1_status')}); nothing runs until the owner activates it"
+    return True, ""
+
+
+def missions(office: str) -> list[dict]:
+    """The office's first-mission templates (offices/<slug>_missions.json); [] if it has none."""
+    slug = resolve(office)
+    path = os.path.join(DIR, f"{slug}_missions.json") if slug else ""
+    if not path or not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return json.load(f)["missions"]
+
+
+def queue_missions(office: str, rpc=None, create=None, get=None) -> dict:
+    """Queue the office's first missions through hq_missions.create_mission, ONLY while the office is active. Idempotent by title.
+    Queued missions still run step by step through the task board, the owner approvals and authorize_action like every mission."""
+    slug = resolve(office)
+    if not slug:
+        return {"ok": False, "reason": f"unknown office {office!r}"}
+    ok, why = _active(slug, rpc)
+    if not ok:
+        return {"ok": False, "reason": why, "queued": []}
+    get = get or (lambda p: hq._request("GET", "/rest/v1/" + p) or [])
+    if not get(f"ventures?slug=eq.{urllib.parse.quote(slug)}&select=id&limit=1"):
+        return {"ok": False, "reason": f"no '{slug}' venture: missions would land in the idea lab, so none were queued", "queued": []}
+    if create is None:
+        import hq_missions
+        create = hq_missions.create_mission
+    queued, skipped = [], []
+    for m in missions(slug):
+        if get("missions?title=eq." + urllib.parse.quote(m["title"]) + "&select=id&limit=1"):
+            skipped.append(m["key"])
+            continue
+        r = create(m["objective"], venture=m["venture"], title=m["title"], budget_cents=m.get("budget_cents", 0), created_by=f"office:{slug}",
+                   priority=m.get("priority", 2), max_steps=m.get("max_steps"), checkpoint=dict(m.get("checkpoint") or {}, mission_key=m["key"]))
+        if r.get("error"):
+            return {"ok": False, "reason": r["error"], "queued": queued, "skipped": skipped}
+        queued.append(m["key"])
+    return {"ok": True, "queued": queued, "skipped": skipped}
+
+
+REQUEST_FIELDS = ("purpose", "expected_return", "payback", "cheapest_alternative", "deadline")
+
+
+def request_money(office: str, cents: int, purpose: str, expected_return: str, payback: str, cheapest_alternative: str, deadline: str,
+                  by: str = "agent", rpc=None, propose=None) -> dict:
+    """A funding request from an office agent. It is ONLY an M2 allocation proposal (fz_propose_office_money via hq_office_money.propose):
+    it lands in the owner's /approvals queue; no money moves and no cap or limit changes. Refused unless the office is active."""
+    slug = resolve(office)
+    if not slug:
+        return {"ok": False, "reason": f"unknown office {office!r}"}
+    ok, why = _active(slug, rpc)
+    if not ok:
+        return {"ok": False, "reason": why}
+    try:
+        cents = int(cents)
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "amount must be a whole number of cents"}
+    if cents <= 0:
+        return {"ok": False, "reason": "amount must be above $0"}
+    vals = dict(zip(REQUEST_FIELDS, (purpose, expected_return, payback, cheapest_alternative, deadline)))
+    missing = [k for k, v in vals.items() if len(str(v or "").strip()) < 3]
+    if missing:
+        return {"ok": False, "reason": "a funding request needs: " + ", ".join(missing)}
+    rationale = (f"FUNDING REQUEST ${cents / 100:,.2f}. Purpose: {vals['purpose']}. Expected return: {vals['expected_return']}. Payback: {vals['payback']}. "
+                 f"Cheapest alternative considered: {vals['cheapest_alternative']}. Deadline: {vals['deadline']}. "
+                 "Existing limits apply after approval ($25 per transaction, $75 per week, low-cost mode, hard stop).")
+    if propose is None:
+        import hq_office_money
+        propose = hq_office_money.propose
+    by = re.sub(r"[^A-Za-z0-9:_.-]", "", f"{slug}:{by}")[:60]
+    return propose(slug, "allocate", cents=cents, rationale=rationale[:2000], by=by)

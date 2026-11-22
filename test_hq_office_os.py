@@ -6,6 +6,7 @@ import re
 import sys
 import types
 import unittest
+import urllib.parse
 from unittest import mock
 
 import hq_office_os as O
@@ -36,7 +37,7 @@ class Template(unittest.TestCase):
             for a in d["agents"]:
                 self.assertIn(a["model_tier"], ("small", "medium"))
                 self.assertGreater(len(a["prompt"]), 40)
-        self.assertEqual(sorted(f for f in os.listdir(O.DIR)), sorted(["TEMPLATE.json"] + [f"{s}.json" for s in O.OFFICES]))
+        self.assertEqual(sorted(f for f in os.listdir(O.DIR)), sorted(["TEMPLATE.json", "donna_missions.json"] + [f"{s}.json" for s in O.OFFICES]))
 
     def test_no_personal_data_in_offices(self):
         blob = "".join(open(os.path.join(O.DIR, f)).read() for f in os.listdir(O.DIR)) + MIG
@@ -150,6 +151,96 @@ class Command(unittest.TestCase):
         for bad in ("fz_owner_", "\"PATCH\"", "\"DELETE\"", "\"PUT\""):
             self.assertNotIn(bad, src)
 
+
+
+def _status(**kw):
+    base = {"office": "donna", "status": "active", "m1_status": "active", "drift": False}
+    base.update(kw)
+    return lambda *a: base
+
+
+INACTIVE = [_status(status="dormant", m1_status="dormant"), _status(status="prepared", m1_status="dormant"),
+            _status(status="active", m1_status="dormant", drift=True), _status(status="dormant", m1_status="active", drift=True),
+            _status(office="monopoly"), mock.Mock(side_effect=RuntimeError("down"))]
+
+
+class DonnaV1(unittest.TestCase):
+    def test_brief_and_agents(self):
+        cfg = O.office_config("donna")
+        for want in ("Ottawa", "3 paying clients", "$500 to $1,000+", "setup fee plus support", "No niche is locked", "client portal", "funding request"):
+            self.assertIn(want, cfg["brief"])
+        self.assertEqual([a["title"] for a in cfg["agents"]], ["Market research", "Offer and pricing", "Outreach prep", "Delivery and onboarding"])
+        self.assertTrue(all(a["model_tier"] == "small" for a in cfg["agents"]))
+        p = O.system_prompt(PROFILE, "client-success")
+        self.assertIn("Owner direction v1", p)
+        self.assertIn("CASL-compliant", p)
+        self.assertIn("every send needs the owner's approval", p)
+
+    def test_missions_file(self):
+        ms = O.missions("donna")
+        self.assertEqual([m["key"] for m in ms], ["donna-m1-prospects", "donna-m2-sales-kit", "donna-m3-demo-line", "donna-m4-weekly-report"])
+        for m in ms:
+            self.assertEqual((m["venture"], m["budget_cents"], m["checkpoint"]["office"], m["checkpoint"]["external_contact"]), ("donna", 0, "donna", False))
+            self.assertIn("funding request", m["objective"])
+            self.assertGreater(len(m["objective"]), 100)
+        self.assertIn("PENDING owner approval", ms[1]["objective"])
+        self.assertIn("$1,297/mo + $1,497 setup", ms[1]["objective"])
+        self.assertIn("funding request approval", ms[2]["checkpoint"]["needs_owner"])
+        self.assertEqual(O.missions("monopoly"), [])
+
+    def test_no_mission_runs_while_donna_is_not_active(self):
+        for st in INACTIVE:
+            created, got = [], []
+            r = O.queue_missions("donna", rpc=st, create=lambda *a, **k: created.append(a) or {"id": "x"}, get=lambda p: got.append(p) or [{"id": "v"}])
+            self.assertFalse(r["ok"])
+            self.assertEqual((created, got), ([], []))
+
+    def test_queue_when_active(self):
+        created = []
+        existing = {"Donna: sales kit (drafts only)"}
+        get = lambda p: [{"id": "v"}] if p.startswith("ventures") or any(urllib.parse.quote(t) in p for t in existing) else []
+        r = O.queue_missions("donna", rpc=_status(), create=lambda obj, **k: created.append(k) or {"id": "m"}, get=get)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["skipped"], ["donna-m2-sales-kit"])
+        self.assertEqual([k["title"] for k in created], ["Donna: Ottawa trades prospect list", "Donna: demo line plan", "Donna: weekly KPI report"])
+        self.assertTrue(all(k["venture"] == "donna" and k["created_by"] == "office:donna" and k["budget_cents"] == 0 for k in created))
+        r = O.queue_missions("donna", rpc=_status(), create=lambda *a, **k: self.fail("created"), get=lambda p: [])
+        self.assertFalse(r["ok"])
+        self.assertIn("idea lab", r["reason"])
+
+
+class MoneyRequest(unittest.TestCase):
+    ARGS = dict(cents=2000, purpose="demo phone line", expected_return="1 client at $497/mo", payback="under 1 month", cheapest_alternative="free trial number", deadline="2026-12-15")
+
+    def test_refused_while_dormant(self):
+        for st in INACTIVE:
+            calls = []
+            r = O.request_money("donna", **self.ARGS, rpc=st, propose=lambda *a, **k: calls.append(a) or {"ok": True})
+            self.assertFalse(r["ok"])
+            self.assertEqual(calls, [])
+
+    def test_is_only_a_proposal(self):
+        calls = []
+        r = O.request_money("donna", **self.ARGS, by="offer pricing", rpc=_status(), propose=lambda *a, **k: calls.append((a, k)) or {"ok": True, "proposal": "p"})
+        self.assertTrue(r["ok"])
+        (a, k), = calls
+        self.assertEqual(a, ("donna", "allocate"))
+        self.assertEqual((k["cents"], k["by"]), (2000, "donna:offerpricing"))
+        for want in ("FUNDING REQUEST $20.00", "demo phone line", "1 client at $497/mo", "under 1 month", "free trial number", "2026-12-15", "$25 per transaction, $75 per week"):
+            self.assertIn(want, k["rationale"])
+        for bad in (dict(self.ARGS, cents=0), dict(self.ARGS, cents="x"), dict(self.ARGS, payback=""), dict(self.ARGS, cheapest_alternative=" ")):
+            self.assertFalse(O.request_money("donna", **bad, rpc=_status(), propose=lambda *a, **k: self.fail("proposed"))["ok"])
+
+    def test_m2_propose_never_moves_money(self):
+        import hq_office_money
+        names = []
+        with mock.patch.object(hq_office_money, "_rpc", side_effect=lambda n, b: names.append(n) or {"proposal": "p", "status": "pending"}):
+            r = O.request_money("donna", **self.ARGS, rpc=_status())
+        self.assertTrue(r["ok"])
+        self.assertEqual(names, ["fz_propose_office_money"])          # never fz_owner_allocate, a reservation or a payment
+        src = open(O.__file__).read()
+        for bad in ("fz_owner_allocate", "fz_reserve_office_spend", "reserve_spend", "prepare_payment", "hq_payments", "daily_spend_cap", "capital_policy"):
+            self.assertNotIn(bad, src)
 
 if __name__ == "__main__":
     unittest.main()
