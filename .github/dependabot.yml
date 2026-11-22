@@ -27,4 +27,32 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    cooldown:
+      default-days: 7        # a release must be a week old before Dependabot proposes it (version updates only; security updates are not delayed)
+    labels: ["dependencies"]
+  # PWA smoke-test toolchain (webtests/package-lock.json, jsdom). Dev only, never deployed. Majors arrive as their own PR and wait 14 days
+  # (jsdom majors raise the Node engines floor; the gate's `node >= 20` skip rule must be revisited with them).
+  - package-ecosystem: "npm"
+    directory: "/webtests"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 3
+    groups:
+      npm-minor-and-patch:
+        update-types: ["minor", "patch"]
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    labels: ["dependencies"]
+  # Agent Swarm pilot images (compose `image:` lines). UNVERIFIED: whether Dependabot's docker-compose scanner matches the filename
+  # docker-compose.hardened.yml; if not it logs "no manifests" harmlessly and integrations/agent-swarm/hardening/resolve_image_digests.py
+  # (workflow swarm-image-digests) is the fallback. desplega-ai images are ignored on purpose: a Swarm version change invalidates the
+  # worker-gate allow-list evidence (54 of 509 operations) and must be a deliberate, re-verified owner decision, not a bot PR.
+  - package-ecosystem: "docker-compose"
+    directory: "/integrations/agent-swarm/hardening"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "ghcr.io/desplega-ai/*"
+    cooldown:
+      default-days: 14
     labels: ["dependencies"]
