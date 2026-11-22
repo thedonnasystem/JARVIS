@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.27.1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 # Derived from the stock Agent Swarm worker image. Purpose: run with `user: 1001:1001`, `cap_drop: [ALL]`,
 # `read_only: true`, `no-new-privileges`, with NO root phase at runtime. All root work happens here, at build time.
 # Build out-of-band on the Docker host (the pilot compose never builds or pulls):
@@ -6,7 +6,7 @@
 #     -t fendezy/swarm-worker-hardened:2.13.2 -f Dockerfile.worker-hardened .
 #   docker image inspect -f '{{.Id}}' fendezy/swarm-worker-hardened:2.13.2    # -> image: sha256:<id> in the compose file
 # UNVERIFIED: this file has only been linted (hadolint) and statically checked here; it has never been built.
-ARG BASE_IMAGE=ghcr.io/desplega-ai/agent-swarm-worker:2.13.2@sha256:0000000000000000000000000000000000000000000000000000000000000000
+ARG BASE_IMAGE=ghcr.io/desplega-ai/agent-swarm-worker:2.13.2@sha256:b69f29b6c1a7c54c2cd294c02061218e37779a24c56e1dc44f5c2ff241efb3f5
 FROM ${BASE_IMAGE}
 
 USER 0:0

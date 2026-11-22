@@ -1,6 +1,6 @@
 """Unit tests for verify_swarm_controls.py. Good fixture = the real hardened compose; bad fixtures are single-fault
 mutations of it, written to tests/fixtures/ (kept on disk for inspection). Run: python3 -m unittest discover -s tests -v"""
-import copy, json, os, shutil, subprocess, sys, unittest
+import copy, json, os, re, shutil, subprocess, sys, unittest
 import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -68,7 +68,7 @@ class Good(unittest.TestCase):
     def test_good_passes_static(self):
         rep = run(GOOD)
         self.assertFalse(rep.failed, [r for r in rep.rows if r["status"] == "FAIL"])
-        self.assertEqual(sum(r["id"].startswith("C") and r["id"][1:].isdigit() and r["status"] == "PASS" for r in rep.rows), 21)
+        self.assertEqual(sum(r["id"].startswith("C") and r["id"][1:].isdigit() and r["status"] == "PASS" for r in rep.rows), 22)
 
     def test_cli_exit_codes(self):
         self.assertEqual(v.main([GOOD, "--no-runtime"]), 0)
@@ -173,7 +173,7 @@ def patched_cases():
         ("entrypoint_accepts_any_key", {ent: rep_('aseph_*) ;;', '*) ;;')}, "C20"),
         ("dockerfile_user_root", {dock: rep_('USER 1001:1001\nRUN HOME', 'USER 0:0\nRUN HOME')}, "C20"),
         ("dockerfile_uid_drift", {dock: rep_('"$(id -u worker)" = "1001"', '"$(id -u worker)" = "1002"')}, "C20"),
-        ("dockerfile_unpinned_base", {dock: rep_('@sha256:0000000000000000000000000000000000000000000000000000000000000000', '')}, "C20"),
+        ("dockerfile_unpinned_base", {dock: lambda t: re.sub(r'(ARG BASE_IMAGE=\S+?)@sha256:[0-9a-f]{64}', r'\1', t)}, "C20"),
         ("dockerfile_no_seed", {dock: lambda t: t.replace("worker-home-seed", "x-seed")}, "C20"),
         ("dockerfile_gosu_entry", {dock: rep_('ENTRYPOINT ["/usr/local/bin/entrypoint-hardened.sh"]', 'ENTRYPOINT ["gosu", "worker", "/docker-entrypoint.sh"]')}, "C20"),
         ("api_env_has_model_key", {"secrets.example/api.env.example": lambda t: t + "\nANTHROPIC_API_KEY=x\n"}, "C21"),
@@ -273,6 +273,31 @@ class RuntimeInspect(unittest.TestCase):
         for n, m in muts.items():
             with self.subTest(case=n):
                 self.assertTrue(self.check(m).failed)
+
+
+class DockerfilePins(unittest.TestCase):
+    """C22: the Dockerfile's `# syntax=` frontend and ARG base digest. WARN without --strict, FAIL with it (C01 only looked at the compose)."""
+
+    def _fix(self, name, fn):
+        return write(name, load(), patch={"worker/Dockerfile.worker-hardened": fn})
+
+    def test_placeholder_arg_digest(self):
+        p = self._fix("dockerfile_arg_placeholder", lambda t: re.sub(r"(ARG BASE_IMAGE=\S+?@sha256:)[0-9a-f]{64}", r"\g<1>" + "0" * 64, t))
+        self.assertEqual(status(run(p), "C22w"), "WARN")
+        self.assertFalse(run(p).failed)
+        self.assertEqual(status(run(p, strict=True), "C22"), "FAIL")
+
+    def test_unpinned_syntax_directive(self):
+        p = self._fix("dockerfile_syntax_unpinned", lambda t: re.sub(r"^# syntax=\S+", "# syntax=docker/dockerfile:1", t, count=1))
+        self.assertEqual(status(run(p), "C22w"), "WARN")
+        self.assertEqual(status(run(p, strict=True), "C22"), "FAIL")
+
+    def test_missing_syntax_directive(self):
+        p = self._fix("dockerfile_syntax_missing", lambda t: t.split("\n", 1)[1])
+        self.assertEqual(status(run(p, strict=True), "C22"), "FAIL")
+
+    def test_real_dockerfile_passes(self):
+        self.assertEqual(status(run(GOOD, strict=True), "C22"), "PASS")
 
 
 if __name__ == "__main__":
