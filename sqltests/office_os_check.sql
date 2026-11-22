@@ -125,10 +125,10 @@ begin
   -- O3 privileges: no API role reaches the schema or the table; nobody but the service path executes the functions
   foreach r in array ROLES loop
     if has_schema_privilege(r, 'fz_office_os', 'usage') or has_schema_privilege(r, 'fz_office_os', 'create') then raise exception 'O3 % reaches the schema', r; end if;
-    foreach f in array array['fz_office_profiles', 'fz_office_decisions', 'fz_office_drift', 'fz_office_invoices', 'fz_billing_plans'] loop
+    foreach f in array array['fz_office_profiles', 'fz_office_decisions', 'fz_office_drift', 'fz_office_invoices', 'fz_billing_plans', 'fz_billing_log'] loop
       if has_table_privilege(r, ('fz_office_os.' || f)::regclass, 'select,insert,update,delete,truncate,references,trigger') then raise exception 'O3 % holds a privilege on %', r, f; end if;
     end loop;
-    foreach f in array array['office_os_set_manager(text,text)', 'office_os_activate(text)', 'office_os_decide(text,text,boolean)', 'office_os_deactivate(text)', 'office_os_status(text)', 'office_os_drift_check()', 'office_os_invoice_record(text,text,text,text,integer,text,text)', 'office_os_invoice_request_send(uuid)', 'office_os_invoice_decide(uuid,integer,boolean)', 'office_os_invoice_claim_send(uuid)', 'office_os_invoice_mark_sent(uuid,boolean)', 'office_os_invoices(integer)', 'office_os_plan_propose(text,text,text,integer,text,text)', 'office_os_plan_decide(uuid,integer,text,boolean)', 'office_os_plan_revoke(uuid)', 'office_os_invoice_record_plan(uuid,text,text,integer,text,text)', 'office_os_plans()'] loop
+    foreach f in array array['office_os_set_manager(text,text)', 'office_os_activate(text)', 'office_os_decide(text,text,boolean)', 'office_os_deactivate(text)', 'office_os_status(text)', 'office_os_drift_check()', 'office_os_invoice_record(text,text,text,text,integer,text,text)', 'office_os_invoice_request_send(uuid)', 'office_os_invoice_decide(uuid,integer,boolean)', 'office_os_invoice_claim_send(uuid)', 'office_os_invoice_mark_sent(uuid,boolean)', 'office_os_invoices(integer)', 'office_os_plan_propose(text,text,text,integer,text,text)', 'office_os_plan_decide(uuid,integer,text,boolean)', 'office_os_plan_revoke(uuid)', 'office_os_invoice_record_plan(uuid,text,text,integer,text,text)', 'office_os_plans()', 'office_os_plan_cancel(uuid)', 'office_os_plan_past_due(uuid,text)', 'office_os_plan_resume(uuid)', 'office_os_invoice_observe(uuid,text)', 'office_os_billing_log(integer)'] loop
       if r <> 'service_role' and has_function_privilege(r, ('public.' || f)::regprocedure, 'execute') then raise exception 'O3 % executes %', r, f; end if;
     end loop;
   end loop;
@@ -342,6 +342,52 @@ begin
   j := (substr(pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0008', 'test', 79700, 'cad', 'month')::text$q$, j ->> 'plan')), 4))::jsonb;
   if pg_temp.svc(format('select public.office_os_invoice_claim_send(%L)::text', j ->> 'invoice')) not like 'OK:%in_fzoplan0008%' then raise exception 'O15 an approved plan invoice cannot be sent'; end if;
   if jsonb_array_length((substr(pg_temp.svc('select public.office_os_plans()::text'), 4))::jsonb) <> 2 then raise exception 'O15 plans list'; end if;
+  perform public.office_os_deactivate('donna');
+
+  -- O16 billing hardening: append-only billing log of every event; payment failure stops a plan (once, owner told), only the owner resumes; owner-only cancel, no refund
+  j := public.office_os_activate('donna'); perform public.office_os_decide('donna', j ->> 'nonce', true); perform public.office_os_activate('donna');
+  j := (substr(pg_temp.svc($q$select public.office_os_plan_propose('donna', 'Fzo Roofing', 'cus_fzotest03', 49700, 'cad', 'month')::text$q$), 4))::jsonb;
+  v_req := (j ->> 'plan')::uuid;
+  perform public.office_os_plan_decide(v_req, 49700, 'month', true);
+  j := (substr(pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzohard001', 'test', 49700, 'cad', 'month')::text$q$, v_req)), 4))::jsonb;
+  v_req2 := (j ->> 'invoice')::uuid;
+  perform pg_temp.svc(format('select public.office_os_invoice_claim_send(%L)::text', v_req2));
+  perform pg_temp.svc(format('select public.office_os_invoice_mark_sent(%L, true)::text', v_req2));
+  if (select string_agg(event, ',' order by id) from fz_office_os.fz_billing_log where plan_id = v_req) is distinct from 'requested,approved,drafted,approved,sent' then
+    raise exception 'O16 billing log: %', (select string_agg(event, ',' order by id) from fz_office_os.fz_billing_log where plan_id = v_req); end if;
+  -- append-only: even the table owner is refused; no API role has any privilege
+  begin update fz_office_os.fz_billing_log set event = 'paid' where plan_id = v_req; raise exception 'O16-x'; exception when insufficient_privilege then null; end;
+  begin delete from fz_office_os.fz_billing_log where plan_id = v_req; raise exception 'O16-x'; exception when insufficient_privilege then null; end;
+  begin truncate fz_office_os.fz_billing_log; raise exception 'O16-x'; exception when insufficient_privilege then null; end;
+  foreach r in array ROLES loop
+    if has_table_privilege(r, 'fz_office_os.fz_billing_log', 'select,insert,update,delete,truncate') then raise exception 'O16 % holds a privilege on the billing log', r; end if;
+  end loop;
+  -- paid is logged once (revenue only: no ledger row)
+  n0 := (select count(*) from public.ledger);
+  perform pg_temp.svc(format($q$select public.office_os_invoice_observe(%L, 'paid')::text$q$, v_req2));
+  if pg_temp.svc(format($q$select public.office_os_invoice_observe(%L, 'paid')::text$q$, v_req2)) not like 'OK:%"logged": false%' then raise exception 'O16 paid logged twice'; end if;
+  if (select count(*) from fz_office_os.fz_billing_log where invoice_id = v_req2 and event = 'paid') <> 1 or (select count(*) from public.ledger) <> n0 then raise exception 'O16 paid observation'; end if;
+  -- payment failure: past_due once, owner told once, no more auto invoices or sends; the bot cannot resume
+  n0 := (select count(*) from public.owner_messages where body like 'Billing stopped:%Fzo Roofing%');
+  if pg_temp.svc(format($q$select public.office_os_plan_past_due(%L, 'invoice uncollectible')::text$q$, v_req)) not like 'OK:%"changed": true%' then raise exception 'O16 past due'; end if;
+  if pg_temp.svc(format($q$select public.office_os_plan_past_due(%L, 'again')::text$q$, v_req)) not like 'OK:%"changed": false%' then raise exception 'O16 past due twice'; end if;
+  if (select count(*) from public.owner_messages where body like 'Billing stopped:%Fzo Roofing%') <> n0 + 1 then raise exception 'O16 the owner was not alerted exactly once'; end if;
+  if pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzohard002', 'test', 49700, 'cad', 'month')::text$q$, v_req)) not like 'ERR:refused: plan is past_due%' then raise exception 'O16 a past-due plan billed'; end if;
+  if pg_temp.svc(format('select public.office_os_plan_resume(%L)::text', v_req)) not like 'ERR:owner approval required%' then raise exception 'O16 the bot resumed'; end if;
+  if pg_temp.noowner(format('select public.office_os_plan_resume(%L)::text', v_req)) not like 'ERR:owner approval required%' then raise exception 'O16 no-owner resumed'; end if;
+  perform public.office_os_plan_resume(v_req);
+  if (select status from fz_office_os.fz_billing_plans where id = v_req) is distinct from 'approved' then raise exception 'O16 resume'; end if;
+  -- cancellation: owner only, immediate, no refund, logged
+  if pg_temp.svc(format('select public.office_os_plan_cancel(%L)::text', v_req)) not like 'ERR:owner approval required%' then raise exception 'O16 the bot cancelled'; end if;
+  j := public.office_os_plan_cancel(v_req);
+  if (j ->> 'refund')::boolean or (select status from fz_office_os.fz_billing_plans where id = v_req) is distinct from 'cancelled' then raise exception 'O16 cancel %', j; end if;
+  if pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzohard003', 'test', 49700, 'cad', 'month')::text$q$, v_req)) not like 'ERR:refused: plan is cancelled%' then raise exception 'O16 a cancelled plan billed'; end if;
+  if pg_temp.owner(format('select public.office_os_plan_resume(%L)::text', v_req)) not like 'ERR:refused: plan % is not past due%' then raise exception 'O16 a cancelled plan resumed'; end if;
+  if (select string_agg(event, ',' order by id) from fz_office_os.fz_billing_log where plan_id = v_req and event in ('past_due', 'resumed', 'cancelled')) is distinct from 'past_due,resumed,cancelled'
+     or (select detail ->> 'refund' from fz_office_os.fz_billing_log where plan_id = v_req and event = 'cancelled') is distinct from 'false' then raise exception 'O16 log of stop / resume / cancel'; end if;
+  if jsonb_array_length((substr(pg_temp.svc('select public.office_os_billing_log(50)::text'), 4))::jsonb) < 10 or pg_temp.as_id('anon', null, 'select public.office_os_billing_log(5)::text') not like 'ERR:permission denied%' then raise exception 'O16 log read'; end if;
+  if (select e -> 'last_invoice' ->> 'stripe_id' from jsonb_array_elements((substr(pg_temp.svc('select public.office_os_plans()::text'), 4))::jsonb) e where e ->> 'id' = v_req::text) is distinct from 'in_fzohard001' then
+    raise exception 'O16 last invoice in plans'; end if;
   perform public.office_os_deactivate('donna');
 
   -- O12 nothing outside M7 changed shape: the profile table is not in public, not registered, nothing unregistered / unclassified

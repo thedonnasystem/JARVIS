@@ -1107,7 +1107,7 @@ async def hq_account_cmd(update, context) -> None:
 
 
 async def hq_invoices_cmd(update, context) -> None:
-    """/invoices  owner only: list; request <id> (send approval); send <id> (approved one); plans; bill <office> (this period of each approved plan)."""
+    """/invoices  owner only: list; request <id>; send <id>; plans; bill <office>; check <office> (payment failures); cancel <plan> (immediate, no refund); log."""
     if not _owner(update):
         return
     args = getattr(context, "args", None) or []
@@ -1121,6 +1121,14 @@ async def hq_invoices_cmd(update, context) -> None:
             text = f"Billing plans: {len(r['sent'])} sent, {len(r['refused'])} refused." + "".join(f"\n- refused: {x['reason']}" for x in r["refused"])
         elif args == ["plans"]:
             text = hq_invoices.plans_text()
+        elif args == ["log"]:
+            text = hq_invoices.log_text()
+        elif len(args) == 2 and args[0] == "cancel":
+            r = hq_invoices.cancel_plan(args[1])
+            text = f"Plan {r.get('plan')} cancelled now: no future invoices, nothing refunded."
+        elif len(args) == 2 and args[0] == "check":
+            r = hq_invoices.check_plans(args[1])
+            text = f"Payments checked: {len(r['paid'])} paid, {len(r['past_due'])} stopped as past due (resume: office_os_plan_resume in the SQL editor)."
         elif len(args) == 2 and args[0] == "send":
             r = hq_invoices.send(args[1])
             text = f"Invoice sent ({r.get('mode')} mode)."

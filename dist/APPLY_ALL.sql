@@ -16186,6 +16186,7 @@ begin
     returning id into v_id;
   insert into public.audit_log (actor, action, target, detail)
     values ('office_os', 'invoice_drafted', 'fz_office_invoices/' || v_id, jsonb_build_object('office', p.slug, 'kind', p_kind, 'mode', p_mode, 'cents', p_cents, 'currency', lower(p_currency)));
+  perform fz_office_os.log_event(p.slug, null, v_id, 'drafted', 'office_os', jsonb_build_object('kind', p_kind, 'mode', p_mode, 'cents', p_cents, 'currency', lower(p_currency)));
   return jsonb_build_object('invoice', v_id, 'status', 'draft');
 end $$;
 revoke all on function public.office_os_invoice_record(text, text, text, text, integer, text, text) from public, anon, authenticated;
@@ -16210,6 +16211,7 @@ begin
             i.slug, to_char(i.cents / 100.0, 'FM999,999,990.00'), upper(i.currency), i.mode), false, 'approval_requests', v_req);
   update fz_office_os.fz_office_invoices set status = 'send_requested', approval_request = v_req, updated_at = now() where id = i.id;
   insert into public.audit_log (actor, action, target, detail) values ('office_os', 'invoice_send_requested', 'fz_office_invoices/' || i.id, jsonb_build_object('approval', v_req));
+  perform fz_office_os.log_event(i.slug, i.plan_id, i.id, 'requested', 'office_os', jsonb_build_object('approval', v_req));
   return jsonb_build_object('invoice', i.id, 'ok', true, 'status', 'send_requested', 'approval', v_req);
 end $$;
 revoke all on function public.office_os_invoice_request_send(uuid) from public, anon, authenticated;
@@ -16227,6 +16229,7 @@ begin
   update fz_office_os.fz_office_invoices set status = case when coalesce(p_approved, false) then 'approved' else 'rejected' end, decided_at = now(), updated_at = now() where id = i.id;
   update public.approval_requests set status = case when coalesce(p_approved, false) then 'approved' else 'rejected' end, decided_at = now() where id = i.approval_request and status = 'pending';
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'invoice_send_decided', 'fz_office_invoices/' || i.id, jsonb_build_object('approved', coalesce(p_approved, false)));
+  perform fz_office_os.log_event(i.slug, i.plan_id, i.id, case when coalesce(p_approved, false) then 'approved' else 'cancelled' end, 'owner');
   return jsonb_build_object('invoice', i.id, 'status', case when coalesce(p_approved, false) then 'approved' else 'rejected' end);
 end $$;
 revoke all on function public.office_os_invoice_decide(uuid, integer, boolean) from public, anon, authenticated;
@@ -16245,7 +16248,7 @@ begin
   if not exists (select 1 from fz_office_os.fz_office_profiles p join public.fz_offices o on o.id = p.office_id where p.slug = i.slug and p.status = 'active' and o.status = 'active') then
     raise exception 'refused: % is not active', i.slug using errcode = '42501'; end if;
   update fz_office_os.fz_office_invoices set status = 'sending', updated_at = now() where id = i.id;
-  return jsonb_build_object('invoice', i.id, 'stripe_id', i.stripe_id, 'mode', i.mode, 'cents', i.cents, 'currency', i.currency);
+  return jsonb_build_object('invoice', i.id, 'stripe_id', i.stripe_id, 'mode', i.mode, 'cents', i.cents, 'currency', i.currency, 'plan', i.plan_id, 'period', i.period);
 end $$;
 revoke all on function public.office_os_invoice_claim_send(uuid) from public, anon, authenticated;
 
@@ -16260,6 +16263,7 @@ begin
          sent_at = case when coalesce(p_ok, false) then now() end, updated_at = now() where id = i.id;
   insert into public.audit_log (actor, action, target, detail) values ('office_os', case when coalesce(p_ok, false) then 'invoice_sent' else 'invoice_send_failed' end,
                                                                      'fz_office_invoices/' || i.id, jsonb_build_object('stripe_id', i.stripe_id, 'mode', i.mode));
+  perform fz_office_os.log_event(i.slug, i.plan_id, i.id, case when coalesce(p_ok, false) then 'sent' else 'failed' end, 'office_os', jsonb_build_object('stripe_id', i.stripe_id, 'mode', i.mode));
   return jsonb_build_object('invoice', i.id, 'status', case when coalesce(p_ok, false) then 'sent' else 'send_failed' end);
 end $$;
 revoke all on function public.office_os_invoice_mark_sent(uuid, boolean) from public, anon, authenticated;
@@ -16317,6 +16321,7 @@ begin
             to_char(p_cents / 100.0, 'FM999,999,990.00'), upper(p_currency), p_interval), false, 'approval_requests', v_req);
   update fz_office_os.fz_billing_plans set approval_request = v_req where id = v_id;
   insert into public.audit_log (actor, action, target, detail) values ('office_os', 'billing_plan_proposed', 'fz_billing_plans/' || v_id, jsonb_build_object('office', p.slug, 'cents', p_cents, 'interval', p_interval));
+  perform fz_office_os.log_event(p.slug, v_id, null, 'requested', 'office_os', jsonb_build_object('cents', p_cents, 'interval', p_interval));
   return jsonb_build_object('plan', v_id, 'status', 'proposed', 'approval', v_req);
 end $$;
 revoke all on function public.office_os_plan_propose(text, text, text, integer, text, text) from public, anon, authenticated;
@@ -16334,6 +16339,7 @@ begin
   update fz_office_os.fz_billing_plans set status = case when coalesce(p_approved, false) then 'approved' else 'rejected' end, decided_at = now() where id = b.id;
   update public.approval_requests set status = case when coalesce(p_approved, false) then 'approved' else 'rejected' end, decided_at = now() where id = b.approval_request and status = 'pending';
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'billing_plan_decided', 'fz_billing_plans/' || b.id, jsonb_build_object('approved', coalesce(p_approved, false)));
+  perform fz_office_os.log_event(b.slug, b.id, null, case when coalesce(p_approved, false) then 'approved' else 'cancelled' end, 'owner');
   return jsonb_build_object('plan', b.id, 'status', case when coalesce(p_approved, false) then 'approved' else 'rejected' end);
 end $$;
 revoke all on function public.office_os_plan_decide(uuid, integer, text, boolean) from public, anon, authenticated;
@@ -16344,9 +16350,10 @@ language plpgsql security definer set search_path to 'pg_catalog' as $$
 declare v_role text := coalesce(nullif(current_setting('role', true), ''), 'none'); b fz_office_os.fz_billing_plans;
 begin
   if v_role not in ('none', 'postgres', 'service_role') and not coalesce(public.is_app_owner(), false) then raise exception 'refused' using errcode = '42501'; end if;
-  update fz_office_os.fz_billing_plans set status = 'revoked', revoked_at = now() where id = p_plan and status in ('proposed', 'approved') returning * into b;
+  update fz_office_os.fz_billing_plans set status = 'revoked', revoked_at = now() where id = p_plan and status in ('proposed', 'approved', 'past_due') returning * into b;
   if not found then raise exception 'refused: no open plan %', p_plan; end if;
   insert into public.audit_log (actor, action, target, detail) values (case when coalesce(public.is_app_owner(), false) then 'owner' else 'office_os' end, 'billing_plan_revoked', 'fz_billing_plans/' || b.id, '{}'::jsonb);
+  perform fz_office_os.log_event(b.slug, b.id, null, 'cancelled', case when coalesce(public.is_app_owner(), false) then 'owner' else 'office_os' end, '{"refund": false}'::jsonb);
   return jsonb_build_object('plan', b.id, 'status', 'revoked');
 end $$;
 revoke all on function public.office_os_plan_revoke(uuid) from public, anon, authenticated;
@@ -16372,6 +16379,8 @@ begin
     returning id into v_id;
   insert into public.audit_log (actor, action, target, detail)
     values ('office_os', 'invoice_drafted', 'fz_office_invoices/' || v_id, jsonb_build_object('office', b.slug, 'plan', b.id, 'period', v_period, 'cents', b.cents, 'mode', p_mode, 'auto_approved_by_plan', true));
+  perform fz_office_os.log_event(b.slug, b.id, v_id, 'drafted', 'office_os', jsonb_build_object('period', v_period, 'cents', b.cents));
+  perform fz_office_os.log_event(b.slug, b.id, v_id, 'approved', 'plan', jsonb_build_object('period', v_period));
   return jsonb_build_object('invoice', v_id, 'status', 'approved', 'period', v_period);
 end $$;
 revoke all on function public.office_os_invoice_record_plan(uuid, text, text, integer, text, text) from public, anon, authenticated;
@@ -16380,10 +16389,119 @@ create or replace function public.office_os_plans() returns jsonb
 language sql stable security definer set search_path to 'pg_catalog' as $$
   select case when coalesce(nullif(current_setting('role', true), ''), 'none') in ('none', 'postgres', 'service_role') then
     coalesce((select jsonb_agg(jsonb_build_object('id', b.id, 'office', b.slug, 'client', b.client_label, 'customer', b.customer_id, 'cents', b.cents, 'currency', b.currency,
-                                                  'interval', b.billing_interval, 'status', b.status) order by b.created_at desc) from fz_office_os.fz_billing_plans b), '[]'::jsonb)
+                                                  'interval', b.billing_interval, 'status', b.status,
+                                                  'last_invoice', (select jsonb_build_object('id', i.id, 'stripe_id', i.stripe_id, 'period', i.period, 'status', i.status, 'sent_at', i.sent_at, 'mode', i.mode)
+                                                                     from fz_office_os.fz_office_invoices i where i.plan_id = b.id order by i.created_at desc limit 1))
+                                    order by b.created_at desc) from fz_office_os.fz_billing_plans b), '[]'::jsonb)
   else null end
 $$;
 revoke all on function public.office_os_plans() from public, anon, authenticated;
+
+-- billing hardening: an append-only billing log, payment-failure stop (past_due, owner-only resume), owner-only cancellation (never a refund), paid observation
+create table if not exists fz_office_os.fz_billing_log (
+  id bigserial primary key,
+  at timestamptz not null default now(),
+  slug text not null,
+  plan_id uuid,
+  invoice_id uuid,
+  event text not null check (event in ('requested', 'drafted', 'approved', 'sent', 'paid', 'failed', 'cancelled', 'past_due', 'resumed')),
+  by_whom text not null,
+  detail jsonb not null default '{}'::jsonb
+);
+revoke all on fz_office_os.fz_billing_log from public;
+revoke all on sequence fz_office_os.fz_billing_log_id_seq from public;
+create or replace function fz_office_os.billing_log_append_only() returns trigger
+language plpgsql set search_path to 'pg_catalog' as $$
+begin
+  raise exception 'fz_billing_log is append-only' using errcode = '42501';
+end $$;
+revoke all on function fz_office_os.billing_log_append_only() from public, anon, authenticated;
+drop trigger if exists fz_billing_log_append_only on fz_office_os.fz_billing_log;
+create trigger fz_billing_log_append_only before update or delete on fz_office_os.fz_billing_log for each row execute function fz_office_os.billing_log_append_only();
+drop trigger if exists fz_billing_log_no_truncate on fz_office_os.fz_billing_log;
+create trigger fz_billing_log_no_truncate before truncate on fz_office_os.fz_billing_log for each statement execute function fz_office_os.billing_log_append_only();
+create or replace function fz_office_os.log_event(p_slug text, p_plan uuid, p_invoice uuid, p_event text, p_by text, p_detail jsonb default '{}'::jsonb) returns void
+language sql set search_path to 'pg_catalog' as $$
+  insert into fz_office_os.fz_billing_log (slug, plan_id, invoice_id, event, by_whom, detail) values (p_slug, p_plan, p_invoice, p_event, p_by, coalesce(p_detail, '{}'::jsonb))
+$$;
+revoke all on function fz_office_os.log_event(text, uuid, uuid, text, text, jsonb) from public, anon, authenticated;
+
+alter table fz_office_os.fz_billing_plans drop constraint if exists fz_billing_plans_status_check;
+alter table fz_office_os.fz_billing_plans add constraint fz_billing_plans_status_check check (status in ('proposed', 'approved', 'rejected', 'revoked', 'past_due', 'cancelled'));
+alter table fz_office_os.fz_billing_plans add column if not exists past_due_at timestamptz;
+alter table fz_office_os.fz_billing_plans add column if not exists cancelled_at timestamptz;
+
+-- owner only, immediate: no future period is billed, nothing is refunded
+create or replace function public.office_os_plan_cancel(p_plan uuid) returns jsonb
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare b fz_office_os.fz_billing_plans;
+begin
+  if not coalesce(public.is_app_owner(), false) then raise exception 'owner approval required: only the owner cancels a billing plan' using errcode = '42501'; end if;
+  update fz_office_os.fz_billing_plans set status = 'cancelled', cancelled_at = now() where id = p_plan and status in ('proposed', 'approved', 'past_due') returning * into b;
+  if not found then raise exception 'refused: no open plan %', p_plan; end if;
+  perform fz_office_os.log_event(b.slug, b.id, null, 'cancelled', 'owner', jsonb_build_object('refund', false));
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'billing_plan_cancelled', 'fz_billing_plans/' || b.id, '{"refund": false}'::jsonb);
+  return jsonb_build_object('plan', b.id, 'status', 'cancelled', 'refund', false);
+end $$;
+revoke all on function public.office_os_plan_cancel(uuid) from public, anon, authenticated;
+
+-- payment failure: the service path stops the plan (once) and tells the owner; only the owner resumes it
+create or replace function public.office_os_plan_past_due(p_plan uuid, p_reason text) returns jsonb
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare v_role text := coalesce(nullif(current_setting('role', true), ''), 'none'); b fz_office_os.fz_billing_plans;
+begin
+  if v_role not in ('none', 'postgres', 'service_role') then raise exception 'refused' using errcode = '42501'; end if;
+  update fz_office_os.fz_billing_plans set status = 'past_due', past_due_at = now() where id = p_plan and status = 'approved' returning * into b;
+  if not found then return jsonb_build_object('plan', p_plan, 'changed', false); end if;     -- already stopped: no second alert
+  perform fz_office_os.log_event(b.slug, b.id, null, 'past_due', 'office_os', jsonb_build_object('reason', left(coalesce(p_reason, ''), 200)));
+  insert into public.audit_log (actor, action, target, detail) values ('office_os', 'billing_plan_past_due', 'fz_billing_plans/' || b.id, jsonb_build_object('reason', left(coalesce(p_reason, ''), 200)));
+  if exists (select 1 from public.agents where slug = 'jarvis') then
+    insert into public.owner_messages (from_agent, kind, channel, body)
+      values ('jarvis', 'money', 'telegram', format('Billing stopped: %s plan for %s is past due (%s). No more automatic invoices until you resume it (office_os_plan_resume) or cancel it.',
+                                                    b.slug, b.client_label, left(coalesce(p_reason, ''), 120)));
+  end if;
+  return jsonb_build_object('plan', b.id, 'changed', true, 'status', 'past_due');
+end $$;
+revoke all on function public.office_os_plan_past_due(uuid, text) from public, anon, authenticated;
+
+create or replace function public.office_os_plan_resume(p_plan uuid) returns jsonb
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare b fz_office_os.fz_billing_plans;
+begin
+  if not coalesce(public.is_app_owner(), false) then raise exception 'owner approval required: only the owner resumes a stopped plan' using errcode = '42501'; end if;
+  update fz_office_os.fz_billing_plans set status = 'approved', past_due_at = null where id = p_plan and status = 'past_due' returning * into b;
+  if not found then raise exception 'refused: plan % is not past due', p_plan; end if;
+  perform fz_office_os.log_event(b.slug, b.id, null, 'resumed', 'owner');
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'billing_plan_resumed', 'fz_billing_plans/' || b.id, '{}'::jsonb);
+  return jsonb_build_object('plan', b.id, 'status', 'approved');
+end $$;
+revoke all on function public.office_os_plan_resume(uuid) from public, anon, authenticated;
+
+-- what Stripe says about a sent invoice: 'paid' is logged once (revenue only: nothing is booked or moved here); 'uncollectible' / overdue are logged as failed
+create or replace function public.office_os_invoice_observe(p_invoice uuid, p_stripe_status text) returns jsonb
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare v_role text := coalesce(nullif(current_setting('role', true), ''), 'none'); i fz_office_os.fz_office_invoices; v_event text;
+begin
+  if v_role not in ('none', 'postgres', 'service_role') then raise exception 'refused' using errcode = '42501'; end if;
+  select * into i from fz_office_os.fz_office_invoices where id = p_invoice;
+  if not found or i.status <> 'sent' then raise exception 'refused: only a sent invoice is observed'; end if;
+  v_event := case when p_stripe_status = 'paid' then 'paid' when p_stripe_status in ('uncollectible', 'past_due', 'overdue') then 'failed' else null end;
+  if v_event is null or exists (select 1 from fz_office_os.fz_billing_log where invoice_id = i.id and event = v_event) then
+    return jsonb_build_object('invoice', i.id, 'logged', false);
+  end if;
+  perform fz_office_os.log_event(i.slug, i.plan_id, i.id, v_event, 'stripe', jsonb_build_object('stripe_status', p_stripe_status, 'cents', i.cents, 'currency', i.currency));
+  return jsonb_build_object('invoice', i.id, 'logged', true, 'event', v_event);
+end $$;
+revoke all on function public.office_os_invoice_observe(uuid, text) from public, anon, authenticated;
+
+create or replace function public.office_os_billing_log(p_limit integer default 30) returns jsonb
+language sql stable security definer set search_path to 'pg_catalog' as $$
+  select case when coalesce(nullif(current_setting('role', true), ''), 'none') in ('none', 'postgres', 'service_role') then
+    coalesce((select jsonb_agg(jsonb_build_object('at', l.at, 'office', l.slug, 'plan', l.plan_id, 'invoice', l.invoice_id, 'event', l.event, 'by', l.by_whom, 'detail', l.detail) order by l.id desc)
+              from (select * from fz_office_os.fz_billing_log order by id desc limit least(greatest(coalesce(p_limit, 30), 1), 200)) l), '[]'::jsonb)
+  else null end
+$$;
+revoke all on function public.office_os_billing_log(integer) from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------------------------------------------------------- read model (/office <name>)
 -- p_office NULL = one line per office. Service path (bot, database session). A scoped role (only if granted by mistake) sees its own office, nothing else.
@@ -16437,6 +16555,11 @@ do $$ declare r text; begin
       execute format('revoke all on function public.office_os_plan_revoke(uuid) from %I', r);
       execute format('revoke all on function public.office_os_invoice_record_plan(uuid, text, text, integer, text, text) from %I', r);
       execute format('revoke all on function public.office_os_plans() from %I', r);
+      execute format('revoke all on function public.office_os_plan_cancel(uuid) from %I', r);
+      execute format('revoke all on function public.office_os_plan_past_due(uuid, text) from %I', r);
+      execute format('revoke all on function public.office_os_plan_resume(uuid) from %I', r);
+      execute format('revoke all on function public.office_os_invoice_observe(uuid, text) from %I', r);
+      execute format('revoke all on function public.office_os_billing_log(integer) from %I', r);
       execute format('revoke all on function public.office_os_deactivate(text) from %I', r);
       execute format('revoke all on function public.office_os_status(text) from %I', r);
     end if;

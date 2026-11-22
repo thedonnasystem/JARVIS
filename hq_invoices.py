@@ -29,7 +29,7 @@ API = "https://api.stripe.com"
 _CUS = re.compile(r"^cus_[A-Za-z0-9]{6,64}$")
 _INV = re.compile(r"^in_[A-Za-z0-9]{6,64}$")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-ALLOWED_CALLS = (("POST", "/v1/invoices"), ("POST", "/v1/invoiceitems"), ("DELETE", "/v1/invoices/"), ("GET", "/v1/invoices/"),
+ALLOWED_CALLS = (("POST", "/v1/invoices"), ("POST", "/v1/invoiceitems"), ("DELETE", "/v1/invoices/"), ("GET", "/v1/invoices/"), ("GET", "/v1/invoices?customer="),
                  ("POST", "/v1/invoices/{id}/finalize"), ("POST", "/v1/invoices/{id}/send"), ("POST", "/v1/prices"), ("POST", "/v1/payment_links"))
 
 
@@ -56,16 +56,19 @@ def mode(env=None) -> str:
     raise InvoiceError("STRIPE_SECRET_KEY missing or not a Stripe secret key")
 
 
-def _stripe(method: str, path: str, form: dict | None = None, env=None, http=None) -> dict:
+def _stripe(method: str, path: str, form: dict | None = None, env=None, http=None, idem: str | None = None) -> dict:
     if not any(method == m and (path == p or (p.endswith("/") and path.startswith(p) and "/" not in path[len(p):]) or
+                                (p.endswith("=") and re.fullmatch(re.escape(p) + r"cus_[A-Za-z0-9]{6,64}&limit=\d{1,3}", path)) or
                                 (("{id}" in p) and re.fullmatch(re.escape(p).replace(r"\{id\}", r"in_[A-Za-z0-9]+"), path)))
                for m, p in ALLOWED_CALLS):
         raise InvoiceError(f"Stripe call not allowed: {method} {path}")
     if http:
-        return http(method, path, form or {})
+        return http(method, path, form or {}, idem)
     # the existing official-API transport (hq_hands_adapters.http: HTTPS only, ONE no-redirect opener, so the key never follows a redirect); no new outbound route
     import hq_hands_adapters
     auth = {"Authorization": "Basic " + base64.b64encode((str(_env(env).get(KEY)) + ":").encode()).decode()}
+    if idem:
+        auth["Idempotency-Key"] = idem[:255]            # Stripe returns the first result for a repeated key: a retry can never create or send twice
     try:
         status, body, _ = hq_hands_adapters.http(method, API + path, headers=auth, form=(form or {}) if method == "POST" else None, timeout=20)
     except hq_hands_adapters.HandError as e:
@@ -159,8 +162,9 @@ def send(invoice: str, env=None, http=None, rpc=None) -> dict:
         cur = _stripe("GET", "/v1/invoices/" + sid, None, env, http)
         if cur.get("status") != "draft" or int(cur.get("amount_due") or -1) != int(c["cents"]) or str(cur.get("currency")) != c["currency"]:
             raise InvoiceError("the Stripe invoice no longer matches what the owner approved: not sent")
-        _stripe("POST", f"/v1/invoices/{sid}/finalize", {"auto_advance": "false"}, env, http)
-        _stripe("POST", f"/v1/invoices/{sid}/send", {}, env, http)
+        base = f"fz-{c['plan']}-{c['period']}" if c.get("plan") and c.get("period") else f"fz-inv-{invoice}"
+        _stripe("POST", f"/v1/invoices/{sid}/finalize", {"auto_advance": "false"}, env, http, idem=base + "-finalize")
+        _stripe("POST", f"/v1/invoices/{sid}/send", {}, env, http, idem=base + "-send")
         ok = True
     finally:
         _rpc("office_os_invoice_mark_sent", {"p_invoice": invoice, "p_ok": ok}, rpc)
@@ -200,23 +204,77 @@ def propose_plan(office: str, client_label: str, customer_id: str, cents: int, c
     return _rpc("office_os_plan_propose", {"p_office": slug, "p_client_label": label, "p_customer": customer_id, "p_cents": c, "p_currency": cur, "p_interval": interval}, rpc)
 
 
+def period(interval: str, now=None) -> str:
+    """The billing period the database uses (Toronto calendar): 'YYYY-MM' for month, 'YYYY' for year."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    n = (now or datetime.now(ZoneInfo("America/Toronto"))).astimezone(ZoneInfo("America/Toronto"))
+    return n.strftime("%Y-%m") if interval == "month" else n.strftime("%Y")
+
+
+def _existing_in_stripe(p: dict, per: str, env, http) -> str | None:
+    """An invoice Stripe already holds for this (plan, period): never create a second one."""
+    r = _stripe("GET", f"/v1/invoices?customer={p['customer']}&limit=50", None, env, http)
+    for inv in (r.get("data") or []):
+        md = inv.get("metadata") or {}
+        if md.get("fz_plan") == str(p["id"]) and md.get("fz_period") == per and inv.get("status") not in ("void", "deleted"):
+            return str(inv.get("id"))
+    return None
+
+
+GRACE_DAYS = 7
+
+
+def check_plans(office: str, grace_days: int | None = None, env=None, http=None, rpc=None, now=None) -> dict:
+    """Payment-failure stop: for each approved plan, look at its last SENT invoice in Stripe. Paid: logged (revenue only). Uncollectible, or still unpaid
+    grace_days (default 7, FZ_BILLING_GRACE_DAYS) after its due date: the plan goes past_due (no more auto-sends; the owner is alerted once; only he resumes)."""
+    import time
+    m = mode(env)
+    slug = _office(office, rpc)
+    g = int(grace_days if grace_days is not None else (_env(env).get("FZ_BILLING_GRACE_DAYS") or GRACE_DAYS))
+    t = now if now is not None else time.time()
+    stopped, paid = [], []
+    for p in (_rpc("office_os_plans", {}, rpc) or []):
+        li = p.get("last_invoice") or {}
+        if p.get("office") != slug or p.get("status") != "approved" or li.get("status") != "sent" or li.get("mode") != m or not _INV.fullmatch(str(li.get("stripe_id") or "")):
+            continue
+        inv = _stripe("GET", "/v1/invoices/" + li["stripe_id"], None, env, http)
+        st, due = inv.get("status"), inv.get("due_date")
+        if st == "paid":
+            _rpc("office_os_invoice_observe", {"p_invoice": li["id"], "p_stripe_status": "paid"}, rpc)
+            paid.append(p["id"])
+        elif st == "uncollectible" or (st == "open" and due and t > float(due) + g * 86400):
+            reason = "uncollectible" if st == "uncollectible" else f"unpaid {g}+ days after due"
+            _rpc("office_os_invoice_observe", {"p_invoice": li["id"], "p_stripe_status": "uncollectible" if st == "uncollectible" else "overdue"}, rpc)
+            _rpc("office_os_plan_past_due", {"p_plan": p["id"], "p_reason": reason}, rpc)
+            stopped.append(p["id"])
+    return {"ok": True, "past_due": stopped, "paid": paid}
+
+
 def bill_plans(office: str, env=None, http=None, rpc=None) -> dict:
     """This period's invoice for every APPROVED plan of the office, for exactly the plan's amount and interval, then sent without another tap.
     The database refuses anything else (another amount or interval, a second invoice this period, a revoked plan, a dormant office)."""
     m = mode(env)
     slug = _office(office, rpc)
-    plans = [p for p in (_rpc("office_os_plans", {}, rpc) or []) if p.get("office") == slug and p.get("status") == "approved"]
+    check = check_plans(slug, env=env, http=http, rpc=rpc)                 # a failed payment stops its plan BEFORE the next period is billed
+    plans = [p for p in (_rpc("office_os_plans", {}, rpc) or []) if p.get("office") == slug and p.get("status") == "approved" and p.get("id") not in check["past_due"]]
     done, refused = [], []
     for p in plans:
         iid = ""
+        per = period(p["interval"])
+        key = f"fz-{p['id']}-{per}"
         try:
+            dup = _existing_in_stripe(p, per, env, http)
+            if dup:
+                raise InvoiceError(f"Stripe already holds {dup} for {per}: not created again")
             inv = _stripe("POST", "/v1/invoices", {"customer": p["customer"], "collection_method": "send_invoice", "days_until_due": 14, "auto_advance": "false",
-                                                   "description": f"{p['client']} ({p['interval']}ly plan)"}, env, http)
+                                                   "description": f"{p['client']} ({p['interval']}ly plan)", "metadata[fz_plan]": str(p["id"]),
+                                                   "metadata[fz_period]": per}, env, http, idem=key + "-create")
             iid = str(inv.get("id") or "")
             if not _INV.fullmatch(iid):
                 raise InvoiceError("Stripe returned no invoice id")
             _stripe("POST", "/v1/invoiceitems", {"customer": p["customer"], "invoice": iid, "amount": int(p["cents"]), "currency": p["currency"],
-                                                 "description": f"{p['client']} {p['interval']}ly plan"}, env, http)
+                                                 "description": f"{p['client']} {p['interval']}ly plan"}, env, http, idem=key + "-item")
             r = _rpc("office_os_invoice_record_plan", {"p_plan": p["id"], "p_stripe_id": iid, "p_mode": m, "p_cents": int(p["cents"]), "p_currency": p["currency"],
                                                          "p_interval": p["interval"]}, rpc)
         except Exception as e:
@@ -232,7 +290,7 @@ def bill_plans(office: str, env=None, http=None, rpc=None) -> dict:
             done.append({"plan": p["id"], "invoice": r["invoice"], "period": r.get("period")})
         except Exception as e:
             refused.append({"plan": p.get("id"), "reason": str(e)[:160]})
-    return {"ok": True, "sent": done, "refused": refused}
+    return {"ok": True, "sent": done, "refused": refused, "past_due": check["past_due"]}
 
 
 def plans_text(rpc=None) -> str:
@@ -244,3 +302,54 @@ def plans_text(rpc=None) -> str:
         return "No billing plans. Donna proposes one; you approve it once with office_os_plan_decide('<id>', <cents>, '<interval>', true)."
     return "\n".join(f"{r.get('status')}  {r.get('office')}  {r.get('client')}  {int(r.get('cents') or 0) / 100:,.2f} {str(r.get('currency')).upper()}/{r.get('interval')}  id {r.get('id')}"
                      for r in rows) + "\n\nRevoke one: office_os_plan_revoke('<id>'). /invoices bill donna sends this period's plan invoices."
+
+
+def cancel_plan(plan: str, rpc=None) -> dict:
+    """The owner's /invoices cancel <plan> (Telegram, owner chat only): immediate, no future period, never a refund, logged. It uses the safety-only
+    office_os_plan_revoke (the service path may only stop a plan); office_os_plan_cancel is the same for the SQL editor."""
+    if not _UUID.fullmatch(str(plan or "")):
+        raise InvoiceError("plan id must be the HQ plan uuid")
+    return _rpc("office_os_plan_revoke", {"p_plan": plan}, rpc)
+
+
+def log_text(rpc=None) -> str:
+    try:
+        rows = _rpc("office_os_billing_log", {"p_limit": 30}, rpc) or []
+    except Exception:
+        return "Billing log not installed yet."
+    if not rows:
+        return "Billing log is empty."
+    return "\n".join(f"{str(r.get('at'))[:16]}  {r.get('event')}  {r.get('office')}  by {r.get('by')}  plan {str(r.get('plan') or '-')[:8]}  invoice {str(r.get('invoice') or '-')[:8]}"
+                     for r in rows)
+
+
+_LAST_RUN: dict = {}
+
+
+def run_due(env=None, now=None) -> dict:
+    """Schedule entry (ops/proposals/billing_schedule.md): once a day in the 09:00 Toronto hour, check payments, then bill this period of every approved plan.
+    Returns at once when invoicing is off. Never raises (the engine tick must not stop for billing)."""
+    try:
+        mode(env)
+    except InvoiceError as e:
+        return {"ran": False, "reason": str(e)}
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    n = (now or datetime.now(ZoneInfo("America/Toronto"))).astimezone(ZoneInfo("America/Toronto"))
+    day = n.strftime("%Y-%m-%d")
+    if n.hour != 9 or _LAST_RUN.get("day") == day:
+        return {"ran": False, "reason": "not due"}
+    _LAST_RUN["day"] = day
+    out = {}
+    try:
+        offices = sorted({p.get("office") for p in (_rpc("office_os_plans", {}) or []) if p.get("status") == "approved"})
+        for o in offices:
+            try:
+                out[o] = bill_plans(o, env)
+            except Exception as e:
+                out[o] = {"ok": False, "reason": str(e)[:160]}
+    except Exception as e:
+        logger.warning("billing run failed: %s", str(e)[:160])
+        return {"ran": False, "reason": "plans unreadable"}
+    return {"ran": True, "offices": out}
+

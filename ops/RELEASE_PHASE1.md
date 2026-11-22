@@ -20,10 +20,11 @@ The lockdown and the two postlock files after them are already applied in produc
 
 1. **PR owner marker.** Approve PRs #35 to #40 in order: M1, M2, M3, M4, M5 (#39), M6 (#41), M7 (#40). For each, use an APPROVED review on its head SHA or the label `owner-ok-<full head SHA>`. Merge them bottom-up.
 2. **run.sh proposal** (`ops/proposals/office_os_run_sh.md`): approve or skip. Not needed for the release; the same drill already runs in `sqltests/office_os_check.sql`.
-3. **Append-only audit_log / ledger** (`ops/proposals/AUDIT_LEDGER_APPEND_ONLY.md` + `.sql`): recommended YES. Apply after V1 to V6 pass.
+3. **Append-only audit_log / ledger** (`ops/proposals/AUDIT_LEDGER_APPEND_ONLY.md` + `.sql`): recommended YES. Apply after V1 to V6 pass. In the same transaction it rewrites the `hq-prune` cron job (jobid 2) so it stops deleting audit history.
 4. **Brain access for office identities** (changes the M1 allowlist): recommended LATER, only after Donna is active and her manager token is minted. The statement is in `docs/architecture/PHASE1_M6_MONITORING_BRAIN.md` (owner decisions).
 5. **Client invoicing** (`hq_invoices.py`, off by default): recommended YES to keep it in the release, OFF until you set the Stripe test key (checklist). Add its send route to `AUDIT_PATHS.md` and `test_audit_paths.py` (protected).
-6. **CI timeout 75 to 110 min** (`ops/proposals/ci_timeout_110.md`): recommended **NO** for now. GitHub Actions minutes are exhausted until Dec 1, so the local strict gate is the proof for this release.
+7. **Billing schedule** (`ops/proposals/billing_schedule.md`): one engine line, recommended YES once Donna has her first approved plan in test mode.
+6. **CI timeout 75 to 110 min** (`ops/proposals/ci_timeout_110.md`): recommended **YES**. JARVIS is a public repo, its runs bill 0 minutes, and the exhausted minutes belong to another private repo. A split job is the alternative.
 
 ## 1. Pre-checks (stop if any fails)
 

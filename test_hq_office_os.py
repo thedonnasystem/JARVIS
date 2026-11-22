@@ -178,12 +178,19 @@ class DonnaV1(unittest.TestCase):
 
     def test_missions_file(self):
         ms = O.missions("donna")
-        self.assertEqual([m["key"] for m in ms], ["donna-m1-prospects", "donna-m2-sales-kit", "donna-m3-demo-line", "donna-m4-weekly-report"])
+        self.assertEqual([m["key"] for m in ms], ["donna-m1-validation", "donna-m2-sales-kit", "donna-m3-demo-line", "donna-m4-weekly-report"])
         for m in ms:
             self.assertEqual((m["venture"], m["budget_cents"], m["checkpoint"]["office"], m["checkpoint"]["external_contact"]), ("donna", 0, "donna", False))
             self.assertIn("funding request", m["objective"])
             self.assertGreater(len(m["objective"]), 100)
-        self.assertIn("PENDING owner approval", ms[1]["objective"])
+        for seg in ("home-services trades", "roofing and renovation", "law firms, intake only", "missed-call audits", "pricing checks", "the owner commits the niche"):
+            self.assertIn(seg, ms[0]["objective"])
+        for m in ms[:2]:
+            self.assertIn("$497 for the first month with the setup fee waived", m["objective"])
+            self.assertIn("Guarantee terms TBD by owner", m["objective"])
+        blob = json.dumps(ms) + json.dumps(O.office_config("donna"))
+        self.assertNotIn("PENDING", blob)
+        self.assertNotRegex(blob.replace("Guarantee terms TBD by owner", "").replace("no guarantee or refund promise", "").replace("never promise a guarantee or a refund", "").replace("never offer a guarantee or a refund", "").lower(), r"guarantee|refund")
         self.assertIn("$1,297/mo + $1,497 setup", ms[1]["objective"])
         self.assertIn("funding request approval", ms[2]["checkpoint"]["needs_owner"])
         self.assertEqual(O.missions("monopoly"), [])
@@ -202,7 +209,7 @@ class DonnaV1(unittest.TestCase):
         r = O.queue_missions("donna", rpc=_status(), create=lambda obj, **k: created.append(k) or {"id": "m"}, get=get)
         self.assertTrue(r["ok"])
         self.assertEqual(r["skipped"], ["donna-m2-sales-kit"])
-        self.assertEqual([k["title"] for k in created], ["Donna: Ottawa trades prospect list", "Donna: demo line plan", "Donna: weekly KPI report"])
+        self.assertEqual([k["title"] for k in created], ["Donna: market validation of the top 3 segments", "Donna: demo line plan", "Donna: weekly KPI report"])
         self.assertTrue(all(k["venture"] == "donna" and k["created_by"] == "office:donna" and k["budget_cents"] == 0 for k in created))
         r = O.queue_missions("donna", rpc=_status(), create=lambda *a, **k: self.fail("created"), get=lambda p: [])
         self.assertFalse(r["ok"])

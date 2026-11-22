@@ -4,7 +4,7 @@
 -- Order: FIRST of the Phase 1 rollbacks (before ops/rollback_shared_services.sql). M7 has no structural dependency on M1..M5, so any order works.
 -- 0. keeps the record: every profile (status, manager appointed, activation) goes into ONE audit_log row;
 -- 1. ARCHIVES the profile, decision and drift tables, rows intact, into fz_archive (fz_office_profiles, fz_office_decisions, fz_office_drift) (no API privileges; an older archive moves on to fz_archive_<timestamp>);
--- 2. unschedules the drift job; drops the seventeen office_os_* functions and the empty fz_office_os schema.
+-- 2. unschedules the drift job; drops the office_os_* functions (22) and the schema's own helpers and the empty fz_office_os schema.
 -- Deletes no history. Does NOT change any M1 office status: an office activated through M7 stays active (M1 is the authority); deactivate first if wanted.
 -- A re-apply re-seeds the template and restores the manager appointments from the archive.
 \if :{?fz_in_txn}
@@ -32,12 +32,17 @@ begin
       if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on schema %I from %I', 'fz_archive_' || v_suffix, r); end if;
     end loop;
     execute format('alter table fz_archive.fz_office_profiles set schema %I', 'fz_archive_' || v_suffix);
-    foreach r in array array['fz_office_decisions', 'fz_office_drift', 'fz_office_invoices', 'fz_billing_plans'] loop
+    foreach r in array array['fz_office_decisions', 'fz_office_drift', 'fz_office_invoices', 'fz_billing_plans', 'fz_billing_log'] loop
       if to_regclass('fz_archive.' || r) is not null then execute format('alter table fz_archive.%I set schema %I', r, 'fz_archive_' || v_suffix); end if;
     end loop;
   end if;
+  -- the billing log's append-only triggers use a function of this schema: drop them first (the archive has no API privileges, so the rows stay untouchable)
+  if to_regclass('fz_office_os.fz_billing_log') is not null then
+    drop trigger if exists fz_billing_log_append_only on fz_office_os.fz_billing_log;
+    drop trigger if exists fz_billing_log_no_truncate on fz_office_os.fz_billing_log;
+  end if;
   alter table fz_office_os.fz_office_profiles set schema fz_archive;
-  foreach r in array array['fz_office_decisions', 'fz_office_drift', 'fz_office_invoices', 'fz_billing_plans'] loop
+  foreach r in array array['fz_office_decisions', 'fz_office_drift', 'fz_office_invoices', 'fz_billing_plans', 'fz_billing_log'] loop
     if to_regclass('fz_office_os.' || r) is not null then
       if to_regclass('fz_archive.' || r) is not null then                 -- an older copy left by a rollback of an earlier version moves on too
         execute format('create schema if not exists %I', 'fz_archive_' || v_suffix);
@@ -67,6 +72,13 @@ drop function if exists public.office_os_plan_decide(uuid, integer, text, boolea
 drop function if exists public.office_os_plan_revoke(uuid);
 drop function if exists public.office_os_invoice_record_plan(uuid, text, text, integer, text, text);
 drop function if exists public.office_os_plans();
+drop function if exists public.office_os_plan_cancel(uuid);
+drop function if exists public.office_os_plan_past_due(uuid, text);
+drop function if exists public.office_os_plan_resume(uuid);
+drop function if exists public.office_os_invoice_observe(uuid, text);
+drop function if exists public.office_os_billing_log(integer);
+drop function if exists fz_office_os.log_event(text, uuid, uuid, text, text, jsonb);
+drop function if exists fz_office_os.billing_log_append_only();
 drop schema if exists fz_office_os;
 \if :{?fz_in_txn}
 \else

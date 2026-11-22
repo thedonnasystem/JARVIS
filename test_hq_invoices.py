@@ -40,16 +40,19 @@ class FakeDB:
 
 
 class FakeStripe:
-    def __init__(self, invoice=None):
-        self.calls = []
+    def __init__(self, invoice=None, existing=None, by_id=None):
+        self.calls, self.idem, self.existing, self.by_id = [], [], existing or [], by_id or {}
         self.invoice = invoice or {"id": "in_abc123456", "status": "draft", "amount_due": 49700, "currency": "cad"}
 
-    def __call__(self, method, path, form):
+    def __call__(self, method, path, form, idem=None):
         self.calls.append((method, path, dict(form)))
+        self.idem.append((path, idem))
+        if path.startswith("/v1/invoices?customer="):
+            return {"data": self.existing}
         if path == "/v1/invoices" and method == "POST":
             return {"id": "in_abc123456"}
         if method == "GET":
-            return self.invoice
+            return self.by_id.get(path.rsplit("/", 1)[-1], self.invoice)
         if path == "/v1/prices":
             return {"id": "price_1"}
         if path == "/v1/payment_links":
@@ -233,15 +236,95 @@ class NoRefundsOrPayouts(unittest.TestCase):
             seen.append((method, url, form, headers))
             return 200, {"id": "in_abc123456"}, {}
         with mock.patch.object(hq_hands_adapters, "http", side_effect=fake):
-            self.assertEqual(I._stripe("POST", "/v1/invoices", {"customer": "cus_abc123456"}, ENV)["id"], "in_abc123456")
+            self.assertEqual(I._stripe("POST", "/v1/invoices", {"customer": "cus_abc123456"}, ENV, idem="fz-p1-2026-12-create")["id"], "in_abc123456")
         (m, url, form, headers), = seen
         self.assertEqual((m, url, form), ("POST", "https://api.stripe.com/v1/invoices", {"customer": "cus_abc123456"}))
         self.assertTrue(headers["Authorization"].startswith("Basic "))
+        self.assertEqual(headers["Idempotency-Key"], "fz-p1-2026-12-create")
         with mock.patch.object(hq_hands_adapters, "http", return_value=(402, {"error": {"message": "x"}}, {})):
             with self.assertRaisesRegex(I.InvoiceError, "HTTP 402"):
                 I._stripe("POST", "/v1/invoices", {}, ENV)
         src = open(I.__file__).read()
         self.assertNotIn("urlopen", src)
+
+
+
+class Hardening(unittest.TestCase):
+    def per(self):
+        return I.period("month")
+
+    def test_idempotency_keys_per_plan_and_period(self):
+        db, st = FakeDB(), FakeStripe()
+        db.claim.update(plan="p1", period=self.per())
+        I.bill_plans("donna", env=ENV, http=st, rpc=db)
+        k = f"fz-p1-{self.per()}"
+        self.assertEqual([i for p, i in st.idem if i], [k + "-create", k + "-item", k + "-finalize", k + "-send"])
+        create = [f for m, p, f in st.calls if m == "POST" and p == "/v1/invoices"][0]
+        self.assertEqual((create["metadata[fz_plan]"], create["metadata[fz_period]"]), ("p1", self.per()))
+
+    def test_existing_stripe_invoice_for_the_period_is_not_recreated(self):
+        db = FakeDB()
+        st = FakeStripe(existing=[{"id": "in_old1234567", "status": "open", "metadata": {"fz_plan": "p1", "fz_period": self.per()}}])
+        r = I.bill_plans("donna", env=ENV, http=st, rpc=db)
+        self.assertEqual(r["sent"], [])
+        self.assertIn("already holds in_old1234567", r["refused"][0]["reason"])
+        self.assertFalse(any(m == "POST" for m, p, f in st.calls))
+        self.assertNotIn("office_os_invoice_record_plan", [c[0] for c in db.calls])
+        st = FakeStripe(existing=[{"id": "in_void123456", "status": "void", "metadata": {"fz_plan": "p1", "fz_period": self.per()}}])
+        self.assertEqual(len(I.bill_plans("donna", env=ENV, http=st, rpc=FakeDB())["sent"]), 1)   # a voided one does not block
+
+    def _db_with_last(self, stripe_status, due_days_ago):
+        import time
+        db = FakeDB()
+        db.plans[0]["last_invoice"] = {"id": INV_ID, "stripe_id": "in_last123456", "status": "sent", "mode": "test", "period": "2026-11"}
+        st = FakeStripe(by_id={"in_last123456": {"id": "in_last123456", "status": stripe_status, "due_date": time.time() - due_days_ago * 86400}})
+        return db, st
+
+    def test_payment_failure_stops_the_plan(self):
+        for status, days, stopped in (("uncollectible", 0, True), ("open", 8, True), ("open", 6, False), ("paid", 30, False)):
+            db, st = self._db_with_last(status, days)
+            r = I.check_plans("donna", env=ENV, http=st, rpc=db)
+            self.assertEqual(r["past_due"], ["p1"] if stopped else [], (status, days))
+            names = [c[0] for c in db.calls]
+            self.assertEqual("office_os_plan_past_due" in names, stopped, (status, days))
+            if status == "paid":
+                self.assertEqual([b for n, b in db.calls if n == "office_os_invoice_observe"], [{"p_invoice": INV_ID, "p_stripe_status": "paid"}])
+        db, st = self._db_with_last("open", 3)
+        self.assertEqual(I.check_plans("donna", grace_days=2, env=ENV, http=st, rpc=db)["past_due"], ["p1"])
+
+    def test_past_due_plan_is_not_billed(self):
+        db, st = self._db_with_last("uncollectible", 0)
+        r = I.bill_plans("donna", env=ENV, http=st, rpc=db)
+        self.assertEqual((r["sent"], r["past_due"]), ([], ["p1"]))
+        self.assertFalse(any(m == "POST" for m, p, f in st.calls))
+
+    def test_cancel_is_immediate_safety_only(self):
+        db = FakeDB()
+        I.cancel_plan("11111111-2222-4333-8444-666666666666", rpc=db)
+        self.assertEqual(db.calls, [("office_os_plan_revoke", {"p_plan": "11111111-2222-4333-8444-666666666666"})])
+        with self.assertRaises(I.InvoiceError):
+            I.cancel_plan("p1; drop", rpc=db)
+        src = re.sub(r'"""[\s\S]*?"""', "", open(I.__file__).read())
+        self.assertNotIn("refund", src.lower())
+
+    def test_log_text(self):
+        db = FakeDB()
+        db.__class__ = type("DBL", (FakeDB,), {"__call__": lambda self, m, p, b=None: [{"at": "2026-12-01T09:00", "event": "sent", "office": "donna", "by": "office_os", "plan": "p1", "invoice": INV_ID}]})
+        self.assertIn("sent  donna  by office_os", I.log_text(rpc=db))
+
+    def test_run_due_schedule_entry(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        I._LAST_RUN.clear()
+        with mock.patch.object(I, "_rpc", side_effect=AssertionError("called")):
+            nine0 = datetime(2026, 12, 2, 9, 5, tzinfo=ZoneInfo("America/Toronto"))
+            self.assertIn("invoicing is off", I.run_due(env={}, now=nine0)["reason"])       # flag off: nothing at all, even in the due hour
+            self.assertEqual(I.run_due(env=ENV, now=datetime(2026, 12, 1, 14, tzinfo=ZoneInfo("America/Toronto")))["reason"], "not due")
+        nine = datetime(2026, 12, 1, 9, 5, tzinfo=ZoneInfo("America/Toronto"))
+        with mock.patch.object(I, "_rpc", return_value=[]), mock.patch.object(I, "bill_plans") as bp:
+            self.assertTrue(I.run_due(env=ENV, now=nine)["ran"])
+            self.assertEqual(I.run_due(env=ENV, now=nine)["reason"], "not due")         # once a day
+        bp.assert_not_called()                                                          # no approved plans
 
 
 if __name__ == "__main__":

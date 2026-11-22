@@ -31,4 +31,6 @@
 -- select public.office_os_plan_decide('<plan id>', <cents>, 'month', true);
 --    c) stop a plan at once (no more automatic invoices):
 -- select public.office_os_plan_revoke('<plan id>');
-
+--    d) a plan stopped as past due (failed payment): resume it, or cancel it for good (never a refund)
+-- select public.office_os_plan_resume('<plan id>');
+-- select public.office_os_plan_cancel('<plan id>');
