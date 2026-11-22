@@ -1106,6 +1106,32 @@ async def hq_account_cmd(update, context) -> None:
     await hq_core.reply_to(update.message, hq_accounts.open_text() + "\n\nAfter you sign up: /account done <id> <login>")
 
 
+async def hq_invoices_cmd(update, context) -> None:
+    """/invoices  owner only: list; request <id> (send approval); send <id> (approved one); plans; bill <office> (this period of each approved plan)."""
+    if not _owner(update):
+        return
+    args = getattr(context, "args", None) or []
+    try:
+        import hq_invoices
+        if len(args) == 2 and args[0] == "request":
+            r = hq_invoices.request_send(args[1])
+            text = f"Send approval requested ({r.get('status') or r.get('reason')}). Decide in the SQL editor: office_os_invoice_decide."
+        elif len(args) == 2 and args[0] == "bill":
+            r = hq_invoices.bill_plans(args[1])
+            text = f"Billing plans: {len(r['sent'])} sent, {len(r['refused'])} refused." + "".join(f"\n- refused: {x['reason']}" for x in r["refused"])
+        elif args == ["plans"]:
+            text = hq_invoices.plans_text()
+        elif len(args) == 2 and args[0] == "send":
+            r = hq_invoices.send(args[1])
+            text = f"Invoice sent ({r.get('mode')} mode)."
+        else:
+            text = hq_invoices.invoices_text()
+    except Exception as e:
+        logger.warning("HQ invoices command refused: %s", str(e)[:150])
+        text = f"Refused: {str(e)[:200]}"
+    await hq_core.reply_to(update.message, text[:4000])
+
+
 async def hq_office_cmd(update, context) -> None:
     """/office  the corporate office. /office <name>  read-only status of one of the 8 offices (M7 office OS)."""
     if not _owner(update):
@@ -1295,7 +1321,7 @@ MENU_HQUI = [("needs", "Everything waiting on you, ranked")]
 
 
 MENU = [
-    ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("gate", "Outreach gate and sender anchor"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office; /office <name>: one office's status, manager, agents, tiers"), ("offices", "Office money: allocated, spent, revenue, profit, available"), ("approvals", "Everything waiting on your decision, one line each"), ("security", "Security report: audit chain, grants, identities, tokens"), ("services", "Shared services: owner office, tables, office stamp, scoped reads"), ("health", "Health: caps, kill switch, jobs, approvals, audit chain, security"), ("brain", "Search the shared brain (group facts)"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("gate", "Outreach gate and sender anchor"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office; /office <name>: one office's status, manager, agents, tiers"), ("invoices", "Client invoices: list, request a send approval, send an approved one"), ("offices", "Office money: allocated, spent, revenue, profit, available"), ("approvals", "Everything waiting on your decision, one line each"), ("security", "Security report: audit chain, grants, identities, tokens"), ("services", "Shared services: owner office, tables, office stamp, scoped reads"), ("health", "Health: caps, kill switch, jobs, approvals, audit chain, security"), ("brain", "Search the shared brain (group facts)"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -1374,7 +1400,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("offices", hq_offices_cmd), ("approvals", hq_approvals_cmd), ("security", hq_security_cmd), ("services", hq_services_cmd), ("health", hq_health_cmd), ("brain", hq_brain_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd), ("gate", hq_gate_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("invoices", hq_invoices_cmd), ("offices", hq_offices_cmd), ("approvals", hq_approvals_cmd), ("security", hq_security_cmd), ("services", hq_services_cmd), ("health", hq_health_cmd), ("brain", hq_brain_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd), ("gate", hq_gate_cmd)):
         app.add_handler(CommandHandler(name, fn))
     register_venture2(app, CommandHandler)  # venture2 hook
     try:  # Jarvis core v2: /core, /briefing, /report, /seedmemory (owner only, no AI). Worker + 07:00 report only with JARVIS_CORE=1.

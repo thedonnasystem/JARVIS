@@ -34,7 +34,8 @@ class T(unittest.TestCase):
         self.assertEqual(s["supabase"]["missing"], ["HQ_SUPABASE_SERVICE_KEY"])
         self.assertEqual(s["anthropic"]["state"], "missing")      # blank is not set
         self.assertEqual(s["rbc"]["state"], "manual")
-        self.assertEqual(s["stripe"]["state"], "not-built")
+        self.assertEqual(s["elevenlabs"]["state"], "not-built")
+        self.assertEqual(s["stripe"]["state"], "missing")
         self.assertEqual(s["railway"]["state"], "missing")
 
     def test_never_prints_a_value(self):

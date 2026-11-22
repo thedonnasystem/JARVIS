@@ -23,3 +23,12 @@
 
 -- 4. Stop an office (or cancel a pending activation): back to dormant, spending refused again.
 -- select public.office_os_deactivate('donna');
+
+-- 5. Client invoicing (Donna). Drafts are free; nothing reaches a client without one of these:
+--    a) one invoice: /invoices shows it after Donna asks (/invoices request <id>); approve it with its exact amount in cents, then /invoices send <id>
+-- select public.office_os_invoice_decide('<invoice id>', <cents>, true);
+--    b) a recurring billing plan, once: after that, each month / year Donna sends exactly that amount (/invoices bill donna); anything else asks you again
+-- select public.office_os_plan_decide('<plan id>', <cents>, 'month', true);
+--    c) stop a plan at once (no more automatic invoices):
+-- select public.office_os_plan_revoke('<plan id>');
+

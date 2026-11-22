@@ -57,6 +57,39 @@ Nothing is live until the owner applies M1..M6 and M7. Every office stays DORMAN
 - Funding requests: `hq_office_os.request_money(office, cents, purpose, expected_return, payback, cheapest_alternative, deadline)` calls only the existing M2 `fz_propose_office_money` (kind `allocate`) through `hq_office_money.propose`. It is a proposal in `/approvals`; no money moves and no limit changes. It is refused unless the office is active. **Gap:** that dormant refusal lives in Python only. M2's SQL accepts a proposal for a dormant office by design, because allocating to a dormant office is allowed. A database-level refusal needs an M2 change.
 - Tests: `test_hq_office_os` 18 tests, including no mission queued and no request filed while dormant, prepared, drifting or unreadable, and a request reaching only `fz_propose_office_money`. 10 mutants of the new gates, all killed.
 
+## 3c. Client invoicing (Donna bills clients)
+
+- `hq_invoices.py` is off unless `FZ_STRIPE_INVOICING=1`. With the flag off it makes no Stripe call and no database call.
+- `STRIPE_SECRET_KEY` must be a test key (`sk_test_` / `rk_test_`), or a live key (`sk_live_` / `rk_live_`) together with `FZ_STRIPE_LIVE=1`. The owner sets both in Railway; the bot cannot set environment variables.
+- The office must be active and in sync, and the database re-checks this, plus that `stripe` is in the office's allowed integrations. Donna's seed now includes `stripe`.
+- Only these Stripe calls are allowed: invoices (create draft, read, delete a draft, finalize, send), invoice items, prices and payment links. **No refund, payout, transfer, credit-note or balance call exists or is allowed**, and a test enforces that.
+- Drafting is free. A payment link is recorded but never sent by the bot; the owner shares it.
+- **A one-off invoice is sent only after the owner's per-invoice decision.**
+  - `office_os_invoice_request_send` puts the item in `/approvals`.
+  - The owner decides with `office_os_invoice_decide(id, cents, approve)`: signed-in owner only, with the amount echoed. The decision is stored in `fz_office_os`, which the service key cannot write.
+  - The bot then claims the send once. It re-checks Stripe right before finalize + send: still a draft, same amount, same currency, same mode.
+  - Any failure is recorded as `send_failed`.
+- **A recurring billing plan is approved once.**
+  - The plan holds client label, Stripe customer id, amount, currency and interval (month or year). The owner approves it with `office_os_plan_decide(id, cents, interval, approve)`, amount and interval echoed.
+  - After that, `office_os_invoice_record_plan` records this period's invoice as approved, but only for exactly the plan's amount, currency and interval, only once per period (Toronto calendar), and only while the plan is approved and the office is active.
+  - A larger amount, another interval, a second invoice in the period, a one-off or a revoked plan is refused there. A revoked plan also blocks the send claim of an invoice already recorded.
+  - `office_os_plan_revoke` (owner or service path; revoking only makes things safer) stops auto-send at once.
+- Recording: each invoice row in `fz_office_os.fz_office_invoices` carries its `office_id`, and the database functions audit-log it. There is no ledger write and no reservation, and no cap or limit changes. Incoming money is revenue only.
+- Telegram `/invoices` (owner only):
+  - list;
+  - `request <id>`;
+  - `send <id>`;
+  - `plans`;
+  - `bill <office>`: this period's plan invoices.
+- **Gaps (owner decisions):**
+  1. `bill_plans` runs when called (`/invoices bill donna` or a Jarvis job). Wiring it to the engine schedule touches the protected engine and core.
+  2. Paid invoices are not booked automatically; there is no Stripe webhook. Book revenue with `/money in`.
+  3. Stripe calls reuse the existing official-API transport (`hq_hands_adapters.http`: one no-redirect opener), so no new outbound call site is added. The invoice send route (Stripe finalize + send, then `office_os_invoice_mark_sent`) is new: add it to `AUDIT_PATHS.md` and `test_audit_paths.py`. Both are protected, so that is an owner follow-up.
+  4. The M5 `payments` service registry row is unchanged. It registers `payment_instructions` (outgoing, protected), and changing what it writes is an owner-only registry change, so invoices are attributed by `office_id` in their own table instead.
+- Tests:
+  - `sqltests/office_os_check.sql` O14 (one-off) and O15 (plans);
+  - `test_hq_invoices.py` (16 tests, all Stripe calls mocked, no network): flag off makes no call; key rules (live without the owner switch refused); dormant office refused; send without approval refused; Stripe re-check; plan invoices for the exact amount only; a database refusal deletes the draft; a revoked plan stops auto-send; no refund or payout path.
+
 ## 4. Risks
 
 - The owner can still set an office active directly with M1's `fz_owner_set_office_status`, skipping the manager and decision steps; the drift job alerts within 10 minutes and `/office` flags it.

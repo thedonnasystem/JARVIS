@@ -372,6 +372,17 @@ function	office_os_activate(text)	-	-	execute	security_definer		-
 function	office_os_deactivate(text)	-	-	execute	security_definer		-
 function	office_os_decide(text,text,boolean)	-	-	execute	security_definer		-
 function	office_os_drift_check()	-	-	execute	security_definer		-
+function	office_os_invoice_claim_send(uuid)	-	-	execute	security_definer		-
+function	office_os_invoice_decide(uuid,integer,boolean)	-	-	execute	security_definer		-
+function	office_os_invoice_mark_sent(uuid,boolean)	-	-	execute	security_definer		-
+function	office_os_invoice_record(text,text,text,text,integer,text,text)	-	-	execute	security_definer		-
+function	office_os_invoice_record_plan(uuid,text,text,integer,text,text)	-	-	execute	security_definer		-
+function	office_os_invoice_request_send(uuid)	-	-	execute	security_definer		-
+function	office_os_invoices(integer)	-	-	execute	security_definer		-
+function	office_os_plan_decide(uuid,integer,text,boolean)	-	-	execute	security_definer		-
+function	office_os_plan_propose(text,text,text,integer,text,text)	-	-	execute	security_definer		-
+function	office_os_plan_revoke(uuid)	-	-	execute	security_definer		-
+function	office_os_plans()	-	-	execute	security_definer		-
 function	office_os_set_manager(text,text)	-	-	execute	security_definer		-
 function	office_os_status(text)	-	-	execute	security_definer		-
 function	ops_alerts()	-	-	execute	security_definer		-

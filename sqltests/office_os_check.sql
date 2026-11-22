@@ -125,10 +125,10 @@ begin
   -- O3 privileges: no API role reaches the schema or the table; nobody but the service path executes the functions
   foreach r in array ROLES loop
     if has_schema_privilege(r, 'fz_office_os', 'usage') or has_schema_privilege(r, 'fz_office_os', 'create') then raise exception 'O3 % reaches the schema', r; end if;
-    foreach f in array array['fz_office_profiles', 'fz_office_decisions', 'fz_office_drift'] loop
+    foreach f in array array['fz_office_profiles', 'fz_office_decisions', 'fz_office_drift', 'fz_office_invoices', 'fz_billing_plans'] loop
       if has_table_privilege(r, ('fz_office_os.' || f)::regclass, 'select,insert,update,delete,truncate,references,trigger') then raise exception 'O3 % holds a privilege on %', r, f; end if;
     end loop;
-    foreach f in array array['office_os_set_manager(text,text)', 'office_os_activate(text)', 'office_os_decide(text,text,boolean)', 'office_os_deactivate(text)', 'office_os_status(text)', 'office_os_drift_check()'] loop
+    foreach f in array array['office_os_set_manager(text,text)', 'office_os_activate(text)', 'office_os_decide(text,text,boolean)', 'office_os_deactivate(text)', 'office_os_status(text)', 'office_os_drift_check()', 'office_os_invoice_record(text,text,text,text,integer,text,text)', 'office_os_invoice_request_send(uuid)', 'office_os_invoice_decide(uuid,integer,boolean)', 'office_os_invoice_claim_send(uuid)', 'office_os_invoice_mark_sent(uuid,boolean)', 'office_os_invoices(integer)', 'office_os_plan_propose(text,text,text,integer,text,text)', 'office_os_plan_decide(uuid,integer,text,boolean)', 'office_os_plan_revoke(uuid)', 'office_os_invoice_record_plan(uuid,text,text,integer,text,text)', 'office_os_plans()'] loop
       if r <> 'service_role' and has_function_privilege(r, ('public.' || f)::regprocedure, 'execute') then raise exception 'O3 % executes %', r, f; end if;
     end loop;
   end loop;
@@ -273,6 +273,76 @@ begin
   j := public.office_os_deactivate('donna');
   if pg_temp.st('donna') is distinct from 'dormant' or pg_temp.m1('donna') is distinct from 'dormant' then raise exception 'O11 deactivate: %', j; end if;
   if pg_temp.dr(pg_temp.svc(format('select public.fz_reserve_office_spend(%s)::text', pg_temp.res_args('donna', 50)))) not like 'deny|%dormant%' then raise exception 'O11 a deactivated office can spend'; end if;
+
+  -- O14 client invoicing: drafts only for an ACTIVE office with stripe allowed; a send needs the owner's per-invoice decision (amount echoed); no money row is written
+  n0 := (select count(*) from public.ledger);
+  if pg_temp.svc($q$select public.office_os_invoice_record('donna', 'invoice', 'in_fzotest0001', 'test', 49700, 'cad', 'Answer setup')::text$q$) not like 'ERR:refused: donna is not active%' then raise exception 'O14 a dormant office recorded an invoice'; end if;
+  if pg_temp.svc($q$select public.office_os_invoice_record('wolf-squad', 'invoice', 'in_fzotest0002', 'test', 100, 'cad', 'x')::text$q$) not like 'ERR:refused: wolf-squad is not active%' then raise exception 'O14 wolf-squad recorded'; end if;
+  j := public.office_os_activate('donna'); perform public.office_os_decide('donna', j ->> 'nonce', true); perform public.office_os_activate('donna');
+  if pg_temp.st('donna') is distinct from 'active' then raise exception 'O14 donna not re-activated'; end if;
+  if pg_temp.as_id('fz_office_agent', ca, $q$select public.office_os_invoice_record('donna', 'invoice', 'in_fzotest0003', 'test', 100, 'cad', 'x')::text$q$) not like 'ERR:permission denied%' then raise exception 'O14 a scoped role recorded'; end if;
+  j := (substr(pg_temp.svc($q$select public.office_os_invoice_record('donna', 'invoice', 'in_fzotest0001', 'test', 49700, 'CAD', 'Answer setup')::text$q$), 4))::jsonb;
+  v_req := (j ->> 'invoice')::uuid;
+  if j ->> 'status' is distinct from 'draft' or (select office_id::text || '|' || currency from fz_office_os.fz_office_invoices where id = v_req) <> 'f0000000-0000-4000-8000-000000000002|cad' then raise exception 'O14 draft %', j; end if;
+  if pg_temp.svc(format('select public.office_os_invoice_claim_send(%L)::text', v_req)) not like 'ERR:refused: invoice in_fzotest0001 has no owner send approval%' then raise exception 'O14 a draft was sent'; end if;
+  j := (substr(pg_temp.svc(format('select public.office_os_invoice_request_send(%L)::text', v_req)), 4))::jsonb;
+  if j ->> 'status' is distinct from 'send_requested' or not exists (select 1 from public.fz_approval_queue where source_id = (j ->> 'approval')::uuid and action = 'client_invoice_send' and amount_cents = 49700) then raise exception 'O14 send request %', j; end if;
+  -- the service key approving the queue item does not count; the bot cannot decide; a wrong amount is refused
+  update public.approval_requests set status = 'approved' where id = (j ->> 'approval')::uuid;
+  if pg_temp.svc(format('select public.office_os_invoice_claim_send(%L)::text', v_req)) not like 'ERR:refused%no owner send approval%' then raise exception 'O14 a service-key approval sent the invoice'; end if;
+  if pg_temp.svc(format('select public.office_os_invoice_decide(%L, 49700, true)::text', v_req)) not like 'ERR:owner approval required%' then raise exception 'O14 the bot decided'; end if;
+  if pg_temp.noowner(format('select public.office_os_invoice_decide(%L, 49700, true)::text', v_req)) not like 'ERR:owner approval required%' then raise exception 'O14 no-owner decided'; end if;
+  if pg_temp.owner(format('select public.office_os_invoice_decide(%L, 99700, true)::text', v_req)) not like 'ERR:refused: amount does not match%' then raise exception 'O14 wrong amount approved'; end if;
+  if pg_temp.svc($q$update fz_office_os.fz_office_invoices set status = 'approved'$q$) not like 'ERR:permission denied%' then raise exception 'O14 the bot wrote the invoice table'; end if;
+  perform public.office_os_invoice_decide(v_req, 49700, true);
+  j := (substr(pg_temp.svc(format('select public.office_os_invoice_claim_send(%L)::text', v_req)), 4))::jsonb;
+  if j ->> 'stripe_id' is distinct from 'in_fzotest0001' then raise exception 'O14 claim %', j; end if;
+  if pg_temp.svc(format('select public.office_os_invoice_claim_send(%L)::text', v_req)) not like 'ERR:refused%status sending%' then raise exception 'O14 claimed twice'; end if;
+  if pg_temp.svc(format('select public.office_os_invoice_mark_sent(%L, true)::text', v_req)) not like 'OK:%sent%' then raise exception 'O14 mark sent'; end if;
+  if (select status from fz_office_os.fz_office_invoices where id = v_req) is distinct from 'sent' then raise exception 'O14 not sent'; end if;
+  -- a payment link is recorded but never sent by the bot; a deactivated office cannot send an approved invoice
+  j := (substr(pg_temp.svc($q$select public.office_os_invoice_record('donna', 'payment_link', 'plink_fzotest0004', 'test', 79700, 'cad', 'Capture')::text$q$), 4))::jsonb;
+  if pg_temp.svc(format('select public.office_os_invoice_request_send(%L)::text', j ->> 'invoice')) not like 'ERR:refused: a payment link is never sent%' then raise exception 'O14 a payment link was sent'; end if;
+  v_req2 := ((substr(pg_temp.svc($q$select public.office_os_invoice_record('donna', 'invoice', 'in_fzotest0005', 'test', 14900, 'cad', 'Site support')::text$q$), 4))::jsonb ->> 'invoice')::uuid;
+  perform pg_temp.svc(format('select public.office_os_invoice_request_send(%L)::text', v_req2));
+  perform public.office_os_invoice_decide(v_req2, 14900, true);
+  perform public.office_os_deactivate('donna');
+  if pg_temp.svc(format('select public.office_os_invoice_claim_send(%L)::text', v_req2)) not like 'ERR:refused: donna is not active%' then raise exception 'O14 a dormant office sent'; end if;
+  if jsonb_array_length((substr(pg_temp.svc('select public.office_os_invoices(10)::text'), 4))::jsonb) <> 3 then raise exception 'O14 list'; end if;
+  if pg_temp.as_id('anon', null, 'select public.office_os_invoices(10)::text') not like 'ERR:permission denied%' then raise exception 'O14 anon lists invoices'; end if;
+  if (select count(*) from public.ledger) <> n0 then raise exception 'O14 invoicing wrote a ledger row'; end if;
+  if exists (select 1 from pg_proc where proname ~* '(refund|payout|transfer)' and proname like 'office\_os%') then raise exception 'O14 a refund / payout function exists'; end if;
+
+  -- O15 billing plans: approved once, then that plan's period invoice is auto-approved; a larger amount, another interval, a second one in the period or a revoked plan: refused
+  if pg_temp.svc($q$select public.office_os_plan_propose('donna', 'Fzo Plumbing', 'cus_fzotest01', 49700, 'cad', 'month')::text$q$) not like 'ERR:refused: donna is not active%' then raise exception 'O15 dormant office proposed a plan'; end if;
+  j := public.office_os_activate('donna'); perform public.office_os_decide('donna', j ->> 'nonce', true); perform public.office_os_activate('donna');
+  j := (substr(pg_temp.svc($q$select public.office_os_plan_propose('donna', 'Fzo Plumbing', 'cus_fzotest01', 49700, 'cad', 'month')::text$q$), 4))::jsonb;
+  v_req := (j ->> 'plan')::uuid;
+  if pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0001', 'test', 49700, 'cad', 'month')::text$q$, v_req)) not like 'ERR:refused: plan is proposed%' then raise exception 'O15 an unapproved plan billed'; end if;
+  if pg_temp.svc(format('select public.office_os_plan_decide(%L, 49700, %L, true)::text', v_req, 'month')) not like 'ERR:owner approval required%' then raise exception 'O15 the bot approved a plan'; end if;
+  if pg_temp.owner(format('select public.office_os_plan_decide(%L, 49700, %L, true)::text', v_req, 'year')) not like 'ERR:refused: amount or interval does not match%' then raise exception 'O15 decided a different interval'; end if;
+  if pg_temp.owner(format('select public.office_os_plan_decide(%L, 99700, %L, true)::text', v_req, 'month')) not like 'ERR:refused: amount or interval does not match%' then raise exception 'O15 decided a different amount'; end if;
+  perform public.office_os_plan_decide(v_req, 49700, 'month', true);
+  if pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0002', 'test', 49800, 'cad', 'month')::text$q$, v_req)) not like 'ERR:refused: amount differs from the approved plan%' then raise exception 'O15 an amount above the plan was accepted'; end if;
+  if pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0003', 'test', 49700, 'usd', 'month')::text$q$, v_req)) not like 'ERR:refused: amount differs%' then raise exception 'O15 another currency was accepted'; end if;
+  if pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0009', 'test', 49600, 'cad', 'month')::text$q$, v_req)) not like 'ERR:refused: amount differs%' then raise exception 'O15 a lower amount was accepted (exact plan amount only)'; end if;
+  if pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0004', 'test', 49700, 'cad', 'year')::text$q$, v_req)) not like 'ERR:refused: interval differs%' then raise exception 'O15 a changed interval was accepted'; end if;
+  j := (substr(pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0005', 'test', 49700, 'cad', 'month')::text$q$, v_req)), 4))::jsonb;
+  if j ->> 'status' is distinct from 'approved' or j ->> 'period' !~ '^\d{4}-\d{2}$' then raise exception 'O15 plan invoice %', j; end if;
+  if pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0006', 'test', 49700, 'cad', 'month')::text$q$, v_req)) not like 'ERR:refused: plan already invoiced%' then raise exception 'O15 billed twice in one period'; end if;
+  -- the auto-approved invoice can be claimed, until the plan is revoked
+  v_req2 := (j ->> 'invoice')::uuid;
+  perform public.office_os_plan_revoke(v_req);
+  if pg_temp.svc(format('select public.office_os_invoice_claim_send(%L)::text', v_req2)) not like 'ERR:refused: the billing plan of invoice in_fzoplan0005 is no longer approved%' then raise exception 'O15 a revoked plan still sends'; end if;
+  if pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0007', 'test', 49700, 'cad', 'month')::text$q$, v_req)) not like 'ERR:refused: plan is revoked%' then raise exception 'O15 a revoked plan billed'; end if;
+  if pg_temp.as_id('anon', null, format('select public.office_os_plan_revoke(%L)::text', v_req)) not like 'ERR:permission denied%' then raise exception 'O15 anon revokes'; end if;
+  -- a fresh plan: the auto invoice claims once
+  j := (substr(pg_temp.svc($q$select public.office_os_plan_propose('donna', 'Fzo Electric', 'cus_fzotest02', 79700, 'cad', 'month')::text$q$), 4))::jsonb;
+  perform public.office_os_plan_decide((j ->> 'plan')::uuid, 79700, 'month', true);
+  j := (substr(pg_temp.svc(format($q$select public.office_os_invoice_record_plan(%L, 'in_fzoplan0008', 'test', 79700, 'cad', 'month')::text$q$, j ->> 'plan')), 4))::jsonb;
+  if pg_temp.svc(format('select public.office_os_invoice_claim_send(%L)::text', j ->> 'invoice')) not like 'OK:%in_fzoplan0008%' then raise exception 'O15 an approved plan invoice cannot be sent'; end if;
+  if jsonb_array_length((substr(pg_temp.svc('select public.office_os_plans()::text'), 4))::jsonb) <> 2 then raise exception 'O15 plans list'; end if;
+  perform public.office_os_deactivate('donna');
 
   -- O12 nothing outside M7 changed shape: the profile table is not in public, not registered, nothing unregistered / unclassified
   if exists (select 1 from public.fz_unregistered_tables()) then raise exception 'O12 unregistered table'; end if;
