@@ -16,6 +16,13 @@ import hq
 
 logger = logging.getLogger(__name__)
 LIVE = ("captured", "evaluated", "planned", "executing", "verifying", "blocked")
+ROW_LIMIT = 200
+OFFICE_KEYS = ("office_paused", "office_paused_from")
+
+
+def without_office_marks(checkpoint) -> dict:
+    """The checkpoint minus this gate's marks: an owner pause / abandon must never be resumed by an office reactivation."""
+    return {k: v for k, v in dict(checkpoint or {}).items() if k not in OFFICE_KEYS}
 
 
 def _q(v) -> str:
@@ -61,19 +68,31 @@ def create_refusal(venture_id, get=None) -> str | None:
 
 
 def sweep(get=None, patch=None) -> dict:
-    """Pause live missions of inactive offices; resume the ones this gate paused once their office is active again."""
-    paused, resumed = [], []
-    rows = _get("missions?status=in.(" + ",".join(LIVE + ("paused",)) + ")&select=id,title,status,venture_id,plan,checkpoint", get)
+    """Pause live missions of inactive offices; resume the ones this gate paused once their office is active again.
+    An office whose status cannot be read is skipped this tick: nothing is paused or cancelled, but its missions are returned in 'blocked'
+    so the caller does not advance them (fail closed without churn)."""
+    paused, resumed, blocked = [], [], []
+    sel = "&select=id,title,status,venture_id,plan,checkpoint&order=created_at.asc&limit=" + str(ROW_LIMIT)
+    rows = _get("missions?status=in.(" + ",".join(LIVE) + ")" + sel, get)
+    rows += _get("missions?status=eq.paused&checkpoint->>office_paused=not.is.null" + sel, get)   # only the ones this gate paused
     cache: dict = {}
+    seen: set = set()
     for m in rows:
+        if m["id"] in seen:
+            continue
+        seen.add(m["id"])
         vid = m.get("venture_id")
         if vid not in cache:
             try:
                 cache[vid] = office_of_venture(vid, get)
             except Exception:
-                logger.exception("mission office check failed")
-                cache[vid] = ("unknown", False)
+                logger.exception("mission office check failed: venture skipped this tick")
+                cache[vid] = "unreadable"
         r = cache[vid]
+        if r == "unreadable":
+            if m["status"] in LIVE:
+                blocked.append(m["id"])
+            continue
         cp = dict(m.get("checkpoint") or {})
         if m["status"] in LIVE and r and not r[1]:
             cp["office_paused"] = r[0]
@@ -95,4 +114,4 @@ def sweep(get=None, patch=None) -> dict:
             _patch(f"missions?id=eq.{_q(m['id'])}&status=eq.paused", {"status": target, "plan": plan, "checkpoint": cp,
                                                                        "next_action": "Resumed: the office is active again."}, patch)
             resumed.append(m["id"])
-    return {"paused": paused, "resumed": resumed}
+    return {"paused": paused, "resumed": resumed, "blocked": blocked}
