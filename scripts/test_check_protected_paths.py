@@ -199,12 +199,20 @@ class IdentityTests(unittest.TestCase):
             return {"labels": [{"name": n} for n in labels]}
         return f
 
-    def test_shipped_config_fails_closed_today(self):
+    def test_shipped_config_only_the_chairman_account_approves(self):
+        # Owner bootstrap (Nov 22 2026): owner_login is the Chairman's own account (Fendimo); the agents' account never counts.
+        self.assertEqual(CFG["owner_login"], "Fendimo")
+        self.assertIn("thedonnasystem", CFG["agent_logins"])
+        self.assertNotIn(CFG["owner_login"].casefold(), [a.casefold() for a in CFG["agent_logins"]])
         lab = "owner-ok-" + SHA
         ev = [{"actor": {"login": "thedonnasystem"}, "event": "labeled", "label": {"name": lab}}]
         ok, how = C.approval(CFG, "o/r", 5, SHA, self.fetch(events=ev, labels=[lab]))
-        self.assertFalse(ok); self.assertIn("FAIL CLOSED", how); self.assertIn("second GitHub account", how)
+        self.assertFalse(ok)
         ok, how = C.approval(CFG, "o/r", 5, SHA, self.fetch(reviews=[{"user": {"login": "thedonnasystem"}, "state": "APPROVED", "commit_id": SHA}]))
+        self.assertFalse(ok)
+        ok, how = C.approval(CFG, "o/r", 5, SHA, self.fetch(reviews=[{"user": {"login": "Fendimo"}, "state": "APPROVED", "commit_id": SHA}]))
+        self.assertTrue(ok, how)
+        ok, how = C.approval(CFG, "o/r", 5, SHA, self.fetch(reviews=[{"user": {"login": "Fendimo"}, "state": "APPROVED", "commit_id": "b" * 40}]))
         self.assertFalse(ok)
 
     def test_owner_equal_to_author_fails_closed(self):

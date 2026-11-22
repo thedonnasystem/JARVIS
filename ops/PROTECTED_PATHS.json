@@ -1,7 +1,7 @@
 {
   "version": 2,
   "about": "Never-edit list approved by the Chairman (Nov 16 2026). Any change that touches a path below, renames / copies / symlinks one, changes a listed SQL object, adds a destructive data statement, adds a module that could shadow or monkey-patch a protected one, or adds a file type the checker cannot scan needs an owner approval marker (scripts/check_protected_paths.py). In CI the checker and this file are always read from the TRUSTED base branch, never from the pull request. Jarvis's self-edit pipeline refuses these outright and, in allowlist mode (ops/SELF_EDIT_MODE), refuses anything outside the auto-ship zone. This file protects itself.",
-  "owner_login": "thedonnasystem",
+  "owner_login": "Fendimo",
   "approval": {
     "methods": [
       "review",
