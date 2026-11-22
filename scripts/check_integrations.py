@@ -42,7 +42,7 @@ INTEGRATIONS = [
     ("whatsapp", "WhatsApp Business (owner alerts, off by default)", ["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_OWNER_NUMBER"], ["JARVIS_WHATSAPP", "WHATSAPP_TEMPLATE"], ALL, True, "yellow", False),
     ("emergency_call", "Twilio emergency call to the owner (off by default)", ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER", "OWNER_PHONE_NUMBER"], ["JARVIS_EMERGENCY_CALL"], ALL, True, "yellow", False),
     ("rbc", "RBC bank (manual: statement CSV via /bank, no credential ever)", [], [], ALL, True, "red", False),
-    ("stripe", "Stripe client invoicing (drafts; sends only with the owner's approval; off until FZ_STRIPE_INVOICING=1)", ["STRIPE_SECRET_KEY"], ["FZ_STRIPE_INVOICING", "FZ_STRIPE_LIVE"], ("donna",), True, "red", False),
+    ("stripe", "Stripe client invoicing (RESTRICTED key rk_; drafts; sends only with the owner's approval; off until FZ_STRIPE_INVOICING=1)", ["STRIPE_SECRET_KEY"], ["FZ_STRIPE_INVOICING", "FZ_STRIPE_LIVE"], ("donna",), True, "red", False),
     ("meta_ads", "Meta Ads API (paid campaigns)", [], [], ("ff-marketing",), False, "red", False),
     ("elevenlabs", "ElevenLabs voice", [], [], ("b2b-records", "pimp-ai"), False, "yellow", False),
     ("gmail", "Gmail inbox reading", [], [], ("donna", "wolf-squad"), False, "yellow", False),

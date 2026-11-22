@@ -16170,8 +16170,10 @@ create table if not exists fz_office_os.fz_office_invoices (
   constraint fz_office_invoices_link_never_sent check (kind = 'invoice' or status = 'draft')
 );
 revoke all on fz_office_os.fz_office_invoices from public;
+alter table fz_office_os.fz_office_invoices add column if not exists customer_id text check (customer_id is null or customer_id ~ '^cus_[A-Za-z0-9]{6,64}$');
 
-create or replace function public.office_os_invoice_record(p_office text, p_kind text, p_stripe_id text, p_mode text, p_cents integer, p_currency text, p_description text default '') returns jsonb
+drop function if exists public.office_os_invoice_record(text, text, text, text, integer, text, text);
+create or replace function public.office_os_invoice_record(p_office text, p_kind text, p_customer text, p_stripe_id text, p_mode text, p_cents integer, p_currency text, p_description text default '') returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
 declare v_role text := coalesce(nullif(current_setting('role', true), ''), 'none'); p fz_office_os.fz_office_profiles; v_id uuid;
 begin
@@ -16181,15 +16183,16 @@ begin
   if p.status <> 'active' or not exists (select 1 from public.fz_offices where id = p.office_id and status = 'active') then
     raise exception 'refused: % is not active', p.slug using errcode = '42501'; end if;
   if not ('stripe' = any (p.integrations)) then raise exception 'refused: stripe is not an allowed integration of %', p.slug using errcode = '42501'; end if;
-  insert into fz_office_os.fz_office_invoices (office_id, slug, kind, stripe_id, mode, cents, currency, description)
-    values (p.office_id, p.slug, p_kind, p_stripe_id, p_mode, p_cents, lower(p_currency), left(regexp_replace(coalesce(p_description, ''), '[[:cntrl:]]+', ' ', 'g'), 300))
+  if p_kind = 'invoice' and coalesce(p_customer, '') !~ '^cus_[A-Za-z0-9]{6,64}$' then raise exception 'refused: an invoice needs its Stripe customer id (cus_...)'; end if;
+  insert into fz_office_os.fz_office_invoices (office_id, slug, kind, customer_id, stripe_id, mode, cents, currency, description)
+    values (p.office_id, p.slug, p_kind, case when p_kind = 'invoice' then p_customer end, p_stripe_id, p_mode, p_cents, lower(p_currency), left(regexp_replace(coalesce(p_description, ''), '[[:cntrl:]]+', ' ', 'g'), 300))
     returning id into v_id;
   insert into public.audit_log (actor, action, target, detail)
     values ('office_os', 'invoice_drafted', 'fz_office_invoices/' || v_id, jsonb_build_object('office', p.slug, 'kind', p_kind, 'mode', p_mode, 'cents', p_cents, 'currency', lower(p_currency)));
   perform fz_office_os.log_event(p.slug, null, v_id, 'drafted', 'office_os', jsonb_build_object('kind', p_kind, 'mode', p_mode, 'cents', p_cents, 'currency', lower(p_currency)));
   return jsonb_build_object('invoice', v_id, 'status', 'draft');
 end $$;
-revoke all on function public.office_os_invoice_record(text, text, text, text, integer, text, text) from public, anon, authenticated;
+revoke all on function public.office_os_invoice_record(text, text, text, text, text, integer, text, text) from public, anon, authenticated;
 
 create or replace function public.office_os_invoice_request_send(p_invoice uuid) returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
@@ -16204,11 +16207,11 @@ begin
     raise exception 'refused: % is not active', i.slug using errcode = '42501'; end if;
   insert into public.approval_requests (actor, action, cents, ref, recommendation, expires_at)
     values ('jarvis', 'client_invoice_send', i.cents, 'invoice:' || i.id,
-            format('Send %s invoice %s for %s %s (%s mode) to the client. Decide with office_os_invoice_decide in the SQL editor.', i.slug, i.stripe_id, to_char(i.cents / 100.0, 'FM999,999,990.00'), upper(i.currency), i.mode),
+            format('Send %s invoice %s to Stripe customer %s for %s %s (%s mode). Decide with office_os_invoice_decide in the SQL editor.', i.slug, i.stripe_id, i.customer_id, to_char(i.cents / 100.0, 'FM999,999,990.00'), upper(i.currency), i.mode),
             now() + interval '7 days') returning id into v_req;
   insert into public.owner_messages (from_agent, kind, channel, body, needs_decision, ref_table, ref_id)
-    values ('jarvis', 'proposal', 'telegram', format('Invoice waiting for your send decision: %s %s %s (%s). Decide in the SQL editor (office_os_invoice_decide); a tap here does not send it.',
-            i.slug, to_char(i.cents / 100.0, 'FM999,999,990.00'), upper(i.currency), i.mode), false, 'approval_requests', v_req);
+    values ('jarvis', 'proposal', 'telegram', format('Invoice waiting for your send decision: %s %s %s to customer %s (%s). Decide in the SQL editor (office_os_invoice_decide); a tap here does not send it.',
+            i.slug, to_char(i.cents / 100.0, 'FM999,999,990.00'), upper(i.currency), i.customer_id, i.mode), false, 'approval_requests', v_req);
   update fz_office_os.fz_office_invoices set status = 'send_requested', approval_request = v_req, updated_at = now() where id = i.id;
   insert into public.audit_log (actor, action, target, detail) values ('office_os', 'invoice_send_requested', 'fz_office_invoices/' || i.id, jsonb_build_object('approval', v_req));
   perform fz_office_os.log_event(i.slug, i.plan_id, i.id, 'requested', 'office_os', jsonb_build_object('approval', v_req));
@@ -16248,7 +16251,7 @@ begin
   if not exists (select 1 from fz_office_os.fz_office_profiles p join public.fz_offices o on o.id = p.office_id where p.slug = i.slug and p.status = 'active' and o.status = 'active') then
     raise exception 'refused: % is not active', i.slug using errcode = '42501'; end if;
   update fz_office_os.fz_office_invoices set status = 'sending', updated_at = now() where id = i.id;
-  return jsonb_build_object('invoice', i.id, 'stripe_id', i.stripe_id, 'mode', i.mode, 'cents', i.cents, 'currency', i.currency, 'plan', i.plan_id, 'period', i.period);
+  return jsonb_build_object('invoice', i.id, 'stripe_id', i.stripe_id, 'mode', i.mode, 'cents', i.cents, 'currency', i.currency, 'plan', i.plan_id, 'period', i.period, 'customer', i.customer_id);
 end $$;
 revoke all on function public.office_os_invoice_claim_send(uuid) from public, anon, authenticated;
 
@@ -16271,7 +16274,7 @@ revoke all on function public.office_os_invoice_mark_sent(uuid, boolean) from pu
 create or replace function public.office_os_invoices(p_limit integer default 20) returns jsonb
 language sql stable security definer set search_path to 'pg_catalog' as $$
   select case when coalesce(nullif(current_setting('role', true), ''), 'none') in ('none', 'postgres', 'service_role') then
-    coalesce((select jsonb_agg(jsonb_build_object('id', x.id, 'office', x.slug, 'kind', x.kind, 'stripe_id', x.stripe_id, 'mode', x.mode, 'cents', x.cents, 'currency', x.currency,
+    coalesce((select jsonb_agg(jsonb_build_object('id', x.id, 'office', x.slug, 'kind', x.kind, 'customer', x.customer_id, 'stripe_id', x.stripe_id, 'mode', x.mode, 'cents', x.cents, 'currency', x.currency,
                                                   'description', x.description, 'status', x.status, 'created_at', x.created_at) order by x.created_at desc)
               from (select * from fz_office_os.fz_office_invoices order by created_at desc limit least(greatest(coalesce(p_limit, 20), 1), 100)) x), '[]'::jsonb)
   else null end
@@ -16359,7 +16362,8 @@ end $$;
 revoke all on function public.office_os_plan_revoke(uuid) from public, anon, authenticated;
 
 -- this period's invoice of an approved plan: exactly the plan's amount, currency and interval, the CURRENT period only, once per period; recorded as approved
-create or replace function public.office_os_invoice_record_plan(p_plan uuid, p_stripe_id text, p_mode text, p_cents integer, p_currency text, p_interval text) returns jsonb
+drop function if exists public.office_os_invoice_record_plan(uuid, text, text, integer, text, text);
+create or replace function public.office_os_invoice_record_plan(p_plan uuid, p_customer text, p_stripe_id text, p_mode text, p_cents integer, p_currency text, p_interval text) returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
 declare v_role text := coalesce(nullif(current_setting('role', true), ''), 'none'); b fz_office_os.fz_billing_plans; v_period text; v_id uuid;
 begin
@@ -16369,13 +16373,14 @@ begin
   if b.status <> 'approved' then raise exception 'refused: plan is % (no automatic invoice)', b.status using errcode = '42501'; end if;
   if p_cents is distinct from b.cents or lower(p_currency) is distinct from b.currency then raise exception 'refused: amount differs from the approved plan (% %): needs a per-invoice decision', b.cents, b.currency using errcode = '42501'; end if;
   if p_interval is distinct from b.billing_interval then raise exception 'refused: interval differs from the approved plan (%): needs a per-invoice decision', b.billing_interval using errcode = '42501'; end if;
+  if p_customer is distinct from b.customer_id then raise exception 'refused: the Stripe invoice''s customer is not the approved plan''s customer' using errcode = '42501'; end if;
   if not exists (select 1 from fz_office_os.fz_office_profiles p join public.fz_offices o on o.id = p.office_id where p.slug = b.slug and p.status = 'active' and o.status = 'active') then
     raise exception 'refused: % is not active', b.slug using errcode = '42501'; end if;
   v_period := case b.billing_interval when 'month' then to_char(now() at time zone 'America/Toronto', 'YYYY-MM') else to_char(now() at time zone 'America/Toronto', 'YYYY') end;
   if exists (select 1 from fz_office_os.fz_office_invoices where plan_id = b.id and period = v_period) then
     raise exception 'refused: plan already invoiced for %', v_period using errcode = '42501'; end if;
-  insert into fz_office_os.fz_office_invoices (office_id, slug, kind, stripe_id, mode, cents, currency, description, status, plan_id, period, decided_at)
-    values (b.office_id, b.slug, 'invoice', p_stripe_id, p_mode, b.cents, b.currency, left(b.client_label || ' ' || v_period, 300), 'approved', b.id, v_period, now())
+  insert into fz_office_os.fz_office_invoices (office_id, slug, kind, customer_id, stripe_id, mode, cents, currency, description, status, plan_id, period, decided_at)
+    values (b.office_id, b.slug, 'invoice', b.customer_id, p_stripe_id, p_mode, b.cents, b.currency, left(b.client_label || ' ' || v_period, 300), 'approved', b.id, v_period, now())
     returning id into v_id;
   insert into public.audit_log (actor, action, target, detail)
     values ('office_os', 'invoice_drafted', 'fz_office_invoices/' || v_id, jsonb_build_object('office', b.slug, 'plan', b.id, 'period', v_period, 'cents', b.cents, 'mode', p_mode, 'auto_approved_by_plan', true));
@@ -16383,7 +16388,7 @@ begin
   perform fz_office_os.log_event(b.slug, b.id, v_id, 'approved', 'plan', jsonb_build_object('period', v_period));
   return jsonb_build_object('invoice', v_id, 'status', 'approved', 'period', v_period);
 end $$;
-revoke all on function public.office_os_invoice_record_plan(uuid, text, text, integer, text, text) from public, anon, authenticated;
+revoke all on function public.office_os_invoice_record_plan(uuid, text, text, text, integer, text, text) from public, anon, authenticated;
 
 create or replace function public.office_os_plans() returns jsonb
 language sql stable security definer set search_path to 'pg_catalog' as $$
@@ -16544,7 +16549,7 @@ do $$ declare r text; begin
       execute format('revoke all on function public.office_os_activate(text) from %I', r);
       execute format('revoke all on function public.office_os_decide(text, text, boolean) from %I', r);
       execute format('revoke all on function public.office_os_drift_check() from %I', r);
-      execute format('revoke all on function public.office_os_invoice_record(text, text, text, text, integer, text, text) from %I', r);
+      execute format('revoke all on function public.office_os_invoice_record(text, text, text, text, text, integer, text, text) from %I', r);
       execute format('revoke all on function public.office_os_invoice_request_send(uuid) from %I', r);
       execute format('revoke all on function public.office_os_invoice_decide(uuid, integer, boolean) from %I', r);
       execute format('revoke all on function public.office_os_invoice_claim_send(uuid) from %I', r);
@@ -16553,7 +16558,7 @@ do $$ declare r text; begin
       execute format('revoke all on function public.office_os_plan_propose(text, text, text, integer, text, text) from %I', r);
       execute format('revoke all on function public.office_os_plan_decide(uuid, integer, text, boolean) from %I', r);
       execute format('revoke all on function public.office_os_plan_revoke(uuid) from %I', r);
-      execute format('revoke all on function public.office_os_invoice_record_plan(uuid, text, text, integer, text, text) from %I', r);
+      execute format('revoke all on function public.office_os_invoice_record_plan(uuid, text, text, text, integer, text, text) from %I', r);
       execute format('revoke all on function public.office_os_plans() from %I', r);
       execute format('revoke all on function public.office_os_plan_cancel(uuid) from %I', r);
       execute format('revoke all on function public.office_os_plan_past_due(uuid, text) from %I', r);

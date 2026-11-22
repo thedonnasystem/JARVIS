@@ -62,6 +62,7 @@ drop function if exists public.office_os_set_manager(text, text);
 drop function if exists public.office_os_decide(text, text, boolean);
 drop function if exists public.office_os_drift_check();
 drop function if exists public.office_os_invoice_record(text, text, text, text, integer, text, text);
+drop function if exists public.office_os_invoice_record(text, text, text, text, text, integer, text, text);
 drop function if exists public.office_os_invoice_request_send(uuid);
 drop function if exists public.office_os_invoice_decide(uuid, integer, boolean);
 drop function if exists public.office_os_invoice_claim_send(uuid);
@@ -71,6 +72,7 @@ drop function if exists public.office_os_plan_propose(text, text, text, integer,
 drop function if exists public.office_os_plan_decide(uuid, integer, text, boolean);
 drop function if exists public.office_os_plan_revoke(uuid);
 drop function if exists public.office_os_invoice_record_plan(uuid, text, text, integer, text, text);
+drop function if exists public.office_os_invoice_record_plan(uuid, text, text, text, integer, text, text);
 drop function if exists public.office_os_plans();
 drop function if exists public.office_os_plan_cancel(uuid);
 drop function if exists public.office_os_plan_past_due(uuid, text);

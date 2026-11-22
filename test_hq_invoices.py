@@ -16,7 +16,7 @@ class FakeDB:
     def __init__(self, active=True, status=None):
         self.calls, self.active = [], active
         self.status = status or {"office": "donna", "status": "active", "m1_status": "active", "drift": False}
-        self.claim = {"invoice": INV_ID, "stripe_id": "in_abc123456", "mode": "test", "cents": 49700, "currency": "cad"}
+        self.claim = {"invoice": INV_ID, "stripe_id": "in_abc123456", "mode": "test", "cents": 49700, "currency": "cad", "customer": "cus_abc123456"}
         self.plans = [{"id": "p1", "office": "donna", "client": "Fzo Plumbing", "customer": "cus_abc123456", "cents": 49700, "currency": "cad", "interval": "month", "status": "approved"},
                       {"id": "p2", "office": "donna", "client": "Old", "customer": "cus_abc999999", "cents": 100, "currency": "cad", "interval": "month", "status": "revoked"}]
         self.refuse = set()
@@ -42,7 +42,7 @@ class FakeDB:
 class FakeStripe:
     def __init__(self, invoice=None, existing=None, by_id=None):
         self.calls, self.idem, self.existing, self.by_id = [], [], existing or [], by_id or {}
-        self.invoice = invoice or {"id": "in_abc123456", "status": "draft", "amount_due": 49700, "currency": "cad"}
+        self.invoice = invoice or {"id": "in_abc123456", "status": "draft", "amount_due": 49700, "currency": "cad", "customer": "cus_abc123456"}
 
     def __call__(self, method, path, form, idem=None):
         self.calls.append((method, path, dict(form)))
@@ -50,7 +50,8 @@ class FakeStripe:
         if path.startswith("/v1/invoices?customer="):
             return {"data": self.existing}
         if path == "/v1/invoices" and method == "POST":
-            return {"id": "in_abc123456"}
+            self.invoice = dict(self.invoice, customer=form.get("customer"), metadata={k[9:-1]: v for k, v in form.items() if k.startswith("metadata[")})
+            return {"id": "in_abc123456", "customer": getattr(self, "create_customer", None) or form.get("customer")}
         if method == "GET":
             return self.by_id.get(path.rsplit("/", 1)[-1], self.invoice)
         if path == "/v1/prices":
@@ -85,7 +86,7 @@ class Gates(unittest.TestCase):
             I.mode(live)
         with self.assertRaisesRegex(I.InvoiceError, "FZ_STRIPE_LIVE"):
             I.mode(dict(live, FZ_STRIPE_LIVE="yes"))
-        self.assertEqual(I.mode(dict(live, FZ_STRIPE_LIVE="1")), "live")
+        self.assertEqual(I.mode(dict(live, FZ_STRIPE_LIVE="1", STRIPE_SECRET_KEY="rk_live_" + "x" * 24)), "live")
         for bad in ("", "pk_test_abc", "whsec_abc", "sk_tes_abc"):
             with self.assertRaises(I.InvoiceError):
                 I.mode({"FZ_STRIPE_INVOICING": "1", "STRIPE_SECRET_KEY": bad})
@@ -114,7 +115,7 @@ class Flow(unittest.TestCase):
         self.assertEqual([(m, p) for m, p, _ in st.calls], [("POST", "/v1/invoices"), ("POST", "/v1/invoiceitems")])
         self.assertEqual(st.calls[0][2]["auto_advance"], "false")
         rec = [b for n, b in db.calls if n == "office_os_invoice_record"][0]
-        self.assertEqual((rec["p_office"], rec["p_cents"], rec["p_currency"], rec["p_mode"]), ("donna", 49700, "cad", "test"))
+        self.assertEqual((rec["p_office"], rec["p_cents"], rec["p_currency"], rec["p_mode"], rec["p_customer"]), ("donna", 49700, "cad", "test", "cus_abc123456"))
         with self.assertRaises(I.InvoiceError):
             I.draft_invoice("donna", "someone@example.invalid", 100, "cad", "x", env=ENV, http=st, rpc=db)    # a customer id, never client details
 
@@ -134,8 +135,8 @@ class Flow(unittest.TestCase):
         self.assertNotIn("office_os_invoice_mark_sent", [c[0] for c in db.calls])
 
     def test_send_rechecks_stripe(self):
-        for inv in ({"status": "draft", "amount_due": 99700, "currency": "cad"}, {"status": "open", "amount_due": 49700, "currency": "cad"},
-                    {"status": "draft", "amount_due": 49700, "currency": "usd"}):
+        for inv in ({"status": "draft", "amount_due": 99700, "currency": "cad", "customer": "cus_abc123456"}, {"status": "open", "amount_due": 49700, "currency": "cad", "customer": "cus_abc123456"},
+                    {"status": "draft", "amount_due": 49700, "currency": "usd", "customer": "cus_abc123456"}):
             db, st = FakeDB(), FakeStripe(invoice=inv)
             with self.assertRaisesRegex(I.InvoiceError, "no longer matches"):
                 I.send(INV_ID, env=ENV, http=st, rpc=db)
@@ -166,7 +167,7 @@ class Plans(unittest.TestCase):
         r = I.bill_plans("donna", env=ENV, http=st, rpc=db)
         self.assertEqual([x["plan"] for x in r["sent"]], ["p1"])                  # the revoked plan is not billed
         rp = [b for n, b in db.calls if n == "office_os_invoice_record_plan"]
-        self.assertEqual(rp, [{"p_plan": "p1", "p_stripe_id": "in_abc123456", "p_mode": "test", "p_cents": 49700, "p_currency": "cad", "p_interval": "month"}])
+        self.assertEqual(rp, [{"p_plan": "p1", "p_customer": "cus_abc123456", "p_stripe_id": "in_abc123456", "p_mode": "test", "p_cents": 49700, "p_currency": "cad", "p_interval": "month"}])
         item = [f for m, p, f in st.calls if p == "/v1/invoiceitems"][0]
         self.assertEqual((item["amount"], item["currency"]), (49700, "cad"))
 
@@ -325,6 +326,53 @@ class Hardening(unittest.TestCase):
             self.assertTrue(I.run_due(env=ENV, now=nine)["ran"])
             self.assertEqual(I.run_due(env=ENV, now=nine)["reason"], "not due")         # once a day
         bp.assert_not_called()                                                          # no approved plans
+
+
+
+class ReviewFixes(unittest.TestCase):
+    def test_send_refuses_another_customer(self):
+        db, st = FakeDB(), FakeStripe(invoice={"status": "draft", "amount_due": 49700, "currency": "cad", "customer": "cus_someone999"})
+        with self.assertRaisesRegex(I.InvoiceError, "customer is not the approved customer"):
+            I.send(INV_ID, env=ENV, http=st, rpc=db)
+        self.assertFalse(any(p.endswith(("/finalize", "/send")) for _, p, _ in st.calls))
+        self.assertEqual([b for n, b in db.calls if n == "office_os_invoice_mark_sent"], [{"p_invoice": INV_ID, "p_ok": False}])   # logged as failed
+        db = FakeDB()
+        db.claim["customer"] = None
+        with self.assertRaisesRegex(I.InvoiceError, "customer"):
+            I.send(INV_ID, env=ENV, http=FakeStripe(), rpc=db)
+
+    def test_plan_invoice_must_carry_its_plan_and_period(self):
+        for md in ({}, {"fz_plan": "p9", "fz_period": "2026-12"}, {"fz_plan": "p1", "fz_period": "2026-11"}):
+            db, st = FakeDB(), FakeStripe(invoice={"status": "draft", "amount_due": 49700, "currency": "cad", "customer": "cus_abc123456", "metadata": md})
+            db.claim.update(plan="p1", period="2026-12")
+            with self.assertRaisesRegex(I.InvoiceError, "not this plan's invoice"):
+                I.send(INV_ID, env=ENV, http=st, rpc=db)
+            self.assertFalse(any(p.endswith(("/finalize", "/send")) for _, p, _ in st.calls))
+        db, st = FakeDB(), FakeStripe(invoice={"status": "draft", "amount_due": 49700, "currency": "cad", "customer": "cus_abc123456",
+                                               "metadata": {"fz_plan": "p1", "fz_period": "2026-12"}})
+        db.claim.update(plan="p1", period="2026-12")
+        self.assertTrue(I.send(INV_ID, env=ENV, http=st, rpc=db)["sent"])
+
+    def test_plan_record_uses_the_customer_stripe_reports(self):
+        db, st = FakeDB(), FakeStripe()
+        st.create_customer = "cus_other99999"                   # Stripe says another customer: the database (O15) refuses it, so pass what Stripe says
+        I.bill_plans("donna", env=ENV, http=st, rpc=db)
+        self.assertEqual([b["p_customer"] for n, b in db.calls if n == "office_os_invoice_record_plan"], ["cus_other99999"])
+
+    def test_full_live_key_refused_by_default(self):
+        base = {"FZ_STRIPE_INVOICING": "1", "FZ_STRIPE_LIVE": "1"}
+        with self.assertRaisesRegex(I.InvoiceError, "restricted key"):
+            I.mode(dict(base, STRIPE_SECRET_KEY="sk_live_" + "x" * 24))
+        self.assertEqual(I.mode(dict(base, STRIPE_SECRET_KEY="rk_live_" + "x" * 24)), "live")
+        self.assertEqual(I.mode(dict(base, STRIPE_SECRET_KEY="sk_live_" + "x" * 24, FZ_STRIPE_ALLOW_FULL_KEY="1")), "live")
+        with self.assertRaisesRegex(I.InvoiceError, "restricted key"):
+            I.mode(dict(base, STRIPE_SECRET_KEY="sk_live_" + "x" * 24, FZ_STRIPE_ALLOW_FULL_KEY="yes"))
+
+    def test_list_shows_customer(self):
+        db = FakeDB()
+        db.__class__ = type("DBI", (FakeDB,), {"__call__": lambda self, m, p, b=None: [{"status": "draft", "office": "donna", "kind": "invoice", "customer": "cus_abc123456",
+                                                                                           "cents": 49700, "currency": "cad", "mode": "test", "description": "x", "id": INV_ID}]})
+        self.assertIn("cus_abc123456", I.invoices_text(rpc=db))
 
 
 if __name__ == "__main__":

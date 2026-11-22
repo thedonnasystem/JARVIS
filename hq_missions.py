@@ -29,6 +29,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 import hq
+import hq_mission_gate
 import hq_services
 import hq_evidence
 
@@ -122,6 +123,9 @@ def create_mission(objective: str, venture: str | None = None, title: str | None
     v = _get(f"ventures?slug=eq.{_q(slug)}&select=id,slug,status&limit=1")
     if not v:
         v = _get("ventures?slug=eq.idea-lab&select=id,slug,status&limit=1")
+    refusal = hq_mission_gate.create_refusal(v[0]["id"] if v else None)   # M7: no mission for an office that is not active
+    if refusal:
+        return {"error": refusal}
     budget = DEFAULT_BUDGET_CENTS if budget_cents is None else max(0, min(int(budget_cents), MAX_BUDGET_CENTS))
     row = {
         "title": (title or objective.split("\n")[0])[:140].strip() or "Untitled mission",
@@ -1355,6 +1359,13 @@ def advance() -> int:
         if e.code in (400, 404):  # table not there yet (migration not applied): stay inert
             return 0
         raise
+    try:  # M7: pause the missions of offices that are not active (resume them when active again) BEFORE any of them moves
+        gate = hq_mission_gate.sweep()
+        if gate["paused"]:
+            missions = [m for m in missions if m["id"] not in gate["paused"]]
+    except Exception:
+        logger.exception("mission office gate failed: no mission moves this tick")
+        return 0
     n = 0
     for m in missions:
         try:

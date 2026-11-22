@@ -377,8 +377,8 @@ function	office_os_invoice_claim_send(uuid)	-	-	execute	security_definer		-
 function	office_os_invoice_decide(uuid,integer,boolean)	-	-	execute	security_definer		-
 function	office_os_invoice_mark_sent(uuid,boolean)	-	-	execute	security_definer		-
 function	office_os_invoice_observe(uuid,text)	-	-	execute	security_definer		-
-function	office_os_invoice_record(text,text,text,text,integer,text,text)	-	-	execute	security_definer		-
-function	office_os_invoice_record_plan(uuid,text,text,integer,text,text)	-	-	execute	security_definer		-
+function	office_os_invoice_record(text,text,text,text,text,integer,text,text)	-	-	execute	security_definer		-
+function	office_os_invoice_record_plan(uuid,text,text,text,integer,text,text)	-	-	execute	security_definer		-
 function	office_os_invoice_request_send(uuid)	-	-	execute	security_definer		-
 function	office_os_invoices(integer)	-	-	execute	security_definer		-
 function	office_os_plan_cancel(uuid)	-	-	execute	security_definer		-

@@ -24,7 +24,7 @@ import hq
 import hq_office_os
 
 logger = logging.getLogger(__name__)
-FLAG, KEY, LIVE = "FZ_STRIPE_INVOICING", "STRIPE_SECRET_KEY", "FZ_STRIPE_LIVE"
+FLAG, KEY, LIVE, FULL_KEY = "FZ_STRIPE_INVOICING", "STRIPE_SECRET_KEY", "FZ_STRIPE_LIVE", "FZ_STRIPE_ALLOW_FULL_KEY"
 API = "https://api.stripe.com"
 _CUS = re.compile(r"^cus_[A-Za-z0-9]{6,64}$")
 _INV = re.compile(r"^in_[A-Za-z0-9]{6,64}$")
@@ -52,6 +52,8 @@ def mode(env=None) -> str:
     if k.startswith(("sk_live_", "rk_live_")):
         if e.get(LIVE) != "1":
             raise InvoiceError("live Stripe key refused: the owner has not set FZ_STRIPE_LIVE=1")
+        if k.startswith("sk_live_") and e.get(FULL_KEY) != "1":
+            raise InvoiceError("full live secret key refused: use a restricted key (rk_live_) with only invoice, price and payment-link rights")
         return "live"
     raise InvoiceError("STRIPE_SECRET_KEY missing or not a Stripe secret key")
 
@@ -118,7 +120,7 @@ def draft_invoice(office: str, customer_id: str, cents: int, currency: str, desc
         raise InvoiceError("Stripe returned no invoice id")
     _stripe("POST", "/v1/invoiceitems", {"customer": customer_id, "invoice": iid, "amount": c, "currency": cur, "description": desc}, env, http)
     try:
-        r = _rpc("office_os_invoice_record", {"p_office": slug, "p_kind": "invoice", "p_stripe_id": iid, "p_mode": m, "p_cents": c, "p_currency": cur, "p_description": desc}, rpc)
+        r = _rpc("office_os_invoice_record", {"p_office": slug, "p_kind": "invoice", "p_customer": customer_id, "p_stripe_id": iid, "p_mode": m, "p_cents": c, "p_currency": cur, "p_description": desc}, rpc)
     except Exception as e:
         _stripe("DELETE", "/v1/invoices/" + iid, None, env, http)          # an unrecorded draft is deleted (a draft has no money on it)
         raise InvoiceError(f"not recorded, draft deleted ({type(e).__name__})") from None
@@ -134,7 +136,7 @@ def draft_payment_link(office: str, cents: int, currency: str, name: str, env=No
     price = _stripe("POST", "/v1/prices", {"currency": cur, "unit_amount": c, "product_data[name]": nm}, env, http)
     link = _stripe("POST", "/v1/payment_links", {"line_items[0][price]": str(price.get("id") or ""), "line_items[0][quantity]": 1}, env, http)
     lid = str(link.get("id") or "")
-    r = _rpc("office_os_invoice_record", {"p_office": slug, "p_kind": "payment_link", "p_stripe_id": lid, "p_mode": m, "p_cents": c, "p_currency": cur, "p_description": nm}, rpc)
+    r = _rpc("office_os_invoice_record", {"p_office": slug, "p_kind": "payment_link", "p_customer": None, "p_stripe_id": lid, "p_mode": m, "p_cents": c, "p_currency": cur, "p_description": nm}, rpc)
     return {"ok": True, "invoice": r.get("invoice"), "stripe_id": lid, "url": link.get("url"), "mode": m, "note": "the owner shares this link; the bot never sends it"}
 
 
@@ -162,11 +164,18 @@ def send(invoice: str, env=None, http=None, rpc=None) -> dict:
         cur = _stripe("GET", "/v1/invoices/" + sid, None, env, http)
         if cur.get("status") != "draft" or int(cur.get("amount_due") or -1) != int(c["cents"]) or str(cur.get("currency")) != c["currency"]:
             raise InvoiceError("the Stripe invoice no longer matches what the owner approved: not sent")
+        if not c.get("customer") or str(cur.get("customer") or "") != c["customer"]:
+            raise InvoiceError("the Stripe invoice's customer is not the approved customer: not sent")
+        md = cur.get("metadata") or {}
+        if c.get("plan") and (md.get("fz_plan") != str(c["plan"]) or md.get("fz_period") != str(c.get("period"))):
+            raise InvoiceError("the Stripe invoice is not this plan's invoice for this period: not sent")
         base = f"fz-{c['plan']}-{c['period']}" if c.get("plan") and c.get("period") else f"fz-inv-{invoice}"
         _stripe("POST", f"/v1/invoices/{sid}/finalize", {"auto_advance": "false"}, env, http, idem=base + "-finalize")
         _stripe("POST", f"/v1/invoices/{sid}/send", {}, env, http, idem=base + "-send")
         ok = True
     finally:
+        if not ok:
+            logger.warning("invoice %s not sent (recorded as failed in the billing log)", invoice)
         _rpc("office_os_invoice_mark_sent", {"p_invoice": invoice, "p_ok": ok}, rpc)
     return {"ok": True, "invoice": invoice, "sent": True, "mode": m}
 
@@ -181,7 +190,7 @@ def invoices_text(rpc=None) -> str:
         return "No invoices yet. Drafts appear here; sending one needs your decision (office_os_invoice_decide)."
     out = []
     for r in rows:
-        out.append(f"{r.get('status')}  {r.get('office')}  {r.get('kind')}  {int(r.get('cents') or 0) / 100:,.2f} {str(r.get('currency')).upper()}  {r.get('mode')}  "
+        out.append(f"{r.get('status')}  {r.get('office')}  {r.get('kind')}  {r.get('customer') or '-'}  {int(r.get('cents') or 0) / 100:,.2f} {str(r.get('currency')).upper()}  {r.get('mode')}  "
                    f"{str(r.get('description') or '')[:40]}  id {r.get('id')}")
     out.append("\n/invoices request <id>  asks you to approve a send; decide in the SQL editor: office_os_invoice_decide('<id>', <cents>, true).  /invoices send <id>  sends an approved one.")
     return "\n".join(out)
@@ -275,7 +284,7 @@ def bill_plans(office: str, env=None, http=None, rpc=None) -> dict:
                 raise InvoiceError("Stripe returned no invoice id")
             _stripe("POST", "/v1/invoiceitems", {"customer": p["customer"], "invoice": iid, "amount": int(p["cents"]), "currency": p["currency"],
                                                  "description": f"{p['client']} {p['interval']}ly plan"}, env, http, idem=key + "-item")
-            r = _rpc("office_os_invoice_record_plan", {"p_plan": p["id"], "p_stripe_id": iid, "p_mode": m, "p_cents": int(p["cents"]), "p_currency": p["currency"],
+            r = _rpc("office_os_invoice_record_plan", {"p_plan": p["id"], "p_customer": str(inv.get("customer") or ""), "p_stripe_id": iid, "p_mode": m, "p_cents": int(p["cents"]), "p_currency": p["currency"],
                                                          "p_interval": p["interval"]}, rpc)
         except Exception as e:
             if iid:

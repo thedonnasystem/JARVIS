@@ -38,7 +38,7 @@ Tier = risk tier of what the connection lets Jarvis do (Green: just do it; Yello
 | whatsapp | Owner alerts on WhatsApp (off until `JARVIS_WHATSAPP=1`) | all | `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_OWNER_NUMBER` | yes (hq_channels.py) | Yellow |
 | emergency_call | Twilio call to you for emergencies only (off until `JARVIS_EMERGENCY_CALL=1`) | all | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `OWNER_PHONE_NUMBER` | yes (hq_channels.py) | Yellow |
 | rbc | Bank: **manual reconciliation only**. You download the statement CSV and send it with `/bank`; no RBC credential ever exists in the system | all | none | yes (hq_bank.py) | Red (money) |
-| stripe | Client invoicing: Donna drafts invoices / payment links; sending needs your approval (or an approved billing plan); no refunds or payouts | donna | `STRIPE_SECRET_KEY` (+ `FZ_STRIPE_INVOICING=1`, `FZ_STRIPE_LIVE=1` for live) | yes (hq_invoices.py) | Red |
+| stripe | Client invoicing: Donna drafts invoices / payment links; sending needs your approval (or an approved billing plan); no refunds or payouts | donna | `STRIPE_SECRET_KEY` = a **restricted** key `rk_test_` / `rk_live_` (+ `FZ_STRIPE_INVOICING=1`, `FZ_STRIPE_LIVE=1` for live) | yes (hq_invoices.py) | Red |
 | meta_ads | Paid Meta campaigns (spend) | ff-marketing | none yet | **no** (posting only) | Red |
 | elevenlabs | AI voice | b2b-records, pimp-ai | none yet | **no** (placeholder) | Yellow |
 | gmail | Reading the inbox | donna, wolf-squad | none yet | **no** (sending is Resend) | Yellow |
@@ -66,7 +66,13 @@ Donna (activation 1):
 5. **Google** (Calendar now, YouTube later): console.cloud.google.com -> APIs & Services -> Credentials -> Create OAuth client ID (type: TV and limited input) -> Copy client id and secret -> Railway variables `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`. After the redeploy send `/connectcalendar` in Telegram, open the link it gives, sign in, **Allow**.
 6. **Automation** (only if Donna uses n8n/Make today): copy the webhook URL / API key from n8n or Make into `N8N_BASE_URL` + `N8N_API_KEY` or `MAKE_WEBHOOK_URL`.
 
-6b. **Stripe (test mode first)**: dashboard.stripe.com -> create the account yourself -> stay in **Test mode** -> Developers -> API keys -> reveal the **test** Secret key (`sk_test_...`) -> Copy -> Railway variable `STRIPE_SECRET_KEY`; Railway variable `FZ_STRIPE_INVOICING` = `1`. Later, only when you decide to bill for real: Activate the account (business details, bank) -> copy the **live** Secret key (`sk_live_...`) into `STRIPE_SECRET_KEY` and set `FZ_STRIPE_LIVE` = `1`. Railway Variables only, never a chat. Without `FZ_STRIPE_LIVE=1` a live key is refused.
+6b. **Stripe (test mode first, RESTRICTED key only)**:
+   - dashboard.stripe.com -> create the account yourself -> stay in **Test mode**.
+   - Developers -> API keys -> **Create restricted key**, named Jarvis invoicing. Set **Write** for Invoices, Invoice items, Prices and Payment Links, and **Read** for Customers. Leave every other resource at **None** (no Charges, Refunds, Payouts, Transfers or Balance).
+   - Create -> copy the `rk_test_...` key -> Railway variable `STRIPE_SECRET_KEY`. Railway variable `FZ_STRIPE_INVOICING` = `1`.
+   - Never use the full secret key (`sk_...`). The code refuses `sk_live_` unless `FZ_STRIPE_ALLOW_FULL_KEY=1`, which you should not set.
+   - Later, only when you decide to bill for real: activate the account, create the same restricted key in live mode (`rk_live_...`), put it into `STRIPE_SECRET_KEY`, and set `FZ_STRIPE_LIVE` = `1`.
+   - Railway Variables only, never a chat.
 
 Wolf Squad (activation 2):
 7. Uses Resend and Google from steps 4-5. **LinkedIn** (optional): linkedin.com/developers -> Create app -> Auth -> copy Client ID / Secret -> Railway variables `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`. Then in Add the step 0 address as the app's redirect URL. Connect later (needs the return page).

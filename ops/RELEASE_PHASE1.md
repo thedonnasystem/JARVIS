@@ -20,7 +20,7 @@ The lockdown and the two postlock files after them are already applied in produc
 
 1. **PR owner marker.** Approve PRs #35 to #40 in order: M1, M2, M3, M4, M5 (#39), M6 (#41), M7 (#40). For each, use an APPROVED review on its head SHA or the label `owner-ok-<full head SHA>`. Merge them bottom-up.
 2. **run.sh proposal** (`ops/proposals/office_os_run_sh.md`): approve or skip. Not needed for the release; the same drill already runs in `sqltests/office_os_check.sql`.
-3. **Append-only audit_log / ledger** (`ops/proposals/AUDIT_LEDGER_APPEND_ONLY.md` + `.sql`): recommended YES. Apply after V1 to V6 pass. In the same transaction it rewrites the `hq-prune` cron job (jobid 2) so it stops deleting audit history.
+3. **Append-only audit_log / ledger** (`ops/proposals/AUDIT_LEDGER_APPEND_ONLY.md` + `.sql`): recommended YES. Apply after V1 to V6 pass. In the same transaction it rewrites the `hq-prune` cron job (jobid 2) so it stops deleting audit history. After the lock, restoring into the same database or erasing audit rows needs you to disable the triggers deliberately (see the proposal doc). A restore into a new database is unaffected.
 4. **Brain access for office identities** (changes the M1 allowlist): recommended LATER, only after Donna is active and her manager token is minted. The statement is in `docs/architecture/PHASE1_M6_MONITORING_BRAIN.md` (owner decisions).
 5. **Client invoicing** (`hq_invoices.py`, off by default): recommended YES to keep it in the release, OFF until you set the Stripe test key (checklist). Add its send route to `AUDIT_PATHS.md` and `test_audit_paths.py` (protected).
 7. **Billing schedule** (`ops/proposals/billing_schedule.md`): one engine line, recommended YES once Donna has her first approved plan in test mode.

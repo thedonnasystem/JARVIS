@@ -15,4 +15,6 @@
 
 **To apply:** paste the file into the Supabase SQL editor in a release window (it is one transaction). Afterwards `/security` stops listing the standing findings "service_role UPDATE/DELETE/TRUNCATE on audit_log / ledger".
 
+**After the lock (important):** restoring a backup INTO THE SAME database, or erasing audit rows for any reason, is refused by the triggers. It requires you to disable them deliberately (`alter table public.audit_log disable trigger audit_log_append_only;` and the same for `ledger`), do the work, and re-enable them, in one reviewed session. Nobody else can do it: no API role holds the privilege. A restore into a NEW database is unaffected.
+
 **To undo:** the commented block at the end of the file.

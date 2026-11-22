@@ -42,7 +42,7 @@ begin
   select * into j from cron.job where jobname = 'hq-prune';
   if not found or j.jobid <> 2 or j.schedule <> '0 8 * * 0' then raise exception 'hq-prune is not jobid 2 / 0 8 * * 0: stop and check cron.job before applying'; end if;
   perform cron.alter_job(2, command := 'delete from public.agent_runs where started_at < now() - interval ''90 days''');
-  if exists (select 1 from cron.job where command ilike '%audit_log%' or command ilike '%public.ledger%') then
+  if exists (select 1 from cron.job where command ilike '%audit_log%' or command ilike '%ledger%') then   -- with or without the schema, any spelling
     raise exception 'a cron job still touches audit_log / ledger: stop and check cron.job'; end if;
 end $$;
 insert into public.audit_log (actor, action, target, detail)

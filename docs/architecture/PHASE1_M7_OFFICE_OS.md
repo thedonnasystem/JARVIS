@@ -90,6 +90,17 @@ Nothing is live until the owner applies M1..M6 and M7. Every office stays DORMAN
     - before creating, Stripe is re-checked for an invoice carrying the same plan and period metadata.
   - Billing log: `fz_office_os.fz_billing_log`, append-only (no API privileges; update, delete and truncate refused by trigger even for the table owner). It records every event: requested, drafted, approved, sent, paid, failed, cancelled, past_due, resumed. `/invoices log` shows it.
   - Cancellation: `/invoices cancel <plan>` (owner chat) is immediate, stops every future period, never refunds, and is logged. It uses the safety-only revoke. The SQL editor's `office_os_plan_cancel` is owner-signed.
+- **Final review fixes:**
+  - **Every invoice is bound to its Stripe customer.**
+    - A one-off records its `cus_` id, which shows in the owner's decision message and in `/invoices`.
+    - A plan invoice is recorded only if Stripe's customer equals the approved plan's customer, and the database refuses another.
+    - `send()` refuses, and logs as failed, when Stripe's customer differs from the recorded one, or when a plan invoice's `fz_plan` / `fz_period` metadata differs from the recorded plan and period.
+  - **Restricted key:** a full live secret key (`sk_live_`) is refused unless `FZ_STRIPE_ALLOW_FULL_KEY=1`. The checklist asks for a restricted key with only invoice, invoice item, price and payment link write, plus customer read.
+  - **Missions follow their office** (`hq_mission_gate.py`, hooked from `hq_missions`; `hq_engine.py` unchanged):
+    - `create_mission` refuses a mission whose venture's office is not active.
+    - Each tick (`advance`) first pauses, not fails, the live missions of inactive offices and cancels their waiting tasks. It resumes them when the office is active again.
+    - The owner's own pauses are never undone.
+    - An unreadable gate moves nothing.
 - **Gaps (owner decisions):**
   1. Scheduling: `ops/proposals/billing_schedule.md` gives the one-line engine change (`hq_invoices.run_due()`, once a day at 09:00 Toronto). Until it is approved, billing runs only on `/invoices bill donna`.
   2. Paid invoices are not booked automatically; there is no Stripe webhook. Book revenue with `/money in`.

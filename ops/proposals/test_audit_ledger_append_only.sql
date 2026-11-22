@@ -55,7 +55,7 @@ begin
   select * into j from cron.job where jobname = 'hq-prune';
   if not found or j.jobid <> 2 or j.schedule <> '0 8 * * 0' then raise exception 'hq-prune is not jobid 2 / 0 8 * * 0: stop and check cron.job before applying'; end if;
   perform cron.alter_job(2, command := 'delete from public.agent_runs where started_at < now() - interval ''90 days''');
-  if exists (select 1 from cron.job where command ilike '%audit_log%' or command ilike '%public.ledger%') then
+  if exists (select 1 from cron.job where command ilike '%audit_log%' or command ilike '%ledger%') then   -- with or without the schema, any spelling
     raise exception 'a cron job still touches audit_log / ledger: stop and check cron.job'; end if;
 end $$;
 insert into public.audit_log (actor, action, target, detail)
@@ -90,6 +90,13 @@ begin
   insert into public.audit_log (actor, action, target, detail, at) values ('t', 'proposal_test_old', 't', '{}', now() - interval '200 days');
   begin delete from public.audit_log where at < now() - interval '90 days'; raise exception 'P5 the old prune still works'; exception when insufficient_privilege then null; end;
   if not exists (select 1 from public.audit_log where action = 'audit_ledger_append_only_applied' and actor = 'owner') then raise exception 'P6 owner approval not recorded'; end if;
+  -- the guard matches a job that names the table without the schema
+  insert into cron.job (jobname, schedule, command) values ('fzp-guard', '* * * * *', 'delete from ledger where false');
+  begin
+    if exists (select 1 from cron.job where command ilike '%audit_log%' or command ilike '%ledger%') then raise exception 'fzp-guard-hit'; end if;
+    raise exception 'P7 the guard missed an unqualified ledger command';
+  exception when others then if sqlerrm <> 'fzp-guard-hit' then raise; end if; end;
+  delete from cron.job where jobname = 'fzp-guard';
   raise notice 'audit / ledger append-only proposal: all checks passed';
 end $$;
 rollback;
