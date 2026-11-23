@@ -7,6 +7,7 @@ stores credentials or touches a bank session. All checks live in the database fu
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 import hq
@@ -39,7 +40,10 @@ def prepare(actor: str, payee: str, cents: int, purpose: str, alternatives: str 
     if hq_waterfall.coast():
         return hq_waterfall.COAST_REFUSAL
     try:
-        r = _rpc("prepare_payment", {"p_actor": actor, "p_payee": payee.strip()[:120], "p_cents": int(cents), "p_purpose": purpose.strip()[:300],
+        # Phase 1 M3: with FZ_OFFICE_SPEND_GATE=1 a payment for a venture goes through the office layer first (it can only refuse: the venture's office dormant or
+        # short), then the unchanged prepare_payment. Default OFF = exactly today's call.
+        fn = "fz_prepare_office_payment" if venture and os.environ.get("FZ_OFFICE_SPEND_GATE", "").strip() == "1" else "prepare_payment"
+        r = _rpc(fn, {"p_actor": actor, "p_payee": payee.strip()[:120], "p_cents": int(cents), "p_purpose": purpose.strip()[:300],
                                      "p_alternatives": (alternatives or "")[:300], "p_due": due_on, "p_venture_slug": venture})
     except Exception as e:  # fail closed
         logger.warning("prepare_payment failed: %s", e)
