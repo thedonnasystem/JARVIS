@@ -418,8 +418,9 @@ def v3_restore_closed_checks(DST_, cur, sql, owner, work):
             try:
                 oc = psycopg2.connect(_admin_url(other, "postgres")); oc.autocommit = True; occ = oc.cursor()
                 # every cluster-level role the dump carries GRANTs to must exist on the second server BEFORE the restore (ops/OWNER_RESTORE_RUNBOOK.md, "Before a pg_restore into
-                # a new server"): the Supabase API roles, and PR #16's backup identity backup_reader (created by 20261121_postlock_backup_identity_v1; harmless before PR #16 lands)
-                for r in ("anon", "authenticated", "service_role", "backup_reader"):
+                # a new server"): the Supabase API roles, and PR #16's backup identity backup_reader (created by 20261121_postlock_backup_identity_v1; harmless before PR #16 lands),
+                # and the Phase 1 M1 scoped identities fz_jarvis / fz_office_agent / fz_auditor (created by 20261127_org_access_v1; harmless before it lands)
+                for r in ("anon", "authenticated", "service_role", "backup_reader", "fz_jarvis", "fz_office_agent", "fz_auditor"):
                     occ.execute(f"do $$ begin create role {r} nologin; exception when duplicate_object then null; end $$")
                 occ.execute(f'drop database if exists "{prov3}"'); occ.execute(f'create database "{prov3}"'); oc.close()
                 prov_names.append((prov3, _admin_url(other, "postgres")))
