@@ -1,0 +1,19 @@
+---
+import Layout from '~/layouts/PageLayout.astro';
+import { SITE_DATA as S } from '~/data/site';
+const b = S.brand.name, L = S.legal;
+const metadata = { title: `Terms of Service | ${b}`, ignoreTitleTemplate: true };
+---
+
+<Layout metadata={metadata}>
+  <section class="mx-auto max-w-3xl px-6 py-16 prose dark:prose-invert">
+    <h1>Terms of Service</h1>
+    <p><strong>DRAFT PLACEHOLDER: the owner (and counsel) must review this before launch.</strong> It is not legal advice and it is not yet in force.</p>
+    <p><em>Last updated: [OWNER: date]</em></p>
+    <p>These terms govern your use of this website, operated by {b} ({L.entity}), {S.brand.city}, {S.brand.region}.</p>
+    <p><strong>Services.</strong> Service details and prices are described on this site. Each client engagement is governed by a separate written agreement. Nothing on this site is a promise of specific results.</p>
+    <p><strong>Prices.</strong> In Canadian dollars, plus applicable taxes. Prices may change; the price in your signed agreement applies.</p>
+    <p><strong>Website content.</strong> Provided as is, for information only.</p>
+    <p><strong>Contact.</strong> {L.contact}.</p>
+  </section>
+</Layout>

@@ -60,7 +60,7 @@ begin
      or exists (select 1 from pg_attribute where attrelid in ('public.leads'::regclass, 'public.outbox'::regclass, 'public.owner_messages'::regclass, 'public.jarvis_jobs'::regclass)
                 and attname = 'office_id' and not attisdropped)
      or exists (select 1 from pg_trigger where tgname = 'zz_fz_service_office') then raise exception 'V1 the rollback left M5 objects behind'; end if;
-  if to_regclass('fz_archive.fz_services') is null or (select count(*) from fz_archive.fz_services) <> 6 then raise exception 'V1 the registry was not archived'; end if;
+  if to_regclass('fz_archive.fz_services') is null or (select count(*) from fz_archive.fz_services) <> 7 then raise exception 'V1 the registry was not archived'; end if;
   if to_regclass('public.fz_audit_chain') is null or to_regclass('public.fz_office_money') is null then raise exception 'V1 the rollback damaged M4 / M2'; end if;
   if public.backup_export_policy() -> 'unclassified' <> '[]'::jsonb then raise exception 'V1 unclassified after the rollback'; end if;
   if exists (select 1 from public.backup_classification() where table_name = 'fz_services') then raise exception 'V1 the rollback did not restore the M4 classification'; end if;
@@ -82,9 +82,9 @@ do $$
 declare A uuid := 'f0000000-0000-4000-8000-000000000001'; B uuid := 'f0000000-0000-4000-8000-000000000002'; G uuid := 'f0000000-0000-4000-8000-000000000000';
         va uuid; vb uuid; la uuid; lb uuid; m uuid; x uuid; o uuid; res text; j1 jsonb; j2 jsonb; n int; ca jsonb; cj jsonb; r jsonb;
 begin
-  -- V2 the registry: six services, owner office = the group (M1 registry), data classes == the M1 registry, scoped reads OFF, tables known
-  if (select count(*) from public.fz_services) <> 6 or exists (select 1 from public.fz_services where owner_office <> G) then raise exception 'V2 registry rows / owner office'; end if;
-  if (select string_agg(service, ',' order by service) from public.fz_services) <> 'comms,content,crm,llm_routing,payments,scheduler' then raise exception 'V2 services'; end if;
+  -- V2 the registry: the six M5 services plus web_studio (20261205), owner office = the group (M1 registry), data classes == the M1 registry, scoped reads OFF, tables known
+  if (select count(*) from public.fz_services) <> 7 or exists (select 1 from public.fz_services where owner_office <> G) then raise exception 'V2 registry rows / owner office'; end if;
+  if (select string_agg(service, ',' order by service) from public.fz_services) <> 'comms,content,crm,llm_routing,payments,scheduler,web_studio' then raise exception 'V2 services'; end if;
   if exists (select 1 from public.fz_services where scoped_reads) then raise exception 'V2 scoped reads must default OFF'; end if;
   if exists (select 1 from public.fz_services s where s.data_classes is distinct from
                array(select distinct r.data_class from public.fz_table_registry r where r.relname = any (s.writes || s.reads) order by 1)) then raise exception 'V2 data classes drift from M1'; end if;
@@ -217,7 +217,7 @@ begin
   if (select to_jsonb(array_agg(s order by s.service)) from public.fz_services s) <> j1 then raise exception 'V7 the report wrote'; end if;
 
   -- V8 the report: every service, rows counted, no unstamped row since stamping started, scoped-readable tables from the M1 registry only
-  if jsonb_array_length(j2 -> 'services') <> 6 or (j2 ->> 'scoped_reads_on')::int <> 0 then raise exception 'V8 report shape: %', j2; end if;
+  if jsonb_array_length(j2 -> 'services') <> 7 or (j2 ->> 'scoped_reads_on')::int <> 0 then raise exception 'V8 report shape: %', j2; end if;
   if exists (select 1 from jsonb_array_elements(j2 -> 'services') e where (e ->> 'unstamped_since_start')::int <> 0) then raise exception 'V8 unstamped rows since the start: %', j2; end if;
   if (select e -> 'scoped_read_tables' from jsonb_array_elements(j2 -> 'services') e where e ->> 'service' = 'crm') <> '["ventures"]'::jsonb then raise exception 'V8 crm scoped tables'; end if;
   if (select e -> 'scoped_read_tables' from jsonb_array_elements(j2 -> 'services') e where e ->> 'service' = 'payments') <> '["agents", "ventures"]'::jsonb then raise exception 'V8 payments scoped tables'; end if;

@@ -491,11 +491,13 @@ class Netlify(Adapter):
             if s != 200 or not isinstance(raw, (bytes, bytearray)) or not raw.startswith(b"PK") or len(raw) > 50 * 1024 * 1024:
                 raise HandError(f"could not fetch a zip to deploy (HTTP {s})")
         site = ctx.account["external_id"]
-        s, b, _ = ctx.http("POST", f"https://api.netlify.com/api/v1/sites/{urllib.parse.quote(site)}/deploys",
+        # Web Studio previews are Netlify DRAFT deploys (a preview URL, the live site untouched); a publish is a normal (production) deploy
+        draft = "?draft=true" if ctx.payload.get("draft") is True else ""
+        s, b, _ = ctx.http("POST", f"https://api.netlify.com/api/v1/sites/{urllib.parse.quote(site)}/deploys{draft}",
                            headers={"Authorization": "Bearer " + ctx.token()["api_key"], "Content-Type": "application/zip"}, data=bytes(raw), timeout=300)
         if s not in (200, 201) or not isinstance(b, dict) or "id" not in b:
             raise _err("Netlify", s, b)
-        return str(b["id"])
+        return str(b.get("deploy_ssl_url") or b.get("deploy_url") or b["id"]) if draft else str(b["id"])
 
 
 # ------------------------------------------------------------------------------------------------------------------- template for new services
