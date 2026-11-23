@@ -54,6 +54,7 @@ MODEL_TIER = {
     "wan-2.2-ti2v-5b": "standard", "wan-2.2": "high", "wan-2.2-t2v-a14b": "high", "ltx-2": "high", "hunyuanvideo-1.5": "high",
     "kokoro-tts": "high", "ace-step": "high", "musicgen": "standard", "flux-lora-trainer": "high", "hq_llm": "high",
     "flux.1-schnell-lora": "standard", "ltx-video": "standard", "ffmpeg-edit": "hero",
+    "z-image-turbo": "high", "z-image-turbo-lora": "high", "wan-2.2-s2v-14b": "high", "kokoro-82m": "high",     # self-hosted (hq_creative_selfhost)
     "veo-3.1": "hero", "veo-3.1-fast": "hero", "kling-3.0": "hero", "gen-4": "hero", "gen-4-turbo": "hero", "multilingual-v2": "hero",
 }
 MODEL_MODULES = {
@@ -63,10 +64,12 @@ MODEL_MODULES = {
     "veo-3.1": {"video", "ugc"}, "veo-3.1-fast": {"video", "ugc"}, "kling-3.0": {"video", "ugc"}, "gen-4": {"video", "ugc"}, "gen-4-turbo": {"video", "ugc"},
     "multilingual-v2": {"voice"}, "hq_llm": {"copy"}, "sandbox-testsrc": {"video", "image", "ugc", "voice", "music"},
     "flux.1-schnell-lora": {"image"}, "ltx-video": {"video", "ugc"}, "ffmpeg-edit": {"edit"},
+    "z-image-turbo": {"image"}, "z-image-turbo-lora": {"image"}, "wan-2.2-s2v-14b": {"ugc"}, "kokoro-82m": {"voice"},
 }
 # ESTIMATED GPU-seconds per unit of output on a 48GB-class GPU (per image, or per second of video / audio). Real numbers replace these after M8b runs.
 GPU_SECONDS = {"flux.1-schnell": 4, "sdxl-1.0": 6, "flux.1-dev": 20, "flux.1-dev-lora": 22, "wan-2.2-ti2v-5b": 25, "wan-2.2-t2v-a14b": 90,
-               "ltx-2": 12, "hunyuanvideo-1.5": 80, "kokoro-tts": 1, "ace-step": 2, "flux-lora-trainer": 1800, "flux.1-schnell-lora": 5, "ltx-video": 12}
+               "ltx-2": 12, "hunyuanvideo-1.5": 80, "kokoro-tts": 1, "ace-step": 2, "flux-lora-trainer": 1800, "flux.1-schnell-lora": 5, "ltx-video": 12,
+               "z-image-turbo": 6, "z-image-turbo-lora": 7, "wan-2.2-s2v-14b": 120, "kokoro-82m": 1}
 # deceptive framing (action_policy prohibited: deceptive_communication / fabricate) and real-artist imitation
 DECEPTIVE = re.compile(r"\b(testimonial|customer review|real customer|verified (buyer|purchase)|i bought|5[- ]star review|as seen on|unpaid review)\b", re.I)
 IMITATION = re.compile(r"\b(in the style of|sounds? like|voice of|imitat\w*|clone (the |his |her )?voice|deepfake)\b", re.I)
@@ -510,11 +513,15 @@ def adapters_for(providers: list[dict], env: dict, extra: dict | None = None) ->
                 a = HostedAdapter(p["slug"], p.get("env_key") or "", env)
             elif p["slug"] == "runpod-comfyui":
                 a = ComfyUIAdapter(p["slug"], p.get("env_key") or "", env, float(p.get("est_cents") or 0))
+            elif p["slug"] == "comfyui-selfhost":
+                import hq_creative_selfhost
+                a = hq_creative_selfhost.SelfhostAdapter(env)
             else:
                 a = LiveAdapter(p["slug"], p.get("env_key") or "")
         if a.available(env) and (p["slug"] in ("sandbox", "local-edit") or mode(env) == "live"):
             out[p["slug"]] = a
-    return out
+    import hq_creative_selfhost
+    return hq_creative_selfhost.router_filter(out, providers, env)        # selfhost configured -> fal.ai only as an opt-in fallback
 
 
 # ------------------------------------------------------------------------------------------------------------------- router
@@ -561,13 +568,16 @@ def candidates(claim: dict, attempts: list[dict], adapters: dict, spec: dict) ->
                 continue
             if hasattr(adapters[p["slug"]], "supports") and not adapters[p["slug"]].supports(m):
                 continue                                                         # e.g. a ComfyUI slot without a (licence-safe) workflow for m
+            if hasattr(adapters[p["slug"]], "fits") and not adapters[p["slug"]].fits(m, module, spec):
+                continue                                                         # e.g. a LoRA workflow without the persona's LoRA (selfhost)
             if p["kind"] == "premium" and not (allowed and (open_failed or hero_direct)):
                 continue
             est = estimate_cents(p, m, module, spec)
             rank = pref.index(m) if m in pref else len(pref)
             prem = p["kind"] == "premium"
             group = (0 if prem else 1) if hero_direct else (1 if prem else 0)      # hero + preset: premium first; otherwise open first
-            rows.append({"provider": p["slug"], "model": m, "kind": p["kind"], "est": est, "key": (group, est, rank, p["slug"], m)})
+            own = adapters[p["slug"]].preference(m) if hasattr(adapters[p["slug"]], "preference") else 0      # the adapter's quality order at equal price
+            rows.append({"provider": p["slug"], "model": m, "kind": p["kind"], "est": est, "key": (group, est, rank, own, p["slug"], m)})
     rows.sort(key=lambda r: r["key"])
     return rows
 
@@ -769,6 +779,11 @@ def run_job(job_id: str, *, rpc=None, store=None, env: dict | None = None, llm=N
     if refusal:
         rpc("creative_finish", {"p_job": job_id, "p_passed": False, "p_caption": "", "p_qa": {"refused": refusal}})
         return {"job": job_id, "status": "failed", "reason": refusal}
+    import hq_creative_selfhost as selfhost
+    refusal = selfhost.content_refusal(claim["brief"])                   # minors / sexual / impersonation: every provider
+    if refusal:
+        rpc("creative_finish", {"p_job": job_id, "p_passed": False, "p_caption": "", "p_qa": {"refused": refusal}})
+        return {"job": job_id, "status": "failed", "reason": refusal}
     facts = []
     if brain:
         try:
@@ -786,6 +801,14 @@ def run_job(job_id: str, *, rpc=None, store=None, env: dict | None = None, llm=N
             "seconds": (int(vid.get("seconds") or env.get("CREATIVE_VIDEO_SECONDS") or 5)) if module in ("video", "ugc") else None,
             "fps": vid.get("fps"), "workflow": ((tpl or {}).get("spec") or {}).get("workflow"), "edit": ((tpl or {}).get("spec") or {}).get("edit") or {}}
     tmp = workdir or tempfile.mkdtemp(prefix="creative-")
+    spec["script"] = plan["script"]
+    try:
+        spec["persona"] = selfhost.persona_for(claim, store, tmpdir=tmp)     # the character's persona pack (checked), if it has one
+    except Exception as e:
+        rpc("creative_finish", {"p_job": job_id, "p_passed": False, "p_caption": "", "p_qa": {"refused": str(e)[:300]}})
+        return {"job": job_id, "status": "failed", "reason": str(e)[:300]}
+    if store is not None:
+        spec["resolve_url"] = lambda path: store.url(path, 900)
     if claim.get("reuse_of") and store is not None:
         try:
             spec["reference_url"] = store.url(claim["reuse_of"]["path"])      # the approved asset this job builds on
@@ -855,6 +878,7 @@ def run_job(job_id: str, *, rpc=None, store=None, env: dict | None = None, llm=N
                  "template": (tpl or {}).get("template"), "hook": (tpl or {}).get("hook"), "hook_text": hook}
     if out.get("edit"):
         base_meta["edit"] = out["edit"]
+    base_meta.update({k: v for k, v in (out.get("meta") or {}).items() if k not in base_meta})   # e.g. persona / worker; ai_generated stays True
     assets = []
 
     def register(path_rel: str, dst: str, mime: str, platform, name: str, meta: dict):

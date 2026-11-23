@@ -1,0 +1,179 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "wan2.2_s2v_14B_fp8_scaled.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "2": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+   "type": "wan",
+   "device": "default"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "wan_2.1_vae.safetensors"
+  }
+ },
+ "4": {
+  "class_type": "AudioEncoderLoader",
+  "inputs": {
+   "audio_encoder_name": "wav2vec2_large_english_fp16.safetensors"
+  }
+ },
+ "5": {
+  "class_type": "LoadAudio",
+  "inputs": {
+   "audio": "{{audio_file}}"
+  }
+ },
+ "6": {
+  "class_type": "AudioEncoderEncode",
+  "inputs": {
+   "audio_encoder": [
+    "4",
+    0
+   ],
+   "audio": [
+    "5",
+    0
+   ]
+  }
+ },
+ "7": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "{{ref_image}}"
+  }
+ },
+ "8": {
+  "class_type": "ModelSamplingSD3",
+  "inputs": {
+   "shift": 8.0,
+   "model": [
+    "1",
+    0
+   ]
+  }
+ },
+ "9": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "{{prompt}}",
+   "clip": [
+    "2",
+    0
+   ]
+  }
+ },
+ "10": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "{{negative}}",
+   "clip": [
+    "2",
+    0
+   ]
+  }
+ },
+ "11": {
+  "class_type": "WanSoundImageToVideo",
+  "inputs": {
+   "positive": [
+    "9",
+    0
+   ],
+   "negative": [
+    "10",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ],
+   "width": "{{width}}",
+   "height": "{{height}}",
+   "length": "{{frames}}",
+   "batch_size": 1,
+   "audio_encoder_output": [
+    "6",
+    0
+   ],
+   "ref_image": [
+    "7",
+    0
+   ]
+  }
+ },
+ "12": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": "{{seed}}",
+   "steps": 20,
+   "cfg": 6.0,
+   "sampler_name": "uni_pc",
+   "scheduler": "simple",
+   "denoise": 1.0,
+   "model": [
+    "8",
+    0
+   ],
+   "positive": [
+    "11",
+    0
+   ],
+   "negative": [
+    "11",
+    1
+   ],
+   "latent_image": [
+    "11",
+    2
+   ]
+  }
+ },
+ "13": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "12",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  }
+ },
+ "14": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "fps": "{{fps}}",
+   "images": [
+    "13",
+    0
+   ],
+   "audio": [
+    "5",
+    0
+   ]
+  }
+ },
+ "15": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "filename_prefix": "video/fendezy",
+   "format": "auto",
+   "codec": "auto",
+   "video": [
+    "14",
+    0
+   ]
+  }
+ }
+}
