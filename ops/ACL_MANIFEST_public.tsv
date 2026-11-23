@@ -413,6 +413,18 @@ function	queue_prospect_task(text)	-	-	execute	security_definer		-
 function	queue_valuation_task()	-	-	execute	security_definer		-
 function	queue_venture_reviews()	-	-	execute	invoker		-
 function	queue_weekly_review()	-	-	execute	security_definer		-
+function	reception_booking_record(text,text)	-	-	execute	security_definer		-
+function	reception_call_event(text,text,text,text,integer,text,integer)	-	-	execute	security_definer		-
+function	reception_claim_sms(uuid)	-	-	execute	security_definer		-
+function	reception_client_config(text)	-	-	execute	security_definer		-
+function	reception_inbound_sms(text,text,text,text)	-	-	execute	security_definer		-
+function	reception_mark_sms(uuid,boolean,text)	-	-	execute	security_definer		-
+function	reception_owner_decide_sms(uuid,boolean)	-	-	execute	security_definer		-
+function	reception_owner_set_client(text,uuid,jsonb,text)	-	-	execute	security_definer		-
+function	reception_owner_set_flags(text,text,boolean,boolean,integer)	-	-	execute	security_definer		-
+function	reception_pending_sends(integer)	-	-	execute	security_definer		-
+function	reception_queue_sms(text,text,text)	-	-	execute	security_definer		-
+function	reception_report()	-	-	execute	security_definer		-
 function	record_action_result(bigint,text,text,boolean)	-	-	execute	invoker		-
 function	record_lead_reply(uuid,text,text,text)	-	-	execute	security_definer		-
 function	redaction_capture(text,text)	-	-	-	invoker	internal: owner only	-

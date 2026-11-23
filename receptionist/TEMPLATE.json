@@ -1,0 +1,66 @@
+{
+ "_note": "Per-client receptionist config. Real client configs are NOT kept in the repo (they hold the client's phone numbers): the owner stores them with reception_owner_set_client. Phone numbers are E.164.",
+ "business_name": "<Business name>",
+ "timezone": "America/Toronto",
+ "hours": {
+  "mon": [
+   [
+    "09:00",
+    "17:00"
+   ]
+  ],
+  "tue": [
+   [
+    "09:00",
+    "17:00"
+   ]
+  ],
+  "wed": [
+   [
+    "09:00",
+    "17:00"
+   ]
+  ],
+  "thu": [
+   [
+    "09:00",
+    "17:00"
+   ]
+  ],
+  "fri": [
+   [
+    "09:00",
+    "17:00"
+   ]
+  ],
+  "sat": [],
+  "sun": []
+ },
+ "services": [
+  {
+   "name": "<Service>",
+   "price_cents": 0,
+   "minutes": 30
+  }
+ ],
+ "faqs": [
+  {
+   "q": "<Question callers ask>",
+   "a": "<The business's answer>"
+  }
+ ],
+ "escalation_number": "+15555550100",
+ "booking": {
+  "provider": "calcom",
+  "event_type_ids": {
+   "<Service>": 0
+  },
+  "public_url": ""
+ },
+ "voice": {
+  "tts": "kokoro",
+  "stt": "whisper-local",
+  "voice_id": "af_heart",
+  "language": "en-CA"
+ }
+}
