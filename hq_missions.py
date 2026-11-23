@@ -29,6 +29,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 import hq
+import hq_mission_gate
 import hq_services
 import hq_evidence
 
@@ -122,6 +123,9 @@ def create_mission(objective: str, venture: str | None = None, title: str | None
     v = _get(f"ventures?slug=eq.{_q(slug)}&select=id,slug,status&limit=1")
     if not v:
         v = _get("ventures?slug=eq.idea-lab&select=id,slug,status&limit=1")
+    refusal = hq_mission_gate.create_refusal(v[0]["id"] if v else None)   # M7: no mission for an office that is not active
+    if refusal:
+        return {"error": refusal}
     budget = DEFAULT_BUDGET_CENTS if budget_cents is None else max(0, min(int(budget_cents), MAX_BUDGET_CENTS))
     row = {
         "title": (title or objective.split("\n")[0])[:140].strip() or "Untitled mission",
@@ -1355,6 +1359,14 @@ def advance() -> int:
         if e.code in (400, 404):  # table not there yet (migration not applied): stay inert
             return 0
         raise
+    try:  # M7: pause the missions of offices that are not active (resume them when active again) BEFORE any of them moves
+        gate = hq_mission_gate.sweep()
+        stop = set(gate["paused"]) | set(gate.get("blocked") or [])
+        if stop:
+            missions = [m for m in missions if m["id"] not in stop]
+    except Exception:
+        logger.exception("mission office gate failed: no mission moves this tick")
+        return 0
     n = 0
     for m in missions:
         try:
@@ -1455,6 +1467,8 @@ def set_status(prefix: str, status: str) -> str:
         body = {"plan": plan, "checkpoint": {k: old_cp[k] for k in ("task_retries", "budget_marks", "due_at", "told_overdue", "recurrence", "format_repairs") if k in old_cp}}
     if not target:
         return "Use pause, resume or abandon."
+    if target in ("paused", "abandoned"):  # M7: the owner's pause / abandon wins: an office reactivation never resumes it
+        body = {**body, "checkpoint": hq_mission_gate.without_office_marks(m.get("checkpoint"))}
     try:
         _patch(f"missions?id=eq.{_q(m['id'])}", {"status": target, **body})
     except urllib.error.HTTPError as e:

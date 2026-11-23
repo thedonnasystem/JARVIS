@@ -1,0 +1,35 @@
+{
+ "office": "wolf-squad",
+ "title": "Wolf Squad",
+ "manager": "appointed by the owner only (office_os_set_manager)",
+ "brain_scope": [
+  "group",
+  "wolf-squad"
+ ],
+ "agents": [
+  {
+   "role": "sales-manager",
+   "model_tier": "small",
+   "purpose": "Runs the pipeline",
+   "prompt": "Own the sales pipeline: stages, next actions, follow-ups due. Report daily in five bullets. Outreach goes out only after owner approval."
+  },
+  {
+   "role": "prospector",
+   "model_tier": "small",
+   "purpose": "Researches and scores prospects",
+   "prompt": "Research and score prospects against the offer. Never contact a suppressed address or anyone without a consent basis; never buy lists."
+  },
+  {
+   "role": "sdr",
+   "model_tier": "small",
+   "purpose": "Drafts outreach and follow-ups",
+   "prompt": "Draft short, honest outreach and follow-ups for approved prospects. Sending email or DMs is red."
+  },
+  {
+   "role": "closer-assist",
+   "model_tier": "small",
+   "purpose": "Call prep and notes",
+   "prompt": "Prepare call briefs (who, need, objections, next step) and log outcomes. Prices and terms come from the owner."
+  }
+ ]
+}

@@ -1,0 +1,69 @@
+{
+ "about": "Donna's first missions (owner direction v1). QUEUED, NOT RUN: hq_office_os.queue_missions('donna') creates them through hq_missions.create_mission only when Donna is ACTIVE (office_os_status) and the 'donna' venture exists; every step still passes the owner-approval and authorize_action rules. Fields are create_mission's arguments. No personal data.",
+ "office": "donna",
+ "inputs": "Missions 1 and 2 build on the completed Donna research summary.",
+ "missions": [
+  {
+   "key": "donna-m1-validation",
+   "title": "Donna: market validation of the top 3 segments",
+   "venture": "donna",
+   "priority": 2,
+   "max_steps": 5,
+   "budget_cents": 0,
+   "objective": "VALIDATE the market before any niche commitment. Across the top 3 researched segments (1) Ottawa home-services trades (HVAC, plumbing, electrical), (2) roofing and renovation, (3) law firms, intake only: run missed-call audits (call each sampled business's published number during business hours and after hours, record answered / voicemail / no answer and callback time) and pricing checks (what similar AI receptionist and website services cost locally), using PUBLIC business information only. For every business sampled record the CASL evidence: the URL where its contact details are published, the date seen, and any 'no unsolicited messages' notice (excluded from any outreach). No purchased lists, no personal data beyond published business contacts, and no pitching during audits. Report to the owner a ranking of the 3 segments by missed-call rate, ability to pay, competition and ease of delivery, with the evidence, and recommend one; the owner commits the niche. Input: the completed research summary. Pricing (owner-set): Answer $497/mo + $497 setup; Capture $797/mo + $997 setup; Command $1,297/mo + $1,497 setup; Site $1,997 + $149/mo; Site Pro $3,997 + $249/mo; Bundle $997/mo for 12 months + $997 setup. Founding offer: $497 for the first month with the setup fee waived. Guarantee terms TBD by owner: offer no guarantee or refund promise of any kind. If this mission needs any spend, do not spend: file a funding request (hq_office_os.request_money: amount, purpose, expected return and payback, cheapest alternative considered, deadline). It is a proposal in the owner's /approvals queue only; existing limits still apply after approval ($25 per transaction, $75 per week, low-cost mode, hard stop).",
+   "checkpoint": {
+    "office": "donna",
+    "starts_after": "Donna active",
+    "external_contact": false,
+    "owner_decides": "niche commitment"
+   }
+  },
+  {
+   "key": "donna-m2-sales-kit",
+   "title": "Donna: sales kit (drafts only)",
+   "venture": "donna",
+   "priority": 2,
+   "max_steps": 6,
+   "budget_cents": 0,
+   "objective": "Draft Donna's sales kit, all as DRAFTS for the owner: (1) a missed-call audit script, (2) an owner callback script, (3) three CASL-compliant follow-up emails (sender identification, mailing address, working unsubscribe), (4) an offer sheet, (5) an onboarding checklist, (6) a pipeline tracker layout. Nothing is sent. Input: the completed research summary. Pricing (owner-set): Answer $497/mo + $497 setup; Capture $797/mo + $997 setup; Command $1,297/mo + $1,497 setup; Site $1,997 + $149/mo; Site Pro $3,997 + $249/mo; Bundle $997/mo for 12 months + $997 setup. Founding offer: $497 for the first month with the setup fee waived. Guarantee terms TBD by owner: offer no guarantee or refund promise of any kind. Segment: the one the owner commits after mission 1's validation. If this mission needs any spend, do not spend: file a funding request (hq_office_os.request_money: amount, purpose, expected return and payback, cheapest alternative considered, deadline). It is a proposal in the owner's /approvals queue only; existing limits still apply after approval ($25 per transaction, $75 per week, low-cost mode, hard stop).",
+   "checkpoint": {
+    "office": "donna",
+    "starts_after": "Donna active",
+    "external_contact": false
+   }
+  },
+  {
+   "key": "donna-m3-demo-line",
+   "title": "Donna: demo line plan",
+   "venture": "donna",
+   "priority": 3,
+   "max_steps": 3,
+   "budget_cents": 0,
+   "objective": "Plan a demo phone/SMS line for the AI receptionist offer: provider options, monthly cost, setup steps, compliance notes. It needs a phone/SMS integration (not connected yet) and spend the owner approves: file a funding request for the demo line instead of spending, and stop at the plan until the owner approves both. If this mission needs any spend, do not spend: file a funding request (hq_office_os.request_money: amount, purpose, expected return and payback, cheapest alternative considered, deadline). It is a proposal in the owner's /approvals queue only; existing limits still apply after approval ($25 per transaction, $75 per week, low-cost mode, hard stop).",
+   "checkpoint": {
+    "office": "donna",
+    "starts_after": "Donna active",
+    "needs_owner": [
+     "phone/SMS integration",
+     "funding request approval"
+    ],
+    "external_contact": false
+   }
+  },
+  {
+   "key": "donna-m4-weekly-report",
+   "title": "Donna: weekly KPI report",
+   "venture": "donna",
+   "priority": 3,
+   "max_steps": 2,
+   "budget_cents": 0,
+   "objective": "Each week, report Donna's KPIs to the owner from the HQ ledger and pipeline: MRR, customer acquisition cost, conversion rate by stage, churn, and delivery status per client. Read-only; flag gaps in the data instead of estimating. If this mission needs any spend, do not spend: file a funding request (hq_office_os.request_money: amount, purpose, expected return and payback, cheapest alternative considered, deadline). It is a proposal in the owner's /approvals queue only; existing limits still apply after approval ($25 per transaction, $75 per week, low-cost mode, hard stop).",
+   "checkpoint": {
+    "office": "donna",
+    "starts_after": "Donna active",
+    "recurring": "weekly",
+    "external_contact": false
+   }
+  }
+ ]
+}

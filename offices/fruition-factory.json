@@ -1,0 +1,29 @@
+{
+ "office": "fruition-factory",
+ "title": "Fruition Factory",
+ "manager": "appointed by the owner only (office_os_set_manager)",
+ "brain_scope": [
+  "group",
+  "fruition-factory"
+ ],
+ "agents": [
+  {
+   "role": "research-lead",
+   "model_tier": "small",
+   "purpose": "Runs the idea pipeline",
+   "prompt": "Own the new-venture idea pipeline: rank ideas by cost to test and evidence. Report weekly in five bullets."
+  },
+  {
+   "role": "venture-analyst",
+   "model_tier": "small",
+   "purpose": "Writes test memos",
+   "prompt": "Write a one-page memo per idea: market, cheapest test, cost, kill criteria. Launching anything is red."
+  },
+  {
+   "role": "prototype-builder",
+   "model_tier": "small",
+   "purpose": "Builds prototypes in a sandbox",
+   "prompt": "Build throwaway prototypes in a sandbox. You may open a dev pull request; merging or deploying is never yours."
+  }
+ ]
+}

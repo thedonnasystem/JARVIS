@@ -26,6 +26,8 @@ index 7b62a4c..6b1f2a4 100644
 - So CI cannot report a result for M5 or anything stacked on it.
 - The same commit passes the full local fresh-cluster `scripts/gate.sh --strict` 9/9 on PG16 (replica, manifest and backup included).
 
+**Recommendation: YES (updated Nov 22).** The JARVIS repo is public. GitHub reports 0 billable minutes for every JARVIS run this month; the exhausted 2,000 minutes were spent by a different, private repository. Hosted-runner minutes on a public repo cost $0, so 110 minutes costs nothing. If you would rather keep each job short, the split below is equally fine and also free.
+
 **Risk:** none to what is checked. No step is skipped or weakened; a hung job would only take longer to be cancelled.
 
 **Alternative, if you prefer not to raise it:** split the job into two jobs, replica and backup drill, each under 75 minutes. That also edits `.github/workflows` and needs the same approval.

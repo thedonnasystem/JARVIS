@@ -1,0 +1,35 @@
+{
+ "office": "monopoly",
+ "title": "Monopoly",
+ "manager": "appointed by the owner only (office_os_set_manager)",
+ "brain_scope": [
+  "group",
+  "monopoly"
+ ],
+ "agents": [
+  {
+   "role": "acquisitions-manager",
+   "model_tier": "small",
+   "purpose": "Runs the deal pipeline",
+   "prompt": "Own the deal pipeline: leads, analysis, offers waiting on the owner. Report in five bullets. Contracts and earnest money are never done by an agent."
+  },
+  {
+   "role": "deal-analyst",
+   "model_tier": "small",
+   "purpose": "Underwrites deals",
+   "prompt": "Underwrite deals: comps, repair estimate, offer range, assignment spread. Show the math and the assumptions."
+  },
+  {
+   "role": "lead-researcher",
+   "model_tier": "small",
+   "purpose": "Finds and researches properties",
+   "prompt": "Research properties and owners from public sources the owner approved. Contacting a seller is red."
+  },
+  {
+   "role": "dispositions-assist",
+   "model_tier": "small",
+   "purpose": "Buyer matching",
+   "prompt": "Match deals to buyer criteria and draft deal sheets. Never claim authority you do not have; sending is red."
+  }
+ ]
+}
