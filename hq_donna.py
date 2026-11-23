@@ -3,7 +3,7 @@
 Claude built the SYSTEM; the business work (niche research, prospects, sales kits, intakes) is done by Donna's agents through these runners, after activation.
 
 Runners (hq_donna.run(<mission>, inputs)):
-  market-research      public pages from the allowed hosts (offices/donna_runners.json) -> the free brain ranks niches -> every FACT is re-checked against the stored
+  market-research      public pages from the allowed hosts (donna_ops/runners.json) -> the free brain ranks niches -> every FACT is re-checked against the stored
                        page text (hq_evidence.verify_fact); a niche is VALIDATED only with >= 2 supported facts from >= 2 hosts. Unsupported claims are dropped
                        and listed (fabricate). Prospects: a published business contact is recorded only when it is verbatim on its https page and the page
                        carries no "no unsolicited messages" notice (CASL implied consent by conspicuous publication).
@@ -61,7 +61,7 @@ class DonnaRefused(Exception):
 
 
 def config() -> dict:
-    with open(os.path.join(ROOT, "offices", "donna_runners.json")) as f:
+    with open(os.path.join(ROOT, "donna_ops", "runners.json")) as f:
         return json.load(f)
 
 
@@ -147,7 +147,7 @@ def _text_of(raw) -> str:
 
 class Research:
     """The ONLY way Donna's research reaches the web: https GET of public pages, robots.txt honoured, an honest User-Agent, no redirects followed, no
-    login, no CAPTCHA, no proxy. Citable hosts are an allowlist (offices/donna_runners.json); prospect pages may be any https host (contact extraction only)."""
+    login, no CAPTCHA, no proxy. Citable hosts are an allowlist (donna_ops/runners.json); prospect pages may be any https host (contact extraction only)."""
 
     def __init__(self, http=None, cfg: dict | None = None, env: dict | None = None):
         self.cfg = (cfg or config())["research"]

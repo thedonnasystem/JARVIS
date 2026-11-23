@@ -24,7 +24,7 @@ The weekly report also runs from pg_cron (Mondays 13:05 UTC, 09:05 Ottawa). Whil
 Every call goes through the spend gateway. A call that cost anything fails the run (`spend_outside_budget`).
 
 **Roles.** `offices/donna.json` still has the pre-#48 role names. The runners map each mission to both names (`role` / `v1_role` in
-`offices/donna_runners.json`), so they work before and after #48.
+`donna_ops/runners.json`), so they work before and after #48.
 
 ## Gates (all enforced, all tested)
 
@@ -115,7 +115,7 @@ Nothing at the repo root changes, so the bot's own Railway service is unaffected
 | `ops/rollback_donna_ops.sql` | archives to `fz_archive.donna_ops_*` (run it BEFORE `rollback_donna_receptionist.sql`) |
 | `ops/OWNER_DONNA_OPS.sql` | owner steps |
 | `sqltests/donna_ops_check.sql` | the rules, the rollback and the money fingerprint |
-| `hq_donna.py`, `offices/donna_runners.json` | runners, research tools, CASL checker, owner views, deploy kit text |
+| `hq_donna.py`, `donna_ops/runners.json` | runners, research tools, CASL checker, owner views, deploy kit text |
 | `test_hq_donna.py` | network, database and brain mocked |
 | `hq_commands.py` | `/donna`, `/donna drafts`, `/donna run <mission>`, `/donna report`, `/reception kit`, `/reception golive <client>` |
 

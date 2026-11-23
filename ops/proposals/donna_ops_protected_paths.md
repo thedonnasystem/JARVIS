@@ -9,7 +9,7 @@ Proposed additions:
 ## `legal_privacy` category
 
 **`paths`:**
-- `offices/donna_runners.json`: its `casl` block is the fixed footer, and its `research` block is the robots / allowlist policy.
+- `donna_ops/runners.json`: its `casl` block is the fixed footer, and its `research` block is the robots / allowlist policy.
 
 **`sql`:**
 - `text_problems`
