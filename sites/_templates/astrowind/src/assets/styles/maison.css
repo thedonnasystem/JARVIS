@@ -111,22 +111,17 @@ html.maison :focus-visible { outline: 1px solid var(--m-gold-hi); outline-offset
 /* hero */
 .m-hero { position: relative; min-height: 100svh; display: grid; grid-template-rows: 1fr auto; padding-top: 76px; overflow: hidden; }
 .m-hero-stage { position: absolute; inset: 0; transform: translate3d(0, calc(var(--hero-p, 0) * 18vh), 0) scale(calc(1 - var(--hero-p, 0) * 0.08)); opacity: calc(1 - var(--hero-p, 0) * 0.9); }
-.m-orb-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 2.4s var(--m-ease); }
-.m-orb-canvas.is-on { opacity: 1; }
-.m-orb-anchor { position: absolute; width: min(36vw, 540px); aspect-ratio: 1; right: 3.5vw; top: 50%; transform: translateY(-50%); }
-.m-orb-fallback { position: absolute; inset: 0; border-radius: 50%; transition: opacity 2s var(--m-ease);
-  background:
-    radial-gradient(circle at 46% 24%, rgba(255, 246, 220, 0.9) 0 1.3%, transparent 4.5%),
-    linear-gradient(176deg, transparent 37%, color-mix(in oklab, var(--m-gold-hi) 80%, transparent) 40.5%, var(--m-gold) 41.5%, transparent 46%),
-    linear-gradient(183deg, transparent 58%, color-mix(in oklab, var(--m-gold) 55%, transparent) 63%, transparent 72%),
-    radial-gradient(70% 50% at 25% 30%, color-mix(in oklab, var(--m-wine) 45%, transparent), transparent 70%),
-    radial-gradient(circle at 50% 45%, #1d0e11 0%, #0d0708 62%, #060304 100%);
-  box-shadow: inset -26px -34px 70px rgba(0, 0, 0, 0.75), inset 6px 8px 26px color-mix(in oklab, var(--m-gold) 30%, transparent),
-    inset 0 0 0 1px color-mix(in oklab, var(--m-gold) 35%, transparent), 0 0 140px -20px color-mix(in oklab, var(--m-wine) 80%, transparent); }
-.m-orb-fallback::before, .m-orb-fallback::after { content: ''; position: absolute; left: -32%; right: -32%; top: 36%; height: 30%; border-radius: 50%;
-  border: 1px solid color-mix(in oklab, var(--m-gold) 70%, transparent); transform: rotate(-21deg); }
-.m-orb-fallback::after { left: -18%; right: -18%; top: 40%; height: 22%; border-color: color-mix(in oklab, var(--m-gold) 35%, transparent); }
-.m-orb-anchor.is-gl .m-orb-fallback { opacity: 0; }
+/* the 3D stage: one fixed canvas behind the page (main isolates it, so the page paints above it); the poster is the same scene, pre-rendered */
+html.maison main { position: relative; isolation: isolate; }
+.m-stage { position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0; transition: opacity 2.2s var(--m-ease); contain: strict; }
+.m-stage.is-on { opacity: 1; }
+.m-stage.is-still { position: absolute; bottom: auto; height: 100svh; }
+.m-stage-canvas { display: block; width: 100%; height: 100%; }
+.m-poster { position: absolute; inset: 0; transition: opacity 2.4s var(--m-ease);
+  background: url('/maison/stage-d.webp') 72% 50% / cover no-repeat,
+    radial-gradient(34vw 34vw at 74% 50%, color-mix(in oklab, var(--m-gold) 16%, transparent), transparent 62%),
+    radial-gradient(60vw 50vw at 90% 10%, color-mix(in oklab, var(--m-wine) 45%, transparent), transparent 70%), #050304; }
+.m-gl .m-poster { opacity: 0; }
 .m-hero-grid { position: relative; z-index: 2; display: flex; align-items: center; }
 .m-hero-copy { max-width: 50rem; padding: 4rem 0 2rem; }
 .m-hero-foot { position: relative; z-index: 2; display: flex; justify-content: space-between; align-items: center; padding-bottom: 1.8rem;
@@ -137,7 +132,9 @@ html.maison :focus-visible { outline: 1px solid var(--m-gold-hi); outline-offset
 .m-live .m-scroll-line::after { animation: m-drip 2.6s var(--m-ease) infinite; }
 @keyframes m-drip { to { transform: translateY(260%); } }
 @media (max-width: 63.99rem) {
-  .m-orb-anchor { width: min(64vw, 380px); right: 50%; top: 100px; transform: translateX(50%); }
+  .m-poster { background: url('/maison/stage-m.webp') 50% 0 / 100% auto no-repeat,
+    radial-gradient(60vw 60vw at 50% 230px, color-mix(in oklab, var(--m-gold) 16%, transparent), transparent 62%),
+    radial-gradient(90vw 70vw at 90% 0%, color-mix(in oklab, var(--m-wine) 45%, transparent), transparent 70%), #050304; }
   .m-hero-grid { align-items: flex-start; }
   .m-hero-copy { padding-top: min(calc(64vw + 56px), 450px); padding-bottom: 1rem; }
   .m-h1 { font-size: clamp(2.5rem, 10.6vw, 4.6rem); }
@@ -224,7 +221,7 @@ html.maison :focus-visible { outline: 1px solid var(--m-gold-hi); outline-offset
 .m-typing span:nth-child(3) { animation-delay: 0.3s; }
 @keyframes m-dot { 50% { opacity: 0.25; transform: translateY(-2px); } }
 .m-say.is-in { animation: m-bubble 0.8s var(--m-ease) both; }
-@keyframes m-bubble { from { opacity: 0; filter: blur(6px); } to { opacity: 1; filter: none; } }
+@keyframes m-bubble { from { opacity: 0; filter: blur(3px); } to { opacity: 1; filter: none; } }
 .m-call-actions { display: flex; justify-content: center; gap: 1.4rem; padding-top: 0.9rem; }
 .m-call-actions span { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--m-line); background: rgba(244, 237, 225, 0.04); }
 .m-call-actions .m-end { background: linear-gradient(150deg, #b0283e, var(--m-wine)); border-color: transparent; }
@@ -272,7 +269,8 @@ html.maison :focus-visible { outline: 1px solid var(--m-gold-hi); outline-offset
 
 /* offer */
 .m-offer { position: relative; display: grid; gap: 2.5rem; align-items: center; border-radius: 28px; padding: clamp(2.2rem, 5vw, 5rem); overflow: hidden; isolation: isolate;
-  background: radial-gradient(80% 120% at 100% 0%, color-mix(in oklab, var(--m-wine) 95%, #ff4060 5%), transparent 60%), linear-gradient(135deg, var(--m-wine-deep), #12070a 70%);
+  background: radial-gradient(80% 120% at 100% 0%, color-mix(in oklab, color-mix(in oklab, var(--m-wine) 95%, #ff4060 5%) 88%, transparent), transparent 60%), linear-gradient(135deg, color-mix(in oklab, var(--m-wine-deep) 84%, transparent), rgba(18, 7, 10, 0.8) 70%);
+  backdrop-filter: blur(18px) saturate(1.15); -webkit-backdrop-filter: blur(18px) saturate(1.15);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--m-gold) 40%, transparent), 0 50px 120px -50px color-mix(in oklab, var(--m-wine) 90%, transparent); }
 .m-offer::after { content: ''; position: absolute; inset: 0; z-index: -1; background: radial-gradient(520px circle at var(--mx, 70%) var(--my, 30%), color-mix(in oklab, var(--m-gold) 12%, transparent), transparent 60%); }
 @media (min-width: 64rem) { .m-offer { grid-template-columns: auto 1fr; gap: 4.5rem; } }
@@ -389,3 +387,37 @@ html.maison .text-primary { color: var(--m-gold) !important; }
   html.maison *, html.maison *::before, html.maison *::after { animation: none !important; transition: none !important; }
   .m-hero-stage { transform: none !important; opacity: 1 !important; }
 }
+
+/* ---- 3D-era motion layer (cursor light, card tilt + gold edge light, headline unveil, live call) ---- */
+.m-cursor-light { position: fixed; left: 0; top: 0; z-index: 1; width: 560px; height: 560px; margin: -280px 0 0 -280px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--m-gold) 15%, transparent), color-mix(in oklab, var(--m-wine) 10%, transparent) 55%, transparent);
+  mix-blend-mode: screen; opacity: 0; transition: opacity 0.8s var(--m-ease); will-change: transform; }
+.m-cursor-light.is-on { opacity: 1; }
+/* the gold edge light: a bright arc of the hairline border that follows the pointer */
+.m-bento > li::before, .m-plans > li::before, .m-offer::before { background:
+  radial-gradient(240px circle at var(--mx, 50%) var(--my, -40%), color-mix(in oklab, var(--m-gold-hi) 95%, transparent), transparent 70%),
+  linear-gradient(140deg, color-mix(in oklab, var(--m-gold) 55%, transparent), var(--m-line-soft) 30%, transparent 55%, var(--m-line-soft) 80%, color-mix(in oklab, var(--m-gold) 40%, transparent)); }
+.m-plans > li.is-featured::before { background:
+  radial-gradient(240px circle at var(--mx, 50%) var(--my, -40%), #fff6dc, transparent 70%),
+  linear-gradient(160deg, var(--m-gold-hi), var(--m-gold-lo) 40%, color-mix(in oklab, var(--m-gold) 40%, transparent) 70%, var(--m-gold)); }
+.m-offer::before { content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1px; z-index: -1; pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.m-motion .m-bento.is-in > li.is-tilt, .m-motion .m-plans.is-in > li.is-tilt, .m-motion .m-slots.is-in > li.is-tilt, .m-offer.is-tilt { transition: transform 0.25s ease-out, opacity 1.3s var(--m-ease); }
+.m-bento > li, .m-plans > li, .m-offer { transform-style: preserve-3d; }
+/* hero headline: each line unveils upward through its own mask */
+.m-motion .m-h1 .m-line[data-hero] { animation: m-unveil 1.7s var(--m-ease) both; animation-delay: calc(0.3s + var(--d, 0) * 0.16s); }
+@keyframes m-unveil { from { opacity: 0.001; transform: translateY(0.55em) rotate(1.5deg); clip-path: inset(0 0 100% 0); } 60% { opacity: 1; } to { opacity: 1; transform: none; clip-path: inset(0 0 -20% 0); } }
+/* section titles: words rise and settle with a slight swing */
+.m-motion .m-split .m-w > span { transform: translateY(110%) rotate(7deg); transform-origin: 0 100%; transition: transform 1.4s var(--m-ease); transition-delay: calc(var(--i) * 0.055s); }
+.m-motion .m-split.is-in .m-w > span { transform: none; }
+/* hero copy legibility over the scene */
+.m-hero-copy { position: relative; }
+.m-hero-copy::before { content: ''; position: absolute; inset: -18% -30% -18% -40%; z-index: -1; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(3, 2, 2, 0.62), rgba(3, 2, 2, 0.25) 60%, transparent); }
+/* marquee driven by JS when present */
+.m-marquee-js .m-marquee-track { animation: none !important; will-change: transform; }
+/* live call: JS-driven waveform and typing caret */
+.m-phone.is-js .m-wave span { animation: none !important; transform: scaleY(0.18); transition: transform 0.09s linear; }
+.m-caret { display: inline-block; width: 1px; height: 1em; margin-left: 2px; vertical-align: -0.15em; background: var(--m-gold-hi); animation: m-blink 0.9s steps(1) infinite; }
+@keyframes m-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .m-cursor-light { display: none; } }

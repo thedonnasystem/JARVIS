@@ -1,6 +1,7 @@
 ---
-// Maison motion layer: Lenis smooth scrolling (MIT, vendored), one-time reveals, scroll-linked parallax and progress, magnetic buttons and
-// cursor spotlights. Nothing runs under prefers-reduced-motion (the page is then fully static), and all content is visible without JS.
+// Maison motion layer: Lenis smooth scrolling (MIT, vendored), one-time reveals, scroll-linked parallax and progress, magnetic buttons,
+// a cursor-follow light, 3D card tilt with a gold edge light, price count-ups and a scroll-velocity marquee. Nothing runs under
+// prefers-reduced-motion (the page is then fully static), and all content is visible without JS.
 ---
 
 <script>
@@ -83,5 +84,87 @@
     const later = () => setTimeout(live, 4500);
     if (document.readyState === 'complete') later();
     else window.addEventListener('load', later, { once: true });
+  }
+
+  if (!reduce) {
+    // cursor-follow light (desktop): one fixed, GPU-composited layer that trails the pointer
+    if (fine) {
+      const glow = document.createElement('div');
+      glow.className = 'm-cursor-light';
+      glow.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(glow);
+      const c = { x: innerWidth / 2, y: innerHeight / 3, tx: innerWidth / 2, ty: innerHeight / 3, on: false };
+      let id = 0;
+      const tick = () => {
+        c.x += (c.tx - c.x) * 0.14;
+        c.y += (c.ty - c.y) * 0.14;
+        glow.style.transform = `translate3d(${c.x.toFixed(1)}px, ${c.y.toFixed(1)}px, 0)`;
+        id = Math.abs(c.tx - c.x) + Math.abs(c.ty - c.y) > 0.5 ? requestAnimationFrame(tick) : 0;
+      };
+      window.addEventListener('pointermove', (e) => {
+        c.tx = e.clientX; c.ty = e.clientY;
+        if (!c.on) { c.on = true; glow.classList.add('is-on'); }
+        if (!id) id = requestAnimationFrame(tick);
+      }, { passive: true });
+      document.addEventListener('pointerleave', () => { c.on = false; glow.classList.remove('is-on'); });
+
+      // cards tilt toward the pointer; the gold edge light follows it (--mx / --my drive the border gradient)
+      document.querySelectorAll<HTMLElement>('.m-bento > li, .m-plans > li, .m-slots > li, .m-offer').forEach((el) => {
+        el.dataset.spot = '';
+        el.addEventListener('pointermove', (e) => {
+          const r = el.getBoundingClientRect();
+          const x = (e.clientX - r.left) / r.width - 0.5, y = (e.clientY - r.top) / r.height - 0.5;
+          const k = el.classList.contains('m-offer') ? 3 : 7;
+          el.classList.add('is-tilt');
+          el.style.transform = `perspective(1100px) rotateX(${(-y * k).toFixed(2)}deg) rotateY(${(x * k).toFixed(2)}deg) translateY(-4px)`;
+          el.style.setProperty('--mx', `${e.clientX - r.left}px`);
+          el.style.setProperty('--my', `${e.clientY - r.top}px`);
+        });
+        el.addEventListener('pointerleave', () => { el.classList.remove('is-tilt'); el.style.transform = ''; });
+      });
+    }
+
+    // prices count up the first time they come into view (the final text is the original text)
+    const fmt = (n: number) => n.toLocaleString('en-CA');
+    const cio = new IntersectionObserver((entries) => entries.forEach((e) => {
+      if (!e.isIntersecting) return;
+      cio.unobserve(e.target);
+      const el = e.target as HTMLElement, final = el.textContent || '';
+      const m = /^(\D*)([\d,]+)(.*)$/.exec(final);
+      if (!m) return;
+      const to = Number(m[2].replace(/,/g, '')), t0 = performance.now(), dur = 1700;
+      el.setAttribute('aria-label', final);
+      const step = (now: number) => {
+        const t = Math.min(1, (now - t0) / dur), v = 1 - Math.pow(1 - t, 4);
+        el.textContent = t < 1 ? `${m[1]}${fmt(Math.round(to * v))}${m[3]}` : final;
+        if (t < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }), { threshold: 0.6 });
+    document.querySelectorAll('.m-price-num').forEach((el) => cio.observe(el));
+
+    // marquee: drifts on its own and speeds up / leans with the scroll velocity
+    const track = document.querySelector<HTMLElement>('.m-marquee-track');
+    if (track) {
+      root.classList.add('m-marquee-js');
+      let x = 0, last = performance.now(), lastY = scrollY, vel = 0, on = false, id = 0;
+      const run = (now: number) => {
+        const dt = Math.min(0.05, (now - last) / 1000);
+        last = now;
+        const v = (scrollY - lastY) / Math.max(dt, 0.001);
+        lastY = scrollY;
+        vel += (v - vel) * Math.min(1, dt * 6);
+        const half = track.scrollWidth / 2 || 1;
+        x -= (38 + Math.min(900, Math.abs(vel)) * 0.35) * dt * (vel < -40 ? -1 : 1);
+        x = ((x % half) - half) % half;
+        const skew = Math.max(-8, Math.min(8, -vel / 260));
+        track.style.transform = `translate3d(${x.toFixed(1)}px,0,0) skewX(${skew.toFixed(2)}deg)`;
+        id = on ? requestAnimationFrame(run) : 0;
+      };
+      new IntersectionObserver(([e]) => {
+        on = e.isIntersecting;
+        if (on && !id) { last = performance.now(); lastY = scrollY; id = requestAnimationFrame(run); }
+      }).observe(track);
+    }
   }
 </script>

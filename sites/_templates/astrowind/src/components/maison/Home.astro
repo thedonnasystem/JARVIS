@@ -1,7 +1,7 @@
 ---
 // Maison home page (theme 'maison'). Layout, ornament and motion are the template's; every word, price and brand token comes from site.json.
 // Template-owned microcopy is limited to button labels, section numbers and empty case-study slots.
-import Orb from './Orb.astro';
+import Stage from './Stage.astro';
 import Phone from './Phone.astro';
 import Split from './Split.astro';
 import ContactForm from '~/components/widgets/ContactForm.astro';
@@ -21,9 +21,11 @@ let n = 0;
 const idx = () => two(++n);
 ---
 
-<section class="m-hero" aria-labelledby="hero-title">
+<Stage />
+
+<section class="m-hero" aria-labelledby="hero-title" data-scene="hero">
   <div class="m-hero-stage" data-hero-stage>
-    <Orb label={`${S.brand.name} voice animation`} />
+    <div class="m-poster" role="img" aria-label={`${S.brand.name}: a gold instrument catching calls and turning them into booked appointments`}></div>
   </div>
   <div class="m-wrap m-hero-grid">
     <div class="m-hero-copy">
@@ -57,7 +59,7 @@ const idx = () => two(++n);
 </div>
 
 {S.demo && (
-  <section class="m-sec m-call" aria-labelledby="call-title">
+  <section class="m-sec m-call" aria-labelledby="call-title" data-scene="call">
     <div class="m-wrap m-call-grid">
       <div class="m-call-copy">
         <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.demo.label}</p>
@@ -73,7 +75,7 @@ const idx = () => two(++n);
   </section>
 )}
 
-<section class="m-sec" id="services" aria-labelledby="services-title">
+<section class="m-sec" id="services" aria-labelledby="services-title" data-scene="services">
   <div class="m-wrap">
     <header class="m-sec-head">
       <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.services.tagline}</p>
@@ -98,7 +100,7 @@ const idx = () => two(++n);
   </div>
 </section>
 
-<section class="m-sec" id="how-it-works" aria-labelledby="steps-title">
+<section class="m-sec" id="how-it-works" aria-labelledby="steps-title" data-scene="steps">
   <div class="m-wrap">
     <header class="m-sec-head">
       <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.brand.name}</p>
@@ -117,7 +119,7 @@ const idx = () => two(++n);
 </section>
 
 {S.offer && (
-  <section class="m-sec m-offer-sec" aria-labelledby="offer-title">
+  <section class="m-sec m-offer-sec" aria-labelledby="offer-title" data-scene="offer">
     <div class="m-wrap">
       <div class="m-offer" data-reveal data-spot>
         <div class="m-seal" aria-hidden="true">
@@ -137,7 +139,7 @@ const idx = () => two(++n);
 )}
 
 {(S.pricing || []).map((g) => (
-  <section class="m-sec m-pricing" id={g.id} aria-labelledby={`${g.id}-title`}>
+  <section class="m-sec m-pricing" id={g.id} aria-labelledby={`${g.id}-title`} data-scene="pricing">
     <div class="m-wrap">
       <header class="m-sec-head m-sec-head-split">
         <div>
@@ -167,7 +169,7 @@ const idx = () => two(++n);
 ))}
 
 {S.results && (
-  <section class="m-sec" id="results" aria-labelledby="results-title">
+  <section class="m-sec" id="results" aria-labelledby="results-title" data-scene="results">
     <div class="m-wrap">
       <header class="m-sec-head m-sec-head-split">
         <div>
@@ -190,7 +192,7 @@ const idx = () => two(++n);
 )}
 
 {(S.faq || []).length > 0 && (
-  <section class="m-sec" id="faq" aria-labelledby="faq-title">
+  <section class="m-sec" id="faq" aria-labelledby="faq-title" data-scene="faq">
     <div class="m-wrap m-faq-grid">
       <header class="m-sec-head">
         <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>FAQ</p>
@@ -208,7 +210,7 @@ const idx = () => two(++n);
   </section>
 )}
 
-<section class="m-sec m-contact" id="contact" aria-labelledby="contact-title">
+<section class="m-sec m-contact" id="contact" aria-labelledby="contact-title" data-scene="contact">
   <div class="m-wrap m-contact-grid">
     <div class="m-contact-copy">
       <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.brand.city} · {S.brand.region}</p>
