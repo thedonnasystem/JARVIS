@@ -29,6 +29,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 import hq
+import hq_services
 import hq_evidence
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,8 @@ def _now() -> str:
 
 
 def _get(path: str) -> list:
-    return hq._request("GET", f"/rest/v1/{path}") or []
+    # M5: the scheduler service; with FZ_SERVICES_SCOPED_READS unset this is exactly hq._request("GET", "/rest/v1/" + path)
+    return hq_services.get("scheduler", path) or []
 
 
 def _patch(path: str, body: dict) -> None:

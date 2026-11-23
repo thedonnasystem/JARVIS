@@ -261,6 +261,7 @@ function	fz_owner_register_token(text,text,timestamp with time zone,text)	-	-	ex
 function	fz_owner_set_identity(text,text,text,boolean)	-	-	execute	security_definer		-
 function	fz_owner_set_office_status(text,text)	-	-	execute	security_definer		-
 function	fz_owner_set_reinvest(text,integer)	-	-	execute	security_definer		-
+function	fz_owner_set_service(text,boolean,text,text,text)	-	-	execute	security_definer		-
 function	fz_owner_set_workspace_office(uuid,text)	-	-	execute	security_definer		-
 function	fz_policy_preview(text,integer)	-	-	execute	security_definer		-
 function	fz_prepare_office_payment(text,text,integer,text,text,date,text)	-	-	execute	security_definer		-
@@ -276,6 +277,9 @@ function	fz_reserve_office_spend(text,text,text,text,text,text,text,integer,bool
 function	fz_revoke_identity(text,text)	-	-	execute	security_definer		-
 function	fz_security_report(integer)	-	-	execute	security_definer		-
 function	fz_security_watch()	-	-	execute	security_definer		-
+function	fz_service_stamp_office()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	fz_services_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	fz_services_report()	-	-	execute	security_definer		-
 function	fz_set_office_policy(text,text,boolean,integer,integer,text)	-	-	execute	security_definer		-
 function	fz_stamp_scoped_write()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	fz_unallocated_cents()	-	-	execute	security_definer		-
@@ -534,6 +538,7 @@ table	fz_org_archive	-	-	select	rls=true		-
 table	fz_security_alerts	-	-	select	rls=true		-
 table	fz_security_baseline	-	-	select	rls=true		-
 table	fz_security_fingerprints	-	-	select	rls=true		-
+table	fz_services	-	-	select	rls=true		-
 table	fz_table_registry	-	-	select	rls=true		-
 table	fz_token_registry	-	-	select	rls=true		-
 table	fz_workspace_offices	-	-	select	rls=true		-
@@ -602,4 +607,5 @@ view	ffm_spend_v	-	-	select	rls=false		-
 view	fz_approval_queue	-	-	select	rls=false		-
 view	fz_office_allocation_log	-	-	select	rls=false		-
 view	fz_office_money	-	-	select	rls=false		-
+view	fz_service_rows	-	-	select	rls=false		-
 view	setter_standing	-	-	delete,insert,references,select,trigger,truncate,update	rls=false		-
