@@ -1,0 +1,144 @@
+{
+ "id": "rss-digest",
+ "title": "Daily RSS digest -> Telegram",
+ "description": "Every morning, read an RSS feed and send the newest items to the owner on Telegram.",
+ "keywords": [
+  "rss",
+  "news",
+  "digest",
+  "feed",
+  "daily summary",
+  "headlines"
+ ],
+ "params": {
+  "name": {
+   "required": true,
+   "desc": "workflow name"
+  },
+  "feed_url": {
+   "required": true,
+   "desc": "https RSS feed URL",
+   "pattern": "^https:\\/\\/[^\\s<>{}]+$"
+  },
+  "items": {
+   "required": false,
+   "default": "5",
+   "desc": "how many items",
+   "pattern": "^([1-9]|1[0-9]|20)$"
+  },
+  "hour": {
+   "required": false,
+   "default": "7",
+   "desc": "hour of day",
+   "pattern": "^([0-9]|1[0-9]|2[0-3])$"
+  },
+  "chat_id": {
+   "required": true,
+   "desc": "the owner's Telegram chat id",
+   "pattern": "^-?[0-9]{5,16}$"
+  }
+ },
+ "workflow": {
+  "name": "<<name>>",
+  "settings": {
+   "executionOrder": "v1"
+  },
+  "nodes": [
+   {
+    "name": "Schedule",
+    "type": "n8n-nodes-base.scheduleTrigger",
+    "typeVersion": 1.2,
+    "position": [
+     0,
+     0
+    ],
+    "parameters": {
+     "rule": {
+      "interval": [
+       {
+        "field": "days",
+        "triggerAtHour": "<<hour>>"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "name": "Feed",
+    "type": "n8n-nodes-base.rssFeedRead",
+    "typeVersion": 1,
+    "position": [
+     240,
+     0
+    ],
+    "parameters": {
+     "url": "<<feed_url>>",
+     "options": {}
+    }
+   },
+   {
+    "name": "Newest",
+    "type": "n8n-nodes-base.limit",
+    "typeVersion": 1,
+    "position": [
+     480,
+     0
+    ],
+    "parameters": {
+     "maxItems": "<<items>>"
+    }
+   },
+   {
+    "name": "Send",
+    "type": "n8n-nodes-base.telegram",
+    "typeVersion": 1.2,
+    "position": [
+     720,
+     0
+    ],
+    "parameters": {
+     "chatId": "<<chat_id>>",
+     "text": "={{ $json.title }}\n{{ $json.link }}",
+     "additionalFields": {
+      "disable_web_page_preview": true
+     }
+    }
+   }
+  ],
+  "connections": {
+   "Schedule": {
+    "main": [
+     [
+      {
+       "node": "Feed",
+       "type": "main",
+       "index": 0
+      }
+     ]
+    ]
+   },
+   "Feed": {
+    "main": [
+     [
+      {
+       "node": "Newest",
+       "type": "main",
+       "index": 0
+      }
+     ]
+    ]
+   },
+   "Newest": {
+    "main": [
+     [
+      {
+       "node": "Send",
+       "type": "main",
+       "index": 0
+      }
+     ]
+    ]
+   }
+  }
+ }
+}
