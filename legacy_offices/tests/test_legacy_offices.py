@@ -181,9 +181,9 @@ class Doctor(unittest.TestCase):
         rep = doctor.examine("freelance-hunter", gh=gh, src_dir=src, now=NOW)
         self.assertEqual(next(f for f in rep["findings"] if f["check"] == "deps")["status"], "warn")
 
-    def test_not_viable(self):
+    def test_shared_service(self):
         rep = doctor.examine("n8n-railway", gh=FakeGH({}), now=NOW)
-        self.assertEqual(rep["status"], "not viable")
+        self.assertEqual(rep["status"], "shared service")
 
     def test_plan_sends_only_redacted_structure_with_public_sources(self):
         rep = doctor.examine("realestate-ca", gh=self.gh_wholesale(), src_dir="", now=NOW)
@@ -293,7 +293,7 @@ class QualityControl(unittest.TestCase):
         self.assertNotIn("zzz", json.dumps(r))
 
     def test_kill_and_state_round_trip(self):
-        self.assertEqual(qc.review("n8n-railway", now=NOW)["verdict"], "kill")
+        self.assertEqual(qc.review("n8n-railway", now=NOW)["verdict"], "keep (shared service)")   # owner: nothing gets killed
         p = os.path.join(tempfile.mkdtemp(), "s.json")
         qc.save_state(p, [{"office": "x", "funnel": {"found": 3}}])
         self.assertEqual(qc.load_state(p)["x"]["funnel"], {"found": 3})
@@ -317,7 +317,7 @@ class Commands(unittest.TestCase):
     def test_text_and_usage(self):
         self.assertIn("Usage: /doctor", commands.doctor_text([]))
         self.assertIn("Usage: /qc", commands.qc_text(["nope"]))
-        self.assertIn("KILL", commands.qc_text(["n8n"]))
+        self.assertIn("SHARED SERVICE", commands.qc_text(["n8n"]))
 
     def test_owner_only_and_register(self):
         class U:  # minimal Telegram update
@@ -337,7 +337,7 @@ class Commands(unittest.TestCase):
             def add_handler(self, h):
                 added.append(h)
         commands.register(App(), lambda name, fn: (name, fn))
-        self.assertEqual([a[0] for a in added], ["doctor", "qc"])
+        self.assertEqual([a[0] for a in added], ["doctor", "qc", "n8n"])
 
 
 if __name__ == "__main__":

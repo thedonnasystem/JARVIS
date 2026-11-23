@@ -21,9 +21,15 @@ Branch `build/legacy-offices`. Built Nov 23 2026 from the five legacy repos the 
    ```
    (`from legacy_offices import commands as ...` is itself a tripwire line. Plain `import legacy_offices.commands` works too.)
 2. **Run the tests in the gate** (`scripts/gate.sh`, locked). `python3 -m unittest discover` does not find tests in a folder with no `__init__.py`, and `__init__.py` is locked too. Add a step:
-   `run legacy "legacy offices tests" python3 -m unittest -q legacy_offices.tests.test_legacy_offices`
+   `run legacy "legacy offices tests" python3 -m unittest -q legacy_offices.tests.test_legacy_offices legacy_offices.tests.test_n8n`
 3. **Make them real offices** (database + `offices/`, locked). `test_hq_office_os` pins the exact file list in `offices/`, and every office needs an M1 `fz_offices` row and an M7 `fz_office_profiles` row (a migration, then a production release). When the owner wants any of them active: one migration that adds the rows (dormant, as M7 requires), moves the JSON into `offices/`, and updates `hq_office_os.OFFICES` / `ALIASES` and that test. One office at a time, as the M7 rules say.
 4. **Credentials for remote checks (optional):** `LEGACY_GITHUB_TOKEN`, a fine-grained read-only token on the five legacy repos (Contents, Actions, Metadata: read). Without it the doctor reports `unknown`. Railway-hosted offices have no telemetry Jarvis can read. Either give the services a daily heartbeat, or write host observations to `LEGACY_HOST_STATE` from a read-only Railway check.
+
+## Phase 2 (owner-approved Nov 24 2026)
+- **Owner decisions:** nothing gets killed; the dialer stays as is (its guard PR was closed).
+- **n8n is a shared service, not an office.** The rebuilt `thedonnasystem/n8n-railway` uses a pinned official image, Postgres, an encryption key and the public API. On the Jarvis side, `legacy_offices/n8n.py` adds `/n8n templates | new | list | activate | confirm | deactivate`, registered by the same `legacy_offices.commands.register` wiring above. Workflows come only from the vetted templates in `legacy_offices/n8n_templates/` (4 starters) and are imported inactive. Activation needs a one-time code confirmed within 10 minutes. The owner's words go to hq_llm declared private (`owner_request`), so only a self-hosted model sees them; otherwise a keyword matcher picks the template. New Jarvis variables: `N8N_BASE_URL`, `N8N_API_KEY`.
+- **Freelance** (thedonnasystem/freelance-pipeline#2): autonomous mode behind `AUTONOMOUS_SUBMIT` (default off), with self-QC, caps, dedupe, a kill switch and a daily summary.
+- **Real estate** (thedonnasystem/canada-wholesale-pipeline#2): deal ranking, a daily Telegram brief (outreach as drafts only), same-town comps, and Actions minutes cut from ~100 to ~44 a day.
 
 ## Inventory (verified Nov 23 2026)
 | system | stack | runs on | last commit | tests | state | why it is not working |

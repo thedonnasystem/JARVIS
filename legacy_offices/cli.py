@@ -2,6 +2,7 @@
   python3 -m legacy_offices.cli doctor <office>|all [plan]
   python3 -m legacy_offices.cli qc <office>|all
   python3 -m legacy_offices.cli dryrun <office>      the legacy repo's own dry-run / demo job in a local clone (runner.py)
+  python3 -m legacy_offices.cli n8n <args>           same as /n8n (needs N8N_BASE_URL + N8N_API_KEY for list / new / activate)
 Env: LEGACY_SRC_DIR (folder holding the clones), LEGACY_GITHUB_TOKEN (read-only), LEGACY_QC_STATE (aggregate history file),
 FREELANCE_DB_PATH / DIALER_EVENTS_CSV / PAPER_DB_PATH (copies of the services' own data, read for counts only).
 """
@@ -35,6 +36,9 @@ def main(argv: list[str]) -> int:
         print(commands.doctor_text(rest))
     elif cmd == "qc":
         print(commands.qc_text(rest))
+    elif cmd == "n8n":
+        from legacy_offices import n8n
+        print(n8n.command(rest))
     elif cmd == "dryrun" and rest:
         print(dryrun(rest[0]))
     else:

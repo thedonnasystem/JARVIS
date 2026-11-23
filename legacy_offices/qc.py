@@ -305,7 +305,7 @@ def against_targets(m: dict, targets: dict) -> list[str]:
 
 def verdict(o: dict, m: dict, health: str | None = None) -> str:
     if not o.get("viable"):
-        return "kill"
+        return "keep (shared service)" if o.get("kind") == "shared-service" else "kill"
     if o["office"] == "paper-trading":
         return "keep"   # paper only: judged on evidence of edge later, never on revenue
     closed = (m.get("funnel") or {}).get("closed")
@@ -318,7 +318,8 @@ def review(slug: str, *, src_dir=None, now=None, state=None, health=None, **path
     now = now or datetime.now(timezone.utc)
     o = registry.office(slug)
     if not o.get("viable"):
-        return {"office": slug, "title": slug, "verdict": "kill", "why": o.get("why_not", ""), "funnel": {}, "rubric": {}, "changes": [], "notes": []}
+        v = "keep (shared service)" if o.get("kind") == "shared-service" else "kill"
+        return {"office": slug, "title": slug, "verdict": v, "why": o.get("why_not", ""), "funnel": {}, "rubric": {}, "changes": [], "notes": []}
     q = o["qc"]
     root = registry.checkout(slug, src_dir)
     m = COLLECTORS[q["collector"]](root, now, **paths) if root or q["collector"] in ("freelance", "dialer", "trading") else \
@@ -340,8 +341,8 @@ def cost_per_result(minutes_month: float | None, quota: float, results_week: int
 
 
 def text(r: dict) -> str:
-    if r["verdict"] == "kill" and not r.get("stages"):
-        return f"QC: {r['office']} - KILL\n{r.get('why', '')}"
+    if not r.get("stages"):
+        return f"QC: {r['office']} - {r['verdict'].upper()}\n{r.get('why', '')}"
     lab = r.get("labels") or {}
     f = r["funnel"]
     funnel = " -> ".join(f"{lab.get(s, s)} {('?' if f.get(s) is None else f.get(s))}" for s in r["stages"])

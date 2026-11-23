@@ -1,6 +1,7 @@
 """Telegram commands for the legacy offices (owner only, read-only):
   /doctor <office>|all [plan]   technical health, plain diagnosis, ranked fixes; 'plan' adds a free-brain improvement plan (redacted structure only)
   /qc <office>|all              outcome funnel, quality rubric, bottleneck, keep / fix / kill, top 3 changes by revenue impact
+  /n8n ...                      build workflows in the owner's n8n from vetted templates, imported inactive; activation needs /n8n confirm
 Wiring is one try-block in hq_commands.register (a locked file): docs/proposals/legacy_offices.md. Until the owner approves that change these
 commands are not registered; `python3 -m legacy_offices.cli` gives the same output.
 """
@@ -81,6 +82,19 @@ async def qc_cmd(update, context) -> None:
     await _reply(update, text)
 
 
+async def n8n_cmd(update, context) -> None:
+    if not _owner(update):
+        return
+    from legacy_offices import n8n
+    try:
+        text = await asyncio.to_thread(n8n.command, list(getattr(context, "args", None) or []))
+    except Exception as e:
+        logger.exception("n8n command failed")
+        text = f"n8n failed: {type(e).__name__}"
+    await _reply(update, text)
+
+
 def register(app, CommandHandler) -> None:
     app.add_handler(CommandHandler("doctor", doctor_cmd))
     app.add_handler(CommandHandler("qc", qc_cmd))
+    app.add_handler(CommandHandler("n8n", n8n_cmd))

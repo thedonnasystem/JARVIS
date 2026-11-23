@@ -48,7 +48,8 @@ def office(slug: str) -> dict:
     """The office file of a viable system; a non-viable system gets a stub carrying its registry entry."""
     s = system(slug)
     if not s.get("viable"):
-        return {"office": slug, "title": slug, "viable": False, "why_not": s.get("why_not", ""), "legacy": {"repo": s["repo"]}, "qc": {}}
+        return {"office": slug, "title": slug, "viable": False, "kind": s.get("kind", ""), "why_not": s.get("why_not") or s.get("note", ""),
+                "legacy": {"repo": s["repo"]}, "qc": {}}
     with open(os.path.join(OFFICE_DIR, f"{slug}.json"), encoding="utf-8") as f:
         d = json.load(f)
     d["viable"] = True

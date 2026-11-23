@@ -53,7 +53,8 @@
    "aliases": [
     "n8n"
    ],
-   "why_not": "Not a system: a two-line Dockerfile (the public n8n image run as root) with no workflows, no tests and no data. Its Railway deployments were removed in May and July. The two n8n workflow files that exist live in the real-estate repo. Verdict: kill as an office; if n8n is wanted, run it as a shared service with a pinned image version and a non-root user."
+   "kind": "shared-service",
+   "note": "Rebuilt as a SHARED SERVICE (owner, Nov 24: nothing gets killed), not an office: pinned official n8n image, Postgres, encryption key, public API (PR on thedonnasystem/n8n-railway). Jarvis builds workflows in it with /n8n (legacy_offices/n8n.py) from vetted templates, imported inactive; activation needs owner confirmation."
   }
  ],
  "in_repo": {

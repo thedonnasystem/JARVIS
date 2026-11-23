@@ -221,6 +221,9 @@ def examine(slug: str, *, gh=None, run=None, src_dir=None, now=None) -> dict:
     now = now or datetime.now(timezone.utc)
     o = registry.office(slug)
     if not o.get("viable"):
+        if o.get("kind") == "shared-service":
+            return {"office": slug, "title": slug, "status": "shared service", "diagnosis": o.get("why_not", ""), "findings": [],
+                    "fixes": ["owner: deploy the rebuilt n8n service, create the owner login and an API key, set N8N_BASE_URL / N8N_API_KEY in Jarvis"]}
         return {"office": slug, "title": slug, "status": "not viable", "diagnosis": o.get("why_not", ""), "findings": [], "fixes": ["kill it as an office (owner decision)"]}
     root = registry.checkout(slug, src_dir)
     fs = [check_activity(o, gh, now), *check_runs(o, gh, now), check_env(o, gh), check_tests(o, root, run), check_data(o, gh, now), check_deps(o, root)]

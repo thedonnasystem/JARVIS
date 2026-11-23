@@ -111,10 +111,10 @@
   },
   "changes": [
    {
-    "change": "Keep abandoned calls (a second person answers and is hung up on) under the 5 percent rule: the PR rings only as many lines as keep the predicted abandon rate under 3 percent, and one line while the observed 30-day rate is over it (synthetic simulation: 4 lines at a 15% answer rate abandon 20.6%, the guard 0%, at about a third of the conversations per batch). The abandon rule and any recorded message are the owner's legal call.",
-    "impact": 5,
-    "effort": "S (code, PR opened)",
-    "needs": "code"
+    "change": "Owner decision (Nov 24): the dialer stays as is; the abandoned-call guard PR was closed. The abandon rate (second answers hung up on) remains visible in /qc once events.csv is exported, so the owner can re-decide with real numbers.",
+    "impact": 3,
+    "effort": "none (owner decided)",
+    "needs": "owner"
    },
    {
     "change": "Log the pitched / closed outcome on every answered call so close rate per hour of dialing can be measured (events.csv has the fields; the outcome tap is often skipped).",
@@ -123,10 +123,10 @@
     "needs": "owner"
    },
    {
-    "change": "README still describes the old Twilio setup; the PR documents the real Telnyx variables so a redeploy does not stall.",
-    "impact": 1,
-    "effort": "XS (PR opened)",
-    "needs": "code"
+    "change": "Export events.csv weekly (GET /api/log.csv) so /qc can measure dials -> answers -> pitches -> closes per hour.",
+    "impact": 3,
+    "effort": "5 min/week (owner) or a scheduled export",
+    "needs": "owner"
    }
   ]
  }
