@@ -279,7 +279,8 @@ def market_research(ctx: Ctx, inputs: dict) -> dict:
     cfg = ctx.cfg
     niches = [str(n)[:60] for n in (inputs.get("niches") or cfg["niches"])][:9]
     urls = [str(u) for u in (inputs.get("urls") or [])][: cfg["runners"]["market-research"]["max_pages"]]
-    for q in (inputs.get("queries") or [])[:3]:
+    queries = inputs.get("queries") or ([] if urls else [f"{n} businesses Ottawa statistics" for n in niches[:3]])   # only used with the owner's SearXNG
+    for q in queries[:3]:
         urls += [r["url"] for r in ctx.research.search(str(q)) if not ctx.research.allowed(r["url"], True)][:2]
     pages, skipped = [], []
     for u in dict.fromkeys(urls):
@@ -433,7 +434,7 @@ def outreach_prep(ctx: Ctx, inputs: dict) -> dict:
         if probs:
             refused.append({"channel": ch, "reason": "; ".join(probs)[:300]})
             continue
-        targets = [None] + [str(x) for x in (inputs.get("lead_ids") or [])[:25]] if ch != "call" else [None]
+        targets = [None] if ch == "call" else [None] + [str(x) for x in (inputs.get("lead_ids") or [])[:25]]
         for lead in targets:
             b, s = body, subject
             if lead:
@@ -579,8 +580,8 @@ def run(mission: str, inputs: dict | None = None, *, rpc=None, status_rpc=None, 
         except Exception:
             logger.warning("donna run finish failed")
         return {"ok": False, "run": ctx.run_id, "refused" if isinstance(e, DonnaRefused) else "error": reason}
-    summary = json.dumps(out, default=str)[:1500]
-    rpc("donna_run_finish", {"p_run": ctx.run_id, "p_status": "done", "p_summary": summary, "p_output": json.loads(json.dumps(out, default=str)[:55000]) if len(json.dumps(out, default=str)) <= 55000 else {"truncated": True},
+    blob = json.dumps(out, default=str)
+    rpc("donna_run_finish", {"p_run": ctx.run_id, "p_status": "done", "p_summary": blob[:1500], "p_output": json.loads(blob) if len(blob) <= 55000 else {"truncated": True},
                              "p_sources": ctx.sources})
     return {"ok": True, "run": ctx.run_id, "mission": name, "result": out}
 
