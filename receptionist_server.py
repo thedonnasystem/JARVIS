@@ -90,6 +90,11 @@ if FastAPI is not None:
             return None
         return form
 
+    @app.get("/healthz")
+    async def healthz():
+        """Liveness for the platform health check (ops/proposals/receptionist_deploy/railway.json): no data, no database call."""
+        return {"ok": True}
+
     @app.post("/twilio/voice/{client}")
     async def voice(client: str, request: Request):
         form = await _checked(request)

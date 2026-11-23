@@ -124,6 +124,7 @@ The estimate is stored on every call (`calls.cost_est_cents`) and shown in `/rec
 1. Apply the migration (in APPLY_ORDER, before the lockdown).
 2. Create the client's workspace, then run `ops/OWNER_RECEPTIONIST.sql`: the client config, staying in `demo`.
 3. Deploy `receptionist_server.py` as its own Railway service:
+   - the ready kit (not applied): `ops/proposals/receptionist_deploy/` (Dockerfile + railway.json, health check `/healthz`); `/reception kit` lists the variables and webhooks, `/reception golive <client>` the go-live steps (docs/architecture/DONNA_OPS_V1.md);
    - `pip install -r requirements-receptionist.txt`, then `uvicorn receptionist_server:app`;
    - variables: `RECEPTION_BASE_URL`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `RECEPTION_DEMO_NUMBER`, plus `CALCOM_API_KEY` if booking is used;
    - the existing `HQ_SUPABASE_*` variables.
