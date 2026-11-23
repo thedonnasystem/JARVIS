@@ -1,0 +1,27 @@
+/* Futuristic art direction (Web Studio). Everything is scoped under html.fx; brand tokens come from site.json (--fx-primary, --fx-accent). */
+html.fx { --fx-primary: #8b5cf6; --fx-accent: #22d3ee; --fx-bg: #05060d; }
+/* the template's own colour tokens follow the brand, so every widget (icons, links, rings) is on-brand */
+html.fx, html.fx.dark { --aw-color-primary: var(--fx-primary) !important; --aw-color-secondary: var(--fx-accent) !important; --aw-color-accent: var(--fx-accent) !important; }
+html.fx body { background: radial-gradient(1200px 600px at 70% -10%, color-mix(in srgb, var(--fx-primary) 22%, transparent), transparent 60%),
+  radial-gradient(900px 500px at -10% 20%, color-mix(in srgb, var(--fx-accent) 14%, transparent), transparent 60%), var(--fx-bg); color: #e5e7f0; }
+html.fx h1, html.fx h2 { letter-spacing: -0.03em; font-weight: 800; }
+html.fx h1 { font-size: clamp(2.6rem, 6vw, 4.75rem); line-height: 1.02; }
+html.fx .text-accent { background: linear-gradient(90deg, var(--fx-primary), var(--fx-accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+html.fx .fx-glass, html.fx main section .card, html.fx main form { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); box-shadow: 0 0 0 1px rgba(255,255,255,0.02), 0 20px 60px -20px color-mix(in srgb, var(--fx-primary) 45%, transparent); }
+html.fx .btn-primary { background: linear-gradient(90deg, var(--fx-primary), var(--fx-accent)); border: 0; color: #05060d; font-weight: 700;
+  box-shadow: 0 0 24px -4px color-mix(in srgb, var(--fx-accent) 70%, transparent); }
+html.fx .btn-primary:focus-visible, html.fx a:focus-visible, html.fx input:focus-visible, html.fx textarea:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+.fx-orb { position: relative; width: min(380px, 72vw); overflow: visible; aspect-ratio: 1; margin: 0 auto; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--fx-accent) 55%, transparent), color-mix(in srgb, var(--fx-primary) 35%, transparent) 45%, transparent 70%);
+  filter: drop-shadow(0 0 40px color-mix(in srgb, var(--fx-primary) 55%, transparent)); }
+.fx-orb-canvas { width: 100%; height: 100%; }
+.fx-live { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--fx-accent); box-shadow: 0 0 10px var(--fx-accent); margin-right: 0.4rem; vertical-align: middle; }
+.fx-line { display: grid; gap: 0.15rem; padding: 0.7rem 0.9rem; border-radius: 0.9rem; max-width: 88%; transition: opacity 0.5s ease, transform 0.5s ease; }
+.fx-caller { background: rgba(255, 255, 255, 0.06); }
+.fx-agent { margin-left: auto; background: color-mix(in srgb, var(--fx-primary) 22%, transparent); border: 1px solid color-mix(in srgb, var(--fx-accent) 30%, transparent); }
+.fx-who { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.7; }
+.fx-pending { opacity: 0; transform: translateY(8px); }
+.fx-reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.7s ease, transform 0.7s ease; }
+.fx-reveal.fx-in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .fx-reveal, .fx-pending { opacity: 1 !important; transform: none !important; transition: none !important; } }

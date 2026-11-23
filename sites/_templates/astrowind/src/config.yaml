@@ -1,0 +1,64 @@
+# Donna.AI site config. The domain is NOT chosen yet (owner decision): `site` is a placeholder and the real address comes from the
+# build environment (SITE_URL, or Netlify's own URL variable). Nothing in the site depends on a specific domain.
+site:
+  name: Donna.AI
+  site: 'https://example.invalid'
+  base: '/'
+  trailingSlash: false
+
+  googleSiteVerificationId: null
+
+metadata:
+  title:
+    default: Donna.AI | AI receptionist for Ottawa businesses
+    template: '%s | Donna.AI'
+  description: 'Donna.AI answers your calls, texts back missed callers, books appointments and follows up on leads, for Ottawa businesses. Websites too.'
+  robots:
+    index: true
+    follow: true
+  openGraph:
+    site_name: Donna.AI
+    images:
+      - url: '~/assets/images/default.png'
+        width: 1200
+        height: 628
+    type: website
+
+i18n:
+  language: en-CA
+  textDirection: ltr
+
+apps:
+  blog:
+    isEnabled: false
+    postsPerPage: 8
+    post:
+      isEnabled: false
+      permalink: '/%slug%'
+      robots:
+        index: false
+    list:
+      isEnabled: false
+      pathname: 'blog'
+      robots:
+        index: false
+    category:
+      isEnabled: false
+      pathname: 'category'
+      robots:
+        index: false
+    tag:
+      isEnabled: false
+      pathname: 'tag'
+      robots:
+        index: false
+    isRelatedPostsEnabled: false
+    relatedPostsCount: 4
+
+analytics:
+  vendors:
+    googleAnalytics:
+      id: null
+
+ui:
+  theme: 'system'
