@@ -353,6 +353,19 @@ function	jarvis_set_config(text,jsonb)	-	-	execute	security_definer		-
 function	jarvis_sleep_agent(text,text,integer,integer)	-	-	execute	security_definer		-
 function	jarvis_use_large_approval(uuid,uuid)	-	-	execute	security_definer		-
 function	jarvis_wake_agent(text,uuid,text)	-	-	execute	security_definer		-
+function	jmem_apply(text,jsonb,text,text,text)	-	-	execute	security_definer		-
+function	jmem_dot(real[],real[])	-	-	execute	invoker		-
+function	jmem_entity_upsert(uuid,text,text)	-	-	execute	security_definer		-
+function	jmem_forget(text,text,text,text)	-	-	execute	security_definer		-
+function	jmem_guard()	-	-	execute	security_definer		-
+function	jmem_links(text,text,integer)	-	-	execute	security_definer		-
+function	jmem_list(text,text,integer)	-	-	execute	security_definer		-
+function	jmem_norm(text)	-	-	execute	invoker		-
+function	jmem_office(text,text)	-	-	execute	security_definer		-
+function	jmem_search(text,text,real[],text,integer,text,text)	-	-	execute	security_definer		-
+function	jmem_stats()	-	-	execute	security_definer		-
+function	jquota_load()	-	-	execute	security_definer		-
+function	jquota_record(text,integer,bigint,timestamp with time zone,integer)	-	-	execute	security_definer		-
 function	lead_funnel(text)	-	-	execute	invoker		-
 function	leads_dnc_cascade()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	leads_suppression_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-
