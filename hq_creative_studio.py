@@ -239,7 +239,8 @@ def hosted_models() -> dict:
 
 
 class HostedAdapter:
-    """Hosted open-weight models through a per-call API (fal.ai queue API, Replicate predictions API): the v1 generation path, no GPU infrastructure.
+    """Hosted open-weight models through fal.ai's per-call queue API: the v1 generation path, no GPU infrastructure. (A Replicate adapter is NOT included:
+    the protected test_no_bypass allow-lists the files that may call such providers; see ops/proposals/creative_studio_registry.md.)
     Keys come from the environment only and are never logged. Every request and download goes through hq_hands_adapters.http (https only).
     actual_cents = the per-call ESTIMATE (neither API itemises the bill per call); reconcile against the monthly invoice."""
 
@@ -309,24 +310,7 @@ class HostedAdapter:
                 if isinstance(v, dict) and v.get("url"):
                     return v["url"]
             raise StudioError("fal result has no file")
-        h = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "Prefer": "wait=60"}
-        st, r, _ = self.http("POST", f"https://api.replicate.com/v1/models/{ep}/predictions", headers=h, json_body={"input": body})
-        if st not in (200, 201, 202) or not isinstance(r, dict):
-            raise StudioError(f"replicate submit refused ({st})")
-        while r.get("status") not in ("succeeded", "failed", "canceled"):
-            if time.monotonic() > t_end:
-                raise StudioError("replicate prediction timed out")
-            self.sleep(self.poll_s)
-            st, r, _ = self.http("GET", (r.get("urls") or {}).get("get") or "", headers=h)
-            if st >= 400 or not isinstance(r, dict):
-                raise StudioError(f"replicate poll refused ({st})")
-        if r["status"] != "succeeded":
-            raise StudioError(f"replicate prediction {r['status']}")
-        o = r.get("output")
-        o = o[0] if isinstance(o, list) and o else o
-        if not isinstance(o, str):
-            raise StudioError("replicate result has no file")
-        return o
+        raise StudioError(f"{self.slug}: no adapter (fal.ai only in v1)")
 
     def generate(self, module: str, model: str, spec: dict, workdir: str) -> dict:
         if model not in self.cfg:
@@ -356,7 +340,7 @@ def adapters_for(providers: list[dict], env: dict, extra: dict | None = None) ->
         if a is None:
             if p["slug"] == "sandbox":
                 a = SandboxAdapter()
-            elif p["slug"] in ("fal-hosted", "replicate-hosted"):
+            elif p["slug"] == "fal-hosted":
                 a = HostedAdapter(p["slug"], p.get("env_key") or "", env)
             else:
                 a = LiveAdapter(p["slug"], p.get("env_key") or "")

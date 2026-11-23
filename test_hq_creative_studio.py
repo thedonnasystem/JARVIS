@@ -132,8 +132,8 @@ class RouterTest(unittest.TestCase):
     def test_adapters_need_live_mode_and_key(self):
         self.assertEqual(set(cs.adapters_for(PROVIDERS, {})), {"sandbox"})
         self.assertEqual(set(cs.adapters_for(PROVIDERS, {"CREATIVE_STUDIO_MODE": "live"})), {"sandbox"})
-        self.assertEqual(set(cs.adapters_for(PROVIDERS, LIVE)), {"sandbox", "fal-hosted", "replicate-hosted"})   # kling: no key, no adapter yet
-        self.assertEqual(set(cs.adapters_for(PROVIDERS, dict(LIVE, KLING_API_KEY="x"))), {"sandbox", "fal-hosted", "replicate-hosted"})
+        self.assertEqual(set(cs.adapters_for(PROVIDERS, LIVE)), {"sandbox", "fal-hosted"})   # kling: no key, no adapter yet
+        self.assertEqual(set(cs.adapters_for(PROVIDERS, dict(LIVE, KLING_API_KEY="x"))), {"sandbox", "fal-hosted"})
 
 
 class PolicyTest(unittest.TestCase):
@@ -281,27 +281,15 @@ class HostedAdapterTest(unittest.TestCase):
         with self.assertRaises(cs.StudioError):
             cs.HostedAdapter("fal-hosted", "FAL_KEY", LIVE, http=stuck, sleep=lambda s: None, deadline_s=-1).generate("image", "flux.1-schnell", {}, tempfile.mkdtemp())
 
-    def test_replicate_prediction_flow(self):
-        calls = []
-        def http(method, url, headers=None, json_body=None, timeout=60, **k):
-            calls.append((method, url, headers, json_body))
-            if method == "POST":
-                return 201, {"status": "starting", "urls": {"get": "https://api.replicate.com/v1/predictions/p1"}}, {}
-            if "predictions/p1" in url:
-                return 200, {"status": "succeeded", "output": ["https://replicate.delivery/x.mp4"]}, {}
-            return 200, b"mp4", {"Content-Type": "video/mp4"}
-        a = cs.HostedAdapter("replicate-hosted", "REPLICATE_API_TOKEN", LIVE, http=http, sleep=lambda s: None)
-        out = a.generate("video", "wan-2.2-ti2v-5b", {"prompt": "hoodie orbit", "seconds": 5, "aspect": "16:9"}, tempfile.mkdtemp())
-        self.assertEqual(calls[0][1], "https://api.replicate.com/v1/models/wan-video/wan-2.2-5b-fast/predictions")
-        self.assertEqual(calls[0][2]["Authorization"], "Bearer k-rep")
-        self.assertEqual(calls[0][3], {"input": {"prompt": "hoodie orbit", "aspect_ratio": "16:9"}})
-        self.assertEqual(out["mime"], "video/mp4")
-        self.assertEqual(out["actual_cents"], 14)
+    def test_replicate_has_no_adapter(self):
+        self.assertNotIn("replicate-hosted", cs.adapters_for(PROVIDERS, LIVE))
+        with self.assertRaises(cs.StudioError):
+            cs.HostedAdapter("replicate-hosted", "REPLICATE_API_TOKEN", LIVE, http=_no_network).generate("video", "wan-2.2-ti2v-5b", {}, tempfile.mkdtemp())
 
     def test_unknown_model_and_unavailable(self):
-        a = cs.HostedAdapter("replicate-hosted", "REPLICATE_API_TOKEN", LIVE, http=lambda *x, **k: (500, None, {}))
+        a = cs.HostedAdapter("fal-hosted", "FAL_KEY", LIVE, http=lambda *x, **k: (500, None, {}))
         with self.assertRaises(cs.StudioError):
-            a.generate("video", "ltx-2", {}, tempfile.mkdtemp())
+            a.generate("video", "kling-3.0", {}, tempfile.mkdtemp())
         self.assertFalse(cs.HostedAdapter("fal-hosted", "FAL_KEY", {"FAL_KEY": "x"}).available({"FAL_KEY": "x"}))
 
 

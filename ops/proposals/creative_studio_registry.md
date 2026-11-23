@@ -13,3 +13,12 @@ If the owner prefers the registry row to come from the migration, apply both cha
 
 Until then, `fz_creative.studio_on()` returns false and every service-path call refuses with
 "the creative studio is not registered or not active". This is the safe default.
+
+## Second item: a Replicate adapter
+
+The protected `test_no_bypass.py` allow-lists the files that may contain provider calls. It matches `replicate.com` and does not allow
+`hq_creative_studio.py`, so M8 ships **fal.ai only** and leaves Replicate as a registry slot with no adapter.
+
+Every studio generation is reserved through the office spend gate before the call. If the owner wants Replicate as a second hosted path:
+1. add `hq_creative_studio.py` to `ALLOWED_FILES` in `test_no_bypass.py`;
+2. restore the Replicate branch of `HostedAdapter` from this PR's first commit (`ce4c94b`).

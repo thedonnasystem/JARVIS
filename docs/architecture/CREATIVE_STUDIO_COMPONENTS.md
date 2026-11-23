@@ -11,7 +11,7 @@ or later, its licence for commercial use, and the version pinned.
 |---|---|---|---|---|
 | ffmpeg / ffprobe | ffmpeg.org (system package) | LGPL-2.1+ / GPL build; we run the binary and link nothing | 6.1.1 (Ubuntu 6.1.1-3ubuntu5) | cuts, platform renders, soft captions, test media |
 | fal.ai queue API | fal.ai (hosted) | provider terms; weights licences pass through (below) | endpoint ids pinned in `creative_studio/hosted_models.json` | v1 generation without GPU infrastructure |
-| Replicate predictions API | replicate.com (hosted) | provider terms | endpoint ids pinned in `creative_studio/hosted_models.json` | second v1 path |
+| Replicate predictions API | replicate.com (hosted) | provider terms | not used yet: registry slot only | adapter waits for the owner to allow-list it in the protected `test_no_bypass` |
 | Jarvis hands pipeline | this repo (`hq_hands`, `hands_submit_action`) | ours | n/a | calendar and publishing with the existing owner approval. **Chosen over Postiz**: there is no second scheduler to run, and Postiz is AGPL-3.0 |
 
 ## Models (through the hosted APIs in v1)

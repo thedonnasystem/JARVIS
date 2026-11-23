@@ -2,7 +2,7 @@
 """FENDEZY AI CREATIVE STUDIO: the FIRST REAL RUN (owner only). Never run by an agent.
 
 Without --run it only CHECKS and prints the plan (no request leaves the machine). With --run it submits ONE image job and ONE short video job for one
-office and runs them through the hosted open-weight path (fal.ai or Replicate). Every paid call still goes through the office spend gate
+office and runs them through the hosted open-weight path (fal.ai). Every paid call still goes through the office spend gate
 (hq_office_money.reserve -> caps, per-transaction and weekly limits, owner approval rules), and this script refuses any single attempt above --max-cents.
 
 Prerequisites (ops/OWNER_CREATIVE_STUDIO.sql + docs/architecture/PHASE1_M8_CREATIVE_STUDIO.md "First real run"):
@@ -21,7 +21,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import hq_creative_studio as cs  # noqa: E402
 
-KEYS = ("FAL_KEY", "REPLICATE_API_TOKEN")
+KEYS = ("FAL_KEY",)
 PLAN = [("image", "Hero still of the product on a clean studio background, soft key light.", ["1:1", "9:16"]),
         ("video", "Five second product shot, slow orbit, soft key light.", ["9:16"])]
 

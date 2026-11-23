@@ -1,5 +1,5 @@
 {
- "_note": "Hosted open-weight models (v1 generation path). Endpoint ids and prices were checked against the provider catalogues in Nov 2026 but are ESTIMATES: verify each on the provider's model page before the owner enables the provider. usd = list price per unit; CAD estimate = usd x 1.40.",
+ "_note": "Hosted open-weight models on fal.ai (v1 generation path). Endpoint ids and prices were checked against the provider catalogues in Nov 2026 but are ESTIMATES: verify each on the provider's model page before the owner enables the provider. usd = list price per unit; CAD estimate = usd x 1.40.",
  "fal-hosted": {
   "flux.1-schnell": {
    "endpoint": "fal-ai/flux/schnell",
@@ -42,26 +42,6 @@
    "module": "train",
    "unit": "run",
    "usd": 2.0
-  }
- },
- "replicate-hosted": {
-  "flux.1-schnell": {
-   "endpoint": "black-forest-labs/flux-schnell",
-   "module": "image",
-   "unit": "image",
-   "usd": 0.003
-  },
-  "flux.1-dev": {
-   "endpoint": "black-forest-labs/flux-dev",
-   "module": "image",
-   "unit": "image",
-   "usd": 0.025
-  },
-  "wan-2.2-ti2v-5b": {
-   "endpoint": "wan-video/wan-2.2-5b-fast",
-   "module": "video",
-   "unit": "video-second",
-   "usd": 0.02
   }
  }
 }

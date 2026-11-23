@@ -5,7 +5,7 @@ voice, music, copy and edits for all 8 offices. It replaces a paid creative subs
 
 This milestone merges M8a and M8b. It contains:
 - the data model, the router gates, the asset registry and the pipeline worker;
-- hosted open-weight adapters for fal.ai and Replicate;
+- a hosted open-weight adapter for fal.ai. Replicate is a registry slot only, because the protected `test_no_bypass` allow-list does not include this module (owner proposal);
 - the sandbox end-to-end demo.
 
 Analytics feedback into routing is M8c. Components and licences are listed in `CREATIVE_STUDIO_COMPONENTS.md`.
@@ -114,7 +114,7 @@ paid attempt passes the existing office spend gate (caps, per-transaction and we
 |---|---|
 | `CREATIVE_STUDIO_MODE` | `sandbox` (default: sandbox adapter only, no network) or `live` |
 | `FAL_KEY` | fal.ai key (hosted open-weight models). Owner sign-up |
-| `REPLICATE_API_TOKEN` | Replicate token. Owner sign-up |
+| `REPLICATE_API_TOKEN` | Replicate token: slot only, no adapter yet |
 | `CREATIVE_VIDEO_SECONDS` | default video length (5) |
 | `HQ_SUPABASE_URL`, `HQ_SUPABASE_SERVICE_KEY` | existing; used for the RPCs and the private bucket |
 | `FZ_BRAIN_FACTS=1` | existing M7 flag: brain facts in the research step |
@@ -128,7 +128,7 @@ paid attempt passes the existing office spend gate (caps, per-transaction and we
 4. Sandbox proof on a scratch replica:
    `python3 scripts/creative_studio_demo.py --db <scratch url>`
    This runs in one transaction and rolls back.
-5. **First real run.** Sign up for fal.ai or Replicate, put the key in Railway Variables, enable that provider, then run:
+5. **First real run.** Sign up for fal.ai, put the key in Railway Variables, enable that provider, then run:
    `CREATIVE_STUDIO_MODE=live python3 scripts/creative_studio_first_run.py --office <slug>`
    That command only runs checks. Add `--run --max-cents 50` for one image and one 5 s video. The estimated total is under C$0.30; it goes through the spend gate.
 
@@ -150,7 +150,7 @@ paid attempt passes the existing office spend gate (caps, per-transaction and we
 
 | Output | Model / path | Estimate |
 |---|---|---|
-| Image | FLUX.1 schnell, fal / Replicate | about C$0.004 (billed 1 cent) |
+| Image | FLUX.1 schnell, fal | about C$0.004 (billed 1 cent) |
 | Image | FLUX.1 dev, fal | about C$0.035 |
 | Image with character LoRA | flux-lora, fal | about C$0.05 |
 | 5 s video | Wan 2.2 5B, fal | about C$0.21 |
@@ -172,7 +172,7 @@ For comparison, eight C$99/month creative subscriptions cost about C$790.
 | Provider | What | Pricing (estimate) | Key | Priority |
 |---|---|---|---|---|
 | fal.ai | hosted FLUX, Wan 2.2, LTX-2, LoRA training | pay per call, see above | `FAL_KEY` | **first** |
-| Replicate | hosted FLUX, Wan 2.2 | pay per call / GPU-second | `REPLICATE_API_TOKEN` | second |
+| Replicate | hosted FLUX, Wan 2.2 (adapter pending the owner's allow-list decision) | pay per call / GPU-second | `REPLICATE_API_TOKEN` | later |
 | RunPod serverless or Modal | our own ComfyUI workflows (later cost optimisation) | about US$0.0005 to US$0.0011 per GPU-second | `RUNPOD_API_KEY` / `MODAL_TOKEN_ID` | later |
 | Kling / Google Veo / Runway | premium video fallback, FF Marketing hero ads | about US$0.10 to US$0.40 per second | per provider | after hero demand |
 | ElevenLabs | premium voice | about US$0.30 per minute | `ELEVENLABS_API_KEY` | optional |
