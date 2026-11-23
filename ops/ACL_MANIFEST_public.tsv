@@ -235,9 +235,25 @@ function	fz_audit_link(text,text)	-	-	execute	invoker		-
 function	fz_audit_row_hash(bigint,timestamp with time zone,text,text,text,jsonb)	-	-	execute	invoker		-
 function	fz_audit_verify(boolean)	-	-	execute	security_definer		-
 function	fz_authorize_action(text,integer,text,text,text,uuid,uuid,jsonb)	-	-	execute	security_definer		-
+function	fz_brain_add(text,text,text,numeric,jsonb,uuid,text,text)	-	-	execute	security_definer		-
+function	fz_brain_caller_office()	-	-	execute	security_definer		-
+function	fz_brain_clean_provenance(jsonb)	-	-	execute	security_definer		-
+function	fz_brain_decide(uuid,boolean,text)	-	-	execute	security_definer		-
+function	fz_brain_facts_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	fz_brain_promotions_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	fz_brain_propose_promotion(uuid,text)	-	-	execute	security_definer		-
+function	fz_brain_read(text,integer)	-	-	execute	security_definer		-
+function	fz_brain_redact(text,integer)	-	-	execute	security_definer		-
+function	fz_brain_redact_pending()	-	-	execute	security_definer		-
+function	fz_brain_report(text)	-	-	execute	security_definer		-
 function	fz_claims()	-	-	execute	invoker		-
 function	fz_expected_grants()	-	-	execute	invoker		-
+function	fz_health_check()	-	-	execute	security_definer		-
+function	fz_health_report()	-	-	execute	security_definer		-
 function	fz_identity_now()	-	-	execute	security_definer		-
+function	fz_jarvis_decide_brain_promotion(uuid,boolean)	-	-	execute	security_definer		-
+function	fz_m6_config_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
+function	fz_m6_owner_session()	-	-	execute	security_definer		-
 function	fz_money_attribution_guard()	-	-	execute	security_definer	trigger function: cannot be called directly	-
 function	fz_money_do_allocate(text,integer,text,uuid)	-	-	execute	security_definer		-
 function	fz_money_do_clawback(text,integer,text,uuid)	-	-	execute	security_definer		-
@@ -256,8 +272,11 @@ function	fz_owner_ack_security(text)	-	-	execute	security_definer		-
 function	fz_owner_allocate(text,integer,text)	-	-	execute	security_definer		-
 function	fz_owner_attribute_ledger(uuid,text,text)	-	-	execute	security_definer		-
 function	fz_owner_clawback(text,integer,text)	-	-	execute	security_definer		-
+function	fz_owner_decide_brain_promotion(uuid,boolean)	-	-	execute	security_definer		-
 function	fz_owner_decide_office_proposal(uuid,boolean,text)	-	-	execute	security_definer		-
 function	fz_owner_register_token(text,text,timestamp with time zone,text)	-	-	execute	security_definer		-
+function	fz_owner_set_brain_jarvis_approval(boolean)	-	-	execute	security_definer		-
+function	fz_owner_set_health_alerts(boolean)	-	-	execute	security_definer		-
 function	fz_owner_set_identity(text,text,text,boolean)	-	-	execute	security_definer		-
 function	fz_owner_set_office_status(text,text)	-	-	execute	security_definer		-
 function	fz_owner_set_reinvest(text,integer)	-	-	execute	security_definer		-
@@ -454,6 +473,7 @@ sequence	ffm_redaction_epoch_seq	-	-	-			-
 sequence	ffm_restore_markers_id_seq	-	-	-			-
 sequence	ffm_run_receipts_id_seq	-	-	-			-
 sequence	fz_audit_chain_seq_seq	-	-	-			-
+sequence	fz_health_alerts_id_seq	-	-	-			-
 sequence	fz_office_allocations_id_seq	-	-	-			-
 sequence	fz_org_archive_id_seq	-	-	-			-
 sequence	fz_security_alerts_id_seq	-	-	-			-
@@ -526,6 +546,12 @@ table	ffm_suppression_hashes	-	-	-	rls=true		-
 table	fz_audit_chain	-	-	select	rls=true		-
 table	fz_audit_pending	-	-	-	rls=true		-
 table	fz_audit_state	-	-	select	rls=true		-
+table	fz_brain_config	-	-	select	rls=true		-
+table	fz_brain_facts	-	-	-	rls=true		-
+table	fz_brain_promotions	-	-	-	rls=true		-
+table	fz_health_alerts	-	-	select	rls=true		-
+table	fz_health_config	-	-	select	rls=true		-
+table	fz_health_state	-	-	select	rls=true		-
 table	fz_identities	-	-	select	rls=true		-
 table	fz_money_attribution	-	-	select	rls=true		-
 table	fz_money_config	-	-	select	rls=true		-

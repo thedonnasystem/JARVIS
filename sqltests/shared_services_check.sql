@@ -48,7 +48,9 @@ create temp table fzv_stamps as
   union all select 'deals', id, office_id from public.deals where office_id is not null union all select 'outbox', id, office_id from public.outbox where office_id is not null
   union all select 'owner_messages', id, office_id from public.owner_messages where office_id is not null union all select 'jarvis_jobs', id, office_id from public.jarvis_jobs where office_id is not null
   union all select 'hand_actions', id, office_id from public.hand_actions where office_id is not null union all select 'venture_assets', id, office_id from public.venture_assets where office_id is not null;
+\ir ../ops/rollback_monitoring_brain.sql
 \ir ../ops/rollback_shared_services.sql
+\ir ../ops/rollback_monitoring_brain.sql
 \ir ../ops/rollback_shared_services.sql
 create temp table fzv_fp_without as select * from pg_temp.fz_money_fp();
 do $$

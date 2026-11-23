@@ -73,6 +73,11 @@ def _get(path: str) -> list:
     return hq_services.get("scheduler", path) or []
 
 
+def _get_complete(path: str) -> list:
+    # safety counts (the live-mission cap) never use a scoped read: a scoped identity may see fewer rows, and an incomplete list must not let an action through
+    return hq._request("GET", f"/rest/v1/{path}") or []
+
+
 def _patch(path: str, body: dict) -> None:
     hq._request("PATCH", f"/rest/v1/{path}", body, prefer="return=minimal")
 
@@ -110,7 +115,7 @@ def create_mission(objective: str, venture: str | None = None, title: str | None
     objective = (objective or "").strip()
     if len(objective) < 10:
         return {"error": "Describe the objective in at least a sentence."}
-    live = _get("missions?status=in.(" + ",".join(LIVE) + ")&select=id")
+    live = _get_complete("missions?status=in.(" + ",".join(LIVE) + ")&select=id")
     if len(live) >= MAX_LIVE_MISSIONS:
         return {"error": f"{len(live)} missions are already live (max {MAX_LIVE_MISSIONS}). Finish, pause or abandon one first."}
     slug = (venture or "idea-lab").strip().lower()
