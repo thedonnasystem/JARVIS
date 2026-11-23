@@ -244,9 +244,9 @@ begin
   if (select status from fz_reception.clients where slug = 'spruce') <> 'demo' then raise exception 'D8 not demo'; end if;
   c := pg_temp.j(pg_temp.bot($q$select public.donna_golive_checklist('spruce')::text$q$));
   if (c ->> 'ready')::boolean then raise exception 'D8 ready without sign-off %', c; end if;
-  perform pg_temp.expect('D8 signoff bot', pg_temp.bot($q$select public.donna_owner_golive_signoff('spruce', true, true, true)::text$q$), 'ERR:owner approval required%');
-  perform pg_temp.expect('D8 signoff partial', pg_temp.owner($q$select public.donna_owner_golive_signoff('spruce', true, false, true)::text$q$), 'ERR:refused: sign off only after%');
-  perform public.donna_owner_golive_signoff('spruce', true, true, true);
+  perform pg_temp.expect('D8 signoff bot', pg_temp.bot($q$select public.donna_owner_golive_approve('spruce', true, true, true)::text$q$), 'ERR:owner approval required%');
+  perform pg_temp.expect('D8 signoff partial', pg_temp.owner($q$select public.donna_owner_golive_approve('spruce', true, false, true)::text$q$), 'ERR:refused: sign off only after%');
+  perform public.donna_owner_golive_approve('spruce', true, true, true);
   perform public.reception_owner_set_client('spruce', (select ws from fzd), cfg, '+15555550188');
   c := pg_temp.j(pg_temp.bot($q$select public.donna_golive_checklist('spruce')::text$q$));
   if not (c ->> 'ready')::boolean or c ->> 'status' <> 'demo' then raise exception 'D8 ready %', c; end if;

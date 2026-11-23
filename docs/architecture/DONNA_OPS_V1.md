@@ -97,7 +97,7 @@ Nothing at the repo root changes, so the bot's own Railway service is unaffected
 **Env checklist and webhooks:** `/reception kit`.
 
 **Demo → live:** `/reception golive <client>` shows each step and who does it. All live switches stay owner-only:
-1. Owner sign-off `donna_owner_golive_signoff(slug, demo_tested, client_approved, webhooks_set)`, refused unless all three are true.
+1. Owner sign-off `donna_owner_golive_approve(slug, demo_tested, client_approved, webhooks_set)`, refused unless all three are true.
 2. The client's Twilio number (`reception_owner_set_client`).
 3. `reception_owner_set_flags(slug, 'live', ...)`.
 4. `RECEPTION_SMS_LIVE=1` on the server.

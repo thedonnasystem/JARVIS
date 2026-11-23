@@ -446,7 +446,7 @@ class OwnerViews(unittest.TestCase):
         t = D.golive_text("spruce", lambda n, a: c)
         self.assertIn("[x] Donna office active", t)
         self.assertIn("[ ] live", t)
-        self.assertIn("donna_owner_golive_signoff('spruce'", t)
+        self.assertIn("donna_owner_golive_approve('spruce'", t)
         self.assertIn("reception_owner_set_flags('spruce', 'live'", t)
         self.assertIn("paused", t)
         t2 = D.golive_text("x'; drop table y; --", lambda n, a: dict(c, client=a["p_slug"]))

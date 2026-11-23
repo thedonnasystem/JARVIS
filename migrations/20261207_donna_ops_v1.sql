@@ -470,7 +470,7 @@ begin
     jsonb_build_object('step', 'the client approved the script, hours, prices and FAQs', 'who', 'owner', 'done', coalesce(g.client_approved, false)),
     jsonb_build_object('step', 'client Twilio number set (reception_owner_set_client ... number)', 'who', 'owner', 'done', c.twilio_number is not null),
     jsonb_build_object('step', 'number webhooks set in the Twilio console (voice, status, messaging)', 'who', 'owner', 'done', coalesce(g.number_webhooks_set, false)),
-    jsonb_build_object('step', 'owner go-live sign-off recorded (donna_owner_golive_signoff)', 'who', 'owner', 'done', g.slug is not null),
+    jsonb_build_object('step', 'owner go-live sign-off recorded (donna_owner_golive_approve)', 'who', 'owner', 'done', g.slug is not null),
     jsonb_build_object('step', 'live (reception_owner_set_flags ''live'')', 'who', 'owner', 'done', c.status = 'live'));
   return jsonb_build_object('client', p_slug, 'status', c.status, 'text_back', c.text_back_enabled, 'standing', c.text_back_standing, 'steps', steps,
     'ready', fz_donna.active() and c.twilio_number is not null and g.slug is not null and g.demo_tested and g.client_approved and g.number_webhooks_set);
@@ -547,7 +547,7 @@ begin
 end $$;
 revoke all on function public.donna_owner_apply_intake(uuid, text, uuid) from public, anon, authenticated;
 
-create or replace function public.donna_owner_golive_signoff(p_slug text, p_demo_tested boolean, p_client_approved boolean, p_number_webhooks_set boolean) returns jsonb
+create or replace function public.donna_owner_golive_approve(p_slug text, p_demo_tested boolean, p_client_approved boolean, p_number_webhooks_set boolean) returns jsonb
 language plpgsql security definer set search_path to 'pg_catalog' as $$
 begin
   perform fz_donna.owner_only('a go-live sign-off');
@@ -559,7 +559,7 @@ begin
   insert into public.audit_log (actor, action, target, detail) values ('owner', 'donna_golive_signoff', 'fz_reception.clients/' || p_slug, '{}'::jsonb);
   return jsonb_build_object('client', p_slug, 'signed_off', true, 'next', format('reception_owner_set_flags(%L, ''live'', true, false)', p_slug));
 end $$;
-revoke all on function public.donna_owner_golive_signoff(text, boolean, boolean, boolean) from public, anon, authenticated;
+revoke all on function public.donna_owner_golive_approve(text, boolean, boolean, boolean) from public, anon, authenticated;
 
 do $$ declare r text; f regprocedure; begin
   foreach r in array array['fz_jarvis', 'fz_office_agent', 'fz_auditor', 'backup_reader'] loop

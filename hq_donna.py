@@ -657,7 +657,7 @@ def golive_text(slug: str, rpc=None) -> str:
     lines = [f"Go-live checklist: {c['client']} (now {c['status']}){' READY for your live switch' if c.get('ready') else ''}"]
     lines += [f"[{'x' if s['done'] else ' '}] {s['step']} ({s['who']})" for s in c["steps"]]
     lines += ["Owner steps (SQL editor, signed in as you; each one is your explicit approval):",
-              f"1. select public.donna_owner_golive_signoff('{slug}', true, true, true);   -- after the demo test, the client's approval and the webhooks",
+              f"1. select public.donna_owner_golive_approve('{slug}', true, true, true);   -- after the demo test, the client's approval and the webhooks",
               f"2. select public.reception_owner_set_client('{slug}', (select workspace_id from fz_reception.clients where slug = '{slug}'), (select config from fz_reception.clients where slug = '{slug}'), '+1XXXXXXXXXX');",
               f"3. select public.reception_owner_set_flags('{slug}', 'live', true, false);   -- text-back on, every text waits for you",
               "4. Railway: RECEPTION_SMS_LIVE=1 only when approved texts should really go out.",

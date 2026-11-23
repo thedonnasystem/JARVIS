@@ -22,7 +22,7 @@
 -- The intake's site_json stays a draft: hand it to Web Studio, which has its own owner approval before any deploy.
 
 -- 3. Going live (Telegram: /reception golive <client-slug> shows this checklist with ticks):
--- select public.donna_owner_golive_signoff('<client-slug>', true, true, true);   -- demo tested, client approved, number webhooks set
+-- select public.donna_owner_golive_approve('<client-slug>', true, true, true);   -- demo tested, client approved, number webhooks set
 -- select public.reception_owner_set_client('<client-slug>', (select workspace_id from fz_reception.clients where slug = '<client-slug>'),
 --        (select config from fz_reception.clients where slug = '<client-slug>'), '+1XXXXXXXXXX');
 -- select public.reception_owner_set_flags('<client-slug>', 'live', true, false);  -- each text waits for you
