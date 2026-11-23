@@ -1,0 +1,34 @@
+{
+ "about": "Donna's mission runners (hq_donna.run). DORMANT: every run is refused unless the owner activated Donna (office_os_status active + M1 active), and the database re-checks it (donna_run_begin). The mission -> action map is fixed in the database (fz_donna.mission_actions); this file only says how each runner works. No prices are kept here: offer-pricing reads the owner's price list from sites/donna/site.json (Web Studio) or from its inputs. No personal data.",
+ "office": "donna",
+ "missions": {
+  "donna-m1-validation": "market-research",
+  "donna-m2-sales-kit": "outreach-prep",
+  "donna-m4-weekly-report": "weekly-report"
+ },
+ "runners": {
+  "market-research": {"role": "agency-manager", "v1_role": "market-research", "tier": "small", "max_output": 900, "max_pages": 6},
+  "offer-pricing": {"role": "solutions-architect", "v1_role": "offer-pricing", "tier": "small", "max_output": 700},
+  "outreach-prep": {"role": "client-success", "v1_role": "outreach-prep", "tier": "small", "max_output": 700},
+  "delivery-onboarding": {"role": "automation-builder", "v1_role": "delivery-onboarding", "tier": "small", "max_output": 700},
+  "weekly-report": {"role": "agency-manager", "v1_role": "market-research", "tier": "none"}
+ },
+ "niches": ["hvac", "plumbing", "electrical", "roofing and renovation", "dental clinics", "hair and beauty salons", "law firms (intake only)", "auto repair", "cleaning services"],
+ "research": {
+  "about": "Citable sources for niche validation: public pages only, fetched over https with an honest User-Agent, robots.txt respected, nothing behind a login, no CAPTCHA or proxy tricks (evade_platform_restrictions). Search, when used, is the owner's own SearXNG instance (DONNA_SEARXNG_URL); its snippets are leads to pages, never evidence.",
+  "hosts": ["www150.statcan.gc.ca", "www.statcan.gc.ca", "open.ottawa.ca", "ottawa.ca", "www.ottawa.ca", "www.canada.ca", "ised-isde.canada.ca", "crtc.gc.ca", "www.crtc.gc.ca",
+           "fightspam.gc.ca", "www.ontario.ca", "www.twilio.com", "cal.com", "investottawa.ca", "www.investottawa.ca"],
+  "prospect_pages_any_host": true,
+  "max_bytes": 400000,
+  "user_agent": "DonnaResearchBot/1.0 (+public business information only; honours robots.txt)"
+ },
+ "casl": {
+  "about": "Fixed by code, never written by the model. The owner replaces the [OWNER: ...] placeholders before approving (the database refuses an approval while one is left).",
+  "sender": "Donna, the AI receptionist service of [OWNER: legal entity name]",
+  "address": "Mailing address: [OWNER: mailing address]",
+  "contact": "Contact: [OWNER: email or phone]",
+  "unsubscribe_email": "To stop these emails, reply \"unsubscribe\" and we will not contact you again.",
+  "unsubscribe_dm": "Reply STOP and we will not message you again.",
+  "call_remove": "If you'd rather not hear from us, say so and I'll add your number to our do-not-call list right now."
+ }
+}
