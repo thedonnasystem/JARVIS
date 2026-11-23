@@ -12,8 +12,8 @@ It is built by integrating existing systems, not by writing a voice stack.
 |---|---|---|---|
 | Voice agent framework | **Pipecat** `pipecat-ai==1.15.0` | BSD-2-Clause | See "Pipecat or LiveKit Agents" below |
 | Telephony and SMS | Twilio (official REST, Media Streams, TwiML) | provider terms | Pipecat's `TwilioFrameSerializer` is built for it; Canadian local numbers |
-| STT | Whisper through Pipecat (faster-whisper, local); Deepgram optional | MIT / provider | open by default |
-| TTS | **Kokoro** through Pipecat (local, default); Cartesia or ElevenLabs optional | Apache-2.0 / provider | open by default; the voice provider is set in config |
+| STT | Whisper through Pipecat (faster-whisper, on our server) | MIT | open, no per-minute bill |
+| TTS | **Kokoro** through Pipecat (default) or Piper; `twilio-say` in Gather mode | Apache-2.0 / MIT | open; the voice provider is set in config. Paid speech APIs (Deepgram, ElevenLabs, Cartesia) are not wired: the protected `test_no_bypass` allow-lists the files that may call them, so adding them is an owner decision |
 | LLM | `hq_llm.complete` (the free open-model router), `contains_client_data=True` | ours | nothing is hard-coded to one vendor; rules answer first, so most turns need no LLM |
 | Booking | **Cal.com hosted API v2** | Cal.com is AGPL-3.0, but we call their hosted API and run none of their code, so the AGPL does not reach ours. If we ever self-host Cal.com, it must run unmodified, or our changes must be published | no calendar adapter exists in the hands pipeline (only the owner's own Google Calendar in `bot.py`), so v1 uses Cal.com |
 | CRM | the existing client workspaces: a client is a `client_workspaces` row; callers are its `ws_leads` | ours | Twenty CRM (AGPL) is not needed: ours already has leads, consent and suppression |
@@ -80,7 +80,7 @@ the client's phone numbers, so they are **not** kept in the repo. The owner stor
 | `faqs` | `q`, `a` |
 | `escalation_number` | the number to transfer to (E.164) |
 | `booking` | `provider` (`calcom` or `none`), `event_type_ids` (service to Cal.com event type), `public_url` |
-| `voice` | `tts` (`kokoro` default, `twilio-say`, `cartesia`, `elevenlabs`), `stt` (`whisper-local` or `deepgram`), `voice_id`, `language` |
+| `voice` | `tts` (`kokoro` default, `piper`, `twilio-say`), `stt` (`whisper-local`), `voice_id`, `language` |
 
 ## Cost per call (ESTIMATES; verify on twilio.com/pricing and the provider pages)
 
@@ -94,12 +94,11 @@ Prices are US$ list prices converted at x 1.40 to CAD:
 | Twilio speech recognition (Gather) | about US$0.02 per turn |
 | Kokoro TTS | $0 (runs on our server) |
 | Whisper STT | $0 (runs on our server) |
-| Deepgram STT | about US$0.0043/min |
 | hq_llm turns | $0 on the free routes, inside the AI cap |
 | SMS | about US$0.0083 per segment, plus about US$0.003 carrier fee |
 
 For a typical 3-minute call:
-- **Stream mode** (Pipecat, local STT/TTS): about **C$0.06**. With Deepgram: about C$0.08.
+- **Stream mode** (Pipecat, local STT/TTS): about **C$0.06**.
 - **Gather / demo-line mode:** about **C$0.21** (6 turns).
 - **A text-back:** about **C$0.02**.
 

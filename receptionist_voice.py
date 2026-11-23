@@ -1,10 +1,10 @@
 """Donna Receptionist v1: the real-time voice agent, built on Pipecat (BSD-2-Clause, pinned pipecat-ai==1.15.0 in requirements-receptionist.txt).
 
 Pipeline: Twilio Media Streams (TwilioFrameSerializer) -> Silero VAD -> STT -> HqTurns -> TTS -> Twilio.
-- STT: Whisper (local, faster-whisper) by default; Deepgram is optional.
+- STT: Whisper (local, faster-whisper).
 - HqTurns is OUR only processor. It sends each final transcription to hq_receptionist.Conversation, which runs the rules first and then
   hq_llm.complete with contains_client_data=True. It pushes the reply as a TTSSpeakFrame.
-- TTS: Kokoro (open, local) by default; Cartesia / ElevenLabs are optional premium providers.
+- TTS: Kokoro (open, local) by default, or Piper. Paid speech APIs are a later owner decision.
 - Transfer: the live call is redirected through Twilio's REST API to <Dial> the client's escalation number.
 
 Pipecat is imported lazily, so the bot and the unit tests never need it installed.
@@ -23,23 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 def stt_service(cfg: dict, env: dict):
-    kind = (cfg.get("voice") or {}).get("stt", "whisper-local")
-    if kind == "deepgram":
-        from pipecat.services.deepgram.stt import DeepgramSTTService
-        return DeepgramSTTService(api_key=env["DEEPGRAM_API_KEY"])
+    """Whisper (faster-whisper) on the server: open, no per-minute bill."""
     from pipecat.services.whisper.stt import WhisperSTTService
     return WhisperSTTService(device="cpu", compute_type="int8")
 
 
 def tts_service(cfg: dict, env: dict):
+    """Kokoro (default) or Piper: open models on the server. Paid speech APIs are not wired: the protected test_no_bypass allow-lists the files that may
+    call speech/LLM providers (owner proposal in docs/architecture/DONNA_RECEPTIONIST_V1.md)."""
     v = cfg.get("voice") or {}
-    kind = v.get("tts", "kokoro")
-    if kind == "cartesia":
-        from pipecat.services.cartesia.tts import CartesiaTTSService
-        return CartesiaTTSService(api_key=env["CARTESIA_API_KEY"], voice_id=v.get("voice_id"))
-    if kind == "elevenlabs":
-        from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
-        return ElevenLabsTTSService(api_key=env["ELEVENLABS_API_KEY"], voice_id=v.get("voice_id"))
+    if v.get("tts") == "piper":
+        from pipecat.services.piper.tts import PiperTTSService
+        return PiperTTSService(voice_id=v.get("voice_id") or "en_US-lessac-medium")
     from pipecat.services.kokoro.tts import KokoroTTSService
     return KokoroTTSService(voice_id=v.get("voice_id") or "af_heart")
 

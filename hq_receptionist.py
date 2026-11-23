@@ -43,8 +43,8 @@ HOURS_Q = re.compile(r"\b(hours|open|close|closing|opening time)\b", re.I)
 
 # ESTIMATES (US$ list prices, Nov 2026; verify on twilio.com/pricing and the STT/TTS provider pages). CAD = USD x 1.40.
 FX_CAD = 1.40
-COST_USD = {"voice_inbound_min": 0.0085, "media_stream_min": 0.004, "gather_speech_15s": 0.02, "stt_min": {"whisper-local": 0.0, "deepgram": 0.0043},
-            "tts_min": {"kokoro": 0.0, "twilio-say": 0.0}, "sms_segment": 0.0083, "sms_carrier_fee": 0.003, "number_month": 1.15, "llm_turn": 0.0}
+COST_USD = {"voice_inbound_min": 0.0085, "media_stream_min": 0.004, "gather_speech_15s": 0.02, "stt_min": {"whisper-local": 0.0},
+            "tts_min": {"kokoro": 0.0, "piper": 0.0, "twilio-say": 0.0}, "sms_segment": 0.0083, "sms_carrier_fee": 0.003, "number_month": 1.15, "llm_turn": 0.0}
 
 
 class ReceptionError(Exception):
@@ -93,8 +93,10 @@ def validate(cfg: dict) -> dict:
         raise ReceptionError("booking.provider must be calcom or none")
     if (cfg["booking"] or {}).get("provider") == "calcom" and not isinstance(cfg["booking"].get("event_type_ids"), dict):
         raise ReceptionError("booking.event_type_ids maps each service name to a Cal.com event type id")
-    if (cfg["voice"] or {}).get("tts") not in ("kokoro", "twilio-say", "cartesia", "elevenlabs"):
-        raise ReceptionError("voice.tts must be kokoro (default), twilio-say, cartesia or elevenlabs")
+    if (cfg["voice"] or {}).get("tts") not in ("kokoro", "piper", "twilio-say"):
+        raise ReceptionError("voice.tts must be kokoro (default), piper or twilio-say")
+    if (cfg["voice"] or {}).get("stt", "whisper-local") != "whisper-local":
+        raise ReceptionError("voice.stt must be whisper-local")
     return cfg
 
 
@@ -432,7 +434,7 @@ def call_cost_cents(minutes: float, mode: str = "stream", stt: str = "whisper-lo
     m = max(minutes, 0.0)
     usd = m * COST_USD["voice_inbound_min"]
     if mode == "stream":
-        usd += m * (COST_USD["media_stream_min"] + COST_USD["stt_min"].get(stt, 0.0043) + COST_USD["tts_min"].get(tts, 0.015))
+        usd += m * (COST_USD["media_stream_min"] + COST_USD["stt_min"][stt] + COST_USD["tts_min"][tts])
     else:
         usd += (turns if turns is not None else max(1, math.ceil(m * 2))) * COST_USD["gather_speech_15s"]
     return int(math.ceil(usd * FX_CAD * 100))

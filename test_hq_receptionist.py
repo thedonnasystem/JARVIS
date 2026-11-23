@@ -53,7 +53,7 @@ class ConfigTest(unittest.TestCase):
         for mut, msg in ((lambda c: c.pop("faqs"), "missing faqs"), (lambda c: c.update(timezone="Mars/Base"), "unknown timezone"),
                          (lambda c: c["hours"].update(mon=[["18:00", "09:00"]]), "bad span"), (lambda c: c.update(escalation_number="555-0100"), "E.164"),
                          (lambda c: c["services"].append({"name": "X", "price_cents": "free", "minutes": 10}), "price_cents"),
-                         (lambda c: c.update(booking={"provider": "calcom"}), "event_type_ids"), (lambda c: c.update(voice={"tts": "robot"}), "voice.tts")):
+                         (lambda c: c.update(booking={"provider": "calcom"}), "event_type_ids"), (lambda c: c.update(voice={"tts": "robot"}), "voice.tts"), (lambda c: c.update(voice={"tts": "kokoro", "stt": "cloud"}), "voice.stt")):
             c = copy.deepcopy(DEMO)
             mut(c)
             with self.assertRaises(R.ReceptionError) as e:
@@ -251,7 +251,7 @@ class CalComTest(unittest.TestCase):
 class CostTest(unittest.TestCase):
     def test_estimates(self):
         self.assertEqual(R.call_cost_cents(3, "stream"), 6)                     # 3 min x (0.0085 + 0.004) US$ x 1.40 = 5.25 -> 6 cents
-        self.assertEqual(R.call_cost_cents(3, "stream", stt="deepgram"), 8)
+        self.assertEqual(R.call_cost_cents(3, "stream", tts="piper"), 6)
         self.assertEqual(R.call_cost_cents(3, "gather"), 21)                    # + 6 speech turns x US$0.02
         self.assertEqual(R.sms_cost_cents(1), 2)
         self.assertEqual(R.call_cost_cents(0), 0)
