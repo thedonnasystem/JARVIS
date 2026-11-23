@@ -54,6 +54,7 @@
 20261202_monitoring_brain_v1.sql
 20261203_office_os_v1.sql
 20261204_open_brain_v1.sql
+20261205_linked_memory_v1.sql
 20261112_lockdown_v1.sql
 20261121_postlock_backup_identity_v1.sql
 20261122_postlock_backup_identity_v2.sql

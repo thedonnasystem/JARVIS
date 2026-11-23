@@ -81,6 +81,7 @@ Status: built and tested on a scratch replica. **Off until `JARVIS_OPEN_BRAIN=1`
 - **No web search** on free models: the research agent says when an answer is not web-verified, and mission research tasks lose Anthropic's web search tool.
 - **Free tiers change their terms and model ids often.** Every model id can be overridden without code (`JARVIS_<PROVIDER>_MODEL_SMALL/_MEDIUM/_REASON`), and so can every prompt budget (`JARVIS_<PROVIDER>_MAX_PROMPT_TOKENS`). Confirm the model ids at activation (`check_tool_calling`).
 - **Rate counts are in memory**, so a restart forgets them. The providers' own 429 responses still apply, and the router rotates on them.
+  - Stacked PR (linked memory): the counts are now saved in the database and survive restarts (`hq_brain_quota`, docs/architecture/LINKED_MEMORY.md section 5).
 - **Tool results that contain client personal data stop the chat turn** (client class); the reply says so. That is deliberate.
 - **The chat summary is stored in the bot's `memory` table** (category `chat_summary`). Summaries go through the same privacy routing as the chat.
 
