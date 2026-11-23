@@ -1,0 +1,176 @@
+{
+ "_about": "ComfyUI API-format workflow templates for a FUTURE self-hosted ComfyUI (RunPod worker-comfyui or Modal). Placeholders are whole-string '{{name}}' values filled by hq_creative_presets.fill_workflow (typed). Re-expressed from Comfy-Org/workflow_templates @ 8305a7d4008c64ed52e480d553bd5784011d7b11 (MIT). Model files are listed with their licence: only commercially usable weights are routed (FLUX.1 [dev] is deliberately absent: its weights are non-commercial when self-hosted).",
+ "version": "2026-11-23.1",
+ "workflows": {
+  "flux-schnell-t2i": {
+   "file": "flux_schnell_t2i.json",
+   "model": "flux.1-schnell",
+   "module": "image",
+   "output": "image",
+   "defaults": {
+    "steps": 4
+   },
+   "params": [
+    "prompt",
+    "width",
+    "height",
+    "seed"
+   ],
+   "files": [
+    {
+     "name": "flux1-schnell-fp8.safetensors",
+     "dir": "checkpoints",
+     "repo": "Comfy-Org/flux1-schnell",
+     "licence": "Apache-2.0"
+    }
+   ],
+   "source": "templates/flux_schnell.json",
+   "gpu_seconds_est": 4
+  },
+  "flux-schnell-lora-t2i": {
+   "file": "flux_schnell_lora_t2i.json",
+   "model": "flux.1-schnell-lora",
+   "module": "image",
+   "output": "image",
+   "params": [
+    "prompt",
+    "width",
+    "height",
+    "seed",
+    "lora_name",
+    "lora_strength"
+   ],
+   "files": [
+    {
+     "name": "flux1-schnell-fp8.safetensors",
+     "dir": "checkpoints",
+     "repo": "Comfy-Org/flux1-schnell",
+     "licence": "Apache-2.0"
+    },
+    {
+     "name": "<character>.safetensors",
+     "dir": "loras",
+     "repo": "our own trained LoRA (fz_creative.characters.lora_asset_id)",
+     "licence": "ours; trained on consented or fictional references only"
+    }
+   ],
+   "source": "templates/flux_schnell.json + core LoraLoader node",
+   "gpu_seconds_est": 5
+  },
+  "wan22-ti2v-5b": {
+   "file": "wan22_ti2v_5b.json",
+   "model": "wan-2.2-ti2v-5b",
+   "module": "video",
+   "output": "video",
+   "negative_default": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+   "params": [
+    "prompt",
+    "negative",
+    "width",
+    "height",
+    "frames",
+    "fps",
+    "seed"
+   ],
+   "files": [
+    {
+     "name": "wan2.2_ti2v_5B_fp16.safetensors",
+     "dir": "diffusion_models",
+     "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+     "licence": "Apache-2.0"
+    },
+    {
+     "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+     "dir": "text_encoders",
+     "repo": "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+     "licence": "Apache-2.0"
+    },
+    {
+     "name": "wan2.2_vae.safetensors",
+     "dir": "vae",
+     "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+     "licence": "Apache-2.0"
+    }
+   ],
+   "source": "templates/video_wan2_2_5B_ti2v.json (text-to-video branch: no start image)",
+   "gpu_seconds_est_per_video_second": 25
+  },
+  "wan22-t2v-a14b": {
+   "file": "wan22_t2v_a14b.json",
+   "model": "wan-2.2-t2v-a14b",
+   "module": "video",
+   "output": "video",
+   "negative_default": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+   "params": [
+    "prompt",
+    "negative",
+    "width",
+    "height",
+    "frames",
+    "fps",
+    "seed"
+   ],
+   "files": [
+    {
+     "name": "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+     "dir": "diffusion_models",
+     "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+     "licence": "Apache-2.0"
+    },
+    {
+     "name": "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+     "dir": "diffusion_models",
+     "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+     "licence": "Apache-2.0"
+    },
+    {
+     "name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+     "dir": "text_encoders",
+     "repo": "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+     "licence": "Apache-2.0"
+    },
+    {
+     "name": "wan_2.1_vae.safetensors",
+     "dir": "vae",
+     "repo": "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+     "licence": "Apache-2.0"
+    }
+   ],
+   "source": "templates/video_wan2_2_14B_t2v.json (two-stage high/low noise, 20 steps; the lightx2v 4-step LoRA branch is not included: licence not verified)",
+   "gpu_seconds_est_per_video_second": 90
+  },
+  "ltxv-t2v": {
+   "file": "ltxv_t2v.json",
+   "model": "ltx-video",
+   "module": "video",
+   "output": "video",
+   "negative_default": "low quality, worst quality, deformed, distorted, disfigured, motion smear, motion artifacts, fused fingers, bad anatomy, weird hand, ugly",
+   "params": [
+    "prompt",
+    "negative",
+    "width",
+    "height",
+    "frames",
+    "fps",
+    "seed"
+   ],
+   "files": [
+    {
+     "name": "ltx-video-2b-v0.9.safetensors",
+     "dir": "checkpoints",
+     "repo": "Lightricks/LTX-Video",
+     "licence": "VERIFY before self-hosting: LTX-Video open-weights licence (LTX-2 uses the LTX-2 Community License: free under US$10M group revenue)"
+    },
+    {
+     "name": "t5xxl_fp16.safetensors",
+     "dir": "text_encoders",
+     "repo": "comfyanonymous/flux_text_encoders",
+     "licence": "Apache-2.0 (T5)"
+    }
+   ],
+   "source": "templates/ltxv_text_to_video.json",
+   "gpu_seconds_est_per_video_second": 12,
+   "licence_flag": "verify"
+  }
+ }
+}

@@ -1,0 +1,146 @@
+{
+ "44": {
+  "class_type": "CheckpointLoaderSimple",
+  "inputs": {
+   "ckpt_name": "ltx-video-2b-v0.9.safetensors"
+  }
+ },
+ "38": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "t5xxl_fp16.safetensors",
+   "type": "ltxv",
+   "device": "default"
+  }
+ },
+ "6": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "{{prompt}}",
+   "clip": [
+    "38",
+    0
+   ]
+  }
+ },
+ "7": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "{{negative}}",
+   "clip": [
+    "38",
+    0
+   ]
+  }
+ },
+ "69": {
+  "class_type": "LTXVConditioning",
+  "inputs": {
+   "frame_rate": "{{fps}}",
+   "positive": [
+    "6",
+    0
+   ],
+   "negative": [
+    "7",
+    0
+   ]
+  }
+ },
+ "70": {
+  "class_type": "EmptyLTXVLatentVideo",
+  "inputs": {
+   "width": "{{width}}",
+   "height": "{{height}}",
+   "length": "{{frames}}",
+   "batch_size": 1
+  }
+ },
+ "71": {
+  "class_type": "LTXVScheduler",
+  "inputs": {
+   "steps": 30,
+   "max_shift": 2.05,
+   "base_shift": 0.95,
+   "stretch": true,
+   "terminal": 0.1,
+   "latent": [
+    "70",
+    0
+   ]
+  }
+ },
+ "73": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "euler"
+  }
+ },
+ "72": {
+  "class_type": "SamplerCustom",
+  "inputs": {
+   "add_noise": true,
+   "noise_seed": "{{seed}}",
+   "cfg": 3,
+   "model": [
+    "44",
+    0
+   ],
+   "positive": [
+    "69",
+    0
+   ],
+   "negative": [
+    "69",
+    1
+   ],
+   "sampler": [
+    "73",
+    0
+   ],
+   "sigmas": [
+    "71",
+    0
+   ],
+   "latent_image": [
+    "70",
+    0
+   ]
+  }
+ },
+ "8": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "72",
+    0
+   ],
+   "vae": [
+    "44",
+    2
+   ]
+  }
+ },
+ "78": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "fps": "{{fps}}",
+   "images": [
+    "8",
+    0
+   ]
+  }
+ },
+ "79": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "filename_prefix": "video/fendezy",
+   "format": "auto",
+   "codec": "auto",
+   "video": [
+    "78",
+    0
+   ]
+  }
+ }
+}
