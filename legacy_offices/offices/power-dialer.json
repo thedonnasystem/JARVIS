@@ -1,0 +1,133 @@
+{
+ "office": "power-dialer",
+ "title": "Power Dialer",
+ "manager": "appointed by the owner only (office_os_set_manager)",
+ "brain_scope": [
+  "group",
+  "power-dialer"
+ ],
+ "status": "dormant (legacy system; not in the M1/M7 database yet: docs/proposals/legacy_offices.md)",
+ "brief": "Legacy system: the parallel dialer and live call coach (private repo thedonnasystem/dialer) for the owner's energy sales calls. Telnyx call control, Chrome extension, Deepgram speech to text. Jarvis sees only aggregate call counts; names and phone numbers stay in the dialer's own volume. Calling rules (CRTC telemarketing rules, the National DNCL, abandoned-call limits) are the owner's legal call.",
+ "agents": [
+  {
+   "role": "call-analyst",
+   "title": "Call analyst",
+   "model_tier": "small",
+   "purpose": "Reads call stats and finds the leak",
+   "prompt": "From aggregate counts only (dials, answers, abandoned second answers, outcomes), show where the day leaks: connect rate, pitch rate, close rate, abandon rate against the 5 percent rule. Never ask for a name or a number."
+  },
+  {
+   "role": "coach-tuner",
+   "title": "Coach tuner",
+   "model_tier": "small",
+   "purpose": "Improves the call coach",
+   "prompt": "Review coach test results and objection coverage. Propose script and objection-card changes as drafts for the owner; never change spend caps or calling hours."
+  }
+ ],
+ "legacy": {
+  "repo": "thedonnasystem/dialer",
+  "private": true,
+  "stack": "Node 20 (express, ws), Telnyx Call Control + WebRTC, Chrome MV3 extension, Deepgram, Railway",
+  "hosting": "railway",
+  "railway_project": "sales-coach",
+  "entry_points": [
+   "server.js",
+   "coach/server.js",
+   "extension-v2/",
+   "coach/extension/"
+  ],
+  "env": [
+   "TELNYX_API_KEY",
+   "TELNYX_PUBLIC_KEY",
+   "PUBLIC_URL",
+   "DIALER_PASS",
+   "MY_CELL",
+   "DATA_DIR",
+   "HOUR_START",
+   "HOUR_END",
+   "LINES",
+   "DAILY_CAP_USD",
+   "NUMBER_DAILY_CAP",
+   "SHEET_URL",
+   "SHEET_SECRET",
+   "COACH_TOKEN",
+   "DEEPGRAM_API_KEY",
+   "ANTHROPIC_API_KEY",
+   "COACH_MODEL"
+  ],
+  "tests": [
+   [
+    "npm",
+    "test"
+   ]
+  ],
+  "tests_coach": [
+   [
+    "npm",
+    "test"
+   ]
+  ],
+  "dependency_files": [
+   "package.json",
+   "package-lock.json",
+   "coach/package.json"
+  ],
+  "dry_run": {
+   "cwd": ".",
+   "cmd": [
+    "node",
+    "test.js"
+   ],
+   "env": {
+    "MOCK_TELNYX": "1"
+   },
+   "note": "The dialer's own mock Telnyx run: no call is placed."
+  },
+  "caps": {
+   "DAILY_CAP_USD": 40
+  }
+ },
+ "qc": {
+  "collector": "dialer",
+  "stages": [
+   "found",
+   "contacted",
+   "replied",
+   "booked",
+   "closed"
+  ],
+  "stage_labels": {
+   "found": "leads queued",
+   "contacted": "dials",
+   "replied": "answered",
+   "booked": "pitched",
+   "closed": "closed"
+  },
+  "targets": {
+   "answer_rate": 0.15,
+   "abandon_rate_max": 0.05,
+   "pitches_per_day": 6,
+   "closes_per_day": 2
+  },
+  "changes": [
+   {
+    "change": "Keep abandoned calls (a second person answers and is hung up on) under the 5 percent rule: the PR rings only as many lines as keep the predicted abandon rate under 3 percent, and one line while the observed 30-day rate is over it (synthetic simulation: 4 lines at a 15% answer rate abandon 20.6%, the guard 0%, at about a third of the conversations per batch). The abandon rule and any recorded message are the owner's legal call.",
+    "impact": 5,
+    "effort": "S (code, PR opened)",
+    "needs": "code"
+   },
+   {
+    "change": "Log the pitched / closed outcome on every answered call so close rate per hour of dialing can be measured (events.csv has the fields; the outcome tap is often skipped).",
+    "impact": 4,
+    "effort": "habit (owner)",
+    "needs": "owner"
+   },
+   {
+    "change": "README still describes the old Twilio setup; the PR documents the real Telnyx variables so a redeploy does not stall.",
+    "impact": 1,
+    "effort": "XS (PR opened)",
+    "needs": "code"
+   }
+  ]
+ }
+}
