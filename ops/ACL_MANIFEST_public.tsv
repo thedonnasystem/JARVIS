@@ -390,6 +390,9 @@ function	office_os_plan_revoke(uuid)	-	-	execute	security_definer		-
 function	office_os_plans()	-	-	execute	security_definer		-
 function	office_os_set_manager(text,text)	-	-	execute	security_definer		-
 function	office_os_status(text)	-	-	execute	security_definer		-
+function	open_brain_routing()	-	-	execute	security_definer		-
+function	open_brain_set_owner_chat_free(boolean)	-	-	execute	security_definer		-
+function	open_brain_set_training_nonprivate(boolean)	-	-	execute	security_definer		-
 function	ops_alerts()	-	-	execute	security_definer		-
 function	org_scorecard_text()	-	-	execute	invoker		-
 function	outbox_dnc_guard()	-	-	execute	invoker	trigger function: cannot be called directly	-

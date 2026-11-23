@@ -741,6 +741,8 @@ def run_turn_sync(slug: str, task: str, max_out: int, purpose: str) -> str:
     if _CAPITAL_MODE == "low_cost":  # capital survival: one tier cheaper until the fund recovers
         tier = {"strong": "standard", "standard": "cheap"}.get(tier, "cheap")
     model = TIER_MODEL.get(tier, TIER_MODEL["cheap"])
+    if _open_brain():   # Nov 22 2026: free open models via hq_llm's rotation; Anthropic only as the paid last resort (owner switch)
+        return _run_turn_open(slug, system, task, max_out, purpose, tier)
     search = can_search(slug)
     fetches = fetch_budget(task)
     est_in = math.ceil((len(system) + len(task)) / 3) + (25000 + (fetches * FETCH_MAX_TOKENS if FETCH_ENABLED else 0) if search else 0)  # search results add a lot of input tokens (measured: ~17c per search task)
@@ -765,6 +767,33 @@ def run_turn_sync(slug: str, task: str, max_out: int, purpose: str) -> str:
     actual += searches * SEARCH_CENTS
     _rpc("settle_llm_call", {"p_id": call_id, "p_actual_cents": actual, "p_status": "done"})
     _audit(slug, "llm_call", str(call_id), {"model": model, "in": tin, "out": tout, "searches": searches, "cents": actual})
+    return text
+
+
+def _open_brain() -> bool:
+    import hq_open_brain
+    return hq_open_brain.enabled()
+
+
+def _run_turn_open(slug: str, system: str, task: str, max_out: int, purpose: str, tier: str) -> str:
+    """The open-brain agent turn: hq_llm.complete reserves through the same gateway (reserve_llm_budget, booked to the agent with this purpose, so
+    the mission budget and focus mode apply), free calls settle at 0. No web search on free models. Exhausted / refused -> an exception: the
+    task takes the normal retry path."""
+    import hq_llm
+    import hq_meter
+    import hq_open_brain
+    try:
+        r = hq_open_brain.engine_task(slug, system, task, max_out, purpose, tier)
+    except hq_meter.MeterBlocked as e:
+        raise GatewayBlocked(str(e)) from e
+    except hq_llm.BrainOffline as e:
+        _audit(slug, "llm_call_failed", "-", {"error": str(e)[:300], "open_brain": True})
+        raise
+    _audit(slug, "llm_call", "-", {"provider": r["provider"], "model": r["model"], "in": r["input_tokens"], "out": r["output_tokens"], "cents": r["cents"],
+                                   "open_brain": True})
+    text = (r.get("text") or "").strip()
+    if not text:
+        raise RuntimeError(f"{r['provider']} returned no text")
     return text
 
 
