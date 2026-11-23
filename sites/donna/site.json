@@ -14,8 +14,8 @@
     "accent": "#c9a24a"
   },
   "meta": {
-    "title": "Donna.AI | AI receptionist for Ottawa businesses",
-    "description": "Donna.AI answers your calls, texts back missed callers, books appointments and follows up on leads, for Ottawa businesses. Websites too."
+    "title": "Donna.AI | Missed calls into booked appointments",
+    "description": "Donna.AI turns your missed calls and missed leads into booked appointments for Ottawa businesses, 24/7."
   },
   "links": {
     "booking": "#contact",
@@ -24,69 +24,178 @@
   },
   "hero": {
     "tagline": "AI receptionist · Ottawa",
-    "title": "Every call answered.",
-    "title_accent": "Every lead followed up.",
-    "subtitle": "Donna.AI answers your calls, texts back the callers you miss, books appointments and follows up on leads, so your phone stops costing you jobs. We also build websites that bring in calls."
+    "title": "We turn your missed calls and missed leads",
+    "title_accent": "into booked appointments.",
+    "subtitle": "Every call answered. Every missed caller texted back in minutes. Every lead followed up until they book, day and night. You just show up to the appointments."
   },
   "demo": {
     "label": "Illustration of a call, not a real customer",
     "lines": [
-      {"who": "caller", "text": "Hi, my furnace stopped working. Can someone come out tomorrow?"},
-      {"who": "donna", "text": "I'm sorry to hear that. I'm Donna, the AI assistant for this business. I can book a visit. Is morning or afternoon better?"},
-      {"who": "caller", "text": "Morning, please."},
-      {"who": "donna", "text": "I have 9:30 or 11:00 tomorrow morning. Which works?"},
-      {"who": "caller", "text": "9:30."},
-      {"who": "donna", "text": "Booked for 9:30 tomorrow. You'll get a text confirmation now, and the technician will call before arriving."}
+      {
+        "who": "caller",
+        "text": "Hi, my furnace stopped working. Can someone come out tomorrow?"
+      },
+      {
+        "who": "donna",
+        "text": "I'm sorry to hear that. I'm Donna, the AI assistant for this business. I can book a visit. Is morning or afternoon better?"
+      },
+      {
+        "who": "caller",
+        "text": "Morning, please."
+      },
+      {
+        "who": "donna",
+        "text": "I have 9:30 or 11:00 tomorrow morning. Which works?"
+      },
+      {
+        "who": "caller",
+        "text": "9:30."
+      },
+      {
+        "who": "donna",
+        "text": "Booked for 9:30 tomorrow. You'll get a text confirmation now, and the technician will call before arriving."
+      }
     ]
   },
   "services": {
     "tagline": "What Donna.AI does",
-    "title": "Your front desk, handled",
+    "title": "Missed calls in. Booked appointments out.",
     "items": [
-      {"title": "Answers your calls", "description": "Picks up day and night, takes messages and answers common questions about your business.", "icon": "tabler:phone-call"},
-      {"title": "Missed-call text-back", "description": "When a call is missed, the caller gets a text within minutes, so the lead does not go to a competitor.", "icon": "tabler:message-circle"},
-      {"title": "Books appointments", "description": "Offers open times and books them into your calendar.", "icon": "tabler:calendar-event"},
-      {"title": "Follows up on leads", "description": "Keeps every lead in one simple list and follows up with messages you approve.", "icon": "tabler:user-check"},
-      {"title": "Websites and digital presence", "description": "Fast, mobile-first websites with click-to-call, booking and lead capture built in.", "icon": "tabler:world"},
-      {"title": "Built in Ottawa", "description": "Set up and supported locally, for Ottawa businesses.", "icon": "tabler:map-pin"}
+      {
+        "title": "Answers your calls",
+        "description": "Picks up day and night, takes messages and answers common questions about your business.",
+        "icon": "tabler:phone-call"
+      },
+      {
+        "title": "Missed-call text-back",
+        "description": "When a call is missed, the caller gets a text within minutes, so the lead does not go to a competitor.",
+        "icon": "tabler:message-circle"
+      },
+      {
+        "title": "Books appointments",
+        "description": "Offers open times and books them into your calendar.",
+        "icon": "tabler:calendar-event"
+      },
+      {
+        "title": "Follows up on leads",
+        "description": "Keeps every lead in one simple list and follows up with messages you approve.",
+        "icon": "tabler:user-check"
+      },
+      {
+        "title": "Never off the clock",
+        "description": "Nights, weekends and holidays, when your competitors go to voicemail.",
+        "icon": "tabler:clock-24"
+      },
+      {
+        "title": "Built in Ottawa",
+        "description": "Set up and supported locally, for Ottawa businesses.",
+        "icon": "tabler:map-pin"
+      }
     ]
   },
   "steps": {
     "title": "How it works",
     "items": [
-      {"title": "Book a demo", "description": "A short call: we learn how your calls and bookings work today."},
-      {"title": "We set it up", "description": "We configure Donna.AI with your hours, services, questions and calendar."},
-      {"title": "You review it", "description": "You test it on a demo line before any customer hears it."},
-      {"title": "It goes live", "description": "Calls are answered and leads are followed up; you get summaries."}
+      {
+        "title": "Book a demo",
+        "description": "A short call: we learn how your calls and bookings work today."
+      },
+      {
+        "title": "We set it up",
+        "description": "We configure Donna.AI with your hours, services, questions and calendar."
+      },
+      {
+        "title": "You review it",
+        "description": "You test it on a demo line before any customer hears it."
+      },
+      {
+        "title": "It goes live",
+        "description": "Calls are answered and leads are followed up; you get summaries."
+      }
     ]
   },
   "offer": {
     "title": "Founding offer",
-    "text": "For our first clients: $497 for your first month, with the setup fee waived."
+    "text": "For our founding clients: the setup fee is waived on every package."
   },
   "pricing": [
     {
       "id": "packages",
-      "title": "AI receptionist packages",
+      "title": "Packages",
       "subtitle": "Prices in Canadian dollars, plus applicable taxes.",
       "items": [
-        {"title": "Answer", "subtitle": "Never miss a call", "price": 497, "period": "per month", "note": "+ $497 setup (waived on the founding offer)",
-         "features": ["AI receptionist answers every call, day and night", "Takes messages and caller details", "Answers common questions about your business", "Call summaries sent to you by text or email"]},
-        {"title": "Capture", "subtitle": "Turn missed calls into leads", "price": 797, "period": "per month", "note": "+ $997 setup", "highlight": true,
-         "features": ["Everything in Answer", "Missed-call text-back within minutes", "Leads saved to a simple CRM", "Lead follow-up messages you approve"]},
-        {"title": "Command", "subtitle": "Bookings and follow-up on autopilot", "price": 1297, "period": "per month", "note": "+ $1,497 setup",
-         "features": ["Everything in Capture", "Appointment booking into your calendar", "Follow-up sequences and reminders", "Workflow automation and a monthly report"]}
+        {
+          "title": "Answer",
+          "subtitle": "Never miss a call",
+          "price": 497,
+          "period": "per month",
+          "note": "+ $497 setup (waived on the founding offer)",
+          "features": [
+            "AI receptionist answers every call, day and night",
+            "Takes messages and caller details",
+            "Answers common questions about your business",
+            "Call summaries sent to you by text or email"
+          ]
+        },
+        {
+          "title": "Capture",
+          "subtitle": "Turn missed calls into leads",
+          "price": 797,
+          "period": "per month",
+          "note": "+ $997 setup (waived on the founding offer)",
+          "highlight": true,
+          "features": [
+            "Everything in Answer",
+            "Missed-call text-back within minutes",
+            "Leads saved to a simple CRM",
+            "Lead follow-up messages you approve"
+          ]
+        },
+        {
+          "title": "Command",
+          "subtitle": "Bookings and follow-up on autopilot",
+          "price": 1297,
+          "period": "per month",
+          "note": "+ $1,497 setup (waived on the founding offer)",
+          "features": [
+            "Everything in Capture",
+            "Appointment booking into your calendar",
+            "Follow-up sequences and reminders",
+            "Workflow automation and a monthly report"
+          ]
+        }
       ]
     },
     {
       "id": "websites",
-      "title": "Websites",
-      "subtitle": "A website that turns visitors into calls and bookings.",
+      "title": "Add a website",
+      "subtitle": "Optional. Need a website too? One-time payment, no monthly fees.",
       "items": [
-        {"title": "Site", "subtitle": "A fast website that brings in calls", "price": 497, "period": "one-time", "note": "+ $149 per month for hosting and care",
-         "features": ["Mobile-first website", "Click-to-call and booking built in", "Lead-capture form into your CRM", "Basic local SEO setup"]},
-        {"title": "Site Pro", "subtitle": "More pages, more reach", "price": 997, "period": "one-time", "note": "+ $249 per month for hosting and care",
-         "features": ["Everything in Site", "Service and area pages", "Content updates each month", "Priority support"]}
+        {
+          "title": "Site",
+          "subtitle": "A fast website that brings in calls",
+          "price": 497,
+          "period": "one-time",
+          "note": "Pay once. No monthly fees.",
+          "features": [
+            "Mobile-first website",
+            "Click-to-call and booking built in",
+            "Lead-capture form into your CRM",
+            "Basic local SEO setup"
+          ]
+        },
+        {
+          "title": "Site Pro",
+          "subtitle": "More pages, more reach",
+          "price": 997,
+          "period": "one-time",
+          "note": "Pay once. No monthly fees.",
+          "features": [
+            "Everything in Site",
+            "Service and area pages",
+            "Priority support"
+          ]
+        }
       ]
     }
   ],
@@ -96,11 +205,30 @@
     "slots": 3
   },
   "faq": [
-    {"q": "Will callers know they are talking to an AI?", "a": "Yes. Donna.AI introduces itself as an AI assistant for your business."},
-    {"q": "What happens with calls it cannot handle?", "a": "It takes a message and passes the caller to you, by text or email, with a summary."},
-    {"q": "Do I need new phone hardware?", "a": "No. Your calls are forwarded to Donna.AI when you choose, for example after hours or when you are busy."},
-    {"q": "What does the founding offer include?", "a": "$497 for your first month, with the setup fee waived. After the first month the package price applies."},
-    {"q": "Can I try it first?", "a": "Yes. Book a demo and you can hear it on our demo line."}
+    {
+      "q": "Will callers know they are talking to an AI?",
+      "a": "Yes. Donna.AI introduces itself as an AI assistant for your business."
+    },
+    {
+      "q": "Do I need a new website?",
+      "a": "No. Donna works with the phone number you already have. A website is an optional add-on."
+    },
+    {
+      "q": "What happens with calls it cannot handle?",
+      "a": "It takes a message and passes the caller to you, by text or email, with a summary."
+    },
+    {
+      "q": "Do I need new phone hardware?",
+      "a": "No. Your calls are forwarded to Donna.AI when you choose, for example after hours or when you are busy."
+    },
+    {
+      "q": "What does the founding offer include?",
+      "a": "The setup fee is waived on every package for our founding clients."
+    },
+    {
+      "q": "Can I try it first?",
+      "a": "Yes. Book a demo and you can hear it on our demo line."
+    }
   ],
   "contact": {
     "title": "Book a demo or ask a question",
