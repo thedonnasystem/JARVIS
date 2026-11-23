@@ -42,6 +42,8 @@ import hq_engine
 import hq_executor
 import hq_commands
 import hq_meter
+import hq_llm
+import hq_open_brain
 import hq_web
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
@@ -1786,13 +1788,16 @@ async def handle_research_agent(tool_input: dict) -> str:
             **kwargs,
         )
 
-    try:
-        response = await asyncio.to_thread(_call, True)
-    except APIError:
-        logger.warning("web_search tool unavailable for research_agent, falling back to no-tool")
-        response = await asyncio.to_thread(_call, False)
-
-    findings = "".join(b.text for b in response.content if b.type == "text").strip()
+    if hq_open_brain.enabled():   # open brain: free open models, no web search tool (the prompt tells it to say so)
+        findings = (await asyncio.to_thread(hq_open_brain.text, "You are the Research Agent, a focused research assistant.", research_prompt,
+                                            "chat research agent")).strip()
+    else:
+        try:
+            response = await asyncio.to_thread(_call, True)
+        except APIError:
+            logger.warning("web_search tool unavailable for research_agent, falling back to no-tool")
+            response = await asyncio.to_thread(_call, False)
+        findings = "".join(b.text for b in response.content if b.type == "text").strip()
     if not findings:
         findings = "(no findings returned)"
 
@@ -1822,19 +1827,21 @@ async def handle_content_agent(tool_input: dict) -> str:
     if not brief:
         return "No content brief was given."
 
-    response = await asyncio.to_thread(
-        hq_meter.metered_create,
-        anthropic_client, "chat content agent",
-        model=CLAUDE_MODEL,
-        max_tokens=800,
-        system=(
-            "You are the Content Agent. Write captions/copy/lyrics that sound "
-            "like Moe - direct, hungry, emotional, ambitious, never generic "
-            "corporate hype. Match whatever brand/platform is specified."
-        ),
-        messages=[{"role": "user", "content": brief}],
-    )
-    draft = "".join(b.text for b in response.content if b.type == "text").strip()
+    content_system = ("You are the Content Agent. Write captions/copy/lyrics that sound "
+                      "like Moe - direct, hungry, emotional, ambitious, never generic "
+                      "corporate hype. Match whatever brand/platform is specified.")
+    if hq_open_brain.enabled():
+        draft = (await asyncio.to_thread(hq_open_brain.text, content_system, brief, "chat content agent", max_output=800)).strip()
+    else:
+        response = await asyncio.to_thread(
+            hq_meter.metered_create,
+            anthropic_client, "chat content agent",
+            model=CLAUDE_MODEL,
+            max_tokens=800,
+            system=content_system,
+            messages=[{"role": "user", "content": brief}],
+        )
+        draft = "".join(b.text for b in response.content if b.type == "text").strip()
     if not draft:
         draft = "(no draft returned)"
 
@@ -2120,6 +2127,11 @@ async def jarvis_reply(chat_id: int, user_text: str, context, typing: bool = Tru
     # Credential values that pass through store_credential/get_credential are scrubbed before the turn
     # is saved to history, so a fetched secret never sits in plaintext in the messages table.
     redact_values: list[str] = []
+    if hq_open_brain.enabled():
+        reply_text = await _open_brain_turn(history, user_text, tools, context, chat_id, redact_values, _typing, MAX_TOOL_ROUNDS)
+        if reply_text is None:
+            return _OPEN_BRAIN_LAST_ERROR.get(chat_id, hq_llm.OFFLINE_REPLY)    # failed turn is not saved
+        return _persist_turn(chat_id, user_text, reply_text, redact_values)
     try:
         response = await asyncio.to_thread(_call, "owner chat", messages)
         for _ in range(MAX_TOOL_ROUNDS):
@@ -2147,7 +2159,58 @@ async def jarvis_reply(chat_id: int, user_text: str, context, typing: bool = Tru
     reply_text = "".join(block.text for block in response.content if block.type == "text")
     if not reply_text:
         reply_text = "(Claude returned no text - it may have refused this request.)"
+    return _persist_turn(chat_id, user_text, reply_text, redact_values)
 
+
+_OPEN_BRAIN_LAST_ERROR: dict = {}
+
+
+async def _open_brain_turn(history, user_text, tools, context, chat_id, redact_values, typing, max_rounds) -> str | None:
+    """Owner turn on the open brain: hq_llm's free-provider rotation with OpenAI-format tool calling. Returns the reply, or None with the reason in
+    _OPEN_BRAIN_LAST_ERROR (deterministic text, no AI): budget / kill switch, every free provider at its limit, owner chat not allowed on free
+    providers, client data without a self-hosted model."""
+    summary = await asyncio.to_thread(hq_open_brain.load_summary, lambda: recall(query=f"chat:{chat_id}", category="chat_summary", limit=1))
+    memories = await asyncio.to_thread(hq_open_brain.memory_facts, user_text)
+    system, msgs, turn_tools, _ = hq_open_brain.build_packet(history, user_text, tools, summary.get("summary", ""), memories,
+                                                             system=os.environ.get("JARVIS_FREE_SYSTEM_PROMPT") or hq_open_brain.COMPACT_SYSTEM)
+    try:
+        r = await asyncio.to_thread(hq_open_brain.chat, system, msgs, turn_tools, "owner chat")
+        for _ in range(max_rounds):
+            calls = r.get("tool_calls") or []
+            if not calls:
+                break
+            msgs = msgs + [hq_open_brain.assistant_turn(r)]
+            for c in calls:
+                await typing()
+                result_text = await dispatch_tool_call(c["name"], c["arguments"], context, chat_id, redact_values)
+                for secret_value in redact_values:       # a fetched credential never goes to a third-party model provider
+                    if secret_value:
+                        result_text = str(result_text).replace(secret_value, "[credential withheld from the model]")
+                msgs.append(hq_open_brain.tool_turn(c["id"], result_text))
+            msgs = hq_open_brain.shrink_round(system, msgs, turn_tools)
+            r = await asyncio.to_thread(hq_open_brain.chat, system, msgs, turn_tools, "owner chat (tool round)")
+    except hq_meter.MeterBlocked as e:
+        _OPEN_BRAIN_LAST_ERROR[chat_id] = hq_meter.status_reply(e)
+        return None
+    except hq_llm.BrainOffline as e:            # exhausted / owner chat not allowed / client data: plain text, nothing spent
+        if hq_meter.kill_switch_on():           # a refusal before the gateway must still show the kill switch first (deterministic, no AI)
+            _OPEN_BRAIN_LAST_ERROR[chat_id] = hq_meter.status_reply(hq_meter.MeterBlocked("kill switch", "kill"))
+        else:
+            _OPEN_BRAIN_LAST_ERROR[chat_id] = str(e).split(" (")[0] if isinstance(e, hq_llm.AllProvidersExhausted) else str(e)
+        return None
+    except hq_llm.PromptTooLarge:
+        _OPEN_BRAIN_LAST_ERROR[chat_id] = "Sir, that message is too long for the free models. Please send it in smaller parts."
+        return None
+    text = (r.get("text") or "").strip()
+    try:                                                    # the rolling summary of older turns (small tier; any failure keeps the old one)
+        await asyncio.to_thread(hq_open_brain.refresh_summary, history, summary,
+                                lambda v: remember(agent="jarvis-chat", category="chat_summary", key=f"chat:{chat_id}", value=v))
+    except Exception:
+        logger.warning("chat summary refresh failed")
+    return text or "(The model returned no text.)"
+
+
+def _persist_turn(chat_id: int, user_text: str, reply_text: str, redact_values: list) -> str:
     persisted_user_text, persisted_reply_text = user_text, reply_text
     for secret_value in redact_values:
         if not secret_value:

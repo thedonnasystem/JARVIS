@@ -20,6 +20,13 @@ Chairman's rule (Nov 16 2026): the brain costs $0 by default.
 Every attempt, free or paid, goes through the existing spend gateway first (hq_meter -> reserve_llm_budget: kill switch, caps, paused agent, mission budget).
 Free calls settle at 0 cents. The cap values are never changed here.
 
+OPEN BRAIN (Nov 22 2026, Chairman): the owner chat (bot.py) and mission tasks (hq_engine) run through complete() too, with OpenAI-format tool calling
+(converted for Anthropic). Anthropic is the LAST provider and stays off unless the owner switched paid providers on (jarvis_self_fund_status).
+Owner data (sources 'owner_chat' / 'owner_mission' / 'owner_tool') goes to a free provider ONLY when the owner switched owner_chat_free_providers on
+(fz_brain_config, read through open_brain_routing(); unreachable = off) and only to the no-training, no-retention providers in OWNER_DATA_PROVIDERS
+(code-only). CLIENT data (client sources, or anything hq_scrub / pii_hit detects) still goes only to a client_data_ok provider (self-hosted), whatever
+the switch says. A provider whose tool calls are malformed (unknown tool, arguments that are not a JSON object) is skipped like a failed provider.
+
 Environment (names only; values live in Railway Variables, never in the repo). For each provider NAME in the catalog:
   <KEY ENV of the provider>              e.g. GROQ_API_KEY, CEREBRAS_API_KEY, OPENROUTER_API_KEY, GITHUB_MODELS_TOKEN, NVIDIA_API_KEY, JARVIS_SELFHOST_API_KEY
   JARVIS_<NAME>_MODEL_SMALL / _MEDIUM / _LARGE   override the catalog's model ids (confirm current ids at activation: free model lists change often)
@@ -51,7 +58,7 @@ import hq_scrub
 logger = logging.getLogger(__name__)
 
 CORE_AGENT = "jarvis-core"
-TIERS = ("small", "medium", "large")
+TIERS = ("small", "medium", "large", "reason")      # reason: the provider's strongest free reasoning model (planning / hard problems)
 MAX_PROMPT_TOKENS = 90_000          # hard ceiling (some paid prices jump above 100k input tokens)
 FREE_PROMPT_TOKENS = 6_000          # what a free-tier call may carry: free tokens-per-minute limits are small, so prompts stay small (retrieval, not dumps)
 CHARS_PER_TOKEN = 3.5               # conservative: over-counts tokens
@@ -66,16 +73,16 @@ CLIENT_DATA_REPLY = ("Sir, that task contains client personal data, and no self-
 # Terms and limits: see FREE_PROVIDER_TERMS.md (checked Nov 16 2026, SUBJECT TO CHANGE). Model ids are defaults to be confirmed at activation.
 CATALOG = [
     {"name": "groq", "base_url": "https://api.groq.com/openai/v1", "key_env": "GROQ_API_KEY", "paid": False, "trains": False, "client_data_ok": False,
-     "models": {"small": "llama-3.1-8b-instant", "medium": "llama-3.3-70b-versatile"}, "limits": {"rpm": 30, "rpd": 1000, "tpm": 6000}},
+     "models": {"small": "llama-3.1-8b-instant", "medium": "llama-3.3-70b-versatile", "reason": "openai/gpt-oss-120b"}, "limits": {"rpm": 30, "rpd": 1000, "tpm": 12000, "max_prompt": 10000}},
     {"name": "cerebras", "base_url": "https://api.cerebras.ai/v1", "key_env": "CEREBRAS_API_KEY", "paid": False, "trains": False, "client_data_ok": False, "trial": True,
-     "models": {"small": "qwen-3.8-27b", "medium": "gpt-oss-120b"}, "limits": {"rpm": 5, "rpd": 1000, "tpm": 30000}},
+     "models": {"small": "qwen-3.8-27b", "medium": "gpt-oss-120b", "reason": "gpt-oss-120b"}, "limits": {"rpm": 5, "rpd": 1000, "tpm": 30000, "max_prompt": 24000}},
     {"name": "openrouter", "base_url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY", "paid": False, "trains": False, "client_data_ok": False,
-     "models": {"small": "nousresearch/hermes-3-llama-3.1-405b:free", "medium": "nousresearch/hermes-3-llama-3.1-405b:free"}, "limits": {"rpm": 20, "rpd": 50, "tpm": 20000},
+     "models": {"small": "nousresearch/hermes-3-llama-3.1-405b:free", "medium": "qwen/qwen3-235b-a22b:free", "reason": "deepseek/deepseek-r1:free"}, "limits": {"rpm": 20, "rpd": 50, "tpm": 40000, "max_prompt": 30000},
      "extra_body": {"provider": {"data_collection": "deny"}}},
     {"name": "github", "base_url": "https://models.github.ai/inference", "key_env": "GITHUB_MODELS_TOKEN", "paid": False, "trains": False, "client_data_ok": False,
-     "models": {"small": "openai/gpt-4.1-mini", "medium": "openai/gpt-4.1"}, "limits": {"rpm": 10, "rpd": 50, "tpm": 8000}},
+     "models": {"small": "openai/gpt-4.1-mini", "medium": "openai/gpt-4.1"}, "limits": {"rpm": 10, "rpd": 50, "tpm": 8000, "max_prompt": 7000}},
     {"name": "nvidia", "base_url": "https://integrate.api.nvidia.com/v1", "key_env": "NVIDIA_API_KEY", "paid": False, "trains": False, "client_data_ok": False,
-     "models": {"small": "meta/llama-3.1-8b-instruct", "medium": "meta/llama-3.3-70b-instruct"}, "limits": {"rpm": 40, "rpd": 1000, "tpm": 20000}},
+     "models": {"small": "meta/llama-3.1-8b-instruct", "medium": "meta/llama-3.3-70b-instruct"}, "limits": {"rpm": 40, "rpd": 1000, "tpm": 20000, "max_prompt": 16000}},
     {"name": "selfhost", "base_url_env": "JARVIS_SELFHOST_BASE_URL", "key_env": "JARVIS_SELFHOST_API_KEY", "paid": False, "trains": False, "client_data_ok": True,
      "models": {"small": "hermes-8b-q4", "medium": "hermes-8b-q4"}, "limits": {"rpm": 4, "rpd": 2000, "tpm": 4000}, "timeout": 600},
     {"name": "gpu", "base_url_env": "JARVIS_GPU_BASE_URL", "key_env": "JARVIS_GPU_API_KEY", "paid": True, "trains": False, "client_data_ok": True, "metering": "gpu_hour",
@@ -83,8 +90,26 @@ CATALOG = [
     {"name": "anthropic", "base_url": "https://api.anthropic.com", "key_env": "ANTHROPIC_API_KEY", "paid": True, "trains": False, "client_data_ok": False, "kind": "anthropic",
      "models": {"small": "claude-haiku-5-5", "medium": "claude-sonnet-5-5", "large": "claude-opus-5-5"}, "limits": {"rpm": 50, "rpd": 5000, "tpm": 100000}},
 ]
+# Open-brain providers (Nov 22 2026), code-defined like CATALOG but loaded only when the open brain is on (JARVIS_OPEN_BRAIN=1), so the legacy
+# rotation and its tests are unchanged.
+EXT_CATALOG = [
+    # the owner's own Mac (Ollama's OpenAI-compatible endpoint, reached over a private tunnel): a second self-hosted model, client data allowed
+    {"name": "selfhost2", "base_url_env": "JARVIS_SELFHOST2_BASE_URL", "key_env": "JARVIS_SELFHOST2_API_KEY", "paid": False, "trains": False, "client_data_ok": True,
+     "models": {"small": "qwen3:8b", "medium": "qwen3:14b"}, "limits": {"rpm": 10, "rpd": 5000, "tpm": 20000}, "timeout": 600},
+    # Google AI Studio free tier: the FREE tier may use prompts to improve Google's products (trains=True). Eligible only for non-private job types and
+    # only when the owner switched allow_training_providers_nonprivate on. Owner and client data never go here (enforced in complete()).
+    {"name": "gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "key_env": "GEMINI_API_KEY", "paid": False, "trains": True,
+     "client_data_ok": False, "models": {"small": "gemini-2.5-flash-lite", "medium": "gemini-2.5-flash", "reason": "gemini-2.5-flash"},
+     "limits": {"rpm": 10, "rpd": 250, "tpm": 250000, "max_prompt": 200000}},
+    # Cloudflare Workers AI free allocation (10,000 neurons/day). Cloudflare states it does not use customer content to train models (trains=False);
+    # no zero-retention commitment, so it is NOT on OWNER_DATA_PROVIDERS (public prompts only). Endpoint built from CLOUDFLARE_ACCOUNT_ID.
+    {"name": "cloudflare", "base_url_tmpl": "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1", "key_env": "CLOUDFLARE_API_TOKEN",
+     "paid": False, "trains": False, "client_data_ok": False, "models": {"small": "@cf/meta/llama-3.1-8b-instruct", "medium": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"},
+     "limits": {"rpm": 30, "rpd": 300, "tpm": 20000, "max_prompt": 6000}},
+]
 DEFAULT_ORDER = "groq,cerebras,openrouter,github,nvidia,selfhost,gpu,anthropic"
-CATALOG_NAMES = frozenset(s["name"] for s in CATALOG)
+EXT_ORDER = "groq,cerebras,openrouter,github,nvidia,selfhost,selfhost2,cloudflare,gemini,gpu,anthropic"
+CATALOG_NAMES = frozenset(s["name"] for s in CATALOG + EXT_CATALOG)
 # Hosts of vendors that charge per token. An extra provider may never point at one (it would be a paid call declared free).
 PAID_HOSTS = ("anthropic.com", "openai.com", "openai.azure.com", "googleapis.com", "mistral.ai", "cohere.ai", "cohere.com", "together.xyz", "together.ai",
               "fireworks.ai", "deepseek.com", "x.ai", "perplexity.ai", "groq.com", "cerebras.ai", "openrouter.ai", "nvidia.com", "github.ai", "replicate.com",
@@ -98,6 +123,11 @@ PAID_HOSTS = ("anthropic.com", "openai.com", "openai.azure.com", "googleapis.com
 # B5: NO job kind is public by name: a job row's kind is chosen by whoever enqueued it, so 'job:<kind>' is never on this list (always private).
 PUBLIC_SOURCES = frozenset({"identity", "system", "repo_code", "public_web", "task_stats", "memory:lesson", "memory:decision", "memory:outcome", "memory:fact"})
 PRIVATE_MEMORY_KINDS = frozenset({"owner_profile"})
+# Open brain: the owner's own data (his chat, his missions, results of tools he asked for). Never public. Code-only.
+OWNER_SOURCES = frozenset({"owner_chat", "owner_mission", "owner_tool"})
+# Free providers that do not train on prompts and keep no prompt data, so they may take OWNER data once the owner switched it on (owner_chat_free_providers).
+# Terms: FREE_PROVIDER_TERMS.md (Groq: no training, zero data retention option; OpenRouter: data_collection=deny routing; Cerebras: no training). Code-only.
+OWNER_DATA_PROVIDERS = frozenset({"groq", "openrouter", "cerebras"})
 # Sources that are private whatever else is declared (documentation: anything off PUBLIC_SOURCES is private anyway). Client, lead, workspace, insurance and
 # real-estate tables and private memory go only to the self-hosted model or to plain code.
 PRIVATE_SOURCE_PREFIXES = ("job:", "table:", "client", "lead", "workspace", "ws_", "ffm", "insurance", "realestate", "real_estate", "wholesale", "property",
@@ -114,6 +144,14 @@ class AllProvidersExhausted(BrainOffline):
 
 class ClientDataRefused(BrainOffline):
     pass
+
+
+class OwnerChatRefused(BrainOffline):
+    """Owner data, the owner's free-provider switch is off, and no self-hosted / paid provider may take it."""
+
+
+OWNER_CHAT_REPLY = ("Sir, our chat counts as your private data, and you have not allowed free model providers to see it (owner_chat_free_providers is off), "
+                    "and no self-hosted or paid model is on. Nothing was sent. To allow it, run ops/OWNER_OPEN_BRAIN.sql in the Supabase SQL editor.")
 
 
 class PromptTooLarge(Exception):
@@ -197,17 +235,83 @@ def route_class(sources, texts) -> str:
     return "public"
 
 
+def data_class(sources, texts) -> str:
+    """Open brain routing: 'client' (client sources or personal data detected: self-hosted only, always), 'owner' (only the owner's own sources besides
+    public ones, nothing detected: free providers only with the owner's switch), or 'public'. Unknown / missing sources = 'client' (default deny)."""
+    if not sources:
+        return "client"
+    owner = False
+    for s in map(str, sources):
+        if s in OWNER_SOURCES:
+            owner = True
+            continue
+        if s not in PUBLIC_SOURCES or s.lower().startswith(PRIVATE_SOURCE_PREFIXES):
+            return "client"
+    if any(has_personal_data(t) for t in texts if t):
+        return "client"
+    return "owner" if owner else "public"
+
+
+_SWITCHES = {"at": 0.0, "val": None}
+
+
+def routing_switches(ttl: float = 30.0) -> dict:
+    """The owner's two open-brain switches (open_brain_routing(), fz_brain_config): owner_chat_free_providers and allow_training_providers_nonprivate.
+    Cached a few seconds. Unreachable / unset = both False (fail closed)."""
+    now = time.monotonic()
+    if _SWITCHES["val"] is not None and now - _SWITCHES["at"] < ttl:
+        return _SWITCHES["val"]
+    try:
+        r = hq._request("POST", "/rest/v1/rpc/open_brain_routing", {}) or {}
+        val = {"owner_chat_free_providers": r.get("owner_chat_free_providers") is True,
+               "allow_training_providers_nonprivate": r.get("allow_training_providers_nonprivate") is True}
+    except Exception:
+        val = {"owner_chat_free_providers": False, "allow_training_providers_nonprivate": False}
+    _SWITCHES.update(at=now, val=val)
+    return val
+
+
+def owner_free_allowed() -> bool:
+    """The owner's switch fz_brain_config.owner_chat_free_providers. Unreachable / unset = False (fail closed)."""
+    return routing_switches(0.0)["owner_chat_free_providers"]
+
+
+def training_nonprivate_allowed() -> bool:
+    """The owner's switch fz_brain_config.allow_training_providers_nonprivate (Gemini free tier). Unreachable / unset = False."""
+    return routing_switches(0.0)["allow_training_providers_nonprivate"]
+
+
+# Task-aware routing (Nov 22 2026, "the best of each"): each job type has its own fallback chain; past the chain the work is queued
+# (AllProvidersExhausted). The data class still decides who MAY see the prompt: a chain never widens it.
+ROUTES = {
+    "chat":    {"chain": ["groq", "cerebras", "openrouter", "selfhost", "selfhost2", "anthropic"], "tier": "medium"},   # fast, tools
+    "long":    {"chain": ["gemini", "openrouter", "cerebras"], "tier": "medium"},                                      # big inputs, non-private
+    "reason":  {"chain": ["groq", "openrouter", "cerebras", "gemini"], "tier": "reason"},                              # hard reasoning / planning
+    "private": {"chain": ["selfhost", "selfhost2", "gpu"], "tier": "medium"},                                           # client data: self-hosted only
+    "bulk":    {"chain": None, "tier": "small"},                                                                         # whoever has headroom
+}
+
+
 # ------------------------------------------------------------------------------------------------------------------- providers
 class Provider:
     def __init__(self, spec: dict, env: dict):
         self.spec = spec
         self.name = spec["name"]
         self.kind = spec.get("kind", "openai_compat")
-        self.base_url = (env.get(spec["base_url_env"], "") if spec.get("base_url_env") else spec.get("base_url", "")).strip().rstrip("/")
+        if spec.get("base_url_tmpl"):
+            acct = re.sub(r"[^A-Za-z0-9]", "", env.get("CLOUDFLARE_ACCOUNT_ID") or "")
+            self.base_url = spec["base_url_tmpl"].format(CLOUDFLARE_ACCOUNT_ID=acct) if acct else ""
+        else:
+            self.base_url = (env.get(spec["base_url_env"], "") if spec.get("base_url_env") else spec.get("base_url", "")).strip().rstrip("/")
         self.key = (env.get(spec["key_env"]) or "").strip()
         self.paid, self.trains, self.client_data_ok = bool(spec.get("paid")), bool(spec.get("trains")), bool(spec.get("client_data_ok"))
         self.models = {t: _model_for(self.name, spec, env, t) for t in TIERS}
         self.limits = dict(spec.get("limits") or {})
+        try:
+            mp = int(env.get(f"JARVIS_{self.name.upper()}_MAX_PROMPT_TOKENS") or 0)
+        except ValueError:
+            mp = 0
+        self.max_prompt = mp if mp > 0 else int(self.limits.get("max_prompt") or FREE_PROMPT_TOKENS)
         self.metering = spec.get("metering", "tokens")
         self.extra_body = spec.get("extra_body") or {}
         self.timeout = int(spec.get("timeout") or 120)
@@ -244,7 +348,7 @@ class Provider:
         return out
 
     def model(self, tier: str) -> str:
-        return self.models.get(tier) or (self.models.get("medium") if tier == "large" else "") or self.models.get("small") or ""
+        return self.models.get(tier) or (self.models.get("medium") if tier in ("large", "reason") else "") or self.models.get("small") or ""
 
 
 LARGE_MODELS = frozenset(m for c in CATALOG for t, m in (c.get("models") or {}).items() if t == "large")
@@ -298,7 +402,8 @@ def metadata_host(host: str) -> bool:
 
 def load_providers(env: dict | None = None) -> list[Provider]:
     e = os.environ if env is None else env
-    specs = {s["name"]: s for s in CATALOG}
+    ext = (e.get("JARVIS_OPEN_BRAIN") or "").strip() == "1"
+    specs = {s["name"]: s for s in CATALOG + (EXT_CATALOG if ext else [])}
     try:
         for s in json.loads(e.get("JARVIS_LLM_EXTRA_PROVIDERS") or "[]"):
             why = extra_problem(s, e)
@@ -308,7 +413,7 @@ def load_providers(env: dict | None = None) -> list[Provider]:
             specs[str(s["name"])] = {**s, "paid": False, "client_data_ok": False, "kind": "openai_compat", "metering": "tokens"}
     except ValueError:
         logger.warning("JARVIS_LLM_EXTRA_PROVIDERS is not valid JSON; ignored")
-    order = [n.strip() for n in (e.get("JARVIS_LLM_ORDER") or DEFAULT_ORDER).split(",") if n.strip()]
+    order = [n.strip() for n in (e.get("JARVIS_LLM_ORDER") or (EXT_ORDER if ext else DEFAULT_ORDER)).split(",") if n.strip()]
     order += [n for n in specs if n not in order]
     return [Provider(specs[n], e) for n in order if n in specs]
 
@@ -356,6 +461,8 @@ class RateTracker:
         self.tok: dict[str, list[tuple[float, int]]] = {}
         self.cool: dict[str, float] = {}
         self.fails: dict[str, int] = {}
+        self.last: dict = {}
+        self.last_by_job: dict = {}
 
     def allows(self, p: Provider, tokens: int) -> bool:
         now = self.clock()
@@ -391,8 +498,56 @@ class RateTracker:
         now = self.clock()
         return {n: {"cooling_s": max(0, int(c - now))} for n, c in self.cool.items() if c > now}
 
+    def answered(self, p: "Provider", model: str, task_class: str, tokens: int = 0, job: str | None = None) -> None:
+        self.last = {"provider": p.name, "model": model, "task_class": task_class, "at": time.time(), "packet_tokens": int(tokens), "job": job}
+        if job:
+            self.last_by_job[job] = dict(self.last)
+
+    def headroom(self, p: "Provider") -> float:
+        """Share of today's request quota left (1.0 = untouched, 0.0 = used up); cooling = 0."""
+        now = self.clock()
+        if self.cool.get(p.name, 0) > now:
+            return 0.0
+        rpd = p.limits.get("rpd") or 0
+        if not rpd:
+            return 1.0
+        used = sum(1 for t in self.req.get(p.name, []) if t > now - 86400)
+        return max(0.0, 1.0 - used / rpd)
+
 
 TRACKER = RateTracker()
+
+
+class ResponseCache:
+    """Small in-process TTL cache for identical PUBLIC, tool-less job prompts (saves free-tier quota). Never holds owner or client data."""
+
+    def __init__(self, ttl: float | None = None, max_items: int = 200, clock=time.monotonic):
+        try:
+            self.ttl = float(ttl if ttl is not None else os.environ.get("JARVIS_LLM_CACHE_TTL") or 600)
+        except ValueError:
+            self.ttl = 600.0
+        self.max_items, self.clock, self.items = max_items, clock, {}
+
+    @staticmethod
+    def key(job, tier, system, messages) -> str:
+        return hashlib.sha256(json.dumps([job, tier, system, messages], ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+
+    def get(self, k):
+        v = self.items.get(k)
+        if not v or v[0] < self.clock():
+            self.items.pop(k, None)
+            return None
+        return dict(v[1])
+
+    def put(self, k, val):
+        if self.ttl <= 0:
+            return
+        if len(self.items) >= self.max_items:
+            self.items.pop(next(iter(self.items)))
+        self.items[k] = (self.clock() + self.ttl, dict(val))
+
+
+RESPONSE_CACHE = ResponseCache()
 
 
 # ------------------------------------------------------------------------------------------------------------------- routing
@@ -531,18 +686,79 @@ def _post(url: str, body: dict, headers: dict, timeout: int) -> dict:
         raise ProviderError("malformed provider answer", sent=True) from None
 
 
+def _fn_tools(tools: list | None) -> list[dict]:
+    """Tool definitions in one neutral form {name, description, parameters}: accepts Anthropic ({input_schema}) and plain ({parameters}) definitions.
+    Provider-side server tools (web search, web fetch: they carry a 'type') are dropped: only the Anthropic API runs them."""
+    out = []
+    for t in tools or []:
+        if not isinstance(t, dict) or not t.get("name") or t.get("type"):
+            continue
+        out.append({"name": t["name"], "description": t.get("description", ""),
+                    "parameters": t.get("parameters") or t.get("input_schema") or {"type": "object", "properties": {}}})
+    return out
+
+
+def _anthropic_messages(messages: list) -> list:
+    """OpenAI-format turns (assistant tool_calls, role 'tool' results) -> Anthropic content blocks. Plain turns pass through."""
+    out = []
+    for m in messages or []:
+        role = m.get("role")
+        if role == "assistant" and m.get("tool_calls"):
+            blocks = [{"type": "text", "text": m["content"]}] if m.get("content") else []
+            for c in m["tool_calls"]:
+                f = c.get("function") or {}
+                try:
+                    args = json.loads(f.get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                blocks.append({"type": "tool_use", "id": c.get("id"), "name": f.get("name"), "input": args if isinstance(args, dict) else {}})
+            out.append({"role": "assistant", "content": blocks})
+        elif role == "tool":
+            block = {"type": "tool_result", "tool_use_id": m.get("tool_call_id"), "content": str(m.get("content", ""))}
+            if out and out[-1]["role"] == "user" and isinstance(out[-1]["content"], list) and all(b.get("type") == "tool_result" for b in out[-1]["content"]):
+                out[-1]["content"].append(block)
+            else:
+                out.append({"role": "user", "content": [block]})
+        else:
+            out.append({"role": role, "content": m.get("content", "")})
+    return out
+
+
 def request_body(p: Provider, model: str, system: str, messages: list, max_output: int, tools: list | None):
+    fn = _fn_tools(tools)
     if p.kind == "anthropic":
-        body = {"model": model, "max_tokens": max_output, "messages": messages,
+        body = {"model": model, "max_tokens": max_output, "messages": _anthropic_messages(messages),
                 "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]}      # prompt caching of the stable prefix
-        if tools:
-            body["tools"] = tools
+        if fn:
+            body["tools"] = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in fn]
         return f"{p.base_url}/v1/messages", body, {"x-api-key": p.key, "anthropic-version": "2023-06-01"}
     # OpenAI-compatible: no cache field. vLLM / llama.cpp reuse an identical prefix by themselves; hosted free tiers ignore it (prompt caching = no-op there).
     body = {"model": model, "max_tokens": max_output, "messages": [{"role": "system", "content": system}] + messages, "temperature": 0.2, **p.extra_body}
-    if tools:
-        body["tools"] = [{"type": "function", "function": t} for t in tools]
+    if fn:
+        body["tools"] = [{"type": "function", "function": t} for t in fn]
     return f"{p.base_url}/chat/completions", body, {"Authorization": f"Bearer {p.key}"}
+
+
+def normalize_calls(p: Provider, calls: list, tool_names: set | None) -> list[dict]:
+    """Tool calls as [{id, name, arguments (dict)}]. A malformed call (no id / name, a tool that was not offered, arguments that are not a JSON
+    object) raises ProviderError: the provider's tool calling is broken for this request, so complete() rotates to the next provider."""
+    out = []
+    for i, c in enumerate(calls or []):
+        if not isinstance(c, dict):
+            raise ProviderError("malformed tool call", sent=True)
+        if p.kind == "anthropic":
+            cid, name, args = c.get("id"), c.get("name"), c.get("input")
+        else:
+            f = c.get("function") or {}
+            cid, name, raw = c.get("id") or f"call_{i}", f.get("name"), f.get("arguments")
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else (raw if raw is not None else {})
+            except ValueError:
+                raise ProviderError("tool call arguments are not JSON", sent=True) from None
+        if not name or (tool_names is not None and name not in tool_names) or not isinstance(args, dict):
+            raise ProviderError(f"bad tool call ({str(name)[:40]})", sent=True)
+        out.append({"id": str(cid)[:80], "name": name, "arguments": args})
+    return out
 
 
 def parse(p: Provider, resp: dict):
@@ -573,12 +789,18 @@ def _settle(call_id, cents: int, status: str) -> None:
 def complete(system: str, messages: list, *, division: str, task_class: str, tier: str = "small", mission_id: str | None = None, max_output: int = 800,
              tools: list | None = None, sources: list[str] | None = None, contains_client_data: bool = False, large_approval: str | None = None,
              providers: list[Provider] | None = None, tracker: RateTracker | None = None, post=_post, clock=time.monotonic, fund=None, env: dict | None = None,
-             use_approval=None, on_attempt=None) -> dict:
+             use_approval=None, on_attempt=None, agent: str = CORE_AGENT, purpose_text: str | None = None, owner_free=None, job: str | None = None,
+             training_ok=None, cache: "ResponseCache | None" = None) -> dict:
     """One answer from the first eligible provider that is inside its limits; rotate on 429 / errors.
     sources: where the prompt's content came from (PUBLIC_SOURCES); missing / unknown = private, so only a client_data_ok provider may get it.
     tier 'large' needs large_approval, consumed here (single use) before any provider is called.
     on_attempt(): called before each provider request (the worker extends its job lease there).
-    Raises ClientDataRefused, AllProvidersExhausted (queue it), BrainOffline (nothing configured), PromptTooLarge, LargeTierRefused, hq_meter.MeterBlocked."""
+    agent / purpose_text: who the spend gateway books the call to (default jarvis-core with the parsed mission purpose).
+    owner_free: the owner's owner_chat_free_providers switch (bool or callable); default: read it from the database (unreachable = off).
+    job: a ROUTES job type (chat / long / reason / private / bulk): its fallback chain decides the order (bulk: most headroom first); providers past
+    the chain are not tried (the caller queues). training_ok: the owner's allow_training_providers_nonprivate switch (public prompts of a job only).
+    Identical PUBLIC, tool-less job prompts are answered from the in-process response cache (RESPONSE_CACHE, TTL) without a model call.
+    Raises OwnerChatRefused, ClientDataRefused, AllProvidersExhausted (queue it), BrainOffline (nothing configured), PromptTooLarge, LargeTierRefused, hq_meter.MeterBlocked."""
     e = os.environ if env is None else env
     if tier not in TIERS:
         raise ValueError(f"unknown tier {tier!r}")
@@ -588,7 +810,9 @@ def complete(system: str, messages: list, *, division: str, task_class: str, tie
     in_est = sum(estimate_tokens(t) for t in texts)
     if in_est + max_output > MAX_PROMPT_TOKENS:
         raise PromptTooLarge(f"about {in_est} input tokens: over the {MAX_PROMPT_TOKENS} limit")
-    private = contains_client_data or route_class(sources, texts) == "private"
+    # tool DEFINITIONS are code (public); only the system prompt and the messages are data to classify
+    klass = "client" if contains_client_data else data_class(sources, _texts(system, messages))
+    private = klass != "public"
     if tier == "large":
         if not large_approval:
             raise LargeTierRefused("the large model tier needs a valid, unused owner approval (jarvis_owner_approve_large)")
@@ -596,18 +820,52 @@ def complete(system: str, messages: list, *, division: str, task_class: str, tie
             use_approval = lambda a, m: bool(hq._request("POST", "/rest/v1/rpc/jarvis_use_large_approval", {"p_id": a, "p_mission": m}))   # noqa: E731
         if not use_approval(large_approval, mission_id):
             raise LargeTierRefused("the large model tier needs a valid, unused owner approval (jarvis_owner_approve_large)")
+    if job is not None and job not in ROUTES:
+        raise ValueError(f"unknown job {job!r}")
+    cache = RESPONSE_CACHE if cache is None else cache
+    ckey = cache.key(job, tier, system, messages) if (job and klass == "public" and not tools) else None
+    if ckey:
+        hit = cache.get(ckey)
+        if hit is not None:
+            return {**hit, "cached": True, "provider": "cache", "cents": 0}
     fund_state = (fund or self_fund_status)() if any(p.paid and not p.problems() for p in providers) else {"paid_allowed": False}
-    pool = eligible(providers, contains_client_data=private, paid_allowed=bool(fund_state.get("paid_allowed")),
-                    allow_training=(e.get("JARVIS_ALLOW_TRAINING_PROVIDERS") == "1"))
-    if private:
+    allow_training = e.get("JARVIS_ALLOW_TRAINING_PROVIDERS") == "1"
+    if job is not None and klass == "public" and not allow_training:
+        if training_ok is None:
+            training_ok = training_nonprivate_allowed
+        allow_training = bool(training_ok() if callable(training_ok) else training_ok)
+    pool = eligible(providers, contains_client_data=(klass == "client"), paid_allowed=bool(fund_state.get("paid_allowed")), allow_training=allow_training)
+    if klass == "client":
         pool = [p for p in pool if p.name in CATALOG_NAMES and p.client_data_ok]     # only the code-defined self-hosted / owner models
+    elif klass == "owner":
+        if owner_free is None:
+            owner_free = owner_free_allowed
+        free_ok = bool(owner_free() if callable(owner_free) else owner_free)
+        pool = [p for p in pool if p.name in CATALOG_NAMES and (p.client_data_ok or (p.paid and p.kind == "anthropic")
+                                                                 or (free_ok and not p.paid and not p.trains and p.name in OWNER_DATA_PROVIDERS))]
     if not pool:
-        if private:
+        if klass == "client":
             raise ClientDataRefused(CLIENT_DATA_REPLY)
+        if klass == "owner":
+            raise OwnerChatRefused(OWNER_CHAT_REPLY)
         raise BrainOffline(OFFLINE_REPLY)
+    if job is not None:
+        chain = ROUTES[job]["chain"]
+        if chain is None:
+            pool = sorted(pool, key=lambda p: (p.paid, -tracker.headroom(p)))                          # bulk: free first, most quota left first
+        else:
+            pool = [p for n in chain for p in pool if p.name == n]
+            pool = sorted(pool, key=lambda p: (tracker.headroom(p) < 0.1,))                             # keep the chain order, demote nearly used-up ones
+        if not pool:
+            if klass == "client":
+                raise ClientDataRefused(CLIENT_DATA_REPLY)
+            if klass == "owner":
+                raise OwnerChatRefused(OWNER_CHAT_REPLY)
+            raise AllProvidersExhausted(EXHAUSTED_REPLY + f" (no provider on the {job} route is set up)")
+    tool_names = {t["name"] for t in _fn_tools(tools)} if tools else None
     tried = []
     for p in pool:
-        if not p.paid and in_est + max_output > FREE_PROMPT_TOKENS and not p.client_data_ok:
+        if not p.paid and in_est + max_output > p.max_prompt and not p.client_data_ok:
             tried.append(f"{p.name}: prompt too big for a free tier"); continue
         if not tracker.allows(p, in_est + max_output):
             tried.append(f"{p.name}: at its limit"); continue
@@ -615,7 +873,7 @@ def complete(system: str, messages: list, *, division: str, task_class: str, tie
         est = estimate_cents(p, model, in_est, max_output)
         if p.paid and est > int(fund_state.get("available_cents") or 0):
             tried.append(f"{p.name}: self-funded budget too small"); continue
-        call_id = hq_meter._reserve_cents(CORE_AGENT, est, model, purpose(division, mission_id, task_class, p.name))
+        call_id = hq_meter._reserve_cents(agent, est, model, (purpose_text[:120] if purpose_text else purpose(division, mission_id, task_class, p.name)))
         url, body, headers = request_body(p, model, system, messages, max_output, tools)
         if on_attempt:
             try:
@@ -626,6 +884,7 @@ def complete(system: str, messages: list, *, division: str, task_class: str, tie
         try:
             resp = post(url, body, headers, p.timeout)
             text, tin, tout, calls = parse(p, resp)
+            calls = normalize_calls(p, calls, tool_names) if (calls or tool_names) else []
         except ProviderError as err:
             # a paid request that may have reached the vendor (timeout, cut connection, malformed answer) settles at the reserved estimate, never 0
             charge = actual_cents(p, model, 0, 0, clock() - t0) if p.metering == "gpu_hour" else (est if (p.paid and err.sent) else 0)
@@ -637,11 +896,37 @@ def complete(system: str, messages: list, *, division: str, task_class: str, tie
             _settle(call_id, est if p.paid else 0, "failed")
             raise
         tracker.record(p, (tin or in_est) + (tout or 0))
+        tracker.answered(p, model, task_class, in_est, job)
+        logger.info("llm: %s/%s answered %s (job %s, packet ~%d tokens, class %s)", p.name, model, task_class, job, in_est, klass)
         cents = actual_cents(p, model, tin, tout, clock() - t0)
         _settle(call_id, cents, "done")
-        return {"text": text, "provider": p.name, "model": model, "tier": tier, "input_tokens": tin, "output_tokens": tout, "cents": cents, "tool_calls": calls,
-                "tried": tried, "route": "private" if private else "public"}
+        out = {"text": text, "provider": p.name, "model": model, "tier": tier, "input_tokens": tin, "output_tokens": tout, "cents": cents, "tool_calls": calls,
+               "tried": tried, "route": "private" if private else "public", "data_class": klass, "packet_tokens": in_est, "job": job}
+        if ckey and not calls and text:
+            cache.put(ckey, out)
+        return out
     raise AllProvidersExhausted(EXHAUSTED_REPLY + " (" + "; ".join(tried)[:300] + ")")
+
+
+def brain_status(env: dict | None = None, tracker: RateTracker | None = None) -> dict:
+    """For /brainstatus: configured providers and their models, which are cooling down (rate limited / failing), and who answered last. No call made."""
+    t = TRACKER if tracker is None else tracker
+    cooling = t.status()
+    rows = []
+    for p in load_providers(env):
+        probs = p.problems()
+        rows.append({"name": p.name, "configured": not probs, "paid": p.paid, "owner_data_ok": p.name in OWNER_DATA_PROVIDERS or p.client_data_ok,
+                     "trains": p.trains, "client_data_ok": p.client_data_ok, "headroom": round(t.headroom(p), 2),
+                     "models": {k: v for k, v in p.models.items() if v}, "cooling_s": (cooling.get(p.name) or {}).get("cooling_s", 0),
+                     "requests_today": len(t.req.get(p.name, []))})
+    routes = {}
+    configured = {r["name"]: r for r in rows if r["configured"]}
+    for job, spec in ROUTES.items():
+        chain = spec["chain"] or [r["name"] for r in sorted(configured.values(), key=lambda r: (r["paid"], r["cooling_s"] > 0))]
+        live = [n for n in chain if n in configured and not configured[n]["cooling_s"] and not (configured[n]["paid"])]
+        routes[job] = {"chain": [n for n in chain if n in configured], "first": live[0] if live else None,
+                       "last": (t.last_by_job.get(job) or {}).get("provider")}
+    return {"providers": rows, "last": dict(t.last), "routes": routes}
 
 
 def health(p: Provider, get=None, timeout: int = 10) -> dict:
