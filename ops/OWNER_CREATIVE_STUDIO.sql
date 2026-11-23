@@ -34,4 +34,11 @@ insert into storage.buckets (id, name, public) values ('creative-studio', 'creat
 -- 8. Decide a finished creative (publishing is then a separate hands approval)
 -- select public.creative_owner_decide('<job id>', true, 'ok');
 
+-- 9. M8c (after migrations/20261207_creative_studio_v2.sql). Free local editing (B-roll stitch, beat-synced cuts, visualizers) on the Jarvis host:
+-- select public.creative_owner_set_provider('local-edit', true);
+--    Templates: the shipped library is seeded; edit or retire one (the seed never overwrites your edit):
+-- select public.creative_owner_set_template('trap-flat-lay', 'the-trap', 'image', 'product', 'Flat lay', array['drop-reveal'], '{"prompt": {"base": "{product} flat lay"}}', 'active');
+--    Self-hosted ComfyUI (later cost step): ops/proposals/creative_comfyui_selfhost.md, then
+-- select public.creative_owner_set_provider('runpod-comfyui', true);   -- also RUNPOD_API_KEY + COMFYUI_RUNPOD_ENDPOINT in Railway Variables
+
 -- Retire (never delete): update public.fz_services set status = 'retired' where service = 'creative_studio';
