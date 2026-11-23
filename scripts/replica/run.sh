@@ -17,9 +17,9 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
   if [ "$f" = "20261122_insurance_classifier_v1.sql" ]; then guards_before="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.ws_guard()'::regprocedure)) || ' ' || md5(pg_get_functiondef('public.ffm_guard()'::regprocedure))")"; fi
   # office money M2: the money controls (protected functions + ACLs, triggers, money table contents + ACLs, capital_snapshot, the authorize_action / reserve_spend decision
   # matrix) must be IDENTICAL right before and right after it is applied (sqltests/include/money_fingerprint.sql; the sqltest repeats this for rollback and re-apply)
-  if [ "$f" = "20261128_office_money_v1.sql" ] || [ "$f" = "20261129_approvals_kernel_v1.sql" ]; then psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/include/money_fingerprint.sql" -c "select k || ' ' || md5(v) from pg_temp.fz_money_fp() order by k" >"${TMPDIR:-/tmp}/money_fp_before" 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "MONEY FINGERPRINT FAILED"; exit 1; }; fi
+  if [ "$f" = "20261128_office_money_v1.sql" ] || [ "$f" = "20261129_approvals_kernel_v1.sql" ] || [ "$f" = "20261130_security_hardening_v1.sql" ]; then psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/include/money_fingerprint.sql" -c "select k || ' ' || md5(v) from pg_temp.fz_money_fp() order by k" >"${TMPDIR:-/tmp}/money_fp_before" 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "MONEY FINGERPRINT FAILED"; exit 1; }; fi
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED: $f"; exit 1; }
-  if [ "$f" = "20261128_office_money_v1.sql" ] || [ "$f" = "20261129_approvals_kernel_v1.sql" ]; then
+  if [ "$f" = "20261128_office_money_v1.sql" ] || [ "$f" = "20261129_approvals_kernel_v1.sql" ] || [ "$f" = "20261130_security_hardening_v1.sql" ]; then
     psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/include/money_fingerprint.sql" -c "select k || ' ' || md5(v) from pg_temp.fz_money_fp() order by k" >"${TMPDIR:-/tmp}/money_fp_after" 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "MONEY FINGERPRINT FAILED"; exit 1; }
     [ "$(wc -l <"${TMPDIR:-/tmp}/money_fp_before")" -ge 300 ] || { echo "MONEY FINGERPRINT too small"; exit 1; }
     diff "${TMPDIR:-/tmp}/money_fp_before" "${TMPDIR:-/tmp}/money_fp_after" >/dev/null || { diff "${TMPDIR:-/tmp}/money_fp_before" "${TMPDIR:-/tmp}/money_fp_after" | head -20; echo "OFFICE MONEY CHANGED THE MONEY CONTROLS (fingerprint before vs after $f)"; exit 1; }
@@ -31,6 +31,8 @@ echo "re-applying every migration (must be safe to run twice)"
 for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
   psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED on second apply: $f"; exit 1; }
 done
+# M4: the privileged grants of the fresh database are exactly the reviewed allowlist (ops/expected_grants.tsv == fz_expected_grants())
+python3 "$root/scripts/expected_grants.py" --url "$REPLICA_URL" --check || { echo "EXPECTED GRANTS CHECK FAILED (a grant changed: review it, then scripts/expected_grants.py --write)"; exit 1; }
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$here/e2e.sql" 2>&1 | grep -v NOTICE | cut -c1-200
 echo "perf: backup_snapshot() redaction cost on 2,000 audit rows + 200 tasks of 11.5k characters (budget 60 s, normal 5-8 s on the scratch machine)"
 "$root/scripts/perf_redaction.sh" "$REPLICA_URL" 2000 200 60 || { echo "PERF CHECK FAILED"; exit 1; }
@@ -132,6 +134,7 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
 done
 echo "insurance rollback drill OK (and the migrations re-apply cleanly afterwards)"
 echo "jarvis hands rollback drill: ops/rollback_jarvis_hands.sql removes the hand objects (twice = idempotent), restores the export policy, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_security_hardening.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "SECURITY HARDENING ROLLBACK (before the approvals kernel rollback) FAILED"; exit 1; }   # security hardening uses the office money owner check
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_approvals_kernel.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "APPROVALS KERNEL ROLLBACK (before the office money rollback) FAILED"; exit 1; }   # the approvals kernel reads office money
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_office_money.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "OFFICE MONEY ROLLBACK (before the hands rollback) FAILED"; exit 1; }   # office money depends on org access
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_org_access.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ORG ACCESS ROLLBACK (before the hands rollback) FAILED"; exit 1; }   # org access re-creates the hands backup classification
@@ -145,6 +148,7 @@ done
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/jarvis_hands_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "jarvis_hands_check failed after the rollback + re-apply"; exit 1; }
 echo "jarvis hands rollback drill OK"
 echo "jarvis core rollback drill: ops/rollback_jarvis_core.sql removes the core objects (twice = idempotent), keeps the export policy classified, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_security_hardening.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "SECURITY HARDENING ROLLBACK (before the approvals kernel rollback) FAILED"; exit 1; }   # security hardening uses the office money owner check
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_approvals_kernel.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "APPROVALS KERNEL ROLLBACK (before the office money rollback) FAILED"; exit 1; }   # the approvals kernel reads office money
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_office_money.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "OFFICE MONEY ROLLBACK (before the core rollback) FAILED"; exit 1; }   # office money depends on org access
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_org_access.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "ORG ACCESS ROLLBACK (before the core rollback) FAILED"; exit 1; }   # org access depends on hands
@@ -195,6 +199,34 @@ if python3 -c "import psycopg2" 2>/dev/null; then   # the REAL hq._request token
 elif [ -n "${REQUIRE_INTEGRATION:-}" ]; then echo "psycopg2 missing but REQUIRE_INTEGRATION is set"; exit 1; fi
 echo "office money rollback drill: ops/rollback_office_money.sql keeps the allocation record in audit_log, removes the M2 views / functions / tables / registry rows and the stamp job (twice = idempotent), restores the org-access backup classification exactly, leaves M1 and every money control in place, then everything re-applies"
 mc0="$(psql "$REPLICA_URL" -At -c "select md5(string_agg(p.oid::regprocedure::text || md5(pg_get_functiondef(p.oid)) || coalesce(p.proacl::text, ''), ',' order by p.oid::regprocedure::text)) from pg_proc p where p.pronamespace='public'::regnamespace and p.prokind='f' and p.proname in ('authorize_action','reserve_spend','settle_spend','release_spend','capital_snapshot','reserve_llm_budget','settle_llm_call','app_set_kill','fz_authorize_action','fz_policy_preview')")|$(psql "$REPLICA_URL" -At -c "select count(*) from pg_trigger t where not t.tgisinternal and t.tgrelid in ('public.ledger'::regclass,'public.llm_calls'::regclass,'public.spend_reservations'::regclass,'public.action_log'::regclass,'public.approval_requests'::regclass,'public.capital_policy'::regclass,'public.system_state'::regclass,'public.action_policy'::regclass)")"
+echo "token rotation drill (ops/TOKEN_ROTATION_RUNBOOK.md): rotate, void, revoke on leak, re-activate, expiry warning"
+psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/scripts/replica/token_drill.sql" 2>"${TMPDIR:-/tmp}/replica.err" >/dev/null || { cat "${TMPDIR:-/tmp}/replica.err"; echo "TOKEN ROTATION DRILL FAILED"; exit 1; }
+grep -q "token rotation drill OK" "${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "TOKEN ROTATION DRILL did not finish"; exit 1; }
+echo "token rotation drill OK"
+echo "security hardening rollback drill: ops/rollback_security_hardening.sql archives the chain / baseline / alerts / tokens (no row lost), removes the M4 functions and job (twice = idempotent), restores the office-money classification exactly, then everything re-applies"
+psql "$REPLICA_URL" -q -c "select public.fz_security_watch()" >/dev/null 2>&1 || true
+sr0="$(psql "$REPLICA_URL" -At -c "select (select count(*) from public.fz_audit_chain)||'/'||(select count(*) from public.fz_audit_pending)||'/'||(select count(*) from public.fz_audit_state)||'/'||(select count(*) from public.fz_security_baseline)||'/'||(select count(*) from public.fz_security_fingerprints)||'/'||(select count(*) from public.fz_security_alerts)||'/'||(select count(*) from public.fz_token_registry)")"
+head0="$(psql "$REPLICA_URL" -At -c "select coalesce((select chain_hash from public.fz_audit_chain order by seq desc limit 1), 'none')")"
+for i in 1 2; do
+  (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_security_hardening.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "SECURITY HARDENING ROLLBACK FAILED (run $i)"; exit 1; }
+done
+sr1="$(psql "$REPLICA_URL" -At -c "select (select count(*) from fz_archive.fz_audit_chain)||'/'||(select count(*) from fz_archive.fz_audit_pending)||'/'||(select count(*) from fz_archive.fz_audit_state)||'/'||(select count(*) from fz_archive.fz_security_baseline)||'/'||(select count(*) from fz_archive.fz_security_fingerprints)||'/'||(select count(*) from fz_archive.fz_security_alerts)||'/'||(select count(*) from fz_archive.fz_token_registry)")"
+[ "$sr0" = "$sr1" ] || { echo "SECURITY HARDENING ROLLBACK DRILL FAILED: rows lost ($sr0 before, $sr1 archived)"; exit 1; }
+sh="$(psql "$REPLICA_URL" -At -c "select (select count(*) from pg_proc where pronamespace='public'::regnamespace and proname in ('fz_audit_chain_extend','fz_audit_verify','fz_security_watch','fz_security_report','fz_privileged_items','fz_expected_grants','fz_security_alert','fz_owner_ack_security','fz_owner_register_token','fz_audit_row_hash','fz_audit_link'))||'/'||(select count(*) from cron.job where jobname='fz-security-watch')||'/'||(select count(*) from pg_class where relnamespace='public'::regnamespace and relname in ('fz_audit_chain','fz_audit_pending','fz_audit_state','fz_security_baseline','fz_security_fingerprints','fz_security_alerts','fz_token_registry'))||'/'||(select public.backup_export_policy()->>'unclassified')")"
+[ "$sh" = "0/0/0/[]" ] || { echo "SECURITY HARDENING ROLLBACK DRILL FAILED: $sh"; exit 1; }
+c1="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.backup_classification()'::regprocedure))")"
+for f in 20261128_office_money_v1.sql 20261121_postlock_backup_identity_v1.sql 20261122_postlock_backup_identity_v2.sql; do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "SECURITY HARDENING ROLLBACK DRILL: could not re-apply $f"; exit 1; }
+done
+c2="$(psql "$REPLICA_URL" -At -c "select md5(pg_get_functiondef('public.backup_classification()'::regprocedure))")"
+[ "$c1" = "$c2" ] || { echo "SECURITY HARDENING ROLLBACK DRILL FAILED: backup_classification() is not the office-money text"; exit 1; }
+for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
+  psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f "$root/migrations/$f" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "FAILED re-applying after the security hardening rollback: $f"; exit 1; }
+done
+[ "$(psql "$REPLICA_URL" -At -c "select coalesce((select chain_hash from public.fz_audit_chain order by seq desc limit 1), 'none')")" = "$head0" ] || { echo "SECURITY HARDENING ROLLBACK DRILL FAILED: the chain head was not seeded back from the archive"; exit 1; }
+psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/security_hardening_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "security_hardening_check failed after the rollback + re-apply"; exit 1; }
+echo "security hardening rollback drill OK (archived, nothing lost, office-money classification exact, then the migrations re-apply and the checks pass again)"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_security_hardening.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "SECURITY HARDENING ROLLBACK (before the approvals kernel drill) FAILED"; exit 1; }   # security hardening uses the office money owner check
 echo "approvals kernel rollback drill: ops/rollback_approvals_kernel.sql keeps a queue snapshot in audit_log, removes the M3 view / trigger / functions / job (twice = idempotent), leaves M2, M1 and every money control in place, then everything re-applies"
 ak0="$(psql "$REPLICA_URL" -At -c "select count(*) from public.audit_log where action='approval_queue_export'")"
 for i in 1 2; do
@@ -207,6 +239,7 @@ for f in $(grep -v '^#' "$root/migrations/APPLY_ORDER.txt"); do
 done
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/approvals_kernel_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "approvals_kernel_check failed after the rollback + re-apply"; exit 1; }
 echo "approvals kernel rollback drill OK (M3 removed, snapshot kept, M2 / M1 / money controls untouched, then the migrations re-apply and the checks pass again)"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_security_hardening.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "SECURITY HARDENING ROLLBACK (before the approvals kernel rollback) FAILED"; exit 1; }   # security hardening uses the office money owner check
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_approvals_kernel.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "APPROVALS KERNEL ROLLBACK (before the office money drill) FAILED"; exit 1; }   # the approvals kernel reads office money
 ex0="$(psql "$REPLICA_URL" -At -c "select count(*) from public.audit_log where action='office_money_export'")"
 # review fix 3: the rollback archives (never drops) the money tables: every row must be in fz_archive afterwards, and a re-apply keeps the original cutover
@@ -235,6 +268,7 @@ done
 psql "$REPLICA_URL" -q -At -v ON_ERROR_STOP=1 -f "$root/sqltests/office_money_check.sql" >/dev/null 2>"${TMPDIR:-/tmp}/replica.err" || { cat "${TMPDIR:-/tmp}/replica.err"; echo "office_money_check failed after the rollback + re-apply"; exit 1; }
 echo "office money rollback drill OK (M2 removed, record kept, M1 and the money controls untouched, org-access classification exact, then the migrations re-apply and the checks pass again)"
 echo "org access rollback drill: ops/rollback_org_access.sql un-archives, removes the scoped roles / policies / columns / fz objects (twice = idempotent), restores the jarvis-hands backup classification exactly, then everything re-applies"
+(cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_security_hardening.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "SECURITY HARDENING ROLLBACK (before the approvals kernel rollback) FAILED"; exit 1; }   # security hardening uses the office money owner check
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_approvals_kernel.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "APPROVALS KERNEL ROLLBACK (before the office money rollback) FAILED"; exit 1; }   # the approvals kernel reads office money
 (cd "$root" && psql "$REPLICA_URL" -q -v ON_ERROR_STOP=1 -f ops/rollback_office_money.sql >/dev/null 2>"${TMPDIR:-/tmp}/replica.err") || { cat "${TMPDIR:-/tmp}/replica.err"; echo "OFFICE MONEY ROLLBACK (before the org access rollback) FAILED"; exit 1; }   # office money depends on org access
 arch="$(psql "$REPLICA_URL" -At -c "select coalesce(string_agg(entity || ':' || key || ':' || prior_status, ',' order by entity, key), '') from public.fz_org_archive where decision = 'archived' and entity in ('agent', 'department')")"
