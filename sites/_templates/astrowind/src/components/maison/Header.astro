@@ -1,0 +1,28 @@
+---
+// Maison header: wordmark, hairline nav, magnetic metal CTA. Mobile menu is a <details> (works without JS).
+import Wordmark from './Wordmark.astro';
+import { headerData } from '~/navigation';
+import { BRAND } from '~/data/site';
+const { links, actions } = headerData;
+---
+
+<a href="#main" class="m-skip">Skip to content</a>
+<header class="m-header" data-m-header>
+  <div class="m-progress" aria-hidden="true"><span data-m-progress></span></div>
+  <div class="m-header-in">
+    <a href="/" class="m-brand" aria-label={`${BRAND} home`}><Wordmark /></a>
+    <nav class="m-nav" aria-label="Main">
+      {links.map((l) => <a href={l.href}>{l.text}</a>)}
+    </nav>
+    <div class="m-header-cta">
+      {actions.map((a) => <a href={a.href} class="m-btn m-btn-metal m-btn-sm" data-magnetic><span>{a.text}</span></a>)}
+    </div>
+    <details class="m-menu">
+      <summary aria-label="Menu"><span></span><span></span></summary>
+      <nav aria-label="Mobile">
+        {links.map((l) => <a href={l.href}>{l.text}</a>)}
+        {actions.map((a) => <a href={a.href} class="m-btn m-btn-metal"><span>{a.text}</span></a>)}
+      </nav>
+    </details>
+  </div>
+</header>

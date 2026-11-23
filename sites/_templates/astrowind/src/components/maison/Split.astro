@@ -1,0 +1,9 @@
+---
+// A heading whose words rise in one by one (scroll choreography). Plain text stays plain text for screen readers and without JS.
+const { text = '', as: Tag = 'h2', class: cls = '', id } = Astro.props;
+const words = String(text).split(/\s+/).filter(Boolean);
+---
+
+<Tag class:list={['m-split', cls]} id={id} data-reveal>
+  {words.map((w, i) => <><span class="m-w"><span style={`--i:${i}`}>{w}</span></span>{' '}</>)}
+</Tag>

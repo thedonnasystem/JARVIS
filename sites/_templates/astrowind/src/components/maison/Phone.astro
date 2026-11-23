@@ -1,0 +1,95 @@
+---
+// Maison call demo: a phone that plays the illustrative call from site.json, clearly labelled as an illustration. Every line is in the HTML
+// (readable without JS, by screen readers and under prefers-reduced-motion). With motion allowed the lines arrive one by one, with a typing
+// indicator before the assistant speaks, while the phone is on screen; it then loops. The orb hears it (m:voice).
+import { SITE_DATA as S } from '~/data/site';
+const demo = S.demo;
+const bars = Array.from({ length: 28 }, (_, i) => 0.25 + 0.75 * Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.6)));
+---
+
+{
+  demo && (
+    <figure class="m-phone-wrap">
+      <div class="m-phone" data-m-phone>
+        <div class="m-phone-screen">
+          <div class="m-island" aria-hidden="true" />
+          <div class="m-call-head" aria-hidden="true">
+            <span class="m-call-avatar" />
+            <span class="m-call-name">{S.brand.name}</span>
+            <span class="m-call-status"><span class="m-rec" /> On a call · <span data-m-timer>00:00</span></span>
+          </div>
+          <div class="m-wave" aria-hidden="true">
+            {bars.map((b, i) => <span style={`--h:${b.toFixed(2)};--i:${i}`} />)}
+          </div>
+          <ol class="m-transcript" data-m-transcript>
+            {demo.lines.map((l) => (
+              <li class:list={['m-say', l.who === 'caller' ? 'm-say-caller' : 'm-say-agent']}>
+                <span class="m-say-who">{l.who === 'caller' ? 'Caller' : S.brand.name}</span>
+                <span class="m-say-text">{l.text}</span>
+              </li>
+            ))}
+            <li class="m-typing" aria-hidden="true"><span /><span /><span /></li>
+          </ol>
+          <div class="m-call-actions" aria-hidden="true">
+            <span /><span /><span class="m-end" />
+          </div>
+        </div>
+      </div>
+      <figcaption class="m-phone-label">{demo.label}</figcaption>
+    </figure>
+  )
+}
+
+<script>
+  const phone = document.querySelector<HTMLElement>('[data-m-phone]');
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (phone && !reduce) {
+    const list = phone.querySelector<HTMLElement>('[data-m-transcript]')!;
+    const lines = Array.from(list.querySelectorAll<HTMLElement>('.m-say'));
+    const typing = list.querySelector<HTMLElement>('.m-typing')!;
+    const timer = phone.querySelector<HTMLElement>('[data-m-timer]');
+    const voice = (v: number) => window.dispatchEvent(new CustomEvent('m:voice', { detail: v }));
+    let running = false, visible = false, sec = 0;
+    const later = (fn: () => void, ms: number) => window.setTimeout(fn, ms);
+    const fit = () => {
+      let h = 0;
+      lines.forEach((l) => { if (l.classList.contains('is-in')) h += l.offsetHeight + 10; });
+      if (typing.classList.contains('is-in')) h += typing.offsetHeight + 10;
+      list.style.setProperty('--shift', `${Math.min(0, list.clientHeight - h - 6)}px`);
+    };
+    const play = () => {
+      running = true;
+      sec = 0;
+      lines.forEach((l) => l.classList.remove('is-in'));
+      fit();
+      let at = 600;
+      lines.forEach((l) => {
+        const agent = l.classList.contains('m-say-agent');
+        const len = (l.textContent || '').length;
+        if (agent) {
+          later(() => { typing.classList.add('is-in'); fit(); }, at);
+          at += 1000;
+        }
+        later(() => {
+          typing.classList.remove('is-in');
+          l.classList.add('is-in');
+          fit();
+          voice(agent ? 1 : 0.35);
+          later(() => voice(0), Math.min(2600, 500 + len * 30));
+        }, at);
+        at += 800 + len * 28;
+      });
+      later(() => { running = false; if (visible) play(); }, at + 4000);
+    };
+    window.setInterval(() => {
+      if (!running) return;
+      sec += 1;
+      if (timer) timer.textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+    }, 1000);
+    phone.classList.add('is-js');
+    new IntersectionObserver(([e]) => {
+      visible = e.isIntersecting;
+      if (visible && !running) play();
+    }, { threshold: 0.3 }).observe(phone);
+  }
+</script>

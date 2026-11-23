@@ -1,0 +1,87 @@
+---
+// Maison motion layer: Lenis smooth scrolling (MIT, vendored), one-time reveals, scroll-linked parallax and progress, magnetic buttons and
+// cursor spotlights. Nothing runs under prefers-reduced-motion (the page is then fully static), and all content is visible without JS.
+---
+
+<script>
+  import Lenis from '~/vendor/lenis/lenis.mjs';
+
+  const root = document.documentElement;
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const fine = window.matchMedia('(pointer: fine)').matches;
+  const header = document.querySelector<HTMLElement>('[data-m-header]');
+  const bar = document.querySelector<HTMLElement>('[data-m-progress]');
+  const para = window.matchMedia('(min-width: 64rem) and (pointer: fine)').matches ? Array.from(document.querySelectorAll<HTMLElement>('[data-parallax]')) : [];
+
+  const onScroll = (y: number) => {
+    header?.classList.toggle('is-scrolled', y > 24);
+    const max = root.scrollHeight - innerHeight;
+    if (bar) bar.style.transform = `scaleX(${max > 0 ? Math.min(1, y / max) : 0})`;
+    if (reduce) return;
+    root.style.setProperty('--hero-p', String(Math.min(1, y / Math.max(1, innerHeight))));
+    for (const el of para) {
+      const r = el.getBoundingClientRect();
+      const mid = r.top + r.height / 2 - innerHeight / 2;
+      const off = Math.max(-60, Math.min(60, -mid * Number(el.dataset.parallax || 0.1)));
+      el.style.transform = `translate3d(0, ${off.toFixed(1)}px, 0)`;
+    }
+  };
+
+  if (!reduce) {
+    if (fine) {
+      // Smooth wheel scrolling is a desktop nicety; touch devices keep native scrolling (and save the per-frame work).
+      const lenis = new Lenis({ lerp: 0.085, wheelMultiplier: 0.9, anchors: { offset: -72 } });
+      lenis.on('scroll', ({ scroll }: { scroll: number }) => onScroll(scroll));
+      const raf = (t: number) => { lenis.raf(t); requestAnimationFrame(raf); };
+      requestAnimationFrame(raf);
+    } else {
+      let queued = false;
+      window.addEventListener('scroll', () => {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => { queued = false; onScroll(scrollY); });
+      }, { passive: true });
+    }
+
+    const io = new IntersectionObserver((entries) => entries.forEach((e) => {
+      if (e.isIntersecting) { e.target.classList.add('is-in'); io.unobserve(e.target); }
+    }), { threshold: 0.18, rootMargin: '0px 0px -6% 0px' });
+    document.querySelectorAll('[data-reveal]').forEach((el) => io.observe(el));
+
+    if (fine) {
+      document.querySelectorAll<HTMLElement>('[data-magnetic]').forEach((el) => {
+        const label = el.firstElementChild as HTMLElement | null;
+        el.addEventListener('pointermove', (e) => {
+          const r = el.getBoundingClientRect();
+          const x = e.clientX - r.left - r.width / 2, y = e.clientY - r.top - r.height / 2;
+          el.style.transform = `translate(${x * 0.28}px, ${y * 0.38}px)`;
+          if (label) label.style.transform = `translate(${x * 0.12}px, ${y * 0.16}px)`;
+          el.style.setProperty('--sx', `${e.clientX - r.left}px`);
+        });
+        el.addEventListener('pointerleave', () => {
+          el.style.transform = '';
+          if (label) label.style.transform = '';
+        });
+      });
+      document.querySelectorAll<HTMLElement>('[data-spot]').forEach((el) => {
+        el.addEventListener('pointermove', (e) => {
+          const r = el.getBoundingClientRect();
+          el.style.setProperty('--mx', `${e.clientX - r.left}px`);
+          el.style.setProperty('--my', `${e.clientY - r.top}px`);
+        });
+      });
+    }
+  } else {
+    window.addEventListener('scroll', () => onScroll(scrollY), { passive: true });
+  }
+  onScroll(scrollY);
+
+  // Decorative loops (marquee, waveforms, rings, seal) start once the page is live: on the first interaction or a few seconds after load.
+  if (!reduce) {
+    const live = () => root.classList.add('m-live');
+    ['pointermove', 'scroll', 'touchstart', 'keydown', 'wheel'].forEach((t) => window.addEventListener(t, live, { once: true, passive: true }));
+    const later = () => setTimeout(live, 4500);
+    if (document.readyState === 'complete') later();
+    else window.addEventListener('load', later, { once: true });
+  }
+</script>

@@ -5,12 +5,13 @@
   "office": "donna",
   "template": "astrowind",
   "variant": "futuristic",
+  "theme": "maison",
   "brand": {
     "name": "Donna.AI",
     "city": "Ottawa",
     "region": "Ontario",
-    "primary": "#8b5cf6",
-    "accent": "#22d3ee"
+    "primary": "#7a1428",
+    "accent": "#c9a24a"
   },
   "meta": {
     "title": "Donna.AI | AI receptionist for Ottawa businesses",
@@ -82,9 +83,9 @@
       "title": "Websites",
       "subtitle": "A website that turns visitors into calls and bookings.",
       "items": [
-        {"title": "Site", "subtitle": "A fast website that brings in calls", "price": 1997, "period": "one-time", "note": "+ $149 per month for hosting and care",
+        {"title": "Site", "subtitle": "A fast website that brings in calls", "price": 497, "period": "one-time", "note": "+ $149 per month for hosting and care",
          "features": ["Mobile-first website", "Click-to-call and booking built in", "Lead-capture form into your CRM", "Basic local SEO setup"]},
-        {"title": "Site Pro", "subtitle": "More pages, more reach", "price": 3997, "period": "one-time", "note": "+ $249 per month for hosting and care",
+        {"title": "Site Pro", "subtitle": "More pages, more reach", "price": 997, "period": "one-time", "note": "+ $249 per month for hosting and care",
          "features": ["Everything in Site", "Service and area pages", "Content updates each month", "Priority support"]}
       ]
     }

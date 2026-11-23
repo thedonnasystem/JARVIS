@@ -32,7 +32,7 @@ Registered as the shared service `web_studio` in `fz_services` (migration `20261
 ## Template library (curated, commercial-safe licences only)
 | Template | Licence | Variants |
 |---|---|---|
-| `astrowind`: AstroWind (Astro 7 + Tailwind 4), upstream commit `14e1a69` | MIT | `futuristic`, `local` |
+| `astrowind`: AstroWind (Astro 7 + Tailwind 4), upstream commit `14e1a69` | MIT | `futuristic` (themes: default, `maison`), `local` |
 
 **Futuristic variant:**
 - dark only, with brand-token glow accents and glass cards;
@@ -41,6 +41,18 @@ Registered as the shared service `web_studio` in `fz_services` (migration `20261
 - one-time scroll reveals and bold display type.
 
 All motion is off under `prefers-reduced-motion`, and all content is readable without JavaScript.
+
+**Maison theme** (`"variant": "futuristic", "theme": "maison"` in site.json; Donna.AI uses it). Luxury house meets voice AI: black, wine and metallic gold.
+- **Colours come from the brand:** metal = `brand.accent`, wine = `brand.primary` (Donna: `#c9a24a`, `#7a1428`), so any client can wear the theme in its own colours.
+- **Type:** Cormorant Garamond (display, light and italic) with Inter (text), both OFL and self-hosted by the Astro Fonts API at build time.
+- **Hero:** a liquid-metal orb in raw WebGL (one fragment shader, no library): dark chrome with molten gold horizons, wine reflections, a tilted hairline ring and metal dust. The key light follows the cursor and the surface "speaks" while the call demo plays. A CSS sphere shows first and stays when there is no GPU, no JS or no WebGL.
+- **Sections:** marquee of the services, a phone playing the illustrative call (labelled "Illustration of a call, not a real customer"), bento services grid, numbered steps on a hairline, a wine "founding offer" panel with a turning seal, metal-numeral pricing cards, empty case-study slots, hairline FAQ, and the contact form restyled (same markup and CASL wording, `ContactForm.astro`).
+- **Motion:** Lenis smooth scrolling on desktop (MIT, vendored), word-by-word headline reveals, staggered cards, magnetic metal buttons, cursor spotlights, scroll progress hairline, film grain.
+- **Performance rules:** the shader starts after load when the page is idle, pauses off-screen, caps its resolution, lowers it on a slow GPU and stays a CSS sphere on software GL; decorative loops start on the first interaction (or 4.5 s after load); below-the-fold sections use `content-visibility: auto`; the ambient light is one fixed layer.
+- **Reduced motion:** no smooth scroll, no reveals, no loops; the orb is one still frame; the phone shows the whole call.
+- **Contrast (WCAG AA):** ivory on ink 16:1, muted ivory 8:1, metal on ink 8:1, ink on metal buttons 6:1 or more.
+- **Third-party code:** see `sites/_templates/astrowind/UPSTREAM.md` (Lenis MIT, Cormorant Garamond and Inter OFL, Tabler icons MIT). GSAP was not used (its licence is not MIT/Apache/BSD/ISC).
+- **Selecting it for a new site:** add `"theme": "maison"` to the site's `site.json` in its pull request. `/site new` does not take a theme yet: `hq_webstudio.py` is a protected path (proposal: `docs/proposals/webstudio_themes.md`).
 
 **Honest note on sourcing.**
 - I looked for a design-led futuristic MIT/Apache template first. The Astro theme catalogue's futuristic SaaS templates are paid, `blackspike-astro-landing-page` is CC-BY-4.0 (not MIT/Apache), and Magic UI's full templates are Pro (paid).
@@ -62,9 +74,9 @@ All motion is off under `prefers-reduced-motion`, and all content is readable wi
 - **Owner-review items** (placeholders, the booking link, `owner_review` notes) are listed on every build. They must be cleared before a publish.
 
 ## Not yet (milestone 2)
-- **Lighthouse 90+ is not measured** in this sandbox.
-  - What I did measure: the home page ships about 300 KB uncompressed (66 KB HTML, 124 KB CSS, 73 KB of one self-hosted font, 16 KB JS), with no third-party requests.
-  - A Lighthouse CI step and screenshot-rubric QA (spacing, hierarchy, contrast) belong in the sites workflow.
+- **Lighthouse is measured by hand, not in CI.** Donna.AI v2 (maison), Lighthouse 12.8.2, built dist served locally with gzip and the template's cache headers (as Netlify serves it):
+  mobile 99 / 100 / 100 / 100 (Performance / Accessibility / Best Practices / SEO; LCP 2.0 s, TBT 50 ms, CLS 0.01), desktop 100 / 100 / 100 / 100.
+  The CI step is a proposal (`docs/proposals/sites_lighthouse_ci.md`) because `.github/` is protected. The home page has no third-party requests.
 - Desktop and mobile screenshots were checked by eye in headless Chrome; there is no automated visual rubric yet.
 - **Creative Studio does not exist yet.** Hero imagery is the built-in orb scene; custom renders will come from Creative Studio.
 - **Build zips are not hosted yet.** Previews need `JARVIS_WEBSTUDIO_ZIP_BASE`: an https location where CI uploads `<slug>-v<version>.zip` (owner decision on where, for example a Supabase Storage bucket). Until then, preview and publish say what is missing and do nothing.

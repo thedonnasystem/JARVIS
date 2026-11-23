@@ -1,8 +1,10 @@
 ---
 import '~/assets/styles/tailwind.css';
 import '~/assets/styles/fx.css';
+import '~/assets/styles/maison.css';
 import Reveal from '~/components/fx/Reveal.astro';
-import { FX, SITE_DATA } from '~/data/site';
+import Motion from '~/components/maison/Motion.astro';
+import { FX, MAISON, SITE_DATA } from '~/data/site';
 
 import { Font } from 'astro:assets';
 
@@ -31,11 +33,14 @@ const { language, textDirection } = I18N;
 ---
 
 <!doctype html>
-<html lang={language} dir={textDirection} class:list={["2xl:text-[20px]", FX && "fx"]} style={FX ? `--fx-primary:${SITE_DATA.brand.primary};--fx-accent:${SITE_DATA.brand.accent}` : undefined}>
+<html lang={language} dir={textDirection} class:list={[!MAISON && "2xl:text-[20px]", FX && "fx", MAISON && "maison"]} style={FX ? `--fx-primary:${SITE_DATA.brand.primary};--fx-accent:${SITE_DATA.brand.accent}` : undefined}>
   <head>
     <CommonMeta />
     <Favicons />
     <Font cssVariable="--font-inter" preload />
+    {MAISON && <Font cssVariable="--font-display" preload={[{ weight: '300', style: 'normal' }]} />}
+    {MAISON && <script is:inline>if(!matchMedia('(prefers-reduced-motion: reduce)').matches)document.documentElement.classList.add('m-motion')</script>}
+    {MAISON && <meta name="theme-color" content="#0a0708" />}
     <CustomStyles />
     <ApplyColorMode />
     <Metadata {...metadata} />
@@ -44,7 +49,7 @@ const { language, textDirection } = I18N;
 
 
     <!-- Comment the line below to disable View Transitions -->
-    <ClientRouter fallback="swap" />
+    {!MAISON && <ClientRouter fallback="swap" />}
 
     <!-- Extra head content from pages: structured data, rel=prev/next, … -->
     <slot name="head" />
@@ -54,6 +59,8 @@ const { language, textDirection } = I18N;
     <slot />
 
     <Intersect />
-      {FX && <Reveal />}
+      {FX && !MAISON && <Reveal />}
+    {MAISON && <div class="m-grain" aria-hidden="true"></div>}
+    {MAISON && <Motion />}
   </body>
 </html>

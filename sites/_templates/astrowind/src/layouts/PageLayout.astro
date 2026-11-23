@@ -2,6 +2,9 @@
 import Layout from '~/layouts/Layout.astro';
 import Header from '~/components/widgets/Header.astro';
 import Footer from '~/components/widgets/Footer.astro';
+import MaisonHeader from '~/components/maison/Header.astro';
+import MaisonFooter from '~/components/maison/Footer.astro';
+import { MAISON } from '~/data/site';
 
 import { headerData, footerData } from '~/navigation';
 
@@ -26,9 +29,9 @@ const { metadata } = Astro.props;
   */
   }
   {Astro.slots.has('announcement') && <slot name="announcement" />}
-  {Astro.slots.has('header') ? <slot name="header" /> : <Header {...headerData} isSticky showToggleTheme />}
-  <main class="flex-1">
+  {Astro.slots.has('header') ? <slot name="header" /> : MAISON ? <MaisonHeader /> : <Header {...headerData} isSticky showToggleTheme />}
+  <main class="flex-1" id="main">
     <slot />
   </main>
-  {Astro.slots.has('footer') ? <slot name="footer" /> : <Footer {...footerData} />}
+  {Astro.slots.has('footer') ? <slot name="footer" /> : MAISON ? <MaisonFooter /> : <Footer {...footerData} />}
 </Layout>

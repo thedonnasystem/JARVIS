@@ -46,6 +46,16 @@ export default defineConfig({
       subsets: ['latin'],
       fallbacks: ['sans-serif'],
     },
+    {
+      // Display serif for the 'maison' theme (OFL-1.1, self-hosted at build time like Inter). Unused files are never requested.
+      provider: fontProviders.fontsource(),
+      name: 'Cormorant Garamond',
+      cssVariable: '--font-display',
+      weights: ['300', '400'],
+      styles: ['normal', 'italic'],
+      subsets: ['latin'],
+      fallbacks: ['serif'],
+    },
   ],
 
   integrations: [

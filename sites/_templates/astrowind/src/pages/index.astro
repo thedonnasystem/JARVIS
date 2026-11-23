@@ -11,7 +11,8 @@ import Content from '~/components/widgets/Content.astro';
 import SiteContact from '~/components/widgets/SiteContact.astro';
 import Orb from '~/components/fx/Orb.astro';
 import CallDemo from '~/components/fx/CallDemo.astro';
-import { SITE_DATA as S, BOOKING, DEMO_PHONE, FX } from '~/data/site';
+import MaisonHome from '~/components/maison/Home.astro';
+import { SITE_DATA as S, BOOKING, DEMO_PHONE, FX, MAISON } from '~/data/site';
 
 const metadata = { title: S.meta.title, description: S.meta.description, ignoreTitleTemplate: true };
 const book = { variant: 'primary', text: 'Book a demo', href: BOOKING };
@@ -22,6 +23,7 @@ const slots = Array.from({ length: S.results?.slots || 0 }, (_, i) => ({ title: 
 ---
 
 <Layout metadata={metadata}>
+  {MAISON ? <MaisonHome /> : <>
   <Hero tagline={S.hero.tagline} actions={[book, ...demoAction, { text: 'See packages', href: '#packages' }]}>
     <Fragment slot="title">{S.hero.title}{" "}<span class="text-accent dark:text-white">{S.hero.title_accent}</span></Fragment>
     <Fragment slot="subtitle">{S.hero.subtitle}</Fragment>
@@ -43,4 +45,5 @@ const slots = Array.from({ length: S.results?.slots || 0 }, (_, i) => ({ title: 
   <FAQs id="faq" title="Questions" items={(S.faq || []).map((f) => ({ title: f.q, description: f.a }))} />
 
   <SiteContact />
+  </>}
 </Layout>

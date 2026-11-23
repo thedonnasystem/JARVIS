@@ -4,7 +4,8 @@
 // Jarvis imports submissions into the leads CRM (hq_site_inbox.py) with that version and the wording's hash.
 import Headline from '~/components/ui/Headline.astro';
 import WidgetWrapper from '~/components/ui/WidgetWrapper.astro';
-import { CONSENT, SITE_DATA } from '~/data/site';
+import ContactForm from '~/components/widgets/ContactForm.astro';
+import { SITE_DATA } from '~/data/site';
 
 const c = SITE_DATA.contact || {};
 const field = 'py-3 px-4 block w-full text-md rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-slate-900';
@@ -13,22 +14,6 @@ const field = 'py-3 px-4 block w-full text-md rounded-lg border border-gray-200 
 <WidgetWrapper id="contact" containerClass="max-w-7xl mx-auto">
   <Headline title={c.title} subtitle={c.subtitle} />
   <div class="flex flex-col max-w-xl mx-auto w-full">
-    <form name={CONSENT.form_name} method="POST" action="/thanks" data-netlify="true" netlify-honeypot="bot-field" class="rounded-2xl border border-gray-200 dark:border-gray-700 shadow p-4 sm:p-6 lg:p-8">
-      <input type="hidden" name="form-name" value={CONSENT.form_name} />
-      <input type="hidden" name="consent_version" value={CONSENT.version} />
-      <p class="hidden"><label>Leave this empty: <input name="bot-field" tabindex="-1" autocomplete="off" /></label></p>
-      <div class="mb-5"><label for="name" class="block text-sm font-medium">Your name</label><input id="name" name="name" autocomplete="name" required maxlength="120" class={field} /></div>
-      <div class="mb-5"><label for="business" class="block text-sm font-medium">Business name</label><input id="business" name="business" autocomplete="organization" maxlength="160" class={field} /></div>
-      <div class="mb-5"><label for="phone" class="block text-sm font-medium">Phone</label><input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="40" class={field} /></div>
-      <div class="mb-5"><label for="email" class="block text-sm font-medium">Email</label><input id="email" name="email" type="email" autocomplete="email" maxlength="200" class={field} /></div>
-      <div class="mb-5"><label for="message" class="block text-sm font-medium">How can we help?</label><textarea id="message" name="message" rows="4" maxlength="2000" class={field}></textarea></div>
-      <p class="text-sm opacity-80 mb-4" data-consent="inquiry">{CONSENT.inquiry_notice}</p>
-      <div class="flex items-start mb-6">
-        <input id="marketing_consent" name="marketing_consent" type="checkbox" value="yes" class="mt-1 cursor-pointer" />
-        <label for="marketing_consent" class="ml-3 cursor-pointer text-sm opacity-80" data-consent="marketing">{CONSENT.marketing_checkbox}</label>
-      </div>
-      <button type="submit" class="btn-primary w-full">Send</button>
-      <p class="mt-4 text-xs opacity-70" data-consent="sender">{CONSENT.sender} See our <a class="underline" href="/privacy">privacy policy</a>.</p>
-    </form>
+    <ContactForm class="rounded-2xl border border-gray-200 dark:border-gray-700 shadow p-4 sm:p-6 lg:p-8" field={field} />
   </div>
 </WidgetWrapper>
