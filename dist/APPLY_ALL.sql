@@ -16686,493 +16686,6 @@ end $$;
 
 reset lock_timeout;
 
--- ===== 20261205_linked_memory_v1.sql =====
--- FENDEZY GROUP: "Linked memory" for the open brain (Nov 23 2026). ADDITIVE. Needs 20261127_org_access_v1 (fz_offices, agents.office_id).
--- Design (docs/architecture/LINKED_MEMORY.md): the mem0 pattern (extract facts -> compare with what is already known -> add / update / retract / no-op),
--- implemented natively on the existing Postgres. No extension (no pgvector needed: embeddings are small normalised real[] vectors, scored in SQL),
--- no new service, no new Python dependency.
---   * fz_memory.memories: one fact per row, ALWAYS bound to one office (the group or one of the eight offices) and one data class:
---       public | owner | client. Client facts are returned only to an office's OWN self-hosted path (p_destination = 'selfhost'), never to the group,
---       never to another office. The class never goes down on an update (an owner fact updated with client data becomes client).
---     History is kept: an update writes a NEW row and marks the old one superseded (superseded_by); a contradiction without replacement marks it retracted;
---     the owner's /memory forget marks it forgotten (audited, ids only). Nothing is deleted.
---   * fz_memory.entities / memory_entities / relations: the links (people, ventures, offices, decisions, ...). Composite foreign keys (office_id, id)
---     make a link between two different offices impossible in the database, not only in code.
---   * fz_memory.provider_quota / provider_state: the free-provider counters (requests and tokens per provider per hour, 24 hourly slots reused, and the
---     cool-down), so a restart no longer forgets them. No money: these are request counts of FREE providers. The spend gateway, llm_calls and the caps
---     are not touched.
---   * The schema fz_memory has NO privilege for any API role; only the functions below reach it (as fz_office_os, M7). So it is outside the public
---     table registry and the off-site export. Functions: service key (the bot) and database sessions only; anon / authenticated / the scoped fz roles
---     are refused by grant AND in the body.
--- No change to caps, the kill switch, mode, the spend gateway, authorize_action, the table registry, backup classification or any money control.
--- Function names avoid the fz_ prefix (the M1 rollback drill asserts no public fz_* survives it) and open_brain_ (the open-brain rollback check).
--- Ordered BEFORE the lockdown (R3). Rollback: ops/rollback_linked_memory.sql (moves the schema to fz_memory_archive; a re-apply restores it). Safe to re-run.
-
-set lock_timeout = '5s';
-
-do $$
-begin
-  if to_regnamespace('fz_memory') is null and to_regnamespace('fz_memory_archive') is not null then
-    alter schema fz_memory_archive rename to fz_memory;                    -- re-apply after a rollback: the kept memories come back
-  end if;
-end $$;
-create schema if not exists fz_memory;
-revoke all on schema fz_memory from public;
-do $$ declare r text; begin
-  foreach r in array array['anon', 'authenticated', 'service_role', 'fz_jarvis', 'fz_office_agent', 'fz_auditor', 'backup_reader'] loop
-    if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on schema fz_memory from %I', r); end if;
-  end loop;
-end $$;
-
--- ---------------------------------------------------------------------------------------------------------------------------- tables
-create table if not exists fz_memory.memories (
-  id uuid primary key default gen_random_uuid(),
-  office_id uuid not null,                                               -- no FK to fz_offices (as M1: the archive / export never depends on it)
-  data_class text not null check (data_class in ('public', 'owner', 'client')),
-  kind text not null check (kind in ('fact', 'preference', 'decision', 'person', 'plan', 'lesson', 'outcome')),
-  content text not null check (length(content) between 3 and 600),
-  content_hash text not null check (content_hash ~ '^[0-9a-f]{32}$'),
-  embedding real[] not null check (cardinality(embedding) between 8 and 1024),
-  embedder text not null check (embedder ~ '^[a-z0-9:._-]{1,60}$'),
-  importance real not null default 0.5 check (importance >= 0 and importance <= 1),
-  status text not null default 'active' check (status in ('active', 'superseded', 'retracted', 'forgotten')),
-  supersedes uuid,
-  superseded_by uuid,
-  source text not null default '' check (length(source) <= 120),
-  seen_count integer not null default 1 check (seen_count >= 1),
-  created_at timestamptz not null default now(),
-  last_seen_at timestamptz not null default now(),
-  status_at timestamptz,
-  status_by text check (status_by is null or length(status_by) <= 60),
-  unique (office_id, id)
-);
-create unique index if not exists memories_live_dedupe on fz_memory.memories (office_id, content_hash) where status = 'active';
-create index if not exists memories_live on fz_memory.memories (office_id, last_seen_at desc) where status = 'active';
-create index if not exists memories_fts on fz_memory.memories using gin (to_tsvector('simple', content)) where status = 'active';
-
-create table if not exists fz_memory.entities (
-  id uuid primary key default gen_random_uuid(),
-  office_id uuid not null,
-  kind text not null check (kind in ('person', 'venture', 'office', 'decision', 'org', 'project', 'place', 'product', 'other')),
-  name text not null check (length(name) between 1 and 120),
-  norm text not null check (length(norm) between 1 and 120),
-  created_at timestamptz not null default now(),
-  last_seen_at timestamptz not null default now(),
-  unique (office_id, kind, norm),
-  unique (office_id, id)
-);
-
-create table if not exists fz_memory.memory_entities (
-  office_id uuid not null,
-  memory_id uuid not null,
-  entity_id uuid not null,
-  primary key (memory_id, entity_id),
-  foreign key (office_id, memory_id) references fz_memory.memories (office_id, id),     -- same office, enforced by the database
-  foreign key (office_id, entity_id) references fz_memory.entities (office_id, id)
-);
-create index if not exists memory_entities_entity on fz_memory.memory_entities (entity_id);
-
-create table if not exists fz_memory.relations (
-  id bigint generated always as identity primary key,
-  office_id uuid not null,
-  src uuid not null,
-  rel text not null check (rel ~ '^[a-z][a-z0-9_]{1,40}$'),
-  dst uuid not null,
-  memory_id uuid not null,
-  status text not null default 'active' check (status in ('active', 'superseded')),
-  created_at timestamptz not null default now(),
-  foreign key (office_id, src) references fz_memory.entities (office_id, id),
-  foreign key (office_id, dst) references fz_memory.entities (office_id, id),
-  foreign key (office_id, memory_id) references fz_memory.memories (office_id, id)
-);
-create unique index if not exists relations_live on fz_memory.relations (office_id, src, rel, dst) where status = 'active';
-
-create table if not exists fz_memory.provider_quota (                   -- 24 hourly slots per provider, reused (no delete needed)
-  provider text not null check (provider ~ '^[a-z][a-z0-9_-]{1,30}$'),
-  slot smallint not null check (slot between 0 and 23),
-  hour timestamptz not null,
-  requests integer not null default 0 check (requests >= 0),
-  tokens bigint not null default 0 check (tokens >= 0),
-  primary key (provider, slot)
-);
-create table if not exists fz_memory.provider_state (
-  provider text primary key check (provider ~ '^[a-z][a-z0-9_-]{1,30}$'),
-  cooling_until timestamptz,
-  fails integer not null default 0 check (fails between 0 and 1000),
-  updated_at timestamptz not null default now()
-);
-
-do $$
-declare t text; r text;
-begin
-  foreach t in array array['memories', 'entities', 'memory_entities', 'relations', 'provider_quota', 'provider_state'] loop
-    execute format('alter table fz_memory.%I enable row level security', t);
-    execute format('revoke all on fz_memory.%I from public', t);
-    foreach r in array array['anon', 'authenticated', 'service_role', 'fz_jarvis', 'fz_office_agent', 'fz_auditor', 'backup_reader'] loop
-      if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on fz_memory.%I from %I', t, r); end if;
-    end loop;
-  end loop;
-end $$;
-revoke all on sequence fz_memory.relations_id_seq from public;
-
--- ---------------------------------------------------------------------------------------------------------------------------- helpers
--- Who may call: the bot (service key) and database sessions. Anyone else (anon, a signed-in app user, a scoped office / jarvis / auditor token,
--- the backup identity) is refused here, whatever a later grant says. The SESSION role is read (a SECURITY DEFINER caller does not change it).
-create or replace function public.jmem_guard() returns void
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-begin
-  if coalesce(nullif(current_setting('role', true), ''), 'none') not in ('service_role', 'none', 'postgres') then
-    raise exception 'linked memory: the bot and database sessions only' using errcode = '42501';
-  end if;
-end $$;
-revoke all on function public.jmem_guard() from public, anon, authenticated;
-
-create or replace function public.jmem_norm(p_text text) returns text
-language sql immutable set search_path to 'pg_catalog' as $$
-  select btrim(regexp_replace(lower(coalesce(p_text, '')), '[^a-z0-9]+', ' ', 'g'))
-$$;
-revoke all on function public.jmem_norm(text) from public, anon, authenticated;
-
--- The office a call works in. p_agent wins (the agent's office from public.agents: an office's agents can only ever reach their own office);
--- p_office, if also given, must agree. Unknown office / agent: refused.
-create or replace function public.jmem_office(p_office text, p_agent text default null) returns uuid
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-declare v uuid; a uuid;
-begin
-  if p_agent is not null then
-    select x.office_id into a from public.agents x where x.slug = p_agent;
-    if a is null then raise exception 'linked memory: unknown agent %', left(p_agent, 60) using errcode = '22023'; end if;
-  end if;
-  if p_office is not null then
-    select o.id into v from public.fz_offices o where o.slug = p_office;
-    if v is null then raise exception 'linked memory: unknown office %', left(p_office, 60) using errcode = '22023'; end if;
-  end if;
-  if a is not null and v is not null and a <> v then raise exception 'linked memory: agent % is not in office %', left(p_agent, 60), left(p_office, 60) using errcode = '42501'; end if;
-  v := coalesce(a, v);
-  if v is null then raise exception 'linked memory: office or agent required' using errcode = '22023'; end if;
-  return v;
-end $$;
-revoke all on function public.jmem_office(text, text) from public, anon, authenticated;
-
-create or replace function public.jmem_dot(a real[], b real[]) returns real
-language sql immutable parallel safe set search_path to 'pg_catalog' as $$
-  select case when a is null or b is null or cardinality(a) <> cardinality(b) then 0::real
-              else coalesce((select sum(x * y) from unnest(a, b) as t(x, y)), 0)::real end
-$$;
-revoke all on function public.jmem_dot(real[], real[]) from public, anon, authenticated;
-
--- ---------------------------------------------------------------------------------------------------------------------------- retrieval
--- Top-k memories for one office, scored: 0.50 semantic (same embedder only) + 0.20 lexical + 0.15 importance + 0.10 recency (45-day half-life-ish
--- decay of last_seen_at) + 0.15 when a linked entity is named in the query. Scope:
---   office  -> its own rows only; client rows only when p_destination = 'selfhost'
---   group   -> the group's rows and every office's NON-client rows (M1: group scope reads all offices except client data); never client rows
-create or replace function public.jmem_search(p_office text, p_query text, p_qvec real[] default null, p_embedder text default null, p_k integer default 5,
-                                              p_destination text default 'external', p_agent text default null)
-returns table (id uuid, office text, kind text, data_class text, content text, score real, entities text[], last_seen_at timestamptz)
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-#variable_conflict use_column
-declare v_office uuid; v_group boolean; v_client boolean; q text := left(coalesce(p_query, ''), 1000); qn text; tq tsquery;
-begin
-  perform public.jmem_guard();
-  v_office := public.jmem_office(p_office, p_agent);
-  v_group := exists (select 1 from public.fz_offices o where o.id = v_office and o.kind = 'group');
-  v_client := not v_group and coalesce(p_destination, 'external') = 'selfhost';
-  qn := ' ' || public.jmem_norm(q) || ' ';
-  tq := nullif(replace(plainto_tsquery('simple', q)::text, ' & ', ' | '), '')::tsquery;
-  return query
-  with hit as (
-    select e.id from fz_memory.entities e
-     where length(e.norm) >= 3 and position(' ' || e.norm || ' ' in qn) > 0
-       and (e.office_id = v_office or v_group)
-  ), cand as (
-    select m.*, case when m.embedder = p_embedder then public.jmem_dot(m.embedding, p_qvec) else 0 end as sem,
-           case when tq is null then 0 else ts_rank_cd(to_tsvector('simple', m.content), tq, 32) end as lex,
-           exists (select 1 from fz_memory.memory_entities me where me.memory_id = m.id and me.entity_id in (select hit.id from hit)) as ent
-      from fz_memory.memories m
-     where m.status = 'active'
-       and (m.office_id = v_office or (v_group and m.data_class <> 'client'))
-       and (m.data_class <> 'client' or (v_client and m.office_id = v_office))
-  )
-  select c.id, (select o.slug from public.fz_offices o where o.id = c.office_id), c.kind, c.data_class, c.content,
-         (0.50 * greatest(c.sem, 0) + 0.20 * c.lex + 0.15 * c.importance
-          + 0.10 * exp(-greatest(extract(epoch from now() - c.last_seen_at), 0) / 86400.0 / 45.0) + 0.15 * c.ent::int)::real,
-         array(select e.name from fz_memory.memory_entities me join fz_memory.entities e on e.id = me.entity_id where me.memory_id = c.id order by e.name),
-         c.last_seen_at
-    from cand c
-   where c.sem > 0.15 or c.lex > 0 or c.ent
-   order by 6 desc, c.last_seen_at desc
-   limit greatest(1, least(coalesce(p_k, 5), 20));
-end $$;
-revoke all on function public.jmem_search(text, text, real[], text, integer, text, text) from public, anon, authenticated;
-
--- ---------------------------------------------------------------------------------------------------------------------------- writes
--- One batch of operations from one extraction (at most 20). Every op stays inside the call's office: an update / retract whose target is not an
--- ACTIVE memory of THAT office is skipped (never an error that would lose the rest). Ops:
---   {"op": "add",     "content", "kind", "data_class", "importance" 0..1, "embedding": [...], "entities": [{"name", "kind"}], "relations": [["src", "rel", "dst"]]}
---   {"op": "update",  "id": <target>, ...same as add}        -> new row (supersedes the target), the target becomes superseded
---   {"op": "retract", "id": <target>}                          -> contradicted, no replacement
--- An add whose normalised text is already active, or whose embedding is >= 0.95 similar to an active row of the same office, class and embedder,
--- is a duplicate: the existing row is seen again (last_seen_at, seen_count, max importance) instead.
-create or replace function public.jmem_apply(p_office text, p_ops jsonb, p_source text default '', p_embedder text default 'hash-v1', p_agent text default null)
-returns jsonb
-language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare v_office uuid; op jsonb; v_kind text; v_class text; v_content text; v_hash text; v_vec real[]; v_imp real; v_target fz_memory.memories; v_dup uuid;
-        v_new uuid; e jsonb; r jsonb; v_eid uuid; v_src uuid; v_dst uuid; added int := 0; updated int := 0; retracted int := 0; deduped int := 0; skipped int := 0;
-        rank_ text[] := array['public', 'owner', 'client'];
-begin
-  perform public.jmem_guard();
-  v_office := public.jmem_office(p_office, p_agent);
-  if jsonb_typeof(p_ops) <> 'array' or jsonb_array_length(p_ops) > 20 then raise exception 'linked memory: 0 to 20 operations' using errcode = '22023'; end if;
-  if coalesce(p_embedder, '') !~ '^[a-z0-9:._-]{1,60}$' then raise exception 'linked memory: bad embedder name' using errcode = '22023'; end if;
-  for op in select * from jsonb_array_elements(p_ops) loop
-    begin
-      v_target := null;
-      if op ->> 'op' in ('update', 'retract') then
-        select * into v_target from fz_memory.memories m
-         where m.id = (case when (op ->> 'id') ~ '^[0-9a-f-]{36}$' then (op ->> 'id')::uuid end) and m.office_id = v_office and m.status = 'active';
-        if v_target.id is null then skipped := skipped + 1; continue; end if;
-        if op ->> 'op' = 'retract' then
-          update fz_memory.memories set status = 'retracted', status_at = now(), status_by = left(coalesce(nullif(p_source, ''), 'extraction'), 60) where id = v_target.id;
-          update fz_memory.relations set status = 'superseded' where memory_id = v_target.id and status = 'active';
-          retracted := retracted + 1; continue;
-        end if;
-      elsif coalesce(op ->> 'op', '') <> 'add' then
-        skipped := skipped + 1; continue;
-      end if;
-      v_content := btrim(left(regexp_replace(coalesce(op ->> 'content', ''), '\s+', ' ', 'g'), 600));
-      v_kind := coalesce(nullif(op ->> 'kind', ''), 'fact');
-      v_class := coalesce(op ->> 'data_class', 'client');                -- missing class = client (default deny)
-      if v_class not in ('public', 'owner', 'client') then v_class := 'client'; end if;
-      if v_target.id is not null and array_position(rank_, v_target.data_class) > array_position(rank_, v_class) then v_class := v_target.data_class; end if;
-      v_imp := least(1, greatest(0, coalesce((op ->> 'importance')::real, 0.5)));
-      v_vec := array(select x::real from jsonb_array_elements_text(coalesce(op -> 'embedding', '[]')) x);
-      if length(v_content) < 3 or cardinality(v_vec) not between 8 and 1024
-         or v_kind not in ('fact', 'preference', 'decision', 'person', 'plan', 'lesson', 'outcome') then skipped := skipped + 1; continue; end if;
-      v_hash := md5(public.jmem_norm(v_content));
-      select m.id into v_dup from fz_memory.memories m
-       where m.office_id = v_office and m.status = 'active' and m.id is distinct from v_target.id
-         and (m.content_hash = v_hash or (m.embedder = p_embedder and m.data_class = v_class and public.jmem_dot(m.embedding, v_vec) >= 0.95))
-       order by (m.content_hash = v_hash) desc, m.last_seen_at desc limit 1;
-      if v_dup is not null then
-        update fz_memory.memories set last_seen_at = now(), seen_count = seen_count + 1, importance = greatest(importance, v_imp),
-               data_class = case when array_position(rank_, v_class) > array_position(rank_, data_class) then v_class else data_class end
-         where id = v_dup;
-        if v_target.id is not null then                                   -- the update says the same as another live row: the target is superseded by it
-          update fz_memory.memories set status = 'superseded', superseded_by = v_dup, status_at = now(), status_by = 'extraction' where id = v_target.id;
-          update fz_memory.relations set status = 'superseded' where memory_id = v_target.id and status = 'active';
-        end if;
-        deduped := deduped + 1; continue;
-      end if;
-      insert into fz_memory.memories (office_id, data_class, kind, content, content_hash, embedding, embedder, importance, supersedes, source)
-        values (v_office, v_class, v_kind, v_content, v_hash, v_vec, p_embedder, v_imp, v_target.id, left(coalesce(p_source, ''), 120))
-        returning id into v_new;
-      if v_target.id is not null then
-        update fz_memory.memories set status = 'superseded', superseded_by = v_new, status_at = now(), status_by = 'extraction' where id = v_target.id;
-        update fz_memory.relations set status = 'superseded' where memory_id = v_target.id and status = 'active';
-        updated := updated + 1;
-      else
-        added := added + 1;
-      end if;
-      for e in select * from jsonb_array_elements(case when jsonb_typeof(op -> 'entities') = 'array' then op -> 'entities' else '[]' end) limit 8 loop
-        v_eid := public.jmem_entity_upsert(v_office, e ->> 'name', e ->> 'kind');
-        if v_eid is not null then
-          insert into fz_memory.memory_entities (office_id, memory_id, entity_id) values (v_office, v_new, v_eid) on conflict do nothing;
-        end if;
-      end loop;
-      for r in select * from jsonb_array_elements(case when jsonb_typeof(op -> 'relations') = 'array' then op -> 'relations' else '[]' end) limit 6 loop
-        if jsonb_typeof(r) <> 'array' or jsonb_array_length(r) <> 3 then continue; end if;
-        v_src := public.jmem_entity_upsert(v_office, r ->> 0, null);
-        v_dst := public.jmem_entity_upsert(v_office, r ->> 2, null);
-        if v_src is null or v_dst is null or v_src = v_dst
-           or left(regexp_replace(lower(coalesce(r ->> 1, '')), '[^a-z0-9]+', '_', 'g'), 40) !~ '^[a-z][a-z0-9_]{1,40}$' then continue; end if;
-        insert into fz_memory.memory_entities (office_id, memory_id, entity_id) values (v_office, v_new, v_src), (v_office, v_new, v_dst) on conflict do nothing;
-        insert into fz_memory.relations (office_id, src, rel, dst, memory_id)
-          values (v_office, v_src, left(regexp_replace(lower(r ->> 1), '[^a-z0-9]+', '_', 'g'), 40), v_dst, v_new) on conflict do nothing;
-      end loop;
-    exception when invalid_text_representation or numeric_value_out_of_range or check_violation or string_data_right_truncation then
-      skipped := skipped + 1;
-    end;
-  end loop;
-  return jsonb_build_object('added', added, 'updated', updated, 'retracted', retracted, 'deduped', deduped, 'skipped', skipped);
-end $$;
-revoke all on function public.jmem_apply(text, jsonb, text, text, text) from public, anon, authenticated;
-
--- An entity of THIS office by (kind, normalised name); a NULL kind finds any kind with that name first, else creates 'other'. Bad names: NULL.
-create or replace function public.jmem_entity_upsert(p_office uuid, p_name text, p_kind text) returns uuid
-language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare v_name text := btrim(left(regexp_replace(coalesce(p_name, ''), '\s+', ' ', 'g'), 120)); v_norm text; v_kind text; v uuid;
-begin
-  perform public.jmem_guard();
-  v_norm := left(public.jmem_norm(v_name), 120);
-  if length(v_norm) < 2 then return null; end if;
-  v_kind := case when p_kind in ('person', 'venture', 'office', 'decision', 'org', 'project', 'place', 'product', 'other') then p_kind end;
-  if v_kind is null then
-    select e.id into v from fz_memory.entities e where e.office_id = p_office and e.norm = v_norm order by (e.kind = 'other'), e.created_at limit 1;
-    if v is not null then update fz_memory.entities set last_seen_at = now() where id = v; return v; end if;
-    v_kind := 'other';
-  end if;
-  insert into fz_memory.entities (office_id, kind, name, norm) values (p_office, v_kind, v_name, v_norm)
-    on conflict (office_id, kind, norm) do update set last_seen_at = now()
-    returning id into v;
-  return v;
-end $$;
-revoke all on function public.jmem_entity_upsert(uuid, text, text) from public, anon, authenticated;
-
--- ---------------------------------------------------------------------------------------------------------------------------- owner commands (/memory)
--- Newest (or matching) active memories of one office. Client rows are listed MASKED (the bot sends this text to Telegram; client data stays with the
--- office's own path). The group view lists only the group's own rows.
-create or replace function public.jmem_list(p_office text, p_query text default null, p_limit integer default 15)
-returns table (id uuid, kind text, data_class text, content text, importance real, seen_count integer, last_seen_at timestamptz, entities text[])
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-#variable_conflict use_column
-declare v_office uuid; qn text := nullif(public.jmem_norm(p_query), '');
-begin
-  perform public.jmem_guard();
-  v_office := public.jmem_office(p_office, null);
-  return query
-  select m.id, m.kind, m.data_class, case when m.data_class = 'client' then '[client data: hidden]' else m.content end, m.importance, m.seen_count, m.last_seen_at,
-         array(select e.name from fz_memory.memory_entities me join fz_memory.entities e on e.id = me.entity_id where me.memory_id = m.id order by e.name)
-    from fz_memory.memories m
-   where m.office_id = v_office and m.status = 'active'
-     and (qn is null or (m.data_class <> 'client' and position(qn in public.jmem_norm(m.content)) > 0)
-          or exists (select 1 from fz_memory.memory_entities me join fz_memory.entities e on e.id = me.entity_id where me.memory_id = m.id and e.norm = qn))
-   order by m.last_seen_at desc
-   limit greatest(1, least(coalesce(p_limit, 15), 50));
-end $$;
-revoke all on function public.jmem_list(text, text, integer) from public, anon, authenticated;
-
--- Forget: by id prefix (at least 8 hex characters, unique in the office) or every active memory linked to an entity name. Soft (status 'forgotten'):
--- never retrieved again, kept as history; one audit_log row with ids and counts only, never content.
-create or replace function public.jmem_forget(p_office text, p_id_prefix text default null, p_entity text default null, p_actor text default 'owner')
-returns jsonb
-language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare v_office uuid; ids uuid[]; v_norm text := nullif(public.jmem_norm(p_entity), '');
-begin
-  perform public.jmem_guard();
-  v_office := public.jmem_office(p_office, null);
-  if p_id_prefix is not null then
-    if lower(p_id_prefix) !~ '^[0-9a-f-]{8,36}$' then raise exception 'linked memory: give at least 8 characters of the memory id' using errcode = '22023'; end if;
-    ids := array(select m.id from fz_memory.memories m where m.office_id = v_office and m.status = 'active' and m.id::text like lower(p_id_prefix) || '%');
-    if cardinality(ids) > 1 then raise exception 'linked memory: % memories start with %; give more characters', cardinality(ids), p_id_prefix using errcode = '22023'; end if;
-  elsif v_norm is not null then
-    ids := array(select distinct m.id from fz_memory.memories m join fz_memory.memory_entities me on me.memory_id = m.id join fz_memory.entities e on e.id = me.entity_id
-                  where m.office_id = v_office and m.status = 'active' and e.norm = v_norm limit 200);
-  else
-    raise exception 'linked memory: id prefix or entity name required' using errcode = '22023';
-  end if;
-  if cardinality(ids) = 0 then return jsonb_build_object('forgotten', 0); end if;
-  update fz_memory.memories set status = 'forgotten', status_at = now(), status_by = left(coalesce(p_actor, 'owner'), 60) where id = any (ids);
-  update fz_memory.relations set status = 'superseded' where memory_id = any (ids) and status = 'active';
-  insert into public.audit_log (actor, action, target, detail)
-    values (left(coalesce(p_actor, 'owner'), 60), 'memory_forget', 'fz_memory.memories',
-            jsonb_build_object('office', p_office, 'count', cardinality(ids), 'ids', to_jsonb(ids[1:50]), 'by', case when p_id_prefix is not null then 'id' else 'entity' end));
-  return jsonb_build_object('forgotten', cardinality(ids));
-end $$;
-revoke all on function public.jmem_forget(text, text, text, text) from public, anon, authenticated;
-
--- The links of one entity in one office (/memory links <name>): its live relations, both directions.
-create or replace function public.jmem_links(p_office text, p_name text, p_limit integer default 20)
-returns table (src text, rel text, dst text, since timestamptz)
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-#variable_conflict use_column
-declare v_office uuid; v_norm text := public.jmem_norm(p_name);
-begin
-  perform public.jmem_guard();
-  v_office := public.jmem_office(p_office, null);
-  return query
-  select s.name, r.rel, d.name, r.created_at
-    from fz_memory.relations r join fz_memory.entities s on s.id = r.src join fz_memory.entities d on d.id = r.dst
-    join fz_memory.memories m on m.id = r.memory_id
-   where r.office_id = v_office and r.status = 'active' and m.data_class <> 'client' and (s.norm = v_norm or d.norm = v_norm)
-   order by r.created_at desc
-   limit greatest(1, least(coalesce(p_limit, 20), 50));
-end $$;
-revoke all on function public.jmem_links(text, text, integer) from public, anon, authenticated;
-
-create or replace function public.jmem_stats() returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-begin
-  perform public.jmem_guard();
-  return jsonb_build_object(
-    'by_office', coalesce((select jsonb_object_agg(x.slug, x.n) from (select o.slug, count(*) n from fz_memory.memories m join public.fz_offices o on o.id = m.office_id
-                                                                      where m.status = 'active' group by o.slug) x), '{}'),
-    'by_class', coalesce((select jsonb_object_agg(x.data_class, x.n) from (select data_class, count(*) n from fz_memory.memories where status = 'active' group by data_class) x), '{}'),
-    'history', (select count(*) from fz_memory.memories where status <> 'active'),
-    'entities', (select count(*) from fz_memory.entities),
-    'relations', (select count(*) from fz_memory.relations where status = 'active'));
-end $$;
-revoke all on function public.jmem_stats() from public, anon, authenticated;
-
--- ---------------------------------------------------------------------------------------------------------------------------- free-provider quota
--- Add counts to the provider's current hourly slot (a slot from an older day is restarted) and store its cool-down. Only counts: no prompt, no money.
-create or replace function public.jquota_record(p_provider text, p_requests integer, p_tokens bigint, p_cooling_until timestamptz default null, p_fails integer default 0)
-returns void
-language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare h timestamptz := date_trunc('hour', now()); s smallint := extract(hour from (now() at time zone 'UTC'))::smallint;
-begin
-  perform public.jmem_guard();
-  if coalesce(p_provider, '') !~ '^[a-z][a-z0-9_-]{1,30}$' or coalesce(p_requests, -1) not between 0 and 10000 or coalesce(p_tokens, -1) not between 0 and 100000000
-     or coalesce(p_fails, 0) not between 0 and 1000 or (p_cooling_until is not null and p_cooling_until > now() + interval '1 day') then
-    raise exception 'quota: bad values' using errcode = '22023';
-  end if;
-  if p_requests > 0 or p_tokens > 0 then
-    insert into fz_memory.provider_quota as q (provider, slot, hour, requests, tokens) values (p_provider, s, h, p_requests, p_tokens)
-      on conflict (provider, slot) do update set
-        requests = case when q.hour = excluded.hour then q.requests + excluded.requests else excluded.requests end,
-        tokens = case when q.hour = excluded.hour then q.tokens + excluded.tokens else excluded.tokens end,
-        hour = excluded.hour;
-  end if;
-  insert into fz_memory.provider_state as st (provider, cooling_until, fails, updated_at) values (p_provider, p_cooling_until, coalesce(p_fails, 0), now())
-    on conflict (provider) do update set cooling_until = excluded.cooling_until, fails = excluded.fails, updated_at = now();
-end $$;
-revoke all on function public.jquota_record(text, integer, bigint, timestamptz, integer) from public, anon, authenticated;
-
--- What the bot loads at start: the last 24 hours of slots and every live cool-down.
-create or replace function public.jquota_load() returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-begin
-  perform public.jmem_guard();
-  return jsonb_build_object(
-    'hours', coalesce((select jsonb_agg(jsonb_build_object('provider', q.provider, 'hour', extract(epoch from q.hour)::bigint, 'requests', q.requests, 'tokens', q.tokens)
-                                        order by q.provider, q.hour)
-                         from fz_memory.provider_quota q where q.hour > now() - interval '24 hours'), '[]'),
-    'state', coalesce((select jsonb_object_agg(s.provider, jsonb_build_object('cooling_until', extract(epoch from s.cooling_until), 'fails', s.fails))
-                         from fz_memory.provider_state s), '{}'),
-    'now', extract(epoch from now()));
-end $$;
-revoke all on function public.jquota_load() from public, anon, authenticated;
-
-do $$
-declare f text;
-begin
-  if exists (select 1 from pg_roles where rolname = 'fz_jarvis') then
-    foreach f in array array['jmem_guard()', 'jmem_norm(text)', 'jmem_office(text,text)', 'jmem_dot(real[],real[])', 'jmem_search(text,text,real[],text,integer,text,text)',
-                             'jmem_apply(text,jsonb,text,text,text)', 'jmem_entity_upsert(uuid,text,text)', 'jmem_list(text,text,integer)', 'jmem_forget(text,text,text,text)',
-                             'jmem_links(text,text,integer)', 'jmem_stats()', 'jquota_record(text,integer,bigint,timestamptz,integer)', 'jquota_load()'] loop
-      execute format('revoke all on function public.%s from fz_jarvis, fz_office_agent, fz_auditor', f);
-    end loop;
-  end if;
-  if exists (select 1 from pg_roles where rolname = 'backup_reader') then
-    foreach f in array array['jmem_search(text,text,real[],text,integer,text,text)', 'jmem_apply(text,jsonb,text,text,text)', 'jmem_list(text,text,integer)',
-                             'jmem_forget(text,text,text,text)', 'jmem_links(text,text,integer)', 'jmem_stats()', 'jquota_record(text,integer,bigint,timestamptz,integer)', 'jquota_load()'] loop
-      execute format('revoke all on function public.%s from backup_reader', f);
-    end loop;
-  end if;
-end $$;
-
-reset lock_timeout;
-
--- ===== 20261205_web_studio_v1.sql =====
--- Web Studio v1 (Nov 22 2026): registers the shared Web Studio service (hq_webstudio.py) in the shared-service registry.
--- Web Studio drafts and edits sites as pull requests (sites/<slug>/site.json), queues Netlify previews / publishes as hands 'deploy' actions the
--- owner approves, and imports website form leads into leads. No new table, no new function, no grant: one registry row.
--- Rollback: ops/rollback_web_studio.sql (fz_services rows are never deleted: the row is retired).
-insert into public.fz_services (service, title, owner_office, writes, reads, attribution, scoped_identity, modules, note)
-values ('web_studio', 'Web Studio: websites for every office and for Donna clients (drafts as PRs, Netlify previews / publishes as approved hands deploys)',
-        (select id from public.fz_offices where slug = 'group'), '{leads,hand_actions}', '{hand_accounts,ventures}', 'column', 'jarvis',
-        'hq_webstudio.py, hq_hands_adapters.py', 'site content in sites/<slug>/site.json; templates in sites/_templates/; form leads into leads with the consent wording version')
-on conflict (service) do update set status = 'active', note = excluded.note, updated_by = 'migration';
-
 -- ===== 20261205_creative_studio_v1.sql =====
 -- FENDEZY GROUP Phase 1, milestone M8a "FENDEZY AI CREATIVE STUDIO" (slug creative-studio; fz_services key creative_studio): data model, router gates, asset
 -- registry, pipeline skeleton. ADDITIVE. Needs M1..M7. Design: docs/architecture/PHASE1_M8_CREATIVE_STUDIO.md.
@@ -17887,315 +17400,492 @@ do $$ declare r text; f regprocedure; begin
   end loop;
 end $$;
 
--- ===== 20261207_creative_studio_v2.sql =====
--- FENDEZY GROUP Phase 1, milestone M8c "FENDEZY AI CREATIVE STUDIO": template / preset library, job templates and edit inputs, platform metrics and
--- the ranking that feeds reuse. ADDITIVE on top of migrations/20261205_creative_studio_v1.sql (needs it). Design: docs/architecture/PHASE1_M8_CREATIVE_STUDIO.md (M8c).
---   * templates: data only (prompt vocabulary, edit recipe, hooks, ComfyUI workflow id). A template NEVER names a provider, model, price or the disclosure: the
---     spec key list is fixed by a CHECK, deceptive framing (testimonial / review / real customer) and real-artist imitation are refused by a CHECK, and the
---     router gates of v1 (creative_attempt_begin / _end, the office spend gate, premium rules, retries) are untouched. Seeded from
---     creative_studio/presets/library.json (scripts/creative_presets_seed.py keeps both identical); owner edits stay (updated_by <> 'migration').
---   * job templates: which template / hook a job uses and, for edit jobs, its input clips. Inputs are assets of the SAME office only (approved, or library
---     kinds the owner uploaded); a template that needs a character LoRA needs a registered character on the job (the v1 consent rules apply to it).
---   * platform metrics: imported by hand (CSV) or from the hands pipeline (a hand action of a calendar entry). Same-office assets only. Ranking per office:
---     assets, templates and hooks, with a prior so a template with one lucky post does not win.
---   * 'local-edit' provider (free ffmpeg on the Jarvis host, module 'edit'), OFF like every provider. The self-hosted ComfyUI slots list only the models we
---     ship a workflow for AND whose weights are commercially usable when self-hosted (FLUX.1 [dev] and HunyuanVideo leave the self-host list).
--- No money path, no grant to any API role (explicit REVOKE after every function). Ordered BEFORE the lockdown (R3). Rollback: ops/rollback_creative_studio_v2.sql
--- (archives the three tables to fz_archive). Safe to re-run.
+-- ===== 20261205_linked_memory_v1.sql =====
+-- FENDEZY GROUP: "Linked memory" for the open brain (Nov 23 2026). ADDITIVE. Needs 20261127_org_access_v1 (fz_offices, agents.office_id).
+-- Design (docs/architecture/LINKED_MEMORY.md): the mem0 pattern (extract facts -> compare with what is already known -> add / update / retract / no-op),
+-- implemented natively on the existing Postgres. No extension (no pgvector needed: embeddings are small normalised real[] vectors, scored in SQL),
+-- no new service, no new Python dependency.
+--   * fz_memory.memories: one fact per row, ALWAYS bound to one office (the group or one of the eight offices) and one data class:
+--       public | owner | client. Client facts are returned only to an office's OWN self-hosted path (p_destination = 'selfhost'), never to the group,
+--       never to another office. The class never goes down on an update (an owner fact updated with client data becomes client).
+--     History is kept: an update writes a NEW row and marks the old one superseded (superseded_by); a contradiction without replacement marks it retracted;
+--     the owner's /memory forget marks it forgotten (audited, ids only). Nothing is deleted.
+--   * fz_memory.entities / memory_entities / relations: the links (people, ventures, offices, decisions, ...). Composite foreign keys (office_id, id)
+--     make a link between two different offices impossible in the database, not only in code.
+--   * fz_memory.provider_quota / provider_state: the free-provider counters (requests and tokens per provider per hour, 24 hourly slots reused, and the
+--     cool-down), so a restart no longer forgets them. No money: these are request counts of FREE providers. The spend gateway, llm_calls and the caps
+--     are not touched.
+--   * The schema fz_memory has NO privilege for any API role; only the functions below reach it (as fz_office_os, M7). So it is outside the public
+--     table registry and the off-site export. Functions: service key (the bot) and database sessions only; anon / authenticated / the scoped fz roles
+--     are refused by grant AND in the body.
+-- No change to caps, the kill switch, mode, the spend gateway, authorize_action, the table registry, backup classification or any money control.
+-- Function names avoid the fz_ prefix (the M1 rollback drill asserts no public fz_* survives it) and open_brain_ (the open-brain rollback check).
+-- Ordered BEFORE the lockdown (R3). Rollback: ops/rollback_linked_memory.sql (moves the schema to fz_memory_archive; a re-apply restores it). Safe to re-run.
+
 set lock_timeout = '5s';
 
-do $$ begin
-  if to_regclass('fz_creative.jobs') is null then raise exception 'apply migrations/20261205_creative_studio_v1.sql first'; end if;
+do $$
+begin
+  if to_regnamespace('fz_memory') is null and to_regnamespace('fz_memory_archive') is not null then
+    alter schema fz_memory_archive rename to fz_memory;                    -- re-apply after a rollback: the kept memories come back
+  end if;
+end $$;
+create schema if not exists fz_memory;
+revoke all on schema fz_memory from public;
+do $$ declare r text; begin
+  foreach r in array array['anon', 'authenticated', 'service_role', 'fz_jarvis', 'fz_office_agent', 'fz_auditor', 'backup_reader'] loop
+    if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on schema fz_memory from %I', r); end if;
+  end loop;
 end $$;
 
--- ---------------------------------------------------------------------------------------------------------------------------- template library
-create table if not exists fz_creative.templates (
-  slug text primary key check (slug ~ '^[a-z][a-z0-9-]{2,59}$'),
-  scope text not null check (scope ~ '^[a-z][a-z0-9-]{1,39}$'),                   -- an office slug, or 'group' (every office)
-  module text not null check (module in ('video', 'image', 'ugc', 'voice', 'music', 'copy', 'edit', 'train')),
-  kind text not null check (kind in ('shot', 'product', 'ugc', 'character', 'visualizer', 'lyric_video', 'hero_ad', 'edit')),
-  title text not null check (length(title) between 3 and 120),
-  hooks text[] not null default '{}',
-  spec jsonb not null check (jsonb_typeof(spec) = 'object' and spec - array['prompt', 'negative', 'video', 'edit', 'workflow', 'requires'] = '{}'::jsonb),
-  source text not null default 'fendezy' check (length(source) between 2 and 200),
-  status text not null default 'active' check (status in ('active', 'retired')),
-  updated_at timestamptz not null default now(),
-  updated_by text not null default 'migration',
-  -- the studio's QA words: a template may not carry deceptive framing or real-artist imitation (checked on the positive prompt, title and edit recipe)
-  constraint templates_no_deceptive_framing check (
-    (title || ' ' || coalesce(spec -> 'prompt', '{}'::jsonb)::text || ' ' || coalesce(spec -> 'edit', '{}'::jsonb)::text)
-      !~* '(testimonial|customer review|real customer|verified (buyer|purchase)|i bought|5[- ]star|as seen on|unpaid review|in the style of|sounds? like|voice of|imitat|deepfake|clone)')
-);
-revoke all on fz_creative.templates from public;
-
--- BEGIN TEMPLATE SEED (generated by scripts/creative_presets_seed.py from creative_studio/presets/library.json; do not edit by hand)
-insert into fz_creative.templates (slug, scope, module, kind, title, hooks, spec, source) values
-  ('b2b-beat-cut', 'b2b-records', 'edit', 'edit', 'Beat-synced music-video cut from approved clips', array['lyric-first-line', 'out-now']::text[], $j${"edit": {"beat_sync": {"beats_per_cut": 4}, "broll": true, "captions": "lyric", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14, "max_seconds": 30}, "prompt": {"base": "{title}"}}$j$::jsonb, 'fendezy (librosa beat tracking when installed, numpy onset tracker otherwise)'),
-  ('b2b-cover-art', 'b2b-records', 'image', 'character', 'Single cover art (artist LoRA, consent required for a real artist)', array['out-now']::text[], $j${"edit": {"fit": "pad"}, "negative": "text, letters, watermark, signature, famous artist likeness", "prompt": {"aperture": "f/1.4", "base": "album cover portrait of {character}, {theme}, square composition, space for the title", "camera": "70mm-film", "focal": "50", "lens": "70s-prime", "lighting": ["neon", "volumetric"], "mood": "moody", "shot": "mcu"}, "requires": {"character_lora": true}, "workflow": "flux-schnell-lora-t2i"}$j$::jsonb, 'open-higgsfield + fendezy'),
-  ('b2b-lyric-video', 'b2b-records', 'music', 'lyric_video', 'Lyric video (word-timed by faster-whisper)', array['lyric-first-line']::text[], $j${"edit": {"captions": "lyric", "loudnorm": -14, "visualizer": "spectrum"}, "prompt": {"base": "{title}"}}$j$::jsonb, 'fendezy (faster-whisper word timestamps)'),
-  ('b2b-performance-clip', 'b2b-records', 'video', 'shot', 'Performance clip (character LoRA stills to video)', array['out-now']::text[], $j${"edit": {"captions": "lyric", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "famous artist likeness, text, watermark, deformed hands", "prompt": {"aperture": "f/1.4", "base": "{character} performing on a small stage, crowd silhouettes", "camera": "s35-digital", "focal": "35", "lens": "classic-anamorphic", "lighting": ["club"], "mood": "epic", "move": "orbit", "shot": "medium"}, "requires": {"character_lora": true}, "video": {"fps": 16, "seconds": 5}, "workflow": "wan22-t2v-a14b"}$j$::jsonb, 'fendezy'),
-  ('b2b-visualizer', 'b2b-records', 'music', 'visualizer', 'Audio visualizer over the cover art', array['out-now']::text[], $j${"edit": {"captions": "none", "loudnorm": -14, "visualizer": "waves"}, "prompt": {"base": "{title}"}}$j$::jsonb, 'fendezy (ffmpeg showwaves / showfreqs)'),
-  ('donna-service-explainer', 'donna', 'video', 'shot', 'Donna service explainer (AI receptionist demo, labelled)', array['question', 'stop-scroll']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "real person likeness, text", "prompt": {"base": "modern small business front desk, phone ringing, calm atmosphere, {subject}", "camera": "full-frame-cine", "lighting": ["soft"], "mood": "serene", "move": "dolly-right", "shot": "medium"}, "video": {"fps": 24, "seconds": 5}, "workflow": "ltxv-t2v"}$j$::jsonb, 'fendezy'),
-  ('ffm-ad-still', 'ff-marketing', 'image', 'shot', 'Ad still (variation generator)', array['question']::text[], $j${"edit": {"fit": "pad"}, "negative": "text, watermark, real people likeness", "prompt": {"aperture": "f/4", "base": "{subject}", "camera": "full-frame-cine", "focal": "50", "lens": "warm-prime", "lighting": ["golden-hour"], "mood": "cozy", "shot": "medium"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'open-higgsfield'),
-  ('ffm-broll-stitch', 'ff-marketing', 'edit', 'edit', 'B-roll stitch with hook first and burned captions', array['stop-scroll', 'three-reasons', 'before-after']::text[], $j${"edit": {"broll": true, "captions": "karaoke", "crossfade": 0.25, "fit": "auto_reframe", "hook_first": true, "loudnorm": -14, "max_seconds": 20}, "prompt": {"base": "{subject}"}}$j$::jsonb, 'fendezy'),
-  ('ffm-hero-ad', 'ff-marketing', 'video', 'hero_ad', 'Hero ad 5 s (hero tier; the router decides the model)', array['question', 'stop-scroll']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "text, watermark, real people likeness", "prompt": {"aperture": "f/4", "base": "{subject}, aspirational lifestyle scene", "camera": "modular-8k", "focal": "35", "lens": "modern-prime", "lighting": ["cinematic", "golden-hour"], "mood": "epic", "move": "crane-up", "shot": "hero-low"}, "video": {"fps": 24, "seconds": 5}, "workflow": "wan22-t2v-a14b"}$j$::jsonb, 'open-higgsfield (tv-spot) + fendezy'),
-  ('ffm-ugc-presenter', 'ff-marketing', 'ugc', 'ugc', 'AI presenter explainer (labelled AI)', array['question', 'three-reasons', 'stop-scroll']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "real person likeness, text", "prompt": {"base": "friendly AI presenter explaining {subject} in a bright home office", "camera": "phone-ugc", "lighting": ["soft"], "move": "handheld", "shot": "mcu", "ugc_format": "ugc-talking"}, "video": {"fps": 24, "seconds": 5}, "workflow": "ltxv-t2v"}$j$::jsonb, 'open-higgsfield (format) + fendezy'),
-  ('group-quick-portrait', 'group', 'image', 'shot', 'Quick portrait (fictional person, any office)', array[]::text[], $j${"edit": {"fit": "pad"}, "negative": "real person likeness", "prompt": {"base": "professional portrait photograph of a fictional person, shallow depth of field, soft studio lighting, 85mm lens"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'open-higgsfield QUICK_PROMPTS.Portrait'),
-  ('group-quick-product', 'group', 'image', 'product', 'Quick product shot (any office)', array[]::text[], $j${"edit": {"fit": "pad"}, "prompt": {"base": "{subject}, commercial product photography, clean white background, studio lighting"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'open-higgsfield QUICK_PROMPTS.Product'),
-  ('group-short-explainer', 'group', 'video', 'shot', 'Short explainer clip (any office)', array['question', 'pov']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "prompt": {"base": "{subject}", "lighting": ["soft"], "move": "push-in", "shot": "medium"}, "video": {"fps": 24, "seconds": 5}, "workflow": "ltxv-t2v"}$j$::jsonb, 'fendezy'),
-  ('pimp-character-portrait', 'pimp-ai', 'image', 'character', 'Character portrait (registered LoRA, consistent identity)', array['meet-character']::text[], $j${"edit": {"fit": "pad"}, "negative": "real celebrity likeness, minors, nudity, text, watermark", "prompt": {"aperture": "f/1.4", "base": "portrait of {character}, {outfit}, {location}", "camera": "full-frame-cine", "focal": "85", "lens": "swirl-bokeh", "lighting": ["golden-hour"], "mood": "cozy", "shot": "mcu"}, "requires": {"character_lora": true}, "workflow": "flux-schnell-lora-t2i"}$j$::jsonb, 'open-higgsfield + fendezy'),
-  ('pimp-character-reel', 'pimp-ai', 'video', 'character', 'Character reel 5 s (LoRA still to video)', array['pov', 'meet-character']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "real celebrity likeness, minors, nudity, morphing face", "prompt": {"base": "{character} {action}, {location}", "camera": "phone-ugc", "lighting": ["soft"], "move": "push-in", "shot": "medium"}, "requires": {"character_lora": true}, "video": {"fps": 24, "seconds": 5}, "workflow": "wan22-ti2v-5b"}$j$::jsonb, 'fendezy'),
-  ('pimp-character-train', 'pimp-ai', 'train', 'character', 'Character LoRA training set guide', array[]::text[], $j${"edit": {}, "prompt": {"base": "{trigger_word}"}, "requires": {"character_lora": false, "images_min": 12}}$j$::jsonb, 'fendezy (fal flux-lora-fast-training input; ai-toolkit later)'),
-  ('trap-flat-lay', 'the-trap', 'image', 'product', 'Overhead flat lay', array['drop-reveal']::text[], $j${"edit": {"fit": "pad"}, "negative": "text, watermark, clutter", "prompt": {"aperture": "f/4", "base": "{product} styled with matching accessories on concrete, overhead flat lay", "camera": "full-frame-cine", "focal": "50", "lens": "modern-prime", "lighting": ["soft"], "mood": "street", "shot": "flat-lay"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'fendezy'),
-  ('trap-hyper-motion-edit', 'the-trap', 'edit', 'edit', 'Hyper-motion beat cut from approved clips', array['drop-reveal', 'countdown']::text[], $j${"edit": {"beat_sync": {"beats_per_cut": 2}, "broll": true, "captions": "pop", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14, "max_seconds": 15}, "prompt": {"base": "{product}", "ugc_format": "hyper-motion"}}$j$::jsonb, 'fendezy'),
-  ('trap-product-hero-still', 'the-trap', 'image', 'product', 'Product hero still (softbox, three-quarter)', array['drop-reveal']::text[], $j${"edit": {"fit": "pad"}, "negative": "text, watermark, extra objects, deformed product, logo distortion", "prompt": {"aperture": "f/11", "base": "{product} on a seamless backdrop in brand colours, commercial product photography", "camera": "large-format-digital", "focal": "100", "lens": "sharp-prime", "lighting": ["softbox-product"], "mood": "luxury", "shot": "three-quarter"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'open-higgsfield + fendezy'),
-  ('trap-turntable', 'the-trap', 'video', 'product', 'Product turntable 5 s', array['drop-reveal']::text[], $j${"edit": {"captions": "subtle", "fit": "auto_reframe", "hook_first": false, "loudnorm": -14}, "negative": "blurry, morphing product, extra limbs, text", "prompt": {"aperture": "f/4", "base": "{product} rotating on a turntable, clean studio", "camera": "large-format-digital", "focal": "85", "lens": "sharp-prime", "lighting": ["softbox-product"], "mood": "luxury", "move": "turntable", "shot": "three-quarter"}, "video": {"fps": 24, "seconds": 5}, "workflow": "wan22-ti2v-5b"}$j$::jsonb, 'fendezy'),
-  ('trap-unboxing-ugc', 'the-trap', 'ugc', 'ugc', 'Unboxing (AI hands, labelled)', array['pov', 'drop-reveal']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "faces of real people, brand logos of other companies, text", "prompt": {"base": "{product} being unboxed on a wooden table", "camera": "phone-ugc", "lighting": ["soft"], "move": "handheld", "shot": "cu", "ugc_format": "unboxing"}, "video": {"fps": 24, "seconds": 5}, "workflow": "wan22-ti2v-5b"}$j$::jsonb, 'open-higgsfield (format) + fendezy')
-on conflict (slug) do update set scope = excluded.scope, module = excluded.module, kind = excluded.kind, title = excluded.title, hooks = excluded.hooks, spec = excluded.spec,
-  source = excluded.source, updated_at = now()
-  where fz_creative.templates.updated_by = 'migration';                        -- the owner's edits stay
--- END TEMPLATE SEED
-
--- which template / hook a job uses; for edit jobs, the input clips (same office only)
-create table if not exists fz_creative.job_templates (
-  job_id uuid primary key references fz_creative.jobs (id),
-  office_id uuid not null,
-  template_slug text not null references fz_creative.templates (slug),
-  hook_id text check (hook_id is null or hook_id ~ '^[a-z0-9-]{2,40}$'),
-  hook_text text check (hook_text is null or (length(hook_text) between 1 and 80
-                        and hook_text !~* '(testimonial|customer review|real customer|verified (buyer|purchase)|i bought|5[- ]star|as seen on|unpaid review)')),
-  inputs uuid[] not null default '{}' check (cardinality(inputs) <= 12),
-  chosen_by text not null check (chosen_by in ('request', 'ranked', 'explore', 'default')),
+-- ---------------------------------------------------------------------------------------------------------------------------- tables
+create table if not exists fz_memory.memories (
+  id uuid primary key default gen_random_uuid(),
+  office_id uuid not null,                                               -- no FK to fz_offices (as M1: the archive / export never depends on it)
+  data_class text not null check (data_class in ('public', 'owner', 'client')),
+  kind text not null check (kind in ('fact', 'preference', 'decision', 'person', 'plan', 'lesson', 'outcome')),
+  content text not null check (length(content) between 3 and 600),
+  content_hash text not null check (content_hash ~ '^[0-9a-f]{32}$'),
+  embedding real[] not null check (cardinality(embedding) between 8 and 1024),
+  embedder text not null check (embedder ~ '^[a-z0-9:._-]{1,60}$'),
+  importance real not null default 0.5 check (importance >= 0 and importance <= 1),
+  status text not null default 'active' check (status in ('active', 'superseded', 'retracted', 'forgotten')),
+  supersedes uuid,
+  superseded_by uuid,
+  source text not null default '' check (length(source) <= 120),
+  seen_count integer not null default 1 check (seen_count >= 1),
   created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  status_at timestamptz,
+  status_by text check (status_by is null or length(status_by) <= 60),
+  unique (office_id, id)
+);
+create unique index if not exists memories_live_dedupe on fz_memory.memories (office_id, content_hash) where status = 'active';
+create index if not exists memories_live on fz_memory.memories (office_id, last_seen_at desc) where status = 'active';
+create index if not exists memories_fts on fz_memory.memories using gin (to_tsvector('simple', content)) where status = 'active';
+
+create table if not exists fz_memory.entities (
+  id uuid primary key default gen_random_uuid(),
+  office_id uuid not null,
+  kind text not null check (kind in ('person', 'venture', 'office', 'decision', 'org', 'project', 'place', 'product', 'other')),
+  name text not null check (length(name) between 1 and 120),
+  norm text not null check (length(norm) between 1 and 120),
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  unique (office_id, kind, norm),
+  unique (office_id, id)
+);
+
+create table if not exists fz_memory.memory_entities (
+  office_id uuid not null,
+  memory_id uuid not null,
+  entity_id uuid not null,
+  primary key (memory_id, entity_id),
+  foreign key (office_id, memory_id) references fz_memory.memories (office_id, id),     -- same office, enforced by the database
+  foreign key (office_id, entity_id) references fz_memory.entities (office_id, id)
+);
+create index if not exists memory_entities_entity on fz_memory.memory_entities (entity_id);
+
+create table if not exists fz_memory.relations (
+  id bigint generated always as identity primary key,
+  office_id uuid not null,
+  src uuid not null,
+  rel text not null check (rel ~ '^[a-z][a-z0-9_]{1,40}$'),
+  dst uuid not null,
+  memory_id uuid not null,
+  status text not null default 'active' check (status in ('active', 'superseded')),
+  created_at timestamptz not null default now(),
+  foreign key (office_id, src) references fz_memory.entities (office_id, id),
+  foreign key (office_id, dst) references fz_memory.entities (office_id, id),
+  foreign key (office_id, memory_id) references fz_memory.memories (office_id, id)
+);
+create unique index if not exists relations_live on fz_memory.relations (office_id, src, rel, dst) where status = 'active';
+
+create table if not exists fz_memory.provider_quota (                   -- 24 hourly slots per provider, reused (no delete needed)
+  provider text not null check (provider ~ '^[a-z][a-z0-9_-]{1,30}$'),
+  slot smallint not null check (slot between 0 and 23),
+  hour timestamptz not null,
+  requests integer not null default 0 check (requests >= 0),
+  tokens bigint not null default 0 check (tokens >= 0),
+  primary key (provider, slot)
+);
+create table if not exists fz_memory.provider_state (
+  provider text primary key check (provider ~ '^[a-z][a-z0-9_-]{1,30}$'),
+  cooling_until timestamptz,
+  fails integer not null default 0 check (fails between 0 and 1000),
   updated_at timestamptz not null default now()
 );
-revoke all on fz_creative.job_templates from public;
 
--- platform metrics (cumulative values per window); one row per asset / connector / metric / window end. A re-import of the same window replaces the value.
-create table if not exists fz_creative.platform_metrics (
-  id uuid primary key default gen_random_uuid(),
-  asset_id uuid not null references fz_creative.assets (id),
-  office_id uuid not null,
-  connector text not null check (connector ~ '^[a-z][a-z0-9-]{1,39}$'),
-  metric text not null check (metric in ('impressions', 'views', 'views_3s', 'watch_seconds', 'completion_rate', 'likes', 'comments', 'shares', 'saves', 'follows',
-                                         'clicks', 'leads', 'conversions', 'revenue_cents')),
-  value numeric(16,4) not null check (value >= 0 and (metric <> 'completion_rate' or value <= 1)),
-  window_end date not null,
-  source text not null check (source in ('manual', 'hands')),
-  ref text check (ref is null or length(ref) <= 120),
-  recorded_at timestamptz not null default now(),
-  unique (asset_id, connector, metric, window_end)
-);
-revoke all on fz_creative.platform_metrics from public;
-create index if not exists creative_platform_metrics_office on fz_creative.platform_metrics (office_id, recorded_at);
-
--- ---------------------------------------------------------------------------------------------------------------------------- providers (OFF by default)
-insert into fz_creative.providers (slug, title, kind, modules, models, env_key, est_cents, unit, note) values
-  ('local-edit', 'Local ffmpeg editing on the Jarvis host (B-roll stitch, beat-synced cuts, visualizers, captions): free', 'local', array['edit'], array['ffmpeg-edit'], '', 0, 'job',
-   'free; no network; inputs are approved assets of the same office')
-on conflict (slug) do update set title = excluded.title, kind = excluded.kind, modules = excluded.modules, models = excluded.models, env_key = excluded.env_key,
-  est_cents = excluded.est_cents, unit = excluded.unit, note = excluded.note;   -- 'enabled' stays the owner's
--- self-hosted ComfyUI: only the shipped workflows whose weights are commercially usable when WE run them (creative_studio/comfyui/manifest.json)
-update fz_creative.providers set models = array['flux.1-schnell', 'flux.1-schnell-lora', 'wan-2.2-ti2v-5b', 'wan-2.2-t2v-a14b', 'ltx-video'],
-       modules = array['video', 'image', 'ugc'],
-       note = 'estimate: 48GB-class GPU; workflows in creative_studio/comfyui (FLUX.1 schnell, Wan 2.2, LTX-Video: verify the LTX licence before enabling)'
- where slug in ('runpod-comfyui', 'modal-comfyui');
-
--- ---------------------------------------------------------------------------------------------------------------------------- service path
--- active templates for an office (its own + the group's), optionally one module
-create or replace function public.creative_templates(p_office text, p_module text default null) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+do $$
+declare t text; r text;
 begin
-  perform fz_creative.guard();
-  if fz_creative.office_active(p_office) is null then raise exception 'refused: office % is not active', p_office using errcode = '42501'; end if;
-  return coalesce((select jsonb_agg(jsonb_build_object('slug', t.slug, 'scope', t.scope, 'module', t.module, 'kind', t.kind, 'title', t.title, 'hooks', to_jsonb(t.hooks),
-                                                       'spec', t.spec) order by (t.scope <> p_office), t.slug)
-                     from fz_creative.templates t where t.status = 'active' and t.scope in (p_office, 'group') and (p_module is null or t.module = p_module)), '[]'::jsonb);
-end $$;
-revoke all on function public.creative_templates(text, text) from public, anon, authenticated;
-
--- attach a template (and hook, and edit inputs) to a queued or running job, before any attempt passed QA
-create or replace function public.creative_job_set_template(p_job uuid, p_template text, p_hook text default null, p_hook_text text default null,
-                                                           p_inputs uuid[] default '{}', p_chosen_by text default 'request') returns jsonb
-language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare j fz_creative.jobs; t fz_creative.templates; v_bad int;
-begin
-  perform fz_creative.guard();
-  select * into j from fz_creative.jobs where id = p_job for update;
-  if not found then raise exception 'unknown job'; end if;
-  if j.status not in ('queued', 'running') then raise exception 'refused: job is %', j.status; end if;
-  if fz_creative.office_active(j.slug) is null then raise exception 'refused: office % is not active', j.slug using errcode = '42501'; end if;
-  if exists (select 1 from fz_creative.attempts where job_id = j.id and outcome = 'ok') then raise exception 'refused: the job already has a passing attempt' using errcode = '42501'; end if;
-  select * into t from fz_creative.templates where slug = p_template and status = 'active';
-  if not found or t.scope not in (j.slug, 'group') then raise exception 'refused: template % is not available to office %', p_template, j.slug using errcode = '42501'; end if;
-  if t.module <> j.module then raise exception 'refused: template % is for %, the job is %', p_template, t.module, j.module using errcode = '42501'; end if;
-  if p_hook is not null and not (p_hook = any (t.hooks)) then raise exception 'refused: hook % is not in template %', p_hook, p_template using errcode = '42501'; end if;
-  if coalesce((t.spec -> 'requires' ->> 'character_lora')::boolean, false) and j.character_id is null then
-    raise exception 'refused: template % needs a registered character (consent rules apply)', p_template using errcode = '42501'; end if;
-  if cardinality(coalesce(p_inputs, '{}')) > 12 then raise exception 'refused: at most 12 inputs' using errcode = '42501'; end if;
-  select count(*) into v_bad from unnest(coalesce(p_inputs, '{}')) i
-   where not exists (select 1 from fz_creative.assets a where a.id = i and a.office_id = j.office_id
-                       and (a.status = 'approved' or (a.kind not in ('generated', 'lora') and a.status = 'draft'))
-                       and a.mime ~ '^(video|image|audio)/');
-  if v_bad > 0 then raise exception 'refused: every input must be an approved (or uploaded library) media asset of office %', j.slug using errcode = '42501'; end if;
-  if j.module = 'edit' and cardinality(coalesce(p_inputs, '{}')) = 0 and j.reuse_of is null then
-    raise exception 'refused: an edit job needs input clips' using errcode = '42501'; end if;
-  insert into fz_creative.job_templates (job_id, office_id, template_slug, hook_id, hook_text, inputs, chosen_by)
-    values (j.id, j.office_id, t.slug, p_hook, nullif(fz_creative.clean(p_hook_text, 80), ''), coalesce(p_inputs, '{}'), coalesce(p_chosen_by, 'request'))
-    on conflict (job_id) do update set template_slug = excluded.template_slug, hook_id = excluded.hook_id, hook_text = excluded.hook_text, inputs = excluded.inputs,
-                                       chosen_by = excluded.chosen_by, updated_at = now();
-  insert into public.audit_log (actor, action, target, detail) values ('creative_studio', 'creative_job_template', 'fz_creative.jobs/' || j.id,
-    jsonb_build_object('template', t.slug, 'hook', p_hook, 'inputs', cardinality(coalesce(p_inputs, '{}')), 'chosen_by', coalesce(p_chosen_by, 'request')));
-  return jsonb_build_object('job', j.id, 'template', t.slug, 'hook', p_hook);
-end $$;
-revoke all on function public.creative_job_set_template(uuid, text, text, text, uuid[], text) from public, anon, authenticated;
-
--- the worker reads the job's template, hook and inputs (paths of the same office's assets)
-create or replace function public.creative_job_template(p_job uuid) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-declare jt fz_creative.job_templates;
-begin
-  perform fz_creative.guard();
-  select * into jt from fz_creative.job_templates where job_id = p_job;
-  if not found then return null; end if;
-  return (select jsonb_build_object('template', t.slug, 'module', t.module, 'kind', t.kind, 'title', t.title, 'spec', t.spec, 'hooks', to_jsonb(t.hooks),
-                                    'hook', jt.hook_id, 'hook_text', jt.hook_text, 'chosen_by', jt.chosen_by,
-                                    'inputs', coalesce((select jsonb_agg(jsonb_build_object('id', a.id, 'path', a.path, 'mime', a.mime, 'kind', a.kind, 'name', a.name) order by k.ord)
-                                                          from unnest(jt.inputs) with ordinality k(id, ord) join fz_creative.assets a on a.id = k.id and a.office_id = jt.office_id), '[]'::jsonb))
-            from fz_creative.templates t where t.slug = jt.template_slug);
-end $$;
-revoke all on function public.creative_job_template(uuid) from public, anon, authenticated;
-
--- metrics import: rows [{asset | hand_action, connector, metric, value, window_end}] for ONE office; bad rows are reported, not written
-create or replace function public.creative_metrics_import(p_office text, p_rows jsonb, p_source text, p_ref text default null) returns jsonb
-language plpgsql security definer set search_path to 'pg_catalog' as $$
-declare v_office uuid; r jsonb; i int := 0; v_asset uuid; v_ins int := 0; v_upd int := 0; v_rej jsonb := '[]'::jsonb; v_new boolean; v_val numeric; v_day date;
-begin
-  perform fz_creative.guard();
-  v_office := fz_creative.office_active(p_office);
-  if v_office is null then raise exception 'refused: office % is not active', p_office using errcode = '42501'; end if;
-  if p_source is null or p_source not in ('manual', 'hands') then raise exception 'bad source %', p_source; end if;
-  if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) > 500 then raise exception 'refused: rows must be an array of at most 500' using errcode = '42501'; end if;
-  for r in select * from jsonb_array_elements(p_rows) loop
-    i := i + 1;
-    v_asset := null;
-    begin
-      if r ? 'asset' then
-        v_asset := (select a.id from fz_creative.assets a where a.id = (r ->> 'asset')::uuid and a.office_id = v_office);
-      elsif r ? 'hand_action' then
-        v_asset := (select c.asset_id from fz_creative.calendar c where c.hand_action_id = (r ->> 'hand_action')::uuid and c.office_id = v_office limit 1);
-      end if;
-      if v_asset is null then v_rej := v_rej || jsonb_build_object('row', i, 'reason', 'no asset of this office'); continue; end if;
-      v_val := (r ->> 'value')::numeric;
-      v_day := coalesce((r ->> 'window_end')::date, current_date);
-      insert into fz_creative.platform_metrics (asset_id, office_id, connector, metric, value, window_end, source, ref)
-        values (v_asset, v_office, r ->> 'connector', r ->> 'metric', v_val, v_day, p_source, left(coalesce(p_ref, r ->> 'hand_action'), 120))
-        on conflict (asset_id, connector, metric, window_end) do update set value = excluded.value, source = excluded.source, ref = excluded.ref, recorded_at = now()
-        returning (xmax = 0) into v_new;
-      if v_new then v_ins := v_ins + 1; else v_upd := v_upd + 1; end if;
-    exception when others then
-      v_rej := v_rej || jsonb_build_object('row', i, 'reason', left(sqlerrm, 120));
-    end;
-  end loop;
-  update fz_creative.jobs j set stage = 'analytics', updated_at = now()
-   where j.office_id = v_office and j.stage in ('approval', 'publishing') and j.status = 'approved'
-     and exists (select 1 from fz_creative.assets a join fz_creative.platform_metrics m on m.asset_id = a.id where a.job_id = j.id);
-  insert into public.audit_log (actor, action, target, detail) values ('creative_studio', 'creative_metrics_import', 'fz_creative.platform_metrics/' || p_office,
-    jsonb_build_object('source', p_source, 'inserted', v_ins, 'updated', v_upd, 'rejected', jsonb_array_length(v_rej)));
-  return jsonb_build_object('inserted', v_ins, 'updated', v_upd, 'rejected', v_rej);
-end $$;
-revoke all on function public.creative_metrics_import(text, jsonb, text, text) from public, anon, authenticated;
-
--- ranking for reuse: per asset a score from its latest cumulative metrics (summed over platforms); templates and hooks get a Bayesian average
--- (prior weight 3 posts at the office mean) so one lucky post does not win. Service path any office; a scoped identity (if ever granted) its own office only.
-create or replace function public.creative_rank(p_office text, p_module text default null, p_days integer default 90) returns jsonb
-language plpgsql stable security definer set search_path to 'pg_catalog' as $$
-declare v_role text := coalesce(nullif(current_setting('role', true), ''), 'none'); v_office uuid; v_mean numeric; v_scores jsonb;
-begin
-  if v_role in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
-    if public.current_office_id() is distinct from (select id from public.fz_offices where slug = p_office and kind = 'office') then
-      raise exception 'refused: a scoped identity reads its own office''s ranking only' using errcode = '42501'; end if;
-  elsif v_role not in ('none', 'postgres', 'service_role') then
-    raise exception 'refused' using errcode = '42501';
-  end if;
-  v_office := (select id from public.fz_offices where slug = p_office and kind = 'office');
-  if v_office is null then raise exception 'unknown office %', p_office; end if;
-  v_scores := coalesce((select jsonb_agg(jsonb_build_object('asset_id', x.asset_id, 'template', x.template, 'hook', x.hook, 'score', x.score)) from (
-    select a.id as asset_id, jt.template_slug as template, jt.hook_id as hook,
-           round(1000 * (coalesce(m.likes, 0) + 2 * coalesce(m.comments, 0) + 3 * coalesce(m.shares, 0) + 3 * coalesce(m.saves, 0) + 5 * coalesce(m.follows, 0)
-                         + 2 * coalesce(m.clicks, 0) + 20 * coalesce(m.leads, 0) + 100 * coalesce(m.conversions, 0) + coalesce(m.revenue_cents, 0) / 100)
-                 / greatest(coalesce(m.views, m.impressions, 0), 1)
-                 + 20 * coalesce(least(m.views_3s / nullif(coalesce(m.views, m.impressions), 0), 1), 0) + 10 * coalesce(m.completion_rate, 0), 3) as score
-      from fz_creative.assets a
-      join fz_creative.jobs j on j.id = a.job_id
-      left join fz_creative.job_templates jt on jt.job_id = j.id
-      join lateral (select sum(v) filter (where metric = 'impressions') impressions, sum(v) filter (where metric = 'views') views, sum(v) filter (where metric = 'views_3s') views_3s,
-                           avg(v) filter (where metric = 'completion_rate') completion_rate, sum(v) filter (where metric = 'likes') likes,
-                           sum(v) filter (where metric = 'comments') comments, sum(v) filter (where metric = 'shares') shares, sum(v) filter (where metric = 'saves') saves,
-                           sum(v) filter (where metric = 'follows') follows, sum(v) filter (where metric = 'clicks') clicks, sum(v) filter (where metric = 'leads') leads,
-                           sum(v) filter (where metric = 'conversions') conversions, sum(v) filter (where metric = 'revenue_cents') revenue_cents
-                      from (select distinct on (pm.connector, pm.metric) pm.metric, pm.value v from fz_creative.platform_metrics pm
-                             where pm.asset_id = a.id and pm.recorded_at > now() - make_interval(days => greatest(coalesce(p_days, 90), 1))
-                             order by pm.connector, pm.metric, pm.window_end desc) last) m on true
-     where a.office_id = v_office and a.kind = 'generated' and a.status = 'approved' and (p_module is null or j.module = p_module)
-       and coalesce(m.views, m.impressions, m.likes, m.clicks, m.leads) is not null) x), '[]'::jsonb);
-  v_mean := coalesce((select avg(score) from jsonb_to_recordset(v_scores) s(asset_id uuid, template text, hook text, score numeric)), 0);
-  return jsonb_build_object('office', p_office, 'module', p_module, 'mean', round(v_mean, 3),
-    'assets', coalesce((select jsonb_agg(jsonb_build_object('asset', asset_id, 'template', template, 'hook', hook, 'score', score) order by score desc)
-                          from (select * from jsonb_to_recordset(v_scores) s(asset_id uuid, template text, hook text, score numeric) order by score desc limit 10) x), '[]'::jsonb),
-    'templates', coalesce((select jsonb_agg(jsonb_build_object('template', template, 'posts', n, 'avg', round(t / n, 3), 'rank_score', round((t + 3 * v_mean) / (n + 3), 3))
-                                            order by (t + 3 * v_mean) / (n + 3) desc, template)
-                             from (select template, count(*) n, sum(score) t from jsonb_to_recordset(v_scores) s(asset_id uuid, template text, hook text, score numeric)
-                                    where template is not null group by template) y), '[]'::jsonb),
-    'hooks', coalesce((select jsonb_agg(jsonb_build_object('hook', hook, 'posts', n, 'avg', round(t / n, 3), 'rank_score', round((t + 3 * v_mean) / (n + 3), 3))
-                                        order by (t + 3 * v_mean) / (n + 3) desc, hook)
-                         from (select hook, count(*) n, sum(score) t from jsonb_to_recordset(v_scores) s(asset_id uuid, template text, hook text, score numeric)
-                                where hook is not null group by hook) z), '[]'::jsonb));
-end $$;
-revoke all on function public.creative_rank(text, text, integer) from public, anon, authenticated;
-
--- ---------------------------------------------------------------------------------------------------------------------------- owner control
--- add / edit / retire an office template (the CHECKs above still apply: fixed spec keys, no deceptive framing). The migration seed never overwrites it again.
-create or replace function public.creative_owner_set_template(p_slug text, p_scope text, p_module text, p_kind text, p_title text, p_hooks text[], p_spec jsonb,
-                                                             p_status text default 'active') returns jsonb
-language plpgsql security definer set search_path to 'pg_catalog' as $$
-begin
-  perform fz_creative.owner_only('a creative template');
-  if p_scope <> 'group' and not exists (select 1 from public.fz_offices where slug = p_scope and kind = 'office') then raise exception 'unknown office %', p_scope; end if;
-  insert into fz_creative.templates (slug, scope, module, kind, title, hooks, spec, source, status, updated_by)
-    values (p_slug, p_scope, p_module, p_kind, p_title, coalesce(p_hooks, '{}'), coalesce(p_spec, '{}'::jsonb), 'owner', coalesce(p_status, 'active'), 'owner')
-    on conflict (slug) do update set scope = excluded.scope, module = excluded.module, kind = excluded.kind, title = excluded.title, hooks = excluded.hooks,
-                                     spec = excluded.spec, status = excluded.status, updated_by = 'owner', updated_at = now();
-  insert into public.audit_log (actor, action, target, detail) values ('owner', 'creative_template', 'fz_creative.templates/' || p_slug,
-    jsonb_build_object('scope', p_scope, 'module', p_module, 'status', coalesce(p_status, 'active')));
-  return jsonb_build_object('template', p_slug, 'status', coalesce(p_status, 'active'));
-end $$;
-revoke all on function public.creative_owner_set_template(text, text, text, text, text, text[], jsonb, text) from public, anon, authenticated;
-
--- none of these is for a scoped identity (the M1 allowlist stays exact)
-do $$ declare r text; f regprocedure; begin
-  foreach r in array array['fz_jarvis', 'fz_office_agent', 'fz_auditor', 'backup_reader'] loop
-    continue when not exists (select 1 from pg_roles where rolname = r);
-    for f in select p.oid::regprocedure from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like 'creative\_%' loop
-      execute format('revoke all on function %s from %I', f, r);
+  foreach t in array array['memories', 'entities', 'memory_entities', 'relations', 'provider_quota', 'provider_state'] loop
+    execute format('alter table fz_memory.%I enable row level security', t);
+    execute format('revoke all on fz_memory.%I from public', t);
+    foreach r in array array['anon', 'authenticated', 'service_role', 'fz_jarvis', 'fz_office_agent', 'fz_auditor', 'backup_reader'] loop
+      if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on fz_memory.%I from %I', t, r); end if;
     end loop;
   end loop;
 end $$;
+revoke all on sequence fz_memory.relations_id_seq from public;
 
--- ===== 20261209_creative_selfhost_v1.sql =====
--- FENDEZY AI CREATIVE STUDIO: self-hosted ComfyUI worker provider row (hq_creative_selfhost; docs/architecture/CREATIVE_SELFHOST.md).
--- Additive and idempotent. No functions, no grants. The row starts OFF: the owner enables it with creative_owner_set_provider('comfyui-selfhost', true)
--- after a worker has passed its selftest. 0 CAD cents per call (our own worker): the router never reserves for it, and the existing fal.ai caps are unchanged.
--- A rented pod is paid per hour outside the studio (owner decision; the worker stops itself when idle).
-set lock_timeout = '5s';
+-- ---------------------------------------------------------------------------------------------------------------------------- helpers
+-- Who may call: the bot (service key) and database sessions. Anyone else (anon, a signed-in app user, a scoped office / jarvis / auditor token,
+-- the backup identity) is refused here, whatever a later grant says. The SESSION role is read (a SECURITY DEFINER caller does not change it).
+create or replace function public.jmem_guard() returns void
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+begin
+  if coalesce(nullif(current_setting('role', true), ''), 'none') not in ('service_role', 'none', 'postgres') then
+    raise exception 'linked memory: the bot and database sessions only' using errcode = '42501';
+  end if;
+end $$;
+revoke all on function public.jmem_guard() from public, anon, authenticated;
 
-insert into fz_creative.providers (slug, title, kind, modules, models, env_key, est_cents, unit, note) values
-  ('comfyui-selfhost', 'Self-hosted ComfyUI worker (Kaggle free GPU, an owned GPU or an owner-rented pod): 0 per call', 'local', array['video', 'image', 'ugc', 'voice'],
-     array['flux.1-schnell', 'flux.1-schnell-lora', 'kokoro-82m', 'wan-2.2-s2v-14b', 'wan-2.2-t2v-a14b', 'wan-2.2-ti2v-5b', 'z-image-turbo', 'z-image-turbo-lora'],
-     'COMFYUI_SELFHOST_URL', 0, 'job',
-     'free per call; models and licences in creative_studio/selfhost/manifest.json (Apache-2.0 weights only; LTX-Video only behind CREATIVE_LTX_LICENCE_OK)')
-on conflict (slug) do update set title = excluded.title, kind = excluded.kind, modules = excluded.modules, models = excluded.models, env_key = excluded.env_key,
-  est_cents = excluded.est_cents, unit = excluded.unit, note = excluded.note;   -- 'enabled' stays the owner's
+create or replace function public.jmem_norm(p_text text) returns text
+language sql immutable set search_path to 'pg_catalog' as $$
+  select btrim(regexp_replace(lower(coalesce(p_text, '')), '[^a-z0-9]+', ' ', 'g'))
+$$;
+revoke all on function public.jmem_norm(text) from public, anon, authenticated;
+
+-- The office a call works in. p_agent wins (the agent's office from public.agents: an office's agents can only ever reach their own office);
+-- p_office, if also given, must agree. Unknown office / agent: refused.
+create or replace function public.jmem_office(p_office text, p_agent text default null) returns uuid
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare v uuid; a uuid;
+begin
+  if p_agent is not null then
+    select x.office_id into a from public.agents x where x.slug = p_agent;
+    if a is null then raise exception 'linked memory: unknown agent %', left(p_agent, 60) using errcode = '22023'; end if;
+  end if;
+  if p_office is not null then
+    select o.id into v from public.fz_offices o where o.slug = p_office;
+    if v is null then raise exception 'linked memory: unknown office %', left(p_office, 60) using errcode = '22023'; end if;
+  end if;
+  if a is not null and v is not null and a <> v then raise exception 'linked memory: agent % is not in office %', left(p_agent, 60), left(p_office, 60) using errcode = '42501'; end if;
+  v := coalesce(a, v);
+  if v is null then raise exception 'linked memory: office or agent required' using errcode = '22023'; end if;
+  return v;
+end $$;
+revoke all on function public.jmem_office(text, text) from public, anon, authenticated;
+
+create or replace function public.jmem_dot(a real[], b real[]) returns real
+language sql immutable parallel safe set search_path to 'pg_catalog' as $$
+  select case when a is null or b is null or cardinality(a) <> cardinality(b) then 0::real
+              else coalesce((select sum(x * y) from unnest(a, b) as t(x, y)), 0)::real end
+$$;
+revoke all on function public.jmem_dot(real[], real[]) from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------------------------------------------------------- retrieval
+-- Top-k memories for one office, scored: 0.50 semantic (same embedder only) + 0.20 lexical + 0.15 importance + 0.10 recency (45-day half-life-ish
+-- decay of last_seen_at) + 0.15 when a linked entity is named in the query. Scope:
+--   office  -> its own rows only; client rows only when p_destination = 'selfhost'
+--   group   -> the group's rows and every office's NON-client rows (M1: group scope reads all offices except client data); never client rows
+create or replace function public.jmem_search(p_office text, p_query text, p_qvec real[] default null, p_embedder text default null, p_k integer default 5,
+                                              p_destination text default 'external', p_agent text default null)
+returns table (id uuid, office text, kind text, data_class text, content text, score real, entities text[], last_seen_at timestamptz)
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+#variable_conflict use_column
+declare v_office uuid; v_group boolean; v_client boolean; q text := left(coalesce(p_query, ''), 1000); qn text; tq tsquery;
+begin
+  perform public.jmem_guard();
+  v_office := public.jmem_office(p_office, p_agent);
+  v_group := exists (select 1 from public.fz_offices o where o.id = v_office and o.kind = 'group');
+  v_client := not v_group and coalesce(p_destination, 'external') = 'selfhost';
+  qn := ' ' || public.jmem_norm(q) || ' ';
+  tq := nullif(replace(plainto_tsquery('simple', q)::text, ' & ', ' | '), '')::tsquery;
+  return query
+  with hit as (
+    select e.id from fz_memory.entities e
+     where length(e.norm) >= 3 and position(' ' || e.norm || ' ' in qn) > 0
+       and (e.office_id = v_office or v_group)
+  ), cand as (
+    select m.*, case when m.embedder = p_embedder then public.jmem_dot(m.embedding, p_qvec) else 0 end as sem,
+           case when tq is null then 0 else ts_rank_cd(to_tsvector('simple', m.content), tq, 32) end as lex,
+           exists (select 1 from fz_memory.memory_entities me where me.memory_id = m.id and me.entity_id in (select hit.id from hit)) as ent
+      from fz_memory.memories m
+     where m.status = 'active'
+       and (m.office_id = v_office or (v_group and m.data_class <> 'client'))
+       and (m.data_class <> 'client' or (v_client and m.office_id = v_office))
+  )
+  select c.id, (select o.slug from public.fz_offices o where o.id = c.office_id), c.kind, c.data_class, c.content,
+         (0.50 * greatest(c.sem, 0) + 0.20 * c.lex + 0.15 * c.importance
+          + 0.10 * exp(-greatest(extract(epoch from now() - c.last_seen_at), 0) / 86400.0 / 45.0) + 0.15 * c.ent::int)::real,
+         array(select e.name from fz_memory.memory_entities me join fz_memory.entities e on e.id = me.entity_id where me.memory_id = c.id order by e.name),
+         c.last_seen_at
+    from cand c
+   where c.sem > 0.15 or c.lex > 0 or c.ent
+   order by 6 desc, c.last_seen_at desc
+   limit greatest(1, least(coalesce(p_k, 5), 20));
+end $$;
+revoke all on function public.jmem_search(text, text, real[], text, integer, text, text) from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------------------------------------------------------- writes
+-- One batch of operations from one extraction (at most 20). Every op stays inside the call's office: an update / retract whose target is not an
+-- ACTIVE memory of THAT office is skipped (never an error that would lose the rest). Ops:
+--   {"op": "add",     "content", "kind", "data_class", "importance" 0..1, "embedding": [...], "entities": [{"name", "kind"}], "relations": [["src", "rel", "dst"]]}
+--   {"op": "update",  "id": <target>, ...same as add}        -> new row (supersedes the target), the target becomes superseded
+--   {"op": "retract", "id": <target>}                          -> contradicted, no replacement
+-- An add whose normalised text is already active, or whose embedding is >= 0.95 similar to an active row of the same office, class and embedder,
+-- is a duplicate: the existing row is seen again (last_seen_at, seen_count, max importance) instead.
+create or replace function public.jmem_apply(p_office text, p_ops jsonb, p_source text default '', p_embedder text default 'hash-v1', p_agent text default null)
+returns jsonb
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare v_office uuid; op jsonb; v_kind text; v_class text; v_content text; v_hash text; v_vec real[]; v_imp real; v_target fz_memory.memories; v_dup uuid;
+        v_new uuid; e jsonb; r jsonb; v_eid uuid; v_src uuid; v_dst uuid; added int := 0; updated int := 0; retracted int := 0; deduped int := 0; skipped int := 0;
+        rank_ text[] := array['public', 'owner', 'client'];
+begin
+  perform public.jmem_guard();
+  v_office := public.jmem_office(p_office, p_agent);
+  if jsonb_typeof(p_ops) <> 'array' or jsonb_array_length(p_ops) > 20 then raise exception 'linked memory: 0 to 20 operations' using errcode = '22023'; end if;
+  if coalesce(p_embedder, '') !~ '^[a-z0-9:._-]{1,60}$' then raise exception 'linked memory: bad embedder name' using errcode = '22023'; end if;
+  for op in select * from jsonb_array_elements(p_ops) loop
+    begin
+      v_target := null;
+      if op ->> 'op' in ('update', 'retract') then
+        select * into v_target from fz_memory.memories m
+         where m.id = (case when (op ->> 'id') ~ '^[0-9a-f-]{36}$' then (op ->> 'id')::uuid end) and m.office_id = v_office and m.status = 'active';
+        if v_target.id is null then skipped := skipped + 1; continue; end if;
+        if op ->> 'op' = 'retract' then
+          update fz_memory.memories set status = 'retracted', status_at = now(), status_by = left(coalesce(nullif(p_source, ''), 'extraction'), 60) where id = v_target.id;
+          update fz_memory.relations set status = 'superseded' where memory_id = v_target.id and status = 'active';
+          retracted := retracted + 1; continue;
+        end if;
+      elsif coalesce(op ->> 'op', '') <> 'add' then
+        skipped := skipped + 1; continue;
+      end if;
+      v_content := btrim(left(regexp_replace(coalesce(op ->> 'content', ''), '\s+', ' ', 'g'), 600));
+      v_kind := coalesce(nullif(op ->> 'kind', ''), 'fact');
+      v_class := coalesce(op ->> 'data_class', 'client');                -- missing class = client (default deny)
+      if v_class not in ('public', 'owner', 'client') then v_class := 'client'; end if;
+      if v_target.id is not null and array_position(rank_, v_target.data_class) > array_position(rank_, v_class) then v_class := v_target.data_class; end if;
+      v_imp := least(1, greatest(0, coalesce((op ->> 'importance')::real, 0.5)));
+      v_vec := array(select x::real from jsonb_array_elements_text(coalesce(op -> 'embedding', '[]')) x);
+      if length(v_content) < 3 or cardinality(v_vec) not between 8 and 1024
+         or v_kind not in ('fact', 'preference', 'decision', 'person', 'plan', 'lesson', 'outcome') then skipped := skipped + 1; continue; end if;
+      v_hash := md5(public.jmem_norm(v_content));
+      select m.id into v_dup from fz_memory.memories m
+       where m.office_id = v_office and m.status = 'active' and m.id is distinct from v_target.id
+         and (m.content_hash = v_hash or (m.embedder = p_embedder and m.data_class = v_class and public.jmem_dot(m.embedding, v_vec) >= 0.95))
+       order by (m.content_hash = v_hash) desc, m.last_seen_at desc limit 1;
+      if v_dup is not null then
+        update fz_memory.memories set last_seen_at = now(), seen_count = seen_count + 1, importance = greatest(importance, v_imp),
+               data_class = case when array_position(rank_, v_class) > array_position(rank_, data_class) then v_class else data_class end
+         where id = v_dup;
+        if v_target.id is not null then                                   -- the update says the same as another live row: the target is superseded by it
+          update fz_memory.memories set status = 'superseded', superseded_by = v_dup, status_at = now(), status_by = 'extraction' where id = v_target.id;
+          update fz_memory.relations set status = 'superseded' where memory_id = v_target.id and status = 'active';
+        end if;
+        deduped := deduped + 1; continue;
+      end if;
+      insert into fz_memory.memories (office_id, data_class, kind, content, content_hash, embedding, embedder, importance, supersedes, source)
+        values (v_office, v_class, v_kind, v_content, v_hash, v_vec, p_embedder, v_imp, v_target.id, left(coalesce(p_source, ''), 120))
+        returning id into v_new;
+      if v_target.id is not null then
+        update fz_memory.memories set status = 'superseded', superseded_by = v_new, status_at = now(), status_by = 'extraction' where id = v_target.id;
+        update fz_memory.relations set status = 'superseded' where memory_id = v_target.id and status = 'active';
+        updated := updated + 1;
+      else
+        added := added + 1;
+      end if;
+      for e in select * from jsonb_array_elements(case when jsonb_typeof(op -> 'entities') = 'array' then op -> 'entities' else '[]' end) limit 8 loop
+        v_eid := public.jmem_entity_upsert(v_office, e ->> 'name', e ->> 'kind');
+        if v_eid is not null then
+          insert into fz_memory.memory_entities (office_id, memory_id, entity_id) values (v_office, v_new, v_eid) on conflict do nothing;
+        end if;
+      end loop;
+      for r in select * from jsonb_array_elements(case when jsonb_typeof(op -> 'relations') = 'array' then op -> 'relations' else '[]' end) limit 6 loop
+        if jsonb_typeof(r) <> 'array' or jsonb_array_length(r) <> 3 then continue; end if;
+        v_src := public.jmem_entity_upsert(v_office, r ->> 0, null);
+        v_dst := public.jmem_entity_upsert(v_office, r ->> 2, null);
+        if v_src is null or v_dst is null or v_src = v_dst
+           or left(regexp_replace(lower(coalesce(r ->> 1, '')), '[^a-z0-9]+', '_', 'g'), 40) !~ '^[a-z][a-z0-9_]{1,40}$' then continue; end if;
+        insert into fz_memory.memory_entities (office_id, memory_id, entity_id) values (v_office, v_new, v_src), (v_office, v_new, v_dst) on conflict do nothing;
+        insert into fz_memory.relations (office_id, src, rel, dst, memory_id)
+          values (v_office, v_src, left(regexp_replace(lower(r ->> 1), '[^a-z0-9]+', '_', 'g'), 40), v_dst, v_new) on conflict do nothing;
+      end loop;
+    exception when invalid_text_representation or numeric_value_out_of_range or check_violation or string_data_right_truncation then
+      skipped := skipped + 1;
+    end;
+  end loop;
+  return jsonb_build_object('added', added, 'updated', updated, 'retracted', retracted, 'deduped', deduped, 'skipped', skipped);
+end $$;
+revoke all on function public.jmem_apply(text, jsonb, text, text, text) from public, anon, authenticated;
+
+-- An entity of THIS office by (kind, normalised name); a NULL kind finds any kind with that name first, else creates 'other'. Bad names: NULL.
+create or replace function public.jmem_entity_upsert(p_office uuid, p_name text, p_kind text) returns uuid
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare v_name text := btrim(left(regexp_replace(coalesce(p_name, ''), '\s+', ' ', 'g'), 120)); v_norm text; v_kind text; v uuid;
+begin
+  perform public.jmem_guard();
+  v_norm := left(public.jmem_norm(v_name), 120);
+  if length(v_norm) < 2 then return null; end if;
+  v_kind := case when p_kind in ('person', 'venture', 'office', 'decision', 'org', 'project', 'place', 'product', 'other') then p_kind end;
+  if v_kind is null then
+    select e.id into v from fz_memory.entities e where e.office_id = p_office and e.norm = v_norm order by (e.kind = 'other'), e.created_at limit 1;
+    if v is not null then update fz_memory.entities set last_seen_at = now() where id = v; return v; end if;
+    v_kind := 'other';
+  end if;
+  insert into fz_memory.entities (office_id, kind, name, norm) values (p_office, v_kind, v_name, v_norm)
+    on conflict (office_id, kind, norm) do update set last_seen_at = now()
+    returning id into v;
+  return v;
+end $$;
+revoke all on function public.jmem_entity_upsert(uuid, text, text) from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------------------------------------------------------- owner commands (/memory)
+-- Newest (or matching) active memories of one office. Client rows are listed MASKED (the bot sends this text to Telegram; client data stays with the
+-- office's own path). The group view lists only the group's own rows.
+create or replace function public.jmem_list(p_office text, p_query text default null, p_limit integer default 15)
+returns table (id uuid, kind text, data_class text, content text, importance real, seen_count integer, last_seen_at timestamptz, entities text[])
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+#variable_conflict use_column
+declare v_office uuid; qn text := nullif(public.jmem_norm(p_query), '');
+begin
+  perform public.jmem_guard();
+  v_office := public.jmem_office(p_office, null);
+  return query
+  select m.id, m.kind, m.data_class, case when m.data_class = 'client' then '[client data: hidden]' else m.content end, m.importance, m.seen_count, m.last_seen_at,
+         array(select e.name from fz_memory.memory_entities me join fz_memory.entities e on e.id = me.entity_id where me.memory_id = m.id order by e.name)
+    from fz_memory.memories m
+   where m.office_id = v_office and m.status = 'active'
+     and (qn is null or (m.data_class <> 'client' and position(qn in public.jmem_norm(m.content)) > 0)
+          or exists (select 1 from fz_memory.memory_entities me join fz_memory.entities e on e.id = me.entity_id where me.memory_id = m.id and e.norm = qn))
+   order by m.last_seen_at desc
+   limit greatest(1, least(coalesce(p_limit, 15), 50));
+end $$;
+revoke all on function public.jmem_list(text, text, integer) from public, anon, authenticated;
+
+-- Forget: by id prefix (at least 8 hex characters, unique in the office) or every active memory linked to an entity name. Soft (status 'forgotten'):
+-- never retrieved again, kept as history; one audit_log row with ids and counts only, never content.
+create or replace function public.jmem_forget(p_office text, p_id_prefix text default null, p_entity text default null, p_actor text default 'owner')
+returns jsonb
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare v_office uuid; ids uuid[]; v_norm text := nullif(public.jmem_norm(p_entity), '');
+begin
+  perform public.jmem_guard();
+  v_office := public.jmem_office(p_office, null);
+  if p_id_prefix is not null then
+    if lower(p_id_prefix) !~ '^[0-9a-f-]{8,36}$' then raise exception 'linked memory: give at least 8 characters of the memory id' using errcode = '22023'; end if;
+    ids := array(select m.id from fz_memory.memories m where m.office_id = v_office and m.status = 'active' and m.id::text like lower(p_id_prefix) || '%');
+    if cardinality(ids) > 1 then raise exception 'linked memory: % memories start with %; give more characters', cardinality(ids), p_id_prefix using errcode = '22023'; end if;
+  elsif v_norm is not null then
+    ids := array(select distinct m.id from fz_memory.memories m join fz_memory.memory_entities me on me.memory_id = m.id join fz_memory.entities e on e.id = me.entity_id
+                  where m.office_id = v_office and m.status = 'active' and e.norm = v_norm limit 200);
+  else
+    raise exception 'linked memory: id prefix or entity name required' using errcode = '22023';
+  end if;
+  if cardinality(ids) = 0 then return jsonb_build_object('forgotten', 0); end if;
+  update fz_memory.memories set status = 'forgotten', status_at = now(), status_by = left(coalesce(p_actor, 'owner'), 60) where id = any (ids);
+  update fz_memory.relations set status = 'superseded' where memory_id = any (ids) and status = 'active';
+  insert into public.audit_log (actor, action, target, detail)
+    values (left(coalesce(p_actor, 'owner'), 60), 'memory_forget', 'fz_memory.memories',
+            jsonb_build_object('office', p_office, 'count', cardinality(ids), 'ids', to_jsonb(ids[1:50]), 'by', case when p_id_prefix is not null then 'id' else 'entity' end));
+  return jsonb_build_object('forgotten', cardinality(ids));
+end $$;
+revoke all on function public.jmem_forget(text, text, text, text) from public, anon, authenticated;
+
+-- The links of one entity in one office (/memory links <name>): its live relations, both directions.
+create or replace function public.jmem_links(p_office text, p_name text, p_limit integer default 20)
+returns table (src text, rel text, dst text, since timestamptz)
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+#variable_conflict use_column
+declare v_office uuid; v_norm text := public.jmem_norm(p_name);
+begin
+  perform public.jmem_guard();
+  v_office := public.jmem_office(p_office, null);
+  return query
+  select s.name, r.rel, d.name, r.created_at
+    from fz_memory.relations r join fz_memory.entities s on s.id = r.src join fz_memory.entities d on d.id = r.dst
+    join fz_memory.memories m on m.id = r.memory_id
+   where r.office_id = v_office and r.status = 'active' and m.data_class <> 'client' and (s.norm = v_norm or d.norm = v_norm)
+   order by r.created_at desc
+   limit greatest(1, least(coalesce(p_limit, 20), 50));
+end $$;
+revoke all on function public.jmem_links(text, text, integer) from public, anon, authenticated;
+
+create or replace function public.jmem_stats() returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+begin
+  perform public.jmem_guard();
+  return jsonb_build_object(
+    'by_office', coalesce((select jsonb_object_agg(x.slug, x.n) from (select o.slug, count(*) n from fz_memory.memories m join public.fz_offices o on o.id = m.office_id
+                                                                      where m.status = 'active' group by o.slug) x), '{}'),
+    'by_class', coalesce((select jsonb_object_agg(x.data_class, x.n) from (select data_class, count(*) n from fz_memory.memories where status = 'active' group by data_class) x), '{}'),
+    'history', (select count(*) from fz_memory.memories where status <> 'active'),
+    'entities', (select count(*) from fz_memory.entities),
+    'relations', (select count(*) from fz_memory.relations where status = 'active'));
+end $$;
+revoke all on function public.jmem_stats() from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------------------------------------------------------- free-provider quota
+-- Add counts to the provider's current hourly slot (a slot from an older day is restarted) and store its cool-down. Only counts: no prompt, no money.
+create or replace function public.jquota_record(p_provider text, p_requests integer, p_tokens bigint, p_cooling_until timestamptz default null, p_fails integer default 0)
+returns void
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare h timestamptz := date_trunc('hour', now()); s smallint := extract(hour from (now() at time zone 'UTC'))::smallint;
+begin
+  perform public.jmem_guard();
+  if coalesce(p_provider, '') !~ '^[a-z][a-z0-9_-]{1,30}$' or coalesce(p_requests, -1) not between 0 and 10000 or coalesce(p_tokens, -1) not between 0 and 100000000
+     or coalesce(p_fails, 0) not between 0 and 1000 or (p_cooling_until is not null and p_cooling_until > now() + interval '1 day') then
+    raise exception 'quota: bad values' using errcode = '22023';
+  end if;
+  if p_requests > 0 or p_tokens > 0 then
+    insert into fz_memory.provider_quota as q (provider, slot, hour, requests, tokens) values (p_provider, s, h, p_requests, p_tokens)
+      on conflict (provider, slot) do update set
+        requests = case when q.hour = excluded.hour then q.requests + excluded.requests else excluded.requests end,
+        tokens = case when q.hour = excluded.hour then q.tokens + excluded.tokens else excluded.tokens end,
+        hour = excluded.hour;
+  end if;
+  insert into fz_memory.provider_state as st (provider, cooling_until, fails, updated_at) values (p_provider, p_cooling_until, coalesce(p_fails, 0), now())
+    on conflict (provider) do update set cooling_until = excluded.cooling_until, fails = excluded.fails, updated_at = now();
+end $$;
+revoke all on function public.jquota_record(text, integer, bigint, timestamptz, integer) from public, anon, authenticated;
+
+-- What the bot loads at start: the last 24 hours of slots and every live cool-down.
+create or replace function public.jquota_load() returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+begin
+  perform public.jmem_guard();
+  return jsonb_build_object(
+    'hours', coalesce((select jsonb_agg(jsonb_build_object('provider', q.provider, 'hour', extract(epoch from q.hour)::bigint, 'requests', q.requests, 'tokens', q.tokens)
+                                        order by q.provider, q.hour)
+                         from fz_memory.provider_quota q where q.hour > now() - interval '24 hours'), '[]'),
+    'state', coalesce((select jsonb_object_agg(s.provider, jsonb_build_object('cooling_until', extract(epoch from s.cooling_until), 'fails', s.fails))
+                         from fz_memory.provider_state s), '{}'),
+    'now', extract(epoch from now()));
+end $$;
+revoke all on function public.jquota_load() from public, anon, authenticated;
+
+do $$
+declare f text;
+begin
+  if exists (select 1 from pg_roles where rolname = 'fz_jarvis') then
+    foreach f in array array['jmem_guard()', 'jmem_norm(text)', 'jmem_office(text,text)', 'jmem_dot(real[],real[])', 'jmem_search(text,text,real[],text,integer,text,text)',
+                             'jmem_apply(text,jsonb,text,text,text)', 'jmem_entity_upsert(uuid,text,text)', 'jmem_list(text,text,integer)', 'jmem_forget(text,text,text,text)',
+                             'jmem_links(text,text,integer)', 'jmem_stats()', 'jquota_record(text,integer,bigint,timestamptz,integer)', 'jquota_load()'] loop
+      execute format('revoke all on function public.%s from fz_jarvis, fz_office_agent, fz_auditor', f);
+    end loop;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'backup_reader') then
+    foreach f in array array['jmem_search(text,text,real[],text,integer,text,text)', 'jmem_apply(text,jsonb,text,text,text)', 'jmem_list(text,text,integer)',
+                             'jmem_forget(text,text,text,text)', 'jmem_links(text,text,integer)', 'jmem_stats()', 'jquota_record(text,integer,bigint,timestamptz,integer)', 'jquota_load()'] loop
+      execute format('revoke all on function public.%s from backup_reader', f);
+    end loop;
+  end if;
+end $$;
+
+reset lock_timeout;
+
+-- ===== 20261205_web_studio_v1.sql =====
+-- Web Studio v1 (Nov 22 2026): registers the shared Web Studio service (hq_webstudio.py) in the shared-service registry.
+-- Web Studio drafts and edits sites as pull requests (sites/<slug>/site.json), queues Netlify previews / publishes as hands 'deploy' actions the
+-- owner approves, and imports website form leads into leads. No new table, no new function, no grant: one registry row.
+-- Rollback: ops/rollback_web_studio.sql (fz_services rows are never deleted: the row is retired).
+insert into public.fz_services (service, title, owner_office, writes, reads, attribution, scoped_identity, modules, note)
+values ('web_studio', 'Web Studio: websites for every office and for Donna clients (drafts as PRs, Netlify previews / publishes as approved hands deploys)',
+        (select id from public.fz_offices where slug = 'group'), '{leads,hand_actions}', '{hand_accounts,ventures}', 'column', 'jarvis',
+        'hq_webstudio.py, hq_hands_adapters.py', 'site content in sites/<slug>/site.json; templates in sites/_templates/; form leads into leads with the consent wording version')
+on conflict (service) do update set status = 'active', note = excluded.note, updated_by = 'migration';
 
 -- ===== 20261206_donna_receptionist_v1.sql =====
 -- FENDEZY GROUP: "Donna Receptionist v1" (Donna's first offer: AI receptionist for a client business). ADDITIVE. Needs M1..M7 + client workspaces / FFM consent.
@@ -18531,6 +18221,301 @@ do $$ declare r text; f regprocedure; begin
   foreach r in array array['fz_jarvis', 'fz_office_agent', 'fz_auditor', 'backup_reader'] loop
     continue when not exists (select 1 from pg_roles where rolname = r);
     for f in select p.oid::regprocedure from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like 'reception\_%' loop
+      execute format('revoke all on function %s from %I', f, r);
+    end loop;
+  end loop;
+end $$;
+
+-- ===== 20261207_creative_studio_v2.sql =====
+-- FENDEZY GROUP Phase 1, milestone M8c "FENDEZY AI CREATIVE STUDIO": template / preset library, job templates and edit inputs, platform metrics and
+-- the ranking that feeds reuse. ADDITIVE on top of migrations/20261205_creative_studio_v1.sql (needs it). Design: docs/architecture/PHASE1_M8_CREATIVE_STUDIO.md (M8c).
+--   * templates: data only (prompt vocabulary, edit recipe, hooks, ComfyUI workflow id). A template NEVER names a provider, model, price or the disclosure: the
+--     spec key list is fixed by a CHECK, deceptive framing (testimonial / review / real customer) and real-artist imitation are refused by a CHECK, and the
+--     router gates of v1 (creative_attempt_begin / _end, the office spend gate, premium rules, retries) are untouched. Seeded from
+--     creative_studio/presets/library.json (scripts/creative_presets_seed.py keeps both identical); owner edits stay (updated_by <> 'migration').
+--   * job templates: which template / hook a job uses and, for edit jobs, its input clips. Inputs are assets of the SAME office only (approved, or library
+--     kinds the owner uploaded); a template that needs a character LoRA needs a registered character on the job (the v1 consent rules apply to it).
+--   * platform metrics: imported by hand (CSV) or from the hands pipeline (a hand action of a calendar entry). Same-office assets only. Ranking per office:
+--     assets, templates and hooks, with a prior so a template with one lucky post does not win.
+--   * 'local-edit' provider (free ffmpeg on the Jarvis host, module 'edit'), OFF like every provider. The self-hosted ComfyUI slots list only the models we
+--     ship a workflow for AND whose weights are commercially usable when self-hosted (FLUX.1 [dev] and HunyuanVideo leave the self-host list).
+-- No money path, no grant to any API role (explicit REVOKE after every function). Ordered BEFORE the lockdown (R3). Rollback: ops/rollback_creative_studio_v2.sql
+-- (archives the three tables to fz_archive). Safe to re-run.
+set lock_timeout = '5s';
+
+do $$ begin
+  if to_regclass('fz_creative.jobs') is null then raise exception 'apply migrations/20261205_creative_studio_v1.sql first'; end if;
+end $$;
+
+-- ---------------------------------------------------------------------------------------------------------------------------- template library
+create table if not exists fz_creative.templates (
+  slug text primary key check (slug ~ '^[a-z][a-z0-9-]{2,59}$'),
+  scope text not null check (scope ~ '^[a-z][a-z0-9-]{1,39}$'),                   -- an office slug, or 'group' (every office)
+  module text not null check (module in ('video', 'image', 'ugc', 'voice', 'music', 'copy', 'edit', 'train')),
+  kind text not null check (kind in ('shot', 'product', 'ugc', 'character', 'visualizer', 'lyric_video', 'hero_ad', 'edit')),
+  title text not null check (length(title) between 3 and 120),
+  hooks text[] not null default '{}',
+  spec jsonb not null check (jsonb_typeof(spec) = 'object' and spec - array['prompt', 'negative', 'video', 'edit', 'workflow', 'requires'] = '{}'::jsonb),
+  source text not null default 'fendezy' check (length(source) between 2 and 200),
+  status text not null default 'active' check (status in ('active', 'retired')),
+  updated_at timestamptz not null default now(),
+  updated_by text not null default 'migration',
+  -- the studio's QA words: a template may not carry deceptive framing or real-artist imitation (checked on the positive prompt, title and edit recipe)
+  constraint templates_no_deceptive_framing check (
+    (title || ' ' || coalesce(spec -> 'prompt', '{}'::jsonb)::text || ' ' || coalesce(spec -> 'edit', '{}'::jsonb)::text)
+      !~* '(testimonial|customer review|real customer|verified (buyer|purchase)|i bought|5[- ]star|as seen on|unpaid review|in the style of|sounds? like|voice of|imitat|deepfake|clone)')
+);
+revoke all on fz_creative.templates from public;
+
+-- BEGIN TEMPLATE SEED (generated by scripts/creative_presets_seed.py from creative_studio/presets/library.json; do not edit by hand)
+insert into fz_creative.templates (slug, scope, module, kind, title, hooks, spec, source) values
+  ('b2b-beat-cut', 'b2b-records', 'edit', 'edit', 'Beat-synced music-video cut from approved clips', array['lyric-first-line', 'out-now']::text[], $j${"edit": {"beat_sync": {"beats_per_cut": 4}, "broll": true, "captions": "lyric", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14, "max_seconds": 30}, "prompt": {"base": "{title}"}}$j$::jsonb, 'fendezy (librosa beat tracking when installed, numpy onset tracker otherwise)'),
+  ('b2b-cover-art', 'b2b-records', 'image', 'character', 'Single cover art (artist LoRA, consent required for a real artist)', array['out-now']::text[], $j${"edit": {"fit": "pad"}, "negative": "text, letters, watermark, signature, famous artist likeness", "prompt": {"aperture": "f/1.4", "base": "album cover portrait of {character}, {theme}, square composition, space for the title", "camera": "70mm-film", "focal": "50", "lens": "70s-prime", "lighting": ["neon", "volumetric"], "mood": "moody", "shot": "mcu"}, "requires": {"character_lora": true}, "workflow": "flux-schnell-lora-t2i"}$j$::jsonb, 'open-higgsfield + fendezy'),
+  ('b2b-lyric-video', 'b2b-records', 'music', 'lyric_video', 'Lyric video (word-timed by faster-whisper)', array['lyric-first-line']::text[], $j${"edit": {"captions": "lyric", "loudnorm": -14, "visualizer": "spectrum"}, "prompt": {"base": "{title}"}}$j$::jsonb, 'fendezy (faster-whisper word timestamps)'),
+  ('b2b-performance-clip', 'b2b-records', 'video', 'shot', 'Performance clip (character LoRA stills to video)', array['out-now']::text[], $j${"edit": {"captions": "lyric", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "famous artist likeness, text, watermark, deformed hands", "prompt": {"aperture": "f/1.4", "base": "{character} performing on a small stage, crowd silhouettes", "camera": "s35-digital", "focal": "35", "lens": "classic-anamorphic", "lighting": ["club"], "mood": "epic", "move": "orbit", "shot": "medium"}, "requires": {"character_lora": true}, "video": {"fps": 16, "seconds": 5}, "workflow": "wan22-t2v-a14b"}$j$::jsonb, 'fendezy'),
+  ('b2b-visualizer', 'b2b-records', 'music', 'visualizer', 'Audio visualizer over the cover art', array['out-now']::text[], $j${"edit": {"captions": "none", "loudnorm": -14, "visualizer": "waves"}, "prompt": {"base": "{title}"}}$j$::jsonb, 'fendezy (ffmpeg showwaves / showfreqs)'),
+  ('donna-service-explainer', 'donna', 'video', 'shot', 'Donna service explainer (AI receptionist demo, labelled)', array['question', 'stop-scroll']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "real person likeness, text", "prompt": {"base": "modern small business front desk, phone ringing, calm atmosphere, {subject}", "camera": "full-frame-cine", "lighting": ["soft"], "mood": "serene", "move": "dolly-right", "shot": "medium"}, "video": {"fps": 24, "seconds": 5}, "workflow": "ltxv-t2v"}$j$::jsonb, 'fendezy'),
+  ('ffm-ad-still', 'ff-marketing', 'image', 'shot', 'Ad still (variation generator)', array['question']::text[], $j${"edit": {"fit": "pad"}, "negative": "text, watermark, real people likeness", "prompt": {"aperture": "f/4", "base": "{subject}", "camera": "full-frame-cine", "focal": "50", "lens": "warm-prime", "lighting": ["golden-hour"], "mood": "cozy", "shot": "medium"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'open-higgsfield'),
+  ('ffm-broll-stitch', 'ff-marketing', 'edit', 'edit', 'B-roll stitch with hook first and burned captions', array['stop-scroll', 'three-reasons', 'before-after']::text[], $j${"edit": {"broll": true, "captions": "karaoke", "crossfade": 0.25, "fit": "auto_reframe", "hook_first": true, "loudnorm": -14, "max_seconds": 20}, "prompt": {"base": "{subject}"}}$j$::jsonb, 'fendezy'),
+  ('ffm-hero-ad', 'ff-marketing', 'video', 'hero_ad', 'Hero ad 5 s (hero tier; the router decides the model)', array['question', 'stop-scroll']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "text, watermark, real people likeness", "prompt": {"aperture": "f/4", "base": "{subject}, aspirational lifestyle scene", "camera": "modular-8k", "focal": "35", "lens": "modern-prime", "lighting": ["cinematic", "golden-hour"], "mood": "epic", "move": "crane-up", "shot": "hero-low"}, "video": {"fps": 24, "seconds": 5}, "workflow": "wan22-t2v-a14b"}$j$::jsonb, 'open-higgsfield (tv-spot) + fendezy'),
+  ('ffm-ugc-presenter', 'ff-marketing', 'ugc', 'ugc', 'AI presenter explainer (labelled AI)', array['question', 'three-reasons', 'stop-scroll']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "real person likeness, text", "prompt": {"base": "friendly AI presenter explaining {subject} in a bright home office", "camera": "phone-ugc", "lighting": ["soft"], "move": "handheld", "shot": "mcu", "ugc_format": "ugc-talking"}, "video": {"fps": 24, "seconds": 5}, "workflow": "ltxv-t2v"}$j$::jsonb, 'open-higgsfield (format) + fendezy'),
+  ('group-quick-portrait', 'group', 'image', 'shot', 'Quick portrait (fictional person, any office)', array[]::text[], $j${"edit": {"fit": "pad"}, "negative": "real person likeness", "prompt": {"base": "professional portrait photograph of a fictional person, shallow depth of field, soft studio lighting, 85mm lens"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'open-higgsfield QUICK_PROMPTS.Portrait'),
+  ('group-quick-product', 'group', 'image', 'product', 'Quick product shot (any office)', array[]::text[], $j${"edit": {"fit": "pad"}, "prompt": {"base": "{subject}, commercial product photography, clean white background, studio lighting"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'open-higgsfield QUICK_PROMPTS.Product'),
+  ('group-short-explainer', 'group', 'video', 'shot', 'Short explainer clip (any office)', array['question', 'pov']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "prompt": {"base": "{subject}", "lighting": ["soft"], "move": "push-in", "shot": "medium"}, "video": {"fps": 24, "seconds": 5}, "workflow": "ltxv-t2v"}$j$::jsonb, 'fendezy'),
+  ('pimp-character-portrait', 'pimp-ai', 'image', 'character', 'Character portrait (registered LoRA, consistent identity)', array['meet-character']::text[], $j${"edit": {"fit": "pad"}, "negative": "real celebrity likeness, minors, nudity, text, watermark", "prompt": {"aperture": "f/1.4", "base": "portrait of {character}, {outfit}, {location}", "camera": "full-frame-cine", "focal": "85", "lens": "swirl-bokeh", "lighting": ["golden-hour"], "mood": "cozy", "shot": "mcu"}, "requires": {"character_lora": true}, "workflow": "flux-schnell-lora-t2i"}$j$::jsonb, 'open-higgsfield + fendezy'),
+  ('pimp-character-reel', 'pimp-ai', 'video', 'character', 'Character reel 5 s (LoRA still to video)', array['pov', 'meet-character']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "real celebrity likeness, minors, nudity, morphing face", "prompt": {"base": "{character} {action}, {location}", "camera": "phone-ugc", "lighting": ["soft"], "move": "push-in", "shot": "medium"}, "requires": {"character_lora": true}, "video": {"fps": 24, "seconds": 5}, "workflow": "wan22-ti2v-5b"}$j$::jsonb, 'fendezy'),
+  ('pimp-character-train', 'pimp-ai', 'train', 'character', 'Character LoRA training set guide', array[]::text[], $j${"edit": {}, "prompt": {"base": "{trigger_word}"}, "requires": {"character_lora": false, "images_min": 12}}$j$::jsonb, 'fendezy (fal flux-lora-fast-training input; ai-toolkit later)'),
+  ('trap-flat-lay', 'the-trap', 'image', 'product', 'Overhead flat lay', array['drop-reveal']::text[], $j${"edit": {"fit": "pad"}, "negative": "text, watermark, clutter", "prompt": {"aperture": "f/4", "base": "{product} styled with matching accessories on concrete, overhead flat lay", "camera": "full-frame-cine", "focal": "50", "lens": "modern-prime", "lighting": ["soft"], "mood": "street", "shot": "flat-lay"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'fendezy'),
+  ('trap-hyper-motion-edit', 'the-trap', 'edit', 'edit', 'Hyper-motion beat cut from approved clips', array['drop-reveal', 'countdown']::text[], $j${"edit": {"beat_sync": {"beats_per_cut": 2}, "broll": true, "captions": "pop", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14, "max_seconds": 15}, "prompt": {"base": "{product}", "ugc_format": "hyper-motion"}}$j$::jsonb, 'fendezy'),
+  ('trap-product-hero-still', 'the-trap', 'image', 'product', 'Product hero still (softbox, three-quarter)', array['drop-reveal']::text[], $j${"edit": {"fit": "pad"}, "negative": "text, watermark, extra objects, deformed product, logo distortion", "prompt": {"aperture": "f/11", "base": "{product} on a seamless backdrop in brand colours, commercial product photography", "camera": "large-format-digital", "focal": "100", "lens": "sharp-prime", "lighting": ["softbox-product"], "mood": "luxury", "shot": "three-quarter"}, "workflow": "flux-schnell-t2i"}$j$::jsonb, 'open-higgsfield + fendezy'),
+  ('trap-turntable', 'the-trap', 'video', 'product', 'Product turntable 5 s', array['drop-reveal']::text[], $j${"edit": {"captions": "subtle", "fit": "auto_reframe", "hook_first": false, "loudnorm": -14}, "negative": "blurry, morphing product, extra limbs, text", "prompt": {"aperture": "f/4", "base": "{product} rotating on a turntable, clean studio", "camera": "large-format-digital", "focal": "85", "lens": "sharp-prime", "lighting": ["softbox-product"], "mood": "luxury", "move": "turntable", "shot": "three-quarter"}, "video": {"fps": 24, "seconds": 5}, "workflow": "wan22-ti2v-5b"}$j$::jsonb, 'fendezy'),
+  ('trap-unboxing-ugc', 'the-trap', 'ugc', 'ugc', 'Unboxing (AI hands, labelled)', array['pov', 'drop-reveal']::text[], $j${"edit": {"captions": "karaoke", "fit": "auto_reframe", "hook_first": true, "loudnorm": -14}, "negative": "faces of real people, brand logos of other companies, text", "prompt": {"base": "{product} being unboxed on a wooden table", "camera": "phone-ugc", "lighting": ["soft"], "move": "handheld", "shot": "cu", "ugc_format": "unboxing"}, "video": {"fps": 24, "seconds": 5}, "workflow": "wan22-ti2v-5b"}$j$::jsonb, 'open-higgsfield (format) + fendezy')
+on conflict (slug) do update set scope = excluded.scope, module = excluded.module, kind = excluded.kind, title = excluded.title, hooks = excluded.hooks, spec = excluded.spec,
+  source = excluded.source, updated_at = now()
+  where fz_creative.templates.updated_by = 'migration';                        -- the owner's edits stay
+-- END TEMPLATE SEED
+
+-- which template / hook a job uses; for edit jobs, the input clips (same office only)
+create table if not exists fz_creative.job_templates (
+  job_id uuid primary key references fz_creative.jobs (id),
+  office_id uuid not null,
+  template_slug text not null references fz_creative.templates (slug),
+  hook_id text check (hook_id is null or hook_id ~ '^[a-z0-9-]{2,40}$'),
+  hook_text text check (hook_text is null or (length(hook_text) between 1 and 80
+                        and hook_text !~* '(testimonial|customer review|real customer|verified (buyer|purchase)|i bought|5[- ]star|as seen on|unpaid review)')),
+  inputs uuid[] not null default '{}' check (cardinality(inputs) <= 12),
+  chosen_by text not null check (chosen_by in ('request', 'ranked', 'explore', 'default')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+revoke all on fz_creative.job_templates from public;
+
+-- platform metrics (cumulative values per window); one row per asset / connector / metric / window end. A re-import of the same window replaces the value.
+create table if not exists fz_creative.platform_metrics (
+  id uuid primary key default gen_random_uuid(),
+  asset_id uuid not null references fz_creative.assets (id),
+  office_id uuid not null,
+  connector text not null check (connector ~ '^[a-z][a-z0-9-]{1,39}$'),
+  metric text not null check (metric in ('impressions', 'views', 'views_3s', 'watch_seconds', 'completion_rate', 'likes', 'comments', 'shares', 'saves', 'follows',
+                                         'clicks', 'leads', 'conversions', 'revenue_cents')),
+  value numeric(16,4) not null check (value >= 0 and (metric <> 'completion_rate' or value <= 1)),
+  window_end date not null,
+  source text not null check (source in ('manual', 'hands')),
+  ref text check (ref is null or length(ref) <= 120),
+  recorded_at timestamptz not null default now(),
+  unique (asset_id, connector, metric, window_end)
+);
+revoke all on fz_creative.platform_metrics from public;
+create index if not exists creative_platform_metrics_office on fz_creative.platform_metrics (office_id, recorded_at);
+
+-- ---------------------------------------------------------------------------------------------------------------------------- providers (OFF by default)
+insert into fz_creative.providers (slug, title, kind, modules, models, env_key, est_cents, unit, note) values
+  ('local-edit', 'Local ffmpeg editing on the Jarvis host (B-roll stitch, beat-synced cuts, visualizers, captions): free', 'local', array['edit'], array['ffmpeg-edit'], '', 0, 'job',
+   'free; no network; inputs are approved assets of the same office')
+on conflict (slug) do update set title = excluded.title, kind = excluded.kind, modules = excluded.modules, models = excluded.models, env_key = excluded.env_key,
+  est_cents = excluded.est_cents, unit = excluded.unit, note = excluded.note;   -- 'enabled' stays the owner's
+-- self-hosted ComfyUI: only the shipped workflows whose weights are commercially usable when WE run them (creative_studio/comfyui/manifest.json)
+update fz_creative.providers set models = array['flux.1-schnell', 'flux.1-schnell-lora', 'wan-2.2-ti2v-5b', 'wan-2.2-t2v-a14b', 'ltx-video'],
+       modules = array['video', 'image', 'ugc'],
+       note = 'estimate: 48GB-class GPU; workflows in creative_studio/comfyui (FLUX.1 schnell, Wan 2.2, LTX-Video: verify the LTX licence before enabling)'
+ where slug in ('runpod-comfyui', 'modal-comfyui');
+
+-- ---------------------------------------------------------------------------------------------------------------------------- service path
+-- active templates for an office (its own + the group's), optionally one module
+create or replace function public.creative_templates(p_office text, p_module text default null) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+begin
+  perform fz_creative.guard();
+  if fz_creative.office_active(p_office) is null then raise exception 'refused: office % is not active', p_office using errcode = '42501'; end if;
+  return coalesce((select jsonb_agg(jsonb_build_object('slug', t.slug, 'scope', t.scope, 'module', t.module, 'kind', t.kind, 'title', t.title, 'hooks', to_jsonb(t.hooks),
+                                                       'spec', t.spec) order by (t.scope <> p_office), t.slug)
+                     from fz_creative.templates t where t.status = 'active' and t.scope in (p_office, 'group') and (p_module is null or t.module = p_module)), '[]'::jsonb);
+end $$;
+revoke all on function public.creative_templates(text, text) from public, anon, authenticated;
+
+-- attach a template (and hook, and edit inputs) to a queued or running job, before any attempt passed QA
+create or replace function public.creative_job_set_template(p_job uuid, p_template text, p_hook text default null, p_hook_text text default null,
+                                                           p_inputs uuid[] default '{}', p_chosen_by text default 'request') returns jsonb
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare j fz_creative.jobs; t fz_creative.templates; v_bad int;
+begin
+  perform fz_creative.guard();
+  select * into j from fz_creative.jobs where id = p_job for update;
+  if not found then raise exception 'unknown job'; end if;
+  if j.status not in ('queued', 'running') then raise exception 'refused: job is %', j.status; end if;
+  if fz_creative.office_active(j.slug) is null then raise exception 'refused: office % is not active', j.slug using errcode = '42501'; end if;
+  if exists (select 1 from fz_creative.attempts where job_id = j.id and outcome = 'ok') then raise exception 'refused: the job already has a passing attempt' using errcode = '42501'; end if;
+  select * into t from fz_creative.templates where slug = p_template and status = 'active';
+  if not found or t.scope not in (j.slug, 'group') then raise exception 'refused: template % is not available to office %', p_template, j.slug using errcode = '42501'; end if;
+  if t.module <> j.module then raise exception 'refused: template % is for %, the job is %', p_template, t.module, j.module using errcode = '42501'; end if;
+  if p_hook is not null and not (p_hook = any (t.hooks)) then raise exception 'refused: hook % is not in template %', p_hook, p_template using errcode = '42501'; end if;
+  if coalesce((t.spec -> 'requires' ->> 'character_lora')::boolean, false) and j.character_id is null then
+    raise exception 'refused: template % needs a registered character (consent rules apply)', p_template using errcode = '42501'; end if;
+  if cardinality(coalesce(p_inputs, '{}')) > 12 then raise exception 'refused: at most 12 inputs' using errcode = '42501'; end if;
+  select count(*) into v_bad from unnest(coalesce(p_inputs, '{}')) i
+   where not exists (select 1 from fz_creative.assets a where a.id = i and a.office_id = j.office_id
+                       and (a.status = 'approved' or (a.kind not in ('generated', 'lora') and a.status = 'draft'))
+                       and a.mime ~ '^(video|image|audio)/');
+  if v_bad > 0 then raise exception 'refused: every input must be an approved (or uploaded library) media asset of office %', j.slug using errcode = '42501'; end if;
+  if j.module = 'edit' and cardinality(coalesce(p_inputs, '{}')) = 0 and j.reuse_of is null then
+    raise exception 'refused: an edit job needs input clips' using errcode = '42501'; end if;
+  insert into fz_creative.job_templates (job_id, office_id, template_slug, hook_id, hook_text, inputs, chosen_by)
+    values (j.id, j.office_id, t.slug, p_hook, nullif(fz_creative.clean(p_hook_text, 80), ''), coalesce(p_inputs, '{}'), coalesce(p_chosen_by, 'request'))
+    on conflict (job_id) do update set template_slug = excluded.template_slug, hook_id = excluded.hook_id, hook_text = excluded.hook_text, inputs = excluded.inputs,
+                                       chosen_by = excluded.chosen_by, updated_at = now();
+  insert into public.audit_log (actor, action, target, detail) values ('creative_studio', 'creative_job_template', 'fz_creative.jobs/' || j.id,
+    jsonb_build_object('template', t.slug, 'hook', p_hook, 'inputs', cardinality(coalesce(p_inputs, '{}')), 'chosen_by', coalesce(p_chosen_by, 'request')));
+  return jsonb_build_object('job', j.id, 'template', t.slug, 'hook', p_hook);
+end $$;
+revoke all on function public.creative_job_set_template(uuid, text, text, text, uuid[], text) from public, anon, authenticated;
+
+-- the worker reads the job's template, hook and inputs (paths of the same office's assets)
+create or replace function public.creative_job_template(p_job uuid) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare jt fz_creative.job_templates;
+begin
+  perform fz_creative.guard();
+  select * into jt from fz_creative.job_templates where job_id = p_job;
+  if not found then return null; end if;
+  return (select jsonb_build_object('template', t.slug, 'module', t.module, 'kind', t.kind, 'title', t.title, 'spec', t.spec, 'hooks', to_jsonb(t.hooks),
+                                    'hook', jt.hook_id, 'hook_text', jt.hook_text, 'chosen_by', jt.chosen_by,
+                                    'inputs', coalesce((select jsonb_agg(jsonb_build_object('id', a.id, 'path', a.path, 'mime', a.mime, 'kind', a.kind, 'name', a.name) order by k.ord)
+                                                          from unnest(jt.inputs) with ordinality k(id, ord) join fz_creative.assets a on a.id = k.id and a.office_id = jt.office_id), '[]'::jsonb))
+            from fz_creative.templates t where t.slug = jt.template_slug);
+end $$;
+revoke all on function public.creative_job_template(uuid) from public, anon, authenticated;
+
+-- metrics import: rows [{asset | hand_action, connector, metric, value, window_end}] for ONE office; bad rows are reported, not written
+create or replace function public.creative_metrics_import(p_office text, p_rows jsonb, p_source text, p_ref text default null) returns jsonb
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+declare v_office uuid; r jsonb; i int := 0; v_asset uuid; v_ins int := 0; v_upd int := 0; v_rej jsonb := '[]'::jsonb; v_new boolean; v_val numeric; v_day date;
+begin
+  perform fz_creative.guard();
+  v_office := fz_creative.office_active(p_office);
+  if v_office is null then raise exception 'refused: office % is not active', p_office using errcode = '42501'; end if;
+  if p_source is null or p_source not in ('manual', 'hands') then raise exception 'bad source %', p_source; end if;
+  if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) > 500 then raise exception 'refused: rows must be an array of at most 500' using errcode = '42501'; end if;
+  for r in select * from jsonb_array_elements(p_rows) loop
+    i := i + 1;
+    v_asset := null;
+    begin
+      if r ? 'asset' then
+        v_asset := (select a.id from fz_creative.assets a where a.id = (r ->> 'asset')::uuid and a.office_id = v_office);
+      elsif r ? 'hand_action' then
+        v_asset := (select c.asset_id from fz_creative.calendar c where c.hand_action_id = (r ->> 'hand_action')::uuid and c.office_id = v_office limit 1);
+      end if;
+      if v_asset is null then v_rej := v_rej || jsonb_build_object('row', i, 'reason', 'no asset of this office'); continue; end if;
+      v_val := (r ->> 'value')::numeric;
+      v_day := coalesce((r ->> 'window_end')::date, current_date);
+      insert into fz_creative.platform_metrics (asset_id, office_id, connector, metric, value, window_end, source, ref)
+        values (v_asset, v_office, r ->> 'connector', r ->> 'metric', v_val, v_day, p_source, left(coalesce(p_ref, r ->> 'hand_action'), 120))
+        on conflict (asset_id, connector, metric, window_end) do update set value = excluded.value, source = excluded.source, ref = excluded.ref, recorded_at = now()
+        returning (xmax = 0) into v_new;
+      if v_new then v_ins := v_ins + 1; else v_upd := v_upd + 1; end if;
+    exception when others then
+      v_rej := v_rej || jsonb_build_object('row', i, 'reason', left(sqlerrm, 120));
+    end;
+  end loop;
+  update fz_creative.jobs j set stage = 'analytics', updated_at = now()
+   where j.office_id = v_office and j.stage in ('approval', 'publishing') and j.status = 'approved'
+     and exists (select 1 from fz_creative.assets a join fz_creative.platform_metrics m on m.asset_id = a.id where a.job_id = j.id);
+  insert into public.audit_log (actor, action, target, detail) values ('creative_studio', 'creative_metrics_import', 'fz_creative.platform_metrics/' || p_office,
+    jsonb_build_object('source', p_source, 'inserted', v_ins, 'updated', v_upd, 'rejected', jsonb_array_length(v_rej)));
+  return jsonb_build_object('inserted', v_ins, 'updated', v_upd, 'rejected', v_rej);
+end $$;
+revoke all on function public.creative_metrics_import(text, jsonb, text, text) from public, anon, authenticated;
+
+-- ranking for reuse: per asset a score from its latest cumulative metrics (summed over platforms); templates and hooks get a Bayesian average
+-- (prior weight 3 posts at the office mean) so one lucky post does not win. Service path any office; a scoped identity (if ever granted) its own office only.
+create or replace function public.creative_rank(p_office text, p_module text default null, p_days integer default 90) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare v_role text := coalesce(nullif(current_setting('role', true), ''), 'none'); v_office uuid; v_mean numeric; v_scores jsonb;
+begin
+  if v_role in ('fz_jarvis', 'fz_office_agent', 'fz_auditor') then
+    if public.current_office_id() is distinct from (select id from public.fz_offices where slug = p_office and kind = 'office') then
+      raise exception 'refused: a scoped identity reads its own office''s ranking only' using errcode = '42501'; end if;
+  elsif v_role not in ('none', 'postgres', 'service_role') then
+    raise exception 'refused' using errcode = '42501';
+  end if;
+  v_office := (select id from public.fz_offices where slug = p_office and kind = 'office');
+  if v_office is null then raise exception 'unknown office %', p_office; end if;
+  v_scores := coalesce((select jsonb_agg(jsonb_build_object('asset_id', x.asset_id, 'template', x.template, 'hook', x.hook, 'score', x.score)) from (
+    select a.id as asset_id, jt.template_slug as template, jt.hook_id as hook,
+           round(1000 * (coalesce(m.likes, 0) + 2 * coalesce(m.comments, 0) + 3 * coalesce(m.shares, 0) + 3 * coalesce(m.saves, 0) + 5 * coalesce(m.follows, 0)
+                         + 2 * coalesce(m.clicks, 0) + 20 * coalesce(m.leads, 0) + 100 * coalesce(m.conversions, 0) + coalesce(m.revenue_cents, 0) / 100)
+                 / greatest(coalesce(m.views, m.impressions, 0), 1)
+                 + 20 * coalesce(least(m.views_3s / nullif(coalesce(m.views, m.impressions), 0), 1), 0) + 10 * coalesce(m.completion_rate, 0), 3) as score
+      from fz_creative.assets a
+      join fz_creative.jobs j on j.id = a.job_id
+      left join fz_creative.job_templates jt on jt.job_id = j.id
+      join lateral (select sum(v) filter (where metric = 'impressions') impressions, sum(v) filter (where metric = 'views') views, sum(v) filter (where metric = 'views_3s') views_3s,
+                           avg(v) filter (where metric = 'completion_rate') completion_rate, sum(v) filter (where metric = 'likes') likes,
+                           sum(v) filter (where metric = 'comments') comments, sum(v) filter (where metric = 'shares') shares, sum(v) filter (where metric = 'saves') saves,
+                           sum(v) filter (where metric = 'follows') follows, sum(v) filter (where metric = 'clicks') clicks, sum(v) filter (where metric = 'leads') leads,
+                           sum(v) filter (where metric = 'conversions') conversions, sum(v) filter (where metric = 'revenue_cents') revenue_cents
+                      from (select distinct on (pm.connector, pm.metric) pm.metric, pm.value v from fz_creative.platform_metrics pm
+                             where pm.asset_id = a.id and pm.recorded_at > now() - make_interval(days => greatest(coalesce(p_days, 90), 1))
+                             order by pm.connector, pm.metric, pm.window_end desc) last) m on true
+     where a.office_id = v_office and a.kind = 'generated' and a.status = 'approved' and (p_module is null or j.module = p_module)
+       and coalesce(m.views, m.impressions, m.likes, m.clicks, m.leads) is not null) x), '[]'::jsonb);
+  v_mean := coalesce((select avg(score) from jsonb_to_recordset(v_scores) s(asset_id uuid, template text, hook text, score numeric)), 0);
+  return jsonb_build_object('office', p_office, 'module', p_module, 'mean', round(v_mean, 3),
+    'assets', coalesce((select jsonb_agg(jsonb_build_object('asset', asset_id, 'template', template, 'hook', hook, 'score', score) order by score desc)
+                          from (select * from jsonb_to_recordset(v_scores) s(asset_id uuid, template text, hook text, score numeric) order by score desc limit 10) x), '[]'::jsonb),
+    'templates', coalesce((select jsonb_agg(jsonb_build_object('template', template, 'posts', n, 'avg', round(t / n, 3), 'rank_score', round((t + 3 * v_mean) / (n + 3), 3))
+                                            order by (t + 3 * v_mean) / (n + 3) desc, template)
+                             from (select template, count(*) n, sum(score) t from jsonb_to_recordset(v_scores) s(asset_id uuid, template text, hook text, score numeric)
+                                    where template is not null group by template) y), '[]'::jsonb),
+    'hooks', coalesce((select jsonb_agg(jsonb_build_object('hook', hook, 'posts', n, 'avg', round(t / n, 3), 'rank_score', round((t + 3 * v_mean) / (n + 3), 3))
+                                        order by (t + 3 * v_mean) / (n + 3) desc, hook)
+                         from (select hook, count(*) n, sum(score) t from jsonb_to_recordset(v_scores) s(asset_id uuid, template text, hook text, score numeric)
+                                where hook is not null group by hook) z), '[]'::jsonb));
+end $$;
+revoke all on function public.creative_rank(text, text, integer) from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------------------------------------------------------- owner control
+-- add / edit / retire an office template (the CHECKs above still apply: fixed spec keys, no deceptive framing). The migration seed never overwrites it again.
+create or replace function public.creative_owner_set_template(p_slug text, p_scope text, p_module text, p_kind text, p_title text, p_hooks text[], p_spec jsonb,
+                                                             p_status text default 'active') returns jsonb
+language plpgsql security definer set search_path to 'pg_catalog' as $$
+begin
+  perform fz_creative.owner_only('a creative template');
+  if p_scope <> 'group' and not exists (select 1 from public.fz_offices where slug = p_scope and kind = 'office') then raise exception 'unknown office %', p_scope; end if;
+  insert into fz_creative.templates (slug, scope, module, kind, title, hooks, spec, source, status, updated_by)
+    values (p_slug, p_scope, p_module, p_kind, p_title, coalesce(p_hooks, '{}'), coalesce(p_spec, '{}'::jsonb), 'owner', coalesce(p_status, 'active'), 'owner')
+    on conflict (slug) do update set scope = excluded.scope, module = excluded.module, kind = excluded.kind, title = excluded.title, hooks = excluded.hooks,
+                                     spec = excluded.spec, status = excluded.status, updated_by = 'owner', updated_at = now();
+  insert into public.audit_log (actor, action, target, detail) values ('owner', 'creative_template', 'fz_creative.templates/' || p_slug,
+    jsonb_build_object('scope', p_scope, 'module', p_module, 'status', coalesce(p_status, 'active')));
+  return jsonb_build_object('template', p_slug, 'status', coalesce(p_status, 'active'));
+end $$;
+revoke all on function public.creative_owner_set_template(text, text, text, text, text, text[], jsonb, text) from public, anon, authenticated;
+
+-- none of these is for a scoped identity (the M1 allowlist stays exact)
+do $$ declare r text; f regprocedure; begin
+  foreach r in array array['fz_jarvis', 'fz_office_agent', 'fz_auditor', 'backup_reader'] loop
+    continue when not exists (select 1 from pg_roles where rolname = r);
+    for f in select p.oid::regprocedure from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like 'creative\_%' loop
       execute format('revoke all on function %s from %I', f, r);
     end loop;
   end loop;
@@ -19387,6 +19372,21 @@ begin
   return public.heavy_job_json(p_id);
 end $$;
 revoke all on function public.heavy_finish(bigint, text, text, text) from public, anon, authenticated;
+
+-- ===== 20261209_creative_selfhost_v1.sql =====
+-- FENDEZY AI CREATIVE STUDIO: self-hosted ComfyUI worker provider row (hq_creative_selfhost; docs/architecture/CREATIVE_SELFHOST.md).
+-- Additive and idempotent. No functions, no grants. The row starts OFF: the owner enables it with creative_owner_set_provider('comfyui-selfhost', true)
+-- after a worker has passed its selftest. 0 CAD cents per call (our own worker): the router never reserves for it, and the existing fal.ai caps are unchanged.
+-- A rented pod is paid per hour outside the studio (owner decision; the worker stops itself when idle).
+set lock_timeout = '5s';
+
+insert into fz_creative.providers (slug, title, kind, modules, models, env_key, est_cents, unit, note) values
+  ('comfyui-selfhost', 'Self-hosted ComfyUI worker (Kaggle free GPU, an owned GPU or an owner-rented pod): 0 per call', 'local', array['video', 'image', 'ugc', 'voice'],
+     array['flux.1-schnell', 'flux.1-schnell-lora', 'kokoro-82m', 'wan-2.2-s2v-14b', 'wan-2.2-t2v-a14b', 'wan-2.2-ti2v-5b', 'z-image-turbo', 'z-image-turbo-lora'],
+     'COMFYUI_SELFHOST_URL', 0, 'job',
+     'free per call; models and licences in creative_studio/selfhost/manifest.json (Apache-2.0 weights only; LTX-Video only behind CREATIVE_LTX_LICENCE_OK)')
+on conflict (slug) do update set title = excluded.title, kind = excluded.kind, modules = excluded.modules, models = excluded.models, env_key = excluded.env_key,
+  est_cents = excluded.est_cents, unit = excluded.unit, note = excluded.note;   -- 'enabled' stays the owner's
 
 -- ===== 20261112_lockdown_v1.sql =====
 -- Security lockdown (found on first live apply): functions made with plain CREATE FUNCTION are executable by anon/authenticated by default.
