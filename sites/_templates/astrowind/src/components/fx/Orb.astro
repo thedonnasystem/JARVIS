@@ -1,0 +1,44 @@
+---
+// Hero scene: a light canvas "voice orb" (no library, ~2 KB). Static gradient under prefers-reduced-motion or without JS; pauses off-screen.
+const { label = '' } = Astro.props;
+---
+
+<div class="fx-orb" role="img" aria-label={label}>
+  <canvas class="fx-orb-canvas" width="480" height="480" aria-hidden="true"></canvas>
+</div>
+
+<script>
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.querySelectorAll<HTMLCanvasElement>('.fx-orb-canvas').forEach((cv) => {
+    if (reduce) return;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const css = getComputedStyle(document.documentElement);
+    const c1 = css.getPropertyValue('--fx-primary').trim() || '#8b5cf6';
+    const c2 = css.getPropertyValue('--fx-accent').trim() || '#22d3ee';
+    let visible = true;
+    new IntersectionObserver(([e]) => (visible = e.isIntersecting)).observe(cv);
+    const W = cv.width, H = cv.height, R = W * 0.3;
+    const draw = (t: number) => {
+      if (visible) {
+        ctx.clearRect(0, 0, W, H);
+        for (let ring = 0; ring < 3; ring++) {
+          ctx.beginPath();
+          for (let a = 0; a <= Math.PI * 2 + 0.01; a += Math.PI / 90) {
+            const wave = Math.sin(a * (4 + ring) + t / (700 + ring * 250)) * (6 + ring * 4) * (0.6 + 0.4 * Math.sin(t / 900));
+            const r = R + ring * 18 + wave;
+            const x = W / 2 + Math.cos(a) * r, y = H / 2 + Math.sin(a) * r;
+            a === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = ring % 2 ? c2 : c1;
+          ctx.globalAlpha = 0.75 - ring * 0.2;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+      requestAnimationFrame(draw);
+    };
+    requestAnimationFrame(draw);
+  });
+</script>

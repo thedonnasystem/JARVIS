@@ -1,0 +1,9 @@
+---
+// The brand name set in the display serif; anything after the first '.' (e.g. ".AI") is set in metal.
+import { BRAND } from '~/data/site';
+const i = BRAND.indexOf('.');
+const [a, b] = i > 0 ? [BRAND.slice(0, i), BRAND.slice(i)] : [BRAND, ''];
+const { class: cls = '' } = Astro.props;
+---
+
+<span class:list={['m-wordmark', cls]}>{a}{b && <span class="m-metal">{b}</span>}</span>

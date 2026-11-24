@@ -1,0 +1,49 @@
+---
+// Web Studio page: layout and design system come from the template; every word, price and brand token comes from site.json.
+import Layout from '~/layouts/PageLayout.astro';
+import Hero from '~/components/widgets/Hero.astro';
+import Features from '~/components/widgets/Features.astro';
+import Steps from '~/components/widgets/Steps.astro';
+import Prices from '~/components/widgets/Pricing.astro';
+import FAQs from '~/components/widgets/FAQs.astro';
+import CallToAction from '~/components/widgets/CallToAction.astro';
+import Content from '~/components/widgets/Content.astro';
+import SiteContact from '~/components/widgets/SiteContact.astro';
+import Orb from '~/components/fx/Orb.astro';
+import CallDemo from '~/components/fx/CallDemo.astro';
+import MaisonHome from '~/components/maison/Home.astro';
+import { SITE_DATA as S, BOOKING, DEMO_PHONE, FX, MAISON } from '~/data/site';
+
+const metadata = { title: S.meta.title, description: S.meta.description, ignoreTitleTemplate: true };
+const book = { variant: 'primary', text: 'Book a demo', href: BOOKING };
+const demoAction = DEMO_PHONE ? [{ variant: 'secondary', text: `Call the demo line: ${DEMO_PHONE}`, href: `tel:${DEMO_PHONE.replace(/[^0-9+]/g, '')}` }] : [];
+const toPrice = (p) => ({ title: p.title, subtitle: p.subtitle, price: p.price, period: p.period, note: p.note, highlight: !!p.highlight,
+  items: (p.features || []).map((description) => ({ description })), callToAction: { text: 'Book a demo', href: BOOKING } });
+const slots = Array.from({ length: S.results?.slots || 0 }, (_, i) => ({ title: `Case study ${i + 1}`, description: 'Coming soon.' }));
+---
+
+<Layout metadata={metadata}>
+  {MAISON ? <MaisonHome /> : <>
+  <Hero tagline={S.hero.tagline} actions={[book, ...demoAction, { text: 'See packages', href: '#packages' }]}>
+    <Fragment slot="title">{S.hero.title}{" "}<span class="text-accent dark:text-white">{S.hero.title_accent}</span></Fragment>
+    <Fragment slot="subtitle">{S.hero.subtitle}</Fragment>
+    {FX && <Fragment slot="image"><Orb label={`${S.brand.name} voice animation`} /></Fragment>}
+  </Hero>
+
+  {FX && <CallDemo />}
+
+  <Features id="services" tagline={S.services.tagline} title={S.services.title} items={S.services.items} />
+
+  <Steps id="how-it-works" title={S.steps.title} items={S.steps.items.map((s, i) => ({ ...s, icon: `tabler:number-${i + 1}` }))} />
+
+  {S.offer && <CallToAction title={S.offer.title} subtitle={S.offer.text} actions={[book]} />}
+
+  {(S.pricing || []).map((g) => <Prices id={g.id} title={g.title} subtitle={g.subtitle} prices={g.items.map(toPrice)} />)}
+
+  {S.results && <Content id="results" title={S.results.title} content={S.results.content} items={slots} />}
+
+  <FAQs id="faq" title="Questions" items={(S.faq || []).map((f) => ({ title: f.q, description: f.a }))} />
+
+  <SiteContact />
+  </>}
+</Layout>

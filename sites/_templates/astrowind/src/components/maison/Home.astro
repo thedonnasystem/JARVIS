@@ -1,0 +1,239 @@
+---
+// Maison home page (theme 'maison'). Layout, ornament and motion are the template's; every word, price and brand token comes from site.json.
+// Template-owned microcopy is limited to button labels, section numbers and empty case-study slots.
+import Stage from './Stage.astro';
+import Phone from './Phone.astro';
+import Split from './Split.astro';
+import ContactForm from '~/components/widgets/ContactForm.astro';
+import { Icon } from 'astro-icon/components';
+import { SITE_DATA as S, BOOKING, DEMO_PHONE, PLACE } from '~/data/site';
+
+const money = (n: number) => `$${Number(n).toLocaleString('en-CA')}`;
+const per = (p: string) => (/month/i.test(p || '') ? '/ month' : p || '');
+// founding pricing: an honest launch price shown against the UPCOMING standard price (never a past "was" price, never struck through)
+const saving = (g: any, p: any) => (g.founding && p.standard_price > p.price ? p.standard_price - p.price : 0);
+const monthly = (p: any) => /month/i.test(p.period || '');
+const roman = (n: number) => ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'][n] || String(n + 1);
+const two = (n: number) => String(n).padStart(2, '0');
+const tel = DEMO_PHONE ? `tel:${DEMO_PHONE.replace(/[^0-9+]/g, '')}` : '';
+const services = S.services?.items || [];
+const steps = S.steps?.items || [];
+const slots = Array.from({ length: S.results?.slots || 0 }, (_, i) => i + 1);
+const bentoClass = ['b-hero', 'b-tall', 'b-tall', 'b-third', 'b-third', 'b-third'];
+let n = 0;
+const idx = () => two(++n);
+---
+
+<Stage />
+
+<section class="m-hero" aria-labelledby="hero-title" data-scene="hero">
+  <div class="m-hero-stage" data-hero-stage>
+    <div class="m-poster" role="img" aria-label={`${S.brand.name}: a gold instrument catching calls and turning them into booked appointments`}></div>
+  </div>
+  <div class="m-wrap m-hero-grid">
+    <div class="m-hero-copy">
+      <p class="m-eyebrow" data-hero style="--d:0"><span class="m-rule"></span>{S.hero.tagline}</p>
+      <h1 class="m-h1" id="hero-title">
+        <span class="m-line" data-hero style="--d:1">{S.hero.title}</span>
+        <span class="m-line m-metal-text" data-hero style="--d:2"><em>{S.hero.title_accent}</em></span>
+      </h1>
+      <p class="m-lead" data-hero style="--d:3">{S.hero.subtitle}</p>
+      <div class="m-actions" data-hero style="--d:4">
+        <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>Book a demo</span></a>
+        {tel && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Call the demo line: {DEMO_PHONE}</span></a>}
+        <a href="#packages" class="m-btn m-btn-ghost" data-magnetic><span>See packages</span></a>
+      </div>
+      {S.hero.offer && <a href="#packages" class="m-hero-offer" data-hero style="--d:5"><i class="m-pulse" aria-hidden="true" />{S.hero.offer}</a>}
+    </div>
+  </div>
+  <div class="m-wrap m-hero-foot" aria-hidden="true">
+    <span class="m-scroll"><span class="m-scroll-line"></span>Scroll</span>
+    {(S.hero.foot || PLACE) && <span>{S.hero.foot || PLACE}</span>}
+  </div>
+</section>
+
+<div class="m-marquee" aria-hidden="true">
+  <div class="m-marquee-track">
+    {[0, 1].map(() => (
+      <div class="m-marquee-set">
+        {services.map((s) => <><span>{s.title}</span><i class="m-diamond" /></>)}
+      </div>
+    ))}
+  </div>
+</div>
+
+{S.demo && (
+  <section class="m-sec m-call" aria-labelledby="call-title" data-scene="call">
+    <div class="m-wrap m-call-grid">
+      <div class="m-call-copy">
+        <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.demo.label}</p>
+        <Split as="h2" id="call-title" class="m-h2" text={`${S.brand.name}, on a call.`} />
+        <ul class="m-call-points" data-reveal>
+          {services.slice(0, 4).map((s) => <li><Icon name={s.icon || 'tabler:point'} />{s.title}</li>)}
+        </ul>
+      </div>
+      <div class="m-call-visual" data-parallax="0.06">
+        <Phone />
+      </div>
+    </div>
+  </section>
+)}
+
+<section class="m-sec" id="services" aria-labelledby="services-title" data-scene="services">
+  <div class="m-wrap">
+    <header class="m-sec-head">
+      <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.services.tagline}</p>
+      <Split as="h2" id="services-title" class="m-h2" text={S.services.title} />
+    </header>
+    <ul class="m-bento" data-reveal>
+      {services.map((s, i) => (
+        <li class:list={['m-card', 'm-bento-item', bentoClass[i] || 'b-third']} data-spot style={`--i:${i}`}>
+          <span class="m-card-num">{two(i + 1)}</span>
+          {i === 0 && (
+            <div class="m-bento-art" aria-hidden="true">
+              <span class="m-ring r1" /><span class="m-ring r2" /><span class="m-ring r3" />
+              <span class="m-bars">{Array.from({ length: 40 }, (_, k) => <i style={`--k:${k}`} />)}</span>
+            </div>
+          )}
+          <span class="m-card-icon"><Icon name={s.icon || 'tabler:sparkles'} /></span>
+          <h3 class="m-h3">{s.title}</h3>
+          <p class="m-card-text">{s.description}</p>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<section class="m-sec" id="how-it-works" aria-labelledby="steps-title" data-scene="steps">
+  <div class="m-wrap">
+    <header class="m-sec-head">
+      <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.brand.name}</p>
+      <Split as="h2" id="steps-title" class="m-h2" text={S.steps.title} />
+    </header>
+    <ol class="m-steps" data-reveal>
+      {steps.map((s, i) => (
+        <li class="m-step" style={`--i:${i}`}>
+          <span class="m-step-num">{roman(i)}</span>
+          <h3 class="m-h3">{s.title}</h3>
+          <p class="m-card-text">{s.description}</p>
+        </li>
+      ))}
+    </ol>
+  </div>
+</section>
+
+{S.offer && (
+  <section class="m-sec m-offer-sec" aria-labelledby="offer-title" data-scene="offer">
+    <div class="m-wrap">
+      <div class="m-offer" data-reveal data-spot>
+        <div class="m-seal" aria-hidden="true">
+          <svg viewBox="0 0 200 200"><defs><path id="m-seal-path" d="M100,100 m-78,0 a78,78 0 1,1 156,0 a78,78 0 1,1 -156,0" /></defs>
+            <text><textPath href="#m-seal-path" textLength="486" lengthAdjust="spacing">{`${[S.offer.title, S.brand.name, S.offer.seal || PLACE].filter(Boolean).join(' · ')} · `.toUpperCase()}</textPath></text></svg>
+          <span class="m-seal-core"></span>
+        </div>
+        <div class="m-offer-copy">
+          <p class="m-eyebrow"><span class="m-idx">{idx()}</span>{S.brand.name}</p>
+          <h2 class="m-h2" id="offer-title">{S.offer.title}</h2>
+          <p class="m-offer-text">{S.offer.text}</p>
+          <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>Book a demo</span></a>
+        </div>
+      </div>
+    </div>
+  </section>
+)}
+
+{(S.pricing || []).map((g) => (
+  <section class="m-sec m-pricing" id={g.id} aria-labelledby={`${g.id}-title`} data-scene="pricing">
+    <div class="m-wrap">
+      <header class="m-sec-head m-sec-head-split">
+        <div>
+          <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>Pricing</p>
+          <Split as="h2" id={`${g.id}-title`} class="m-h2" text={g.title} />
+        </div>
+        {g.subtitle && <p class="m-body m-sec-sub" data-reveal>{g.subtitle}</p>}
+      </header>
+      <ul class:list={['m-plans', `m-plans-${Math.min(g.items.length, 3)}`]} data-reveal>
+        {g.items.map((p, i) => (
+          <li class:list={['m-card', 'm-plan', p.highlight && 'is-featured']} data-spot style={`--i:${i}`}>
+            {p.highlight && <span class="m-chip">{p.highlight_label || 'Recommended'}</span>}
+            <h3 class="m-plan-title">{p.title}</h3>
+            {p.subtitle && <p class="m-plan-sub">{p.subtitle}</p>}
+            {saving(g, p) > 0 && <p class="m-founding-tag"><i class="m-diamond" aria-hidden="true" />{g.founding.badge}</p>}
+            <p class:list={['m-price', saving(g, p) > 0 && 'is-founding']}><span class="m-price-num">{money(p.price)}</span><span class="m-price-per">{per(p.period)}</span></p>
+            {saving(g, p) > 0 && (
+              <div class="m-founding">
+                <span class="m-save">{`${g.founding.save} ${money(saving(g, p))}${monthly(p) ? ' / month' : ''}`}</span>
+                <p class="m-standard">{`${g.founding.standard} ${money(p.standard_price)}${monthly(p) ? ' / month' : ''} ${g.founding.after}`}</p>
+              </div>
+            )}
+            {p.note && <p class="m-plan-note">{p.note}</p>}
+            <span class="m-hairline" />
+            <ul class="m-features">
+              {(p.features || []).map((f) => <li><i class="m-diamond" aria-hidden="true" />{f}</li>)}
+            </ul>
+            <a href={BOOKING} class:list={['m-btn', p.highlight ? 'm-btn-metal' : 'm-btn-ghost', 'm-btn-block']} data-magnetic><span>Book a demo</span></a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </section>
+))}
+
+{S.results && (
+  <section class="m-sec" id="results" aria-labelledby="results-title" data-scene="results">
+    <div class="m-wrap">
+      <header class="m-sec-head m-sec-head-split">
+        <div>
+          <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.brand.name}</p>
+          <Split as="h2" id="results-title" class="m-h2" text={S.results.title} />
+        </div>
+        <p class="m-body m-sec-sub" data-reveal>{S.results.content}</p>
+      </header>
+      <ul class="m-slots" data-reveal>
+        {slots.map((i) => (
+          <li class="m-slot" style={`--i:${i}`}>
+            <span class="m-card-num">{two(i)}</span>
+            <h3 class="m-h3">Case study {i}</h3>
+            <p class="m-card-text">Coming soon.</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </section>
+)}
+
+{(S.faq || []).length > 0 && (
+  <section class="m-sec" id="faq" aria-labelledby="faq-title" data-scene="faq">
+    <div class="m-wrap m-faq-grid">
+      <header class="m-sec-head">
+        <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>FAQ</p>
+        <Split as="h2" id="faq-title" class="m-h2" text="Questions" />
+      </header>
+      <div class="m-faq" data-reveal>
+        {S.faq.map((f) => (
+          <details class="m-qa" name="faq">
+            <summary><span>{f.q}</span><i class="m-plus" aria-hidden="true" /></summary>
+            <p>{f.a}</p>
+          </details>
+        ))}
+      </div>
+    </div>
+  </section>
+)}
+
+<section class="m-sec m-contact" id="contact" aria-labelledby="contact-title" data-scene="contact">
+  <div class="m-wrap m-contact-grid">
+    <div class="m-contact-copy">
+      <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.contact.tagline || PLACE || S.brand.name}</p>
+      <Split as="h2" id="contact-title" class="m-h2" text={S.contact.title} />
+      {S.contact.subtitle && <p class="m-body" data-reveal>{S.contact.subtitle}</p>}
+      <div class="m-actions" data-reveal>
+        {BOOKING !== '#contact' && <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>Book a demo</span></a>}
+        {tel && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Call the demo line: {DEMO_PHONE}</span></a>}
+      </div>
+    </div>
+    <div class="m-contact-form" data-reveal>
+      <ContactForm class="m-form" field="m-field" />
+    </div>
+  </div>
+</section>
