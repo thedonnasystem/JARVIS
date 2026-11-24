@@ -1,0 +1,86 @@
+{
+ "_note": "FICTIONAL demo client for the demo line and tests. 555 numbers only.",
+ "business_name": "Maple Street Dental",
+ "timezone": "America/Toronto",
+ "hours": {
+  "mon": [
+   [
+    "08:00",
+    "18:00"
+   ]
+  ],
+  "tue": [
+   [
+    "08:00",
+    "18:00"
+   ]
+  ],
+  "wed": [
+   [
+    "08:00",
+    "18:00"
+   ]
+  ],
+  "thu": [
+   [
+    "08:00",
+    "20:00"
+   ]
+  ],
+  "fri": [
+   [
+    "08:00",
+    "16:00"
+   ]
+  ],
+  "sat": [
+   [
+    "09:00",
+    "13:00"
+   ]
+  ],
+  "sun": []
+ },
+ "services": [
+  {
+   "name": "Cleaning",
+   "price_cents": 15000,
+   "minutes": 60
+  },
+  {
+   "name": "Checkup",
+   "price_cents": 9500,
+   "minutes": 30
+  },
+  {
+   "name": "Whitening",
+   "price_cents": 35000,
+   "minutes": 90
+  }
+ ],
+ "faqs": [
+  {
+   "q": "Do you take new patients?",
+   "a": "Yes, we are welcoming new patients."
+  },
+  {
+   "q": "Where are you located and is there parking?",
+   "a": "We're on Maple Street with free parking behind the building."
+  },
+  {
+   "q": "Do you direct bill insurance?",
+   "a": "Yes, we direct bill most insurance plans."
+  }
+ ],
+ "escalation_number": "+15555550100",
+ "booking": {
+  "provider": "none",
+  "public_url": ""
+ },
+ "voice": {
+  "tts": "kokoro",
+  "stt": "whisper-local",
+  "voice_id": "af_heart",
+  "language": "en-CA"
+ }
+}

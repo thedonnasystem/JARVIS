@@ -60,6 +60,7 @@
 20261205_creative_studio_v1.sql
 20261207_creative_studio_v2.sql
 20261209_creative_selfhost_v1.sql
+20261206_donna_receptionist_v1.sql
 20261112_lockdown_v1.sql
 20261121_postlock_backup_identity_v1.sql
 20261122_postlock_backup_identity_v2.sql
