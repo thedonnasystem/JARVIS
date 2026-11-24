@@ -13,7 +13,7 @@
   },
   "meta": {
     "title": "Donna.AI | Missed calls into booked appointments",
-    "description": "Donna.AI answers every call, texts back every missed caller and follows up every lead until they book. Founding prices from $497 a month, locked in."
+    "description": "Donna.AI answers every call, texts back every missed caller and follows up every lead until they book. For service businesses and restaurants. Founding prices from $197 a month, locked in."
   },
   "links": {
     "booking": "#contact",
@@ -25,11 +25,11 @@
     "calculator"
   ],
   "hero": {
-    "tagline": "AI receptionist for service businesses",
+    "tagline": "AI receptionist for service businesses and restaurants",
     "title": "We turn your missed calls and missed leads",
     "title_accent": "into booked appointments.",
     "subtitle": "Every call answered. Every missed caller texted back in minutes. Every lead followed up until they book, day and night. You just show up to the appointments.",
-    "offer": "Founding pricing: from $497 / month, locked in for as long as you stay. Only 10 founding spots.",
+    "offer": "Founding pricing: from $197 / month, locked in for as long as you stay. Only 10 founding spots.",
     "foot": "Founding pricing · 10 spots"
   },
   "demo": {
@@ -120,7 +120,7 @@
   },
   "offer": {
     "title": "Founding pricing",
-    "text": "Only 10 spots. Take one and your price is locked in for as long as you stay: $200 to $500 a month below the standard price, with setup included. When the spots are gone, new clients pay the standard price.",
+    "text": "Only 10 spots. Take one and your price is locked in for as long as you stay: $100 to $500 a month below the standard price, with setup included. When the spots are gone, new clients pay the standard price.",
     "seal": "10 spots"
   },
   "pricing": [
@@ -333,11 +333,19 @@
     {
       "q": "Can I try it first?",
       "a": "Yes. Hear Donna on our demo line, then test your own Donna on a test line before any customer hears it."
+    },
+    {
+      "q": "Do you work with restaurants and food spots?",
+      "a": "Yes. Essential is built for the rush: Donna answers every call, handles questions about hours, menu and location, texts callers your online-order or reservation link, and sends catering and large-order requests to you. Allergy questions always go to your staff."
+    },
+    {
+      "q": "Can you build more than a receptionist?",
+      "a": "Yes. Donna is where most businesses start. We also build custom AI automations, agents and full AI systems, quoted per project after a free scoping call."
     }
   ],
   "contact": {
     "title": "Book a demo or a free missed-call audit",
-    "subtitle": "We reply within one business day.",
+    "subtitle": "We reply within one business day. Prefer email? thedonnasystem@gmail.com",
     "tagline": "Founding pricing · 10 spots"
   },
   "calculator": {
