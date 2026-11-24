@@ -10,9 +10,9 @@ site:
 
 metadata:
   title:
-    default: Donna.AI | AI receptionist for Ottawa businesses
+    default: Donna.AI | Missed calls into booked appointments
     template: '%s | Donna.AI'
-  description: 'Donna.AI answers your calls, texts back missed callers, books appointments and follows up on leads, for Ottawa businesses. Websites too.'
+  description: 'Donna.AI answers every call, texts back every missed caller and follows up every lead until they book.'
   robots:
     index: true
     follow: true

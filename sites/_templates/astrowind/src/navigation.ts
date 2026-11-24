@@ -1,5 +1,5 @@
 import { getPermalink } from './utils/permalinks';
-import { SITE_DATA as S, BOOKING } from './data/site';
+import { SITE_DATA as S, BOOKING, PLACE } from './data/site';
 
 const groups = (S.pricing || []).map((g: any) => ({ text: g.title.split(' ').slice(-1)[0].replace(/^./, (c: string) => c.toUpperCase()), href: getPermalink(`/#${g.id}`) }));
 const links = [{ text: 'Services', href: getPermalink('/#services') }, ...groups, { text: 'How it works', href: getPermalink('/#how-it-works') },
@@ -14,5 +14,5 @@ export const footerData = {
     { text: 'Privacy Policy', href: getPermalink('/privacy') },
   ],
   socialLinks: [],
-  footNote: `${S.brand.name} · ${S.brand.city}, ${S.brand.region} · All rights reserved.`,
+  footNote: [S.brand.name, PLACE, 'All rights reserved.'].filter(Boolean).join(' · '),
 };

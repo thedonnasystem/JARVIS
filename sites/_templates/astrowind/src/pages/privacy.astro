@@ -1,6 +1,6 @@
 ---
 import Layout from '~/layouts/PageLayout.astro';
-import { SITE_DATA as S } from '~/data/site';
+import { SITE_DATA as S, PLACE } from '~/data/site';
 const b = S.brand.name, L = S.legal;
 const metadata = { title: `Privacy Policy | ${b}`, ignoreTitleTemplate: true };
 ---
@@ -10,7 +10,7 @@ const metadata = { title: `Privacy Policy | ${b}`, ignoreTitleTemplate: true };
     <h1>Privacy Policy</h1>
     <p><strong>DRAFT PLACEHOLDER: the owner (and counsel) must review this before launch.</strong> It is not legal advice and it is not yet in force.</p>
     <p><em>Last updated: [OWNER: date]</em></p>
-    <p><strong>Who we are.</strong> {b} ({L.entity}), {S.brand.city}, {S.brand.region}. Contact: {L.contact}.</p>
+    <p><strong>Who we are.</strong> {b} ({L.entity}){PLACE && `, ${PLACE}`}. Contact: {L.contact}.</p>
     <p><strong>What we collect.</strong> When you use our contact form: your name, business name, phone number, email address, your message, the time you sent it, and whether you ticked the optional marketing box.</p>
     <p><strong>Why.</strong> To answer your inquiry. If you ticked the marketing box, also to send you occasional messages about our services.</p>
     <p><strong>Consent and unsubscribing.</strong> Every marketing message identifies us and includes a way to unsubscribe. You can withdraw consent at any time by replying STOP to a text, using the unsubscribe link in an email, or writing to us at {L.contact}.</p>

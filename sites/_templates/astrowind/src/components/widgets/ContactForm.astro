@@ -2,7 +2,7 @@
 // The Web Studio contact form (every site and theme): a same-site Netlify form (no third-party endpoint, no secret in the page) with a honeypot,
 // the CASL inquiry notice and an optional, unticked marketing box shown verbatim from site.json's consent block, and the wording version recorded.
 // Themes restyle it with CSS only; the markup and wording live here, once.
-import { CONSENT } from '~/data/site';
+import { CONSENT, SENDER } from '~/data/site';
 
 const { class: formClass = '', field = '' } = Astro.props;
 ---
@@ -22,5 +22,5 @@ const { class: formClass = '', field = '' } = Astro.props;
     <label for="marketing_consent" class="ml-3 cursor-pointer text-sm opacity-80" data-consent="marketing">{CONSENT.marketing_checkbox}</label>
   </div>
   <button type="submit" class="btn-primary w-full">Send</button>
-  <p class="mt-4 text-xs opacity-70" data-consent="sender">{CONSENT.sender} See our <a class="underline" href="/privacy">privacy policy</a>.</p>
+  <p class="mt-4 text-xs opacity-70" data-consent="sender">{SENDER} See our <a class="underline" href="/privacy">privacy policy</a>.</p>
 </form>

@@ -421,3 +421,19 @@ html.maison .text-primary { color: var(--m-gold) !important; }
 .m-caret { display: inline-block; width: 1px; height: 1em; margin-left: 2px; vertical-align: -0.15em; background: var(--m-gold-hi); animation: m-blink 0.9s steps(1) infinite; }
 @keyframes m-blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .m-cursor-light { display: none; } }
+
+/* founding pricing: launch price vs the upcoming standard price (no strike-through: the standard price is a future price, not a past one) */
+.m-hero-offer { display: inline-flex; align-items: center; gap: 0.75rem; margin-top: 1.6rem; padding: 0.6rem 1.1rem 0.6rem 0.9rem; border-radius: 999px;
+  border: 1px solid var(--m-line); background: color-mix(in oklab, var(--m-ink) 70%, transparent); backdrop-filter: blur(8px);
+  font-size: 0.86rem; color: var(--m-ivory); text-decoration: none; transition: border-color 0.3s; }
+.m-hero-offer:hover { border-color: var(--m-gold); }
+.m-pulse { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--m-gold); flex: none; box-shadow: 0 0 12px var(--m-gold); }
+.m-live .m-pulse::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 1px solid var(--m-gold); animation: m-ping 2.4s var(--m-ease) infinite; }
+@keyframes m-ping { from { transform: scale(0.6); opacity: 1; } to { transform: scale(2.2); opacity: 0; } }
+.m-founding-tag { display: inline-flex; align-items: center; gap: 0.55rem; margin: 2rem 0 0; font-size: 0.66rem; letter-spacing: 0.26em; text-transform: uppercase; color: var(--m-gold-hi); font-weight: 600; }
+.m-founding-tag .m-diamond { margin: 0; }
+.m-price.is-founding { margin-top: 0.9rem; }
+.m-founding { display: grid; justify-items: start; gap: 0.55rem; margin: 0.4rem 0 0.9rem; }
+.m-save { display: inline-block; padding: 0.32rem 0.75rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; color: #120a06; background: var(--m-metal); }
+.m-standard { margin: 0; font-size: 0.82rem; line-height: 1.5; color: var(--m-muted); font-weight: 300; }
+.m-plan.is-featured { box-shadow: 0 30px 90px -40px color-mix(in oklab, var(--m-gold) 55%, transparent); }

@@ -8,14 +8,12 @@
   "theme": "maison",
   "brand": {
     "name": "Donna.AI",
-    "city": "Ottawa",
-    "region": "Ontario",
     "primary": "#7a1428",
     "accent": "#c9a24a"
   },
   "meta": {
     "title": "Donna.AI | Missed calls into booked appointments",
-    "description": "Donna.AI turns your missed calls and missed leads into booked appointments for Ottawa businesses, 24/7."
+    "description": "Donna.AI answers every call, texts back every missed caller and follows up every lead until they book. Founding prices from $497 a month, locked in."
   },
   "links": {
     "booking": "#contact",
@@ -23,10 +21,12 @@
     "demo_phone": ""
   },
   "hero": {
-    "tagline": "AI receptionist · Ottawa",
+    "tagline": "AI receptionist for service businesses",
     "title": "We turn your missed calls and missed leads",
     "title_accent": "into booked appointments.",
-    "subtitle": "Every call answered. Every missed caller texted back in minutes. Every lead followed up until they book, day and night. You just show up to the appointments."
+    "subtitle": "Every call answered. Every missed caller texted back in minutes. Every lead followed up until they book, day and night. You just show up to the appointments.",
+    "offer": "Founding pricing: from $497 / month, locked in for as long as you stay. Only 10 founding spots.",
+    "foot": "Founding pricing · 10 spots"
   },
   "demo": {
     "label": "Illustration of a call, not a real customer",
@@ -62,23 +62,23 @@
     "title": "Missed calls in. Booked appointments out.",
     "items": [
       {
-        "title": "Answers your calls",
-        "description": "Picks up day and night, takes messages and answers common questions about your business.",
+        "title": "Answers every call",
+        "description": "Picks up day and night, answers questions about your services, hours and prices, and sends urgent calls to you by text right away.",
         "icon": "tabler:phone-call"
       },
       {
         "title": "Missed-call text-back",
-        "description": "When a call is missed, the caller gets a text within minutes, so the lead does not go to a competitor.",
+        "description": "Every missed caller gets a text within minutes, so the job does not go to the next number they find.",
         "icon": "tabler:message-circle"
       },
       {
         "title": "Books appointments",
-        "description": "Offers open times and books them into your calendar.",
+        "description": "Offers open times and books the job into your calendar, with a text confirmation to the customer.",
         "icon": "tabler:calendar-event"
       },
       {
         "title": "Follows up on leads",
-        "description": "Keeps every lead in one simple list and follows up with messages you approve.",
+        "description": "Every lead lands in one simple list and gets followed up, with messages you approve, until they book.",
         "icon": "tabler:user-check"
       },
       {
@@ -87,9 +87,9 @@
         "icon": "tabler:clock-24"
       },
       {
-        "title": "Built in Ottawa",
-        "description": "Set up and supported locally, for Ottawa businesses.",
-        "icon": "tabler:map-pin"
+        "title": "Done for you",
+        "description": "We build it, test it with you and keep it tuned. You approve every word before a customer hears it.",
+        "icon": "tabler:shield-check"
       }
     ]
   },
@@ -97,71 +97,86 @@
     "title": "How it works",
     "items": [
       {
-        "title": "Book a demo",
-        "description": "A short call: we learn how your calls and bookings work today."
+        "title": "Free missed-call audit",
+        "description": "We call your line during the day and after hours, like a new customer would, and show you what they get."
       },
       {
-        "title": "We set it up",
-        "description": "We configure Donna.AI with your hours, services, questions and calendar."
+        "title": "We build your Donna",
+        "description": "Your hours, services, prices, questions and calendar, set up by us."
       },
       {
-        "title": "You review it",
-        "description": "You test it on a demo line before any customer hears it."
+        "title": "You test it first",
+        "description": "You try it on a test line and approve it before any customer hears it."
       },
       {
         "title": "It goes live",
-        "description": "Calls are answered and leads are followed up; you get summaries."
+        "description": "Calls are answered, missed callers are texted back and leads are followed up. You get a summary of every call."
       }
     ]
   },
   "offer": {
-    "title": "Founding offer",
-    "text": "For our founding clients: get Command, our premium package, at the Answer price. $497/mo + $497 setup. Need a website too? Site Pro at the Site price, $497 one-time."
+    "title": "Founding pricing",
+    "text": "Only 10 spots. Take one and your price is locked in for as long as you stay: $200 to $500 a month below the standard price, with setup included. When the spots are gone, new clients pay the standard price.",
+    "seal": "10 spots"
   },
   "pricing": [
     {
       "id": "packages",
       "title": "Packages",
-      "subtitle": "Prices in Canadian dollars, plus applicable taxes.",
+      "subtitle": "Founding prices, locked in for as long as you stay. Canadian dollars, plus applicable taxes.",
+      "founding": {
+        "badge": "Founding price",
+        "save": "Save",
+        "standard": "Standard price",
+        "after": "once the 10 founding spots are filled."
+      },
       "items": [
         {
           "title": "Answer",
           "subtitle": "Never miss a call",
           "price": 497,
+          "standard_price": 697,
           "period": "per month",
-          "note": "per month + $497 setup",
+          "note": "Setup included (standard setup $497).",
           "features": [
             "AI receptionist answers every call, day and night",
-            "Takes messages and caller details",
-            "Answers common questions about your business",
-            "Call summaries sent to you by text or email"
+            "Answers questions about your services, hours and prices",
+            "Takes the caller's details and what they need",
+            "Urgent calls sent to you by text right away",
+            "A summary of every call by text or email"
           ]
         },
         {
           "title": "Capture",
-          "subtitle": "Turn missed calls into leads",
+          "subtitle": "Missed calls into booked appointments",
           "price": 797,
+          "standard_price": 1097,
           "period": "per month",
-          "note": "per month + $997 setup",
+          "note": "Setup included (standard setup $997).",
           "highlight": true,
+          "highlight_label": "Recommended",
           "features": [
             "Everything in Answer",
             "Missed-call text-back within minutes",
-            "Leads saved to a simple CRM",
-            "Lead follow-up messages you approve"
+            "Books appointments into your calendar, with text confirmations",
+            "Every lead saved to a simple CRM",
+            "New leads followed up until they book, with messages you approve"
           ]
         },
         {
           "title": "Command",
-          "subtitle": "Bookings and follow-up on autopilot",
+          "subtitle": "Your whole front office, on autopilot",
           "price": 1297,
+          "standard_price": 1797,
           "period": "per month",
-          "note": "per month + $1,497 setup · Founding offer: $497/mo + $497 setup",
+          "note": "Setup included (standard setup $1,497).",
           "features": [
             "Everything in Capture",
-            "Appointment booking into your calendar",
-            "Follow-up sequences and reminders",
-            "Workflow automation and a monthly report"
+            "Instant replies to website and ad leads",
+            "Follow-up on unsold quotes, with messages you approve",
+            "Appointment reminders to cut no-shows",
+            "Win-back messages to past customers",
+            "A monthly report: calls, leads and bookings"
           ]
         }
       ]
@@ -169,12 +184,19 @@
     {
       "id": "websites",
       "title": "Add a website",
-      "subtitle": "Optional. Need a website too? One-time payment, no monthly fees.",
+      "subtitle": "Optional. One-time payment, no monthly fees. Founding prices while the 10 founding spots last.",
+      "founding": {
+        "badge": "Founding price",
+        "save": "Save",
+        "standard": "Standard price",
+        "after": "once the 10 founding spots are filled."
+      },
       "items": [
         {
           "title": "Site",
           "subtitle": "A fast website that brings in calls",
           "price": 497,
+          "standard_price": 697,
           "period": "one-time",
           "note": "Pay once. No monthly fees.",
           "features": [
@@ -188,8 +210,9 @@
           "title": "Site Pro",
           "subtitle": "More pages, more reach",
           "price": 997,
+          "standard_price": 1297,
           "period": "one-time",
-          "note": "Pay once. No monthly fees. · Founding offer: $497",
+          "note": "Pay once. No monthly fees.",
           "features": [
             "Everything in Site",
             "Service and area pages",
@@ -201,7 +224,7 @@
   ],
   "results": {
     "title": "Client results",
-    "content": "We are just getting started, so there are no case studies here yet. Real results from real Ottawa clients will be published here, with their permission.",
+    "content": "We are just getting started, so there are no case studies here yet. Real results from real clients will be published here, with their permission.",
     "slots": 3
   },
   "faq": [
@@ -210,29 +233,30 @@
       "a": "Yes. Donna.AI introduces itself as an AI assistant for your business."
     },
     {
-      "q": "Do I need a new website?",
-      "a": "No. Donna works with the phone number you already have. A website is an optional add-on."
+      "q": "How does founding pricing work?",
+      "a": "Founding pricing is open for 10 spots. Take one and you pay the founding price for as long as you stay with us: $200 to $500 a month below the standard price, with setup included. Once the 10 spots are filled, new clients pay the standard price shown under each package."
+    },
+    {
+      "q": "What is the free missed-call audit?",
+      "a": "We call your business line during the day and after hours, the way a new customer would, and show you what happened: answered, voicemail or no answer. It is free and there is no obligation."
+    },
+    {
+      "q": "Do I need a new website or phone system?",
+      "a": "No. Donna works with the phone number you already have. Calls are forwarded to Donna.AI when you choose, for example after hours or when you are busy. A website is an optional add-on."
     },
     {
       "q": "What happens with calls it cannot handle?",
       "a": "It takes a message and passes the caller to you, by text or email, with a summary."
     },
     {
-      "q": "Do I need new phone hardware?",
-      "a": "No. Your calls are forwarded to Donna.AI when you choose, for example after hours or when you are busy."
-    },
-    {
-      "q": "What does the founding offer include?",
-      "a": "Founding clients get Command, our premium package, at the Answer price: $497/mo + $497 setup. Add a website and you get Site Pro at the Site price, $497 one-time."
-    },
-    {
       "q": "Can I try it first?",
-      "a": "Yes. Book a demo and you can hear it on our demo line."
+      "a": "Yes. Hear Donna on our demo line, then test your own Donna on a test line before any customer hears it."
     }
   ],
   "contact": {
-    "title": "Book a demo or ask a question",
-    "subtitle": "We reply within one business day."
+    "title": "Book a demo or a free missed-call audit",
+    "subtitle": "We reply within one business day.",
+    "tagline": "Founding pricing · 10 spots"
   },
   "legal": {
     "entity": "[OWNER: legal entity name]",
@@ -240,6 +264,9 @@
   },
   "owner_review": [
     "Package contents are a draft: only offer what is delivered and tested.",
+    "Founding pricing: the 10-spot cap and the standard prices (Answer $697, Capture $1,097, Command $1,797 / month; standard setup $497 / $997 / $1,497; Site $697, Site Pro $1,297) are owner decisions. To stay truthful, new clients must actually pay the standard price once the founding spots are filled; keep dated records (Competition Act s.74.01).",
+    "Setup included for founding clients and the free missed-call audit: owner to confirm.",
+    "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
     "Cal.com booking link and demo line are placeholders.",
     "Privacy policy and terms are placeholders for owner and counsel review.",
     "The domain is not chosen: donna.ai or a .ca variant must be checked and bought by the owner."
