@@ -116,7 +116,7 @@
   },
   "offer": {
     "title": "Founding offer",
-    "text": "For our founding clients: the setup fee is waived on every package."
+    "text": "For our founding clients: get Command, our premium package, at the Answer price. $497/mo + $497 setup. Need a website too? Site Pro at the Site price, $497 one-time."
   },
   "pricing": [
     {
@@ -129,7 +129,7 @@
           "subtitle": "Never miss a call",
           "price": 497,
           "period": "per month",
-          "note": "+ $497 setup (waived on the founding offer)",
+          "note": "per month + $497 setup",
           "features": [
             "AI receptionist answers every call, day and night",
             "Takes messages and caller details",
@@ -142,7 +142,7 @@
           "subtitle": "Turn missed calls into leads",
           "price": 797,
           "period": "per month",
-          "note": "+ $997 setup (waived on the founding offer)",
+          "note": "per month + $997 setup",
           "highlight": true,
           "features": [
             "Everything in Answer",
@@ -156,7 +156,7 @@
           "subtitle": "Bookings and follow-up on autopilot",
           "price": 1297,
           "period": "per month",
-          "note": "+ $1,497 setup (waived on the founding offer)",
+          "note": "per month + $1,497 setup · Founding offer: $497/mo + $497 setup",
           "features": [
             "Everything in Capture",
             "Appointment booking into your calendar",
@@ -189,7 +189,7 @@
           "subtitle": "More pages, more reach",
           "price": 997,
           "period": "one-time",
-          "note": "Pay once. No monthly fees.",
+          "note": "Pay once. No monthly fees. · Founding offer: $497",
           "features": [
             "Everything in Site",
             "Service and area pages",
@@ -223,7 +223,7 @@
     },
     {
       "q": "What does the founding offer include?",
-      "a": "The setup fee is waived on every package for our founding clients."
+      "a": "Founding clients get Command, our premium package, at the Answer price: $497/mo + $497 setup. Add a website and you get Site Pro at the Site price, $497 one-time."
     },
     {
       "q": "Can I try it first?",

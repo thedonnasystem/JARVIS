@@ -186,7 +186,7 @@ class DonnaV1(unittest.TestCase):
         for seg in ("home-services trades", "roofing and renovation", "law firms, intake only", "missed-call audits", "pricing checks", "the owner commits the niche"):
             self.assertIn(seg, ms[0]["objective"])
         for m in ms[:2]:
-            self.assertIn("Founding offer: setup fee waived on every package.", m["objective"])
+            self.assertIn("Founding offer: Command (premium) at the Answer price", m["objective"])
             self.assertIn("Guarantee terms TBD by owner", m["objective"])
         blob = json.dumps(ms) + json.dumps(O.office_config("donna"))
         self.assertNotIn("PENDING", blob)
