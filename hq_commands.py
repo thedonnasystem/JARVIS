@@ -1150,6 +1150,7 @@ async def hq_creative_cmd(update, context) -> None:
     except Exception as e:
         logger.warning("HQ creative command failed: %s", str(e)[:150])
         text = f"Creative studio unavailable: {type(e).__name__}"
+    await hq_core.reply_to(update.message, text[:4000])
 
 
 async def hq_reception_cmd(update, context) -> None:
