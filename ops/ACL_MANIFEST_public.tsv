@@ -112,6 +112,9 @@ function	creative_calendar_link(uuid,uuid)	-	-	execute	security_definer		-
 function	creative_character_lora(uuid,uuid)	-	-	execute	security_definer		-
 function	creative_claim(uuid)	-	-	execute	security_definer		-
 function	creative_finish(uuid,boolean,text,jsonb)	-	-	execute	security_definer		-
+function	creative_job_set_template(uuid,text,text,text,uuid[],text)	-	-	execute	security_definer		-
+function	creative_job_template(uuid)	-	-	execute	security_definer		-
+function	creative_metrics_import(text,jsonb,text,text)	-	-	execute	security_definer		-
 function	creative_owner_add_character(text,text,text,boolean,uuid)	-	-	execute	security_definer		-
 function	creative_owner_allow_premium(uuid)	-	-	execute	security_definer		-
 function	creative_owner_decide(uuid,boolean,text)	-	-	execute	security_definer		-
@@ -121,10 +124,13 @@ function	creative_owner_set_brand_kit(text,jsonb)	-	-	execute	security_definer		
 function	creative_owner_set_office(text,boolean,integer,integer,integer)	-	-	execute	security_definer		-
 function	creative_owner_set_preset(text,text,text,text[],boolean,text)	-	-	execute	security_definer		-
 function	creative_owner_set_provider(text,boolean)	-	-	execute	security_definer		-
+function	creative_owner_set_template(text,text,text,text,text,text[],jsonb,text)	-	-	execute	security_definer		-
 function	creative_perf_record(uuid,text,numeric,text)	-	-	execute	security_definer		-
+function	creative_rank(text,text,integer)	-	-	execute	security_definer		-
 function	creative_report()	-	-	execute	security_definer		-
 function	creative_stage(uuid,text,jsonb)	-	-	execute	security_definer		-
 function	creative_submit(text,text,text,text,text[],uuid,uuid,uuid,text)	-	-	execute	security_definer		-
+function	creative_templates(text,text)	-	-	execute	security_definer		-
 function	current_identity()	-	-	execute	security_definer		-
 function	current_office()	-	-	execute	security_definer		-
 function	current_office_id()	-	-	execute	security_definer		-

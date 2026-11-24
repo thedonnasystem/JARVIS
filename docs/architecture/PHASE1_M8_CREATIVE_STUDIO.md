@@ -8,7 +8,8 @@ This milestone merges M8a and M8b. It contains:
 - a hosted open-weight adapter for fal.ai. Replicate is a registry slot only, because the protected `test_no_bypass` allow-list does not include this module (owner proposal);
 - the sandbox end-to-end demo.
 
-Analytics feedback into routing is M8c. Components and licences are listed in `CREATIVE_STUDIO_COMPONENTS.md`.
+M8c (below) adds the template / preset library, burned word-timed captions, the editing upgrades, the self-hosted ComfyUI path and the analytics loop.
+Components and licences are listed in `CREATIVE_STUDIO_COMPONENTS.md`.
 
 ## Pieces
 
@@ -34,7 +35,7 @@ Analytics feedback into routing is M8c. Components and licences are listed in `C
 - **Shared brain.**
   - The worker reads facts through M7's `hq_office_os.brain_facts` (M6 `fz_brain_read`, which is office-scoped and fails closed).
   - Nothing crosses office permissions.
-  - Writing learnings back is M8c.
+  - Writing learnings back to the brain comes later; M8c ranks templates and hooks inside the studio.
 - **No new infrastructure.**
   - Metadata is in the HQ database; files are in Supabase Storage.
   - Publishing uses the Jarvis hands pipeline. Postiz is not used, because the hands pipeline already has the owner approval gate.
@@ -108,11 +109,69 @@ paid attempt passes the existing office spend gate (caps, per-transaction and we
 - Nothing is published from the studio. `schedule_post` creates a hands DRAFT, and the owner approves it through the existing flow, or an owner-set
   standing rule applies.
 
+## M8c: templates, captions, editing, ComfyUI, analytics
+
+| Piece | Where |
+|---|---|
+| Template / preset library (data) | `creative_studio/presets/library.json` (21 templates, hooks, caption styles, vocabulary) |
+| Library validation, prompt compiler, workflow filling | `hq_creative_presets.py` |
+| Captions, loudness, reframe, beat cuts, B-roll, visualizer | `hq_creative_media.py` |
+| ComfyUI API-format workflows + licence manifest | `creative_studio/comfyui/` |
+| ComfyUI (RunPod) + local-edit adapters, template choice, metrics import, ranking | `hq_creative_studio.py` |
+| DB: `templates`, `job_templates`, `platform_metrics`, 6 functions, `local-edit` provider | `migrations/20261207_creative_studio_v2.sql` |
+| Rollback (M8c only / whole studio) | `ops/rollback_creative_studio_v2.sql` / `ops/rollback_creative_studio.sql` |
+| DB proof | `sqltests/creative_studio_v2_check.sql` |
+| Seed = library check | `scripts/creative_presets_seed.py --check` (unit test) |
+
+**Templates are data, never routing.** A template sets prompt vocabulary (shot type, camera move, camera body, lens, focal length, aperture, lighting,
+mood, UGC format), a negative prompt, video length / fps, an edit recipe (fit, captions style, hook-first, B-roll, beat sync, loudness, visualizer),
+hooks and a ComfyUI workflow id. It cannot name a provider, model, price or the disclosure: the Python validator and a DB `CHECK` on the spec keys refuse
+it, and a second `CHECK` refuses testimonial / review / real-customer framing and real-artist imitation. The router, the spend gate, premium rules,
+retries and owner approval are unchanged (`sqltests/creative_studio_v2_check.sql` V5 proves premium is still refused for a templated job).
+
+**Which template a job gets.** The one requested (`creative_job_set_template`), else the office's best-ranked template for the module
+(`creative_rank`), with 1 job in 5 exploring another one, else the office default. Edit jobs always name theirs (they need input clips). A template that
+needs a character LoRA is only used when the job has a registered character (the v1 consent rules apply). Office isolation: a template is the office's
+own or the group's; edit inputs are approved (or uploaded library) assets of the same office.
+
+**Editing step (every video).** fit (pad with the brand colour, or auto-reframe on the visual-energy centre) -> captions -> hook banner (first 2.5 s) ->
+the "AI-generated" label (always; it is drawn even when captions are off) -> loudness normalisation (EBU R128, -14 LUFS, true peak -1.5 dB) -> H.264 /
+AAC, soft SRT track, SRT sidecar in Storage, disclosure in the metadata.
+- Captions: faster-whisper (CPU, int8, word timestamps), in a separate process (`creative_studio/tools/whisper_words.py`; see `ops/proposals/creative_media_deps.md` for why). When the speech is the known script / lyrics, the words keep whisper's timing and the script's
+  spelling. Without whisper or speech, the script is timed evenly (video, UGC, music) or there are no captions (edit jobs).
+- Styles per office brand kit: karaoke (word highlight), pop (one word, scale-in), lyric, subtle; the kit's second colour is the highlight, its first
+  font is used.
+- QA adds the spoken words: deceptive framing or a brand-kit "dont" word in the transcript fails the job.
+- Edit jobs (`local-edit`, free, OFF until the owner enables it): B-roll stitch of the inputs (hard cuts or crossfades), hook-first order by motion,
+  beat-synced cuts on the music input (librosa when installed; a pure-Python onset tracker otherwise), auto-reframe per clip.
+- Music (B2B Records): visualizer (waves / spectrum over the cover art from `reuse_of`) and lyric video (word-timed lyrics), stored next to the audio.
+
+**ComfyUI (self-hosted, later cost step).** Workflows for FLUX.1 schnell (+ LoRA), Wan 2.2 TI2V-5B and T2V-A14B, LTX-Video are checked in (API format,
+typed placeholders). `ComfyUIAdapter` posts them to a RunPod serverless endpoint running worker-comfyui, through `hq_hands_adapters.http` (the allowed
+outbound path; `runpod` is not a provider pattern in `test_no_bypass`). It runs only in live mode with the owner-enabled `runpod-comfyui` row,
+`RUNPOD_API_KEY` and `COMFYUI_RUNPOD_ENDPOINT`. Each run is capped at the reserved GPU-seconds (`policy.executionTimeout`), so the measured cost cannot
+exceed the reservation. Only models with a shipped, commercially usable workflow are routed (FLUX.1 [dev] and HunyuanVideo were removed from the
+self-host rows). Modal stays a slot: `ops/proposals/creative_comfyui_selfhost.md`.
+
+**Analytics loop.** Metrics come in by CSV (`parse_metrics_csv` -> `import_metrics`, source `manual`) or from a hands-pipeline insights result
+(`hands_metrics`, keyed by the hand action; the calendar maps it to the asset; source `hands`). `creative_metrics_import` accepts only the office's
+own assets, validates every row (unknown metric, negative value, completion rate over 1 are reported, not written) and replaces the value on a
+re-import of the same window. `creative_rank` scores each approved asset on its latest metrics (engagement and outcomes per view, 3-second hold,
+completion) and ranks templates and hooks with a prior of 3 posts at the office mean, so one lucky post does not win. `rank_text(office)` is the
+one-line summary for Jarvis / the owner.
+
+**M8c env.** `CREATIVE_WHISPER_DIR` (folder with the faster-whisper model), `CREATIVE_WHISPER_MODEL` (default `tiny`; `base` / `small` are more accurate
+and slower), `CREATIVE_WHISPER_DOWNLOAD=1` (allow the one-time model download), `COMFYUI_RUNPOD_ENDPOINT` (RunPod endpoint id; with `RUNPOD_API_KEY`).
+
+**M8c rollback.** `ops/rollback_creative_studio_v2.sql`: archives the three tables to `fz_archive`, drops the six functions, switches `local-edit` off
+and restores the v1 self-host model list. The worker falls back to v1 behaviour by itself (no template), and the new editing step needs no database.
+To undo the code too, revert the M8c commit.
+
 ## Env config
 
 | Variable | Meaning |
 |---|---|
-| `CREATIVE_STUDIO_MODE` | `sandbox` (default: sandbox adapter only, no network) or `live` |
+| `CREATIVE_STUDIO_MODE` | `sandbox` (default: sandbox adapter (and the free local-edit adapter) only, no network) or `live` |
 | `FAL_KEY` | fal.ai key (hosted open-weight models). Owner sign-up |
 | `REPLICATE_API_TOKEN` | Replicate token: slot only, no adapter yet |
 | `CREATIVE_VIDEO_SECONDS` | default video length (5) |
@@ -159,7 +218,7 @@ paid attempt passes the existing office spend gate (caps, per-transaction and we
 | LoRA training (one character) | flux-lora-fast-training, fal | about C$2.80 per run |
 | 5 s premium video (fallback / hero) | Kling 3.0 | about C$0.75 |
 | 5 s premium video (fallback / hero) | Veo 3.1 | about C$2.80 |
-| Edit / render / captions | ffmpeg on the Jarvis host | C$0 |
+| Edit / render / captions (faster-whisper on the CPU, ffmpeg) | Jarvis host | C$0 (CPU time measured in the sandbox: about 3 s for 12 s of speech with `tiny`) |
 
 **Example month.** All 8 offices, 20 images and 8 short videos each, with 1.5 attempts on average:
 - about C$30 on open models;

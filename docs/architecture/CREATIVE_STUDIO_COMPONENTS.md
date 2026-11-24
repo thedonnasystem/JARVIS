@@ -14,6 +14,33 @@ or later, its licence for commercial use, and the version pinned.
 | Replicate predictions API | replicate.com (hosted) | provider terms | not used yet: registry slot only | adapter waits for the owner to allow-list it in the protected `test_no_bypass` |
 | Jarvis hands pipeline | this repo (`hq_hands`, `hands_submit_action`) | ours | n/a | calendar and publishing with the existing owner approval. **Chosen over Postiz**: there is no second scheduler to run, and Postiz is AGPL-3.0 |
 
+## Added in M8c (templates, editing, analytics)
+
+| Component | Repo / source | Licence | Version pinned | How it is used |
+|---|---|---|---|---|
+| faster-whisper | github.com/SYSTRAN/faster-whisper | MIT | 1.2.1 (CTranslate2 4.9.1) | CPU int8 transcription with word timestamps for burned captions and SRT (`hq_creative_media.speech_words`, run in a separate process: `creative_studio/tools/whisper_words.py`). Optional: without it captions fall back to script timing. Model `tiny` (Whisper weights, MIT) is read from `CREATIVE_WHISPER_DIR`; no download unless `CREATIVE_WHISPER_DOWNLOAD=1`. Not in `requirements.txt` yet (protected): `ops/proposals/creative_media_deps.md` |
+| librosa | github.com/librosa/librosa | ISC | 1.0.1 tested (`beats()` imports it when present; audio decoded by our ffmpeg) | beat tracking for beat-synced cuts. Optional: without it an onset-energy autocorrelation tracker in pure Python is used (tested 121 BPM on a 120 BPM kick) |
+| aubio | github.com/aubio/aubio | **GPL-3.0** | not used | flagged: GPL; librosa (ISC) chosen instead |
+| MoviePy | github.com/Zulko/moviepy | MIT | not used | ffmpeg filtergraphs cover cuts, crossfades, reframe, overlays and loudness without a second media stack (less to install, faster) |
+| ffmpeg filters `ass` (libass), `loudnorm`, `xfade`, `showwaves`, `showspectrum`, `crop` | ffmpeg.org | LGPL-2.1+ / GPL build; binary only | 6.1.1 | burned captions + AI label, EBU R128 loudness (-14 LUFS, true-peak -1.5 dB), crossfades, visualizers, auto-reframe |
+| Open-Higgsfield / Open Generative AI | github.com/Anil-matcha/Open-Higgsfield-AI | MIT (LICENSE checked: "Copyright (c) 2026 Open Generative AI Contributors") | commit 6f726e6539b06bb2f4288f20480c116e7173a06d | PORTED as data: camera bodies, lenses, focal perspectives, aperture effects, lighting / mood / quality tags, quick prompts, the prompt-compiler order (`src/lib/promptUtils.js`), UGC format names (`MarketingStudio.jsx`) and video workflow kinds (`videoWorkflows.js`) into `creative_studio/presets/library.json`. Its "Product Review" format is renamed "product demo"; its Muapi cloud path and "no guardrails" stance are not adopted. It ships no real camera-move presets (those are Higgsfield's closed product); our camera moves are written from standard cinematography terms |
+| ComfyUI workflow templates | github.com/Comfy-Org/workflow_templates | MIT | commit 8305a7d4008c64ed52e480d553bd5784011d7b11 | node graphs and sampler defaults of `flux_schnell`, `video_wan2_2_5B_ti2v`, `video_wan2_2_14B_t2v`, `ltxv_text_to_video` re-expressed in ComfyUI API format in `creative_studio/comfyui/` (+ a FLUX schnell LoRA variant with the core `LoraLoader`) |
+| worker-comfyui (RunPod) | github.com/runpod-workers/worker-comfyui | AGPL-3.0 | owner picks the image tag at endpoint creation (5.x API assumed: `input.workflow`, output `images[]` base64 / s3_url) | `ComfyUIAdapter` only calls it over HTTPS; we do not modify or redistribute it. **Verify the output format against the tag you deploy** |
+| espeak-ng | github.com/espeak-ng/espeak-ng | GPL-3.0 | 1.51 (system package) | **demo / test fixture only** (makes a test voice-over in `scripts/creative_studio_demo.py`); never shipped or called by the studio |
+
+Weights used by the ComfyUI templates (self-hosted, so the weights' own licence applies to us):
+
+| Weights | Licence | Routed when self-hosted? |
+|---|---|---|
+| FLUX.1 [schnell] (`flux1-schnell-fp8`) | Apache-2.0 | yes |
+| FLUX.1 [dev] and LoRAs on it | FLUX.1 [dev] Non-Commercial | **no**: removed from the self-host provider rows by `20261207_creative_studio_v2.sql`; hosted fal.ai only |
+| Wan 2.2 TI2V-5B, T2V-A14B, umt5-xxl encoder, Wan VAEs (Comfy-Org repackaged) | Apache-2.0 | yes |
+| Wan 2.2 lightx2v 4-step LoRA | not verified | not included |
+| LTX-Video 2B v0.9 (`ltxv_t2v`) | LTX-Video open-weights licence: **verify before enabling** (LTX-2 uses the LTX-2 Community License, free under US$10M group revenue) | listed as `ltx-video`; flagged |
+| HunyuanVideo 1.5 | Tencent Hunyuan Community (territory excludes EU/UK/KR) | removed from the self-host rows |
+| T5-XXL encoder (LTX) | Apache-2.0 | yes |
+| Whisper `tiny` (faster-whisper CTranslate2 conversion) | MIT | yes (local CPU) |
+
 ## Models (through the hosted APIs in v1)
 
 | Model | Licence | Commercial use | Flag |
@@ -32,12 +59,10 @@ or later, its licence for commercial use, and the version pinned.
 
 | Component | Repo | Licence | Note |
 |---|---|---|---|
-| ComfyUI | github.com/comfyanonymous/ComfyUI | GPL-3.0 | runs as a separate unmodified service; vendor community workflows (FLUX, Wan 2.2, LTX, IP-adapter product shots) as JSON when we move off hosted APIs |
+| ComfyUI | github.com/comfyanonymous/ComfyUI | GPL-3.0 | runs as a separate unmodified service. M8c ships the workflow JSONs and the RunPod adapter; enabling it is an owner step (`ops/proposals/creative_comfyui_selfhost.md`). IP-adapter product-reference and relight workflows are still to come |
 | worker-comfyui (RunPod) | github.com/runpod-workers/worker-comfyui | AGPL-3.0 (per its repository metadata) | run unmodified as our own endpoint; any modification we serve over a network must be published |
 | Modal ComfyUI example | github.com/modal-labs/modal-examples | MIT (verify) | the alternative to RunPod |
 | ostris/ai-toolkit | github.com/ostris/ai-toolkit | MIT | FLUX LoRA training on our own GPU (v1 uses fal's hosted LoRA trainer) |
 | kohya_ss / sd-scripts | github.com/bmaltais/kohya_ss | Apache-2.0 | alternative trainer |
-| faster-whisper | github.com/SYSTRAN/faster-whisper | MIT | word-timed captions (v1 times captions evenly from the script) |
 | IP-Adapter | github.com/tencent-ailab/IP-Adapter | Apache-2.0 | product-reference shots in ComfyUI |
-| Open-Higgsfield / Open Generative AI | github.com/Anil-matcha/Open-Higgsfield-AI | MIT (per the coordinator; verify) | model presets and camera-motion prompt templates only. We do NOT use its Muapi cloud path and do NOT adopt its "no guardrails" stance |
 | Postiz | github.com/gitroomhq/postiz-app | AGPL-3.0 | not adopted: the hands pipeline already covers the calendar |
