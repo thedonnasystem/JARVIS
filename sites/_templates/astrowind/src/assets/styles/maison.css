@@ -456,3 +456,14 @@ html.maison .text-primary { color: var(--m-gold) !important; }
 .m-talk-copy { flex: 1; min-width: 0; }
 .m-talk-title { font-family: var(--m-serif); font-size: 1.15rem; color: var(--m-ivory); line-height: 1.1; }
 .m-talk-status { font-size: 0.8rem; color: var(--m-muted); }
+
+/* why us vs the usual vendor */
+.m-compare { display: grid; gap: 1.1rem; grid-template-columns: 1fr; }
+@media (min-width: 56rem) { .m-compare { grid-template-columns: 1fr 1fr; } }
+.m-compare-col { padding: clamp(1.6rem, 3vw, 2.4rem); }
+.m-compare-col ul { list-style: none; margin: 1.4rem 0 1.8rem; padding: 0; display: grid; gap: 0.95rem; }
+.m-compare-col li { display: flex; gap: 0.75rem; align-items: baseline; line-height: 1.5; }
+.m-compare-col.is-them { opacity: 0.78; }
+.m-compare-col.is-them li { color: var(--m-muted); }
+.m-compare-col.is-us { border-color: color-mix(in oklab, var(--m-gold) 60%, transparent); }
+.m-x { color: #b55; font-weight: 600; flex: none; width: 0.9rem; }

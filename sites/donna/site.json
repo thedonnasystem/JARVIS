@@ -12,25 +12,27 @@
     "accent": "#c9a24a"
   },
   "meta": {
-    "title": "Donna.AI | Missed calls into booked appointments",
-    "description": "Donna.AI answers every call, texts back every missed caller and follows up every lead until they book. Donna Solutions plans start at $197 a month."
+    "title": "Donna.AI | AI solutions and infrastructure for your business",
+    "description": "Donna.AI builds and integrates AI into your business: an AI front desk that turns missed calls and missed leads into booked appointments, workflow automation, custom AI agents and the infrastructure that connects them. Free 20-min AI consultation. Plans from $197 a month."
   },
   "links": {
     "booking": "#contact",
     "booking_is_placeholder": true,
-    "demo_phone": "+1 (825) 462-1250"
+    "demo_phone": "+1 (825) 462-1250",
+    "booking_label": "Book your free 20-min AI consultation",
+    "booking_label_short": "Free AI consultation"
   },
   "header_hide": [
     "websites",
     "calculator"
   ],
   "hero": {
-    "tagline": "AI receptionist and AI systems for your business",
-    "title": "We turn your missed calls and missed leads",
-    "title_accent": "into booked appointments.",
-    "subtitle": "Every call answered. Every missed caller texted back in minutes. Every lead followed up until they book, day and night. You just show up to the appointments.",
-    "offer": "Donna Solutions: plans starting from $197 / month. Book before December 31 and setup is included free (normally $497 to $1,497).",
-    "foot": "Free setup until December 31"
+    "tagline": "AI solutions & infrastructure integration",
+    "title": "AI solutions and infrastructure,",
+    "title_accent": "built into your business.",
+    "subtitle": "We turn your missed calls and missed leads into booked appointments. Then we automate the busywork, build AI agents for your team and connect it all to the tools you already use. Done for you, month-to-month.",
+    "offer": "Free 20-min AI consultation · Plans from $197 / month · Setup free until December 31",
+    "foot": "Free 20-min AI consultation"
   },
   "demo": {
     "label": "Illustration of a call, not a real customer",
@@ -62,37 +64,37 @@
     ]
   },
   "services": {
-    "tagline": "What Donna.AI does",
-    "title": "Missed calls in. Booked appointments out.",
+    "tagline": "What we build",
+    "title": "One partner for all the AI in your business.",
     "items": [
       {
-        "title": "Answers every call",
-        "description": "Picks up day and night, answers questions about your services, hours and prices, and sends urgent calls to you by text right away.",
+        "title": "AI front desk",
+        "description": "Every call answered day and night, missed callers texted back in minutes and appointments booked straight into your calendar.",
         "icon": "tabler:phone-call"
       },
       {
-        "title": "Missed-call text-back",
-        "description": "Every missed caller gets a text within minutes, so the job does not go to the next number they find.",
-        "icon": "tabler:message-circle"
-      },
-      {
-        "title": "Books appointments",
-        "description": "Offers open times and books the job into your calendar, with a text confirmation to the customer.",
-        "icon": "tabler:calendar-event"
-      },
-      {
-        "title": "Follows up on leads",
-        "description": "Every lead lands in one simple list and gets followed up, with messages you approve, until they book.",
+        "title": "Lead capture and follow-up",
+        "description": "Every lead from calls, your website, ads and messages lands in one place and gets followed up, with messages you approve, until they book.",
         "icon": "tabler:user-check"
       },
       {
-        "title": "Never off the clock",
-        "description": "Nights, weekends and holidays, when your competitors go to voicemail.",
-        "icon": "tabler:clock-24"
+        "title": "Workflow automation",
+        "description": "Quotes, invoices, reminders, review requests and reports that run themselves, so your team stops doing busywork.",
+        "icon": "tabler:settings-automation"
       },
       {
-        "title": "Done for you",
-        "description": "We build it, test it with you and keep it tuned. You approve every word before a customer hears it.",
+        "title": "Custom AI agents",
+        "description": "AI agents trained on your services, prices and policies for intake, scheduling, support and internal questions.",
+        "icon": "tabler:robot"
+      },
+      {
+        "title": "AI infrastructure and integration",
+        "description": "Your phone, calendar, CRM, email, accounting and website connected into one system, with no rip-and-replace.",
+        "icon": "tabler:plug-connected"
+      },
+      {
+        "title": "Run, monitored, improved",
+        "description": "We monitor everything we build, fix what breaks and keep tuning it, and you get a plain-English playbook for all of it.",
         "icon": "tabler:shield-check"
       }
     ]
@@ -101,33 +103,78 @@
     "title": "How it works",
     "items": [
       {
-        "title": "Free missed-call audit",
-        "description": "We call your line during the day and after hours, like a new customer would, and show you what they get."
+        "title": "Free 20-min AI consultation",
+        "description": "We find where AI saves you the most time and money, and show you what we'd build. No cost, no obligation."
       },
       {
-        "title": "We build your Donna",
-        "description": "Your hours, services, prices, questions and calendar, set up by us."
+        "title": "Your AI plan",
+        "description": "A clear plan: what we automate first, how it connects to your tools and one price. No surprises."
       },
       {
-        "title": "You test it first",
-        "description": "You try it on a test line and approve it before any customer hears it."
+        "title": "We build and integrate",
+        "description": "We set it up inside the tools you already use. You test it and approve every word before a customer sees it."
       },
       {
-        "title": "It goes live",
-        "description": "Calls are answered, missed callers are texted back and leads are followed up. You get a summary of every call."
+        "title": "We run and improve it",
+        "description": "Monitoring, fixes and tuning are part of your plan, and we add the next win when you're ready."
       }
     ]
   },
   "offer": {
-    "title": "This month's offer",
-    "text": "Book before December 31 and your setup is included free, normally $497 to $1,497 depending on your plan. Month-to-month, no contracts. Your exact plan and price are put together with our AI specialist on a free 20-minute call.",
-    "seal": "Dec 31"
+    "title": "Free 20-min AI consultation",
+    "text": "In 20 minutes we find where AI saves your business the most time and money, and show you exactly what we'd build. No cost, no obligation. Book before December 31 and setup is free on any plan.",
+    "seal": "Free"
   },
   "pricing": [
     {
+      "id": "custom-ai",
+      "title": "AI solutions and infrastructure",
+      "subtitle": "Automations, AI agents and full AI integration, built around how your business already runs. Scoped and priced in your free 20-min AI consultation.",
+      "items": [
+        {
+          "title": "AI Automations",
+          "subtitle": "Your busywork, done for you",
+          "price_label": "Free consultation",
+          "period": "then one clear price",
+          "note": "Built into the tools you already use.",
+          "features": [
+            "Quotes, invoices and review requests that send themselves",
+            "Leads and jobs synced across the tools you already use",
+            "Reports that land in your inbox without anyone building them"
+          ]
+        },
+        {
+          "title": "AI Agents",
+          "subtitle": "Staff that never clock out",
+          "price_label": "Free consultation",
+          "period": "then one clear price",
+          "note": "Built into the tools you already use.",
+          "features": [
+            "Custom AI agents for intake, scheduling and follow-up",
+            "Trained on your services, prices and policies",
+            "You approve every word before a customer sees it"
+          ]
+        },
+        {
+          "title": "AI Infrastructure & Integration",
+          "subtitle": "Every system talking to each other",
+          "price_label": "Free consultation",
+          "period": "then one clear price",
+          "note": "Built into the tools you already use.",
+          "features": [
+            "A plan showing where AI saves you time and money",
+            "Phone, text, booking, CRM and website working as one system",
+            "Ongoing support and tuning as you grow"
+          ]
+        }
+      ],
+      "nav": "AI Solutions",
+      "eyebrow": "Donna Solutions"
+    },
+    {
       "id": "packages",
-      "title": "Donna Solutions",
-      "subtitle": "Plans starting from $197 a month. Book before December 31 and setup is included free (normally $497 to $1,497). Month-to-month, no contracts. Your exact price is set with our AI specialist on a free call.",
+      "title": "AI front desk plans",
+      "subtitle": "Plans starting from $197 a month, month-to-month. Book before December 31 and setup is free. Your exact plan and price come out of your free 20-min AI consultation.",
       "items": [
         {
           "title": "Essential",
@@ -188,7 +235,9 @@
           ],
           "price_label": "Tailored"
         }
-      ]
+      ],
+      "eyebrow": "Donna Solutions",
+      "nav": "Plans"
     },
     {
       "id": "websites",
@@ -220,51 +269,8 @@
           ],
           "price_label": "Quoted"
         }
-      ]
-    },
-    {
-      "id": "custom-ai",
-      "title": "Beyond the front desk",
-      "subtitle": "Donna is where most businesses start. When you're ready, we build the AI systems behind it. Every build is quoted after a free scoping call.",
-      "items": [
-        {
-          "title": "AI Automations",
-          "subtitle": "Your busywork, done for you",
-          "price_label": "Custom quote",
-          "period": "per project",
-          "note": "Free scoping call first.",
-          "features": [
-            "Quotes, invoices and review requests that send themselves",
-            "Leads and jobs synced across the tools you already use",
-            "Reports that land in your inbox without anyone building them"
-          ]
-        },
-        {
-          "title": "AI Agents",
-          "subtitle": "Staff that never clock out",
-          "price_label": "Custom quote",
-          "period": "per project",
-          "note": "Free scoping call first.",
-          "features": [
-            "Custom AI agents for intake, scheduling and follow-up",
-            "Trained on your services, prices and policies",
-            "You approve every word before a customer sees it"
-          ]
-        },
-        {
-          "title": "AI Infrastructure",
-          "subtitle": "Your whole business, AI-ready",
-          "price_label": "Custom quote",
-          "period": "per project",
-          "note": "Free scoping call first.",
-          "features": [
-            "A plan showing where AI saves you time and money",
-            "Phone, text, booking, CRM and website working as one system",
-            "Ongoing support and tuning as you grow"
-          ]
-        }
       ],
-      "nav": "Custom AI"
+      "eyebrow": "Donna Solutions"
     }
   ],
   "results": {
@@ -274,42 +280,42 @@
   },
   "faq": [
     {
-      "q": "Will callers know they are talking to an AI?",
-      "a": "Yes. Donna.AI introduces itself as an AI assistant for your business."
+      "q": "What happens in the free 20-min AI consultation?",
+      "a": "Our AI specialist asks how your business runs, finds where you're losing time or customers, and shows you what we'd build first. You leave with a clear plan and a price. No cost and no obligation."
+    },
+    {
+      "q": "What can you build?",
+      "a": "An AI front desk that answers every call and books appointments, lead follow-up, workflow automation for quotes, invoices, reminders and reports, custom AI agents for your team, and the integration that connects your phone, calendar, CRM, email, accounting and website."
+    },
+    {
+      "q": "Do I have to change my tools?",
+      "a": "No. We build around the tools you already use and connect them. Nothing gets ripped out."
     },
     {
       "q": "How much does it cost?",
-      "a": "Plans start at $197 a month. Your exact price depends on what your business needs, and our AI specialist puts it together with you on a free 20-minute call. Book before December 31 and setup is included free. Month-to-month, no contracts."
+      "a": "Plans start at $197 a month. Your exact price depends on what you need, and you get it in your free consultation, before we build anything. Book before December 31 and setup is free."
     },
     {
       "q": "Is there a contract?",
-      "a": "No. Every package is month-to-month. Stay because it books you appointments, not because you signed for a year."
+      "a": "No. Every plan is month-to-month. Stay because it works, not because you signed for a year."
     },
     {
-      "q": "What is the free missed-call audit?",
-      "a": "We call your business line during the day and after hours, the way a new customer would, and show you what happened: answered, voicemail or no answer. It is free and there is no obligation."
+      "q": "Will my customers know they're talking to an AI?",
+      "a": "Yes. Donna always says she's an AI, and anyone who wants a person gets a call back. You approve every word before a customer hears it."
     },
     {
-      "q": "Do I need a new website or phone system?",
-      "a": "No. Donna works with the phone number you already have. Calls are forwarded to Donna.AI when you choose, for example after hours or when you are busy. A website is an optional add-on."
+      "q": "What if something breaks?",
+      "a": "Monitoring, fixes and tuning are included in your plan. You won't get a separate bill when something needs fixing."
     },
     {
-      "q": "What happens with calls it cannot handle?",
-      "a": "It takes a message and passes the caller to you, by text or email, with a summary."
-    },
-    {
-      "q": "Can I try it first?",
-      "a": "Yes. Hear Donna on our demo line, then test your own Donna on a test line before any customer hears it."
-    },
-    {
-      "q": "Can you build more than a receptionist?",
-      "a": "Yes. Donna is where most businesses start. We also build custom AI automations, agents and full AI systems, quoted per project after a free scoping call."
+      "q": "Is my data safe?",
+      "a": "Your data stays yours. We only use it to run what we build for you, and we never sell it."
     }
   ],
   "contact": {
-    "title": "Book a demo or a free missed-call audit",
-    "subtitle": "We reply within one business day. Prefer email? thedonnasystem@gmail.com",
-    "tagline": "Free setup until December 31"
+    "title": "Book your free 20-min AI consultation",
+    "subtitle": "Tell us a little about your business and we'll book you in. Prefer email? thedonnasystem@gmail.com",
+    "tagline": "Setup free until December 31"
   },
   "calculator": {
     "path": "calculator",
@@ -414,13 +420,40 @@
     "contact": "thedonnasystem@gmail.com · [OWNER: business mailing address before launch]"
   },
   "owner_review": [
-    "Package contents are a draft: only offer what is delivered and tested.",
     "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
     "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com demo link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
     "Privacy policy and terms are placeholders for owner and counsel review.",
     "The domain is not chosen: donna.ai or a .ca variant must be checked and bought by the owner.",
-    "Custom AI builds (Automations, Agents, Infrastructure) are quoted per project after a scoping call: only quote what can be delivered and tested.",
     "December offer (owner decision, Nov 24 2026): setup included free for clients who book before December 31, 2026 (normally $497 / $997 / $1,497). The deadline is real: on January 1 end the offer or replace it with a new dated one; never roll the same deadline forward (Competition Act).",
-    "Prices (owner decision, Nov 24 2026): Essential $197, Answer $497, Capture $797, Command $1,297 a month; Site $497, Site Pro $997 one-time. The site shows only 'from $197'; exact prices are given on the call."
-  ]
+    "Prices (owner decision, Nov 24 2026): Essential $197, Answer $497, Capture $797, Command $1,297 a month; Site $497, Site Pro $997 one-time. The site shows only 'from $197'; exact prices are given on the call.",
+    "Promises on the site you must keep (owner decision needed if not): free 20-min AI consultation; a plain-English playbook for everything built; monitoring, fixes and tuning included in every plan (no break-fix invoices); a clear plan and one price before any build; client data used only to run their systems and never sold.",
+    "Comparison section describes the usual AI vendor in general terms (no competitor named). Keep every Donna.AI line true."
+  ],
+  "compare": {
+    "tagline": "Why Donna.AI",
+    "title": "The usual AI vendor vs. Donna.AI",
+    "subtitle": "We looked at how AI consultants, agencies and AI receptionist apps sell to businesses like yours, then built the offer we'd want to buy.",
+    "them": {
+      "title": "The usual AI vendor",
+      "items": [
+        "Charges thousands just to assess your business",
+        "Sells you one tool and leaves you to connect the rest",
+        "Setup fees and long contracts",
+        "Hands you a system nobody on your team understands",
+        "Bills you every time something breaks",
+        "Vague pitch, pricing you only see at the end"
+      ]
+    },
+    "us": {
+      "title": "Donna.AI",
+      "items": [
+        "Free 20-min AI consultation",
+        "One partner for the whole stack: front desk, leads, automations, AI agents and integration",
+        "Month-to-month from $197, setup free until December 31",
+        "A plain-English playbook for everything we build, and your data stays yours",
+        "Monitoring, fixes and tuning included in your plan",
+        "A clear plan and one price before we build anything"
+      ]
+    }
+  }
 }

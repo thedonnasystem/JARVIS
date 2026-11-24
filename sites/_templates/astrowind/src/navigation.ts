@@ -1,5 +1,5 @@
 import { getPermalink } from './utils/permalinks';
-import { SITE_DATA as S, BOOKING, PLACE } from './data/site';
+import { SITE_DATA as S, BOOKING, BOOK_LABEL, PLACE } from './data/site';
 
 const groups = (S.pricing || []).map((g: any) => ({ id: g.id, text: g.nav || g.title.split(' ').slice(-1)[0].replace(/^./, (c: string) => c.toUpperCase()), href: getPermalink(`/#${g.id}`) }));
 const links = [{ text: 'Services', href: getPermalink('/#services') }, ...groups, { text: 'How it works', href: getPermalink('/#how-it-works') },
@@ -10,7 +10,7 @@ const links = [{ text: 'Services', href: getPermalink('/#services') }, ...groups
 
 // site.json "header_hide": section ids kept out of the top bar (still in the footer), so the bar fits on one line
 const hide: string[] = (S as any).header_hide || [];
-export const headerData = { links: links.filter((l: any) => !hide.includes(l.id)), actions: [{ text: 'Book a demo', href: BOOKING }] };
+export const headerData = { links: links.filter((l: any) => !hide.includes(l.id)), actions: [{ text: (S.links?.booking_label_short as string) || BOOK_LABEL, href: BOOKING }] };
 
 export const footerData = {
   links: [{ title: S.brand.name, links }],
