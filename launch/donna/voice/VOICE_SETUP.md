@@ -128,3 +128,12 @@ Call from your own mobile and write the actual result next to each expected one.
 11. Make pricing: https://make.com/en/pricing
 12. Cal.com pricing: https://cal.com/pricing
 13. Retell OpenAPI spec, revision 2026-11-24-cf220c4 (the schema subset in `schema/` comes from it; Apache-2.0): https://docs.retellai.com/openapi.yaml
+
+## Website Donna ("Talk to Donna now" on the site)
+A second Retell agent, `web_qualify`, talks with site visitors in the browser: finds their problem, sells with certainty (never promises results), gives a taste, never quotes prices beyond "plans start at $197 a month", and books 20 minutes with our AI specialist.
+1. Retell → Agents → import `retell/web_qualify.llm.json` and `retell/web_qualify.agent.json` (or `python3 retell_push.py push web_qualify` with `RETELL_API_KEY` set in your own shell).
+2. On that agent, add the Cal.com tools (check availability + book appointment) for your 20-minute "Donna.AI call" event, named `check_availability` and `book_appointment`.
+3. Retell → API keys → create a **public** key and restrict it to your site's domain(s) (the Netlify address, later your own domain). Never use the secret key here.
+4. Netlify → Site configuration → Environment variables (you paste them): `PUBLIC_DONNA_WEB_KEY` = that public key, `PUBLIC_DONNA_WEB_AGENT` = the web agent's id. Then Deploys → Trigger deploy.
+5. Test: open the site on your phone and laptop, click "Talk to Donna now", allow the microphone, and run one call as a plumber, one as a med spa and one as "I need an AI agent for my admin". Check a booking lands in Cal.com.
+Until both variables are set, the button calls the demo line instead, so the site never shows a dead button. Calls are capped at 8 minutes; cost is the same per-minute rate as phone calls.

@@ -13,7 +13,7 @@
   },
   "meta": {
     "title": "Donna.AI | Missed calls into booked appointments",
-    "description": "Donna.AI answers every call, texts back every missed caller and follows up every lead until they book. For service businesses and restaurants. Founding prices from $197 a month, locked in."
+    "description": "Donna.AI answers every call, texts back every missed caller and follows up every lead until they book. Donna Solutions plans start at $197 a month."
   },
   "links": {
     "booking": "#contact",
@@ -25,12 +25,12 @@
     "calculator"
   ],
   "hero": {
-    "tagline": "AI receptionist for service businesses and restaurants",
+    "tagline": "AI receptionist and AI systems for your business",
     "title": "We turn your missed calls and missed leads",
     "title_accent": "into booked appointments.",
     "subtitle": "Every call answered. Every missed caller texted back in minutes. Every lead followed up until they book, day and night. You just show up to the appointments.",
-    "offer": "Founding pricing: from $197 / month, locked in for as long as you stay. Only 10 founding spots.",
-    "foot": "Founding pricing · 10 spots"
+    "offer": "Donna Solutions: plans starting from $197 / month. Book before December 31 and setup is included free (normally $497 to $1,497).",
+    "foot": "Free setup until December 31"
   },
   "demo": {
     "label": "Illustration of a call, not a real customer",
@@ -119,44 +119,49 @@
     ]
   },
   "offer": {
-    "title": "Founding pricing",
-    "text": "Only 10 spots. Take one and your price is locked in for as long as you stay: $100 to $500 a month below the standard price, with setup included. When the spots are gone, new clients pay the standard price.",
-    "seal": "10 spots"
+    "title": "This month's offer",
+    "text": "Book before December 31 and your setup is included free, normally $497 to $1,497 depending on your plan. Month-to-month, no contracts. Your exact plan and price are put together with our AI specialist on a free 20-minute call.",
+    "seal": "Dec 31"
   },
   "pricing": [
     {
       "id": "packages",
-      "title": "Packages",
-      "subtitle": "Founding prices, locked in for as long as you stay. Month-to-month, no contracts. Canadian dollars, plus applicable taxes.",
-      "founding": {
-        "badge": "Founding price",
-        "save": "Save",
-        "standard": "Standard price",
-        "after": "once the 10 founding spots are filled."
-      },
+      "title": "Donna Solutions",
+      "subtitle": "Plans starting from $197 a month. Book before December 31 and setup is included free (normally $497 to $1,497). Month-to-month, no contracts. Your exact price is set with our AI specialist on a free call.",
       "items": [
+        {
+          "title": "Essential",
+          "subtitle": "Every call answered",
+          "period": "per month",
+          "note": "Setup free until December 31.",
+          "features": [
+            "AI receptionist answers every call, day and night",
+            "Answers common questions: hours, location, services",
+            "Takes a message from every caller",
+            "Texts callers your booking, order or website link",
+            "A daily summary of every call by email"
+          ],
+          "price_label": "From $197"
+        },
         {
           "title": "Answer",
           "subtitle": "Never miss a call",
-          "price": 497,
-          "standard_price": 697,
-          "period": "per month",
-          "note": "Setup included (standard setup $497).",
+          "period": "on your call",
+          "note": "Setup free until December 31.",
           "features": [
             "AI receptionist answers every call, day and night",
             "Answers questions about your services, hours and prices",
             "Takes the caller's details and what they need",
             "Urgent calls sent to you by text right away",
             "A summary of every call by text or email"
-          ]
+          ],
+          "price_label": "Tailored"
         },
         {
           "title": "Capture",
           "subtitle": "Missed calls into booked appointments",
-          "price": 797,
-          "standard_price": 1097,
-          "period": "per month",
-          "note": "Setup included (standard setup $997).",
+          "period": "on your call",
+          "note": "Setup free until December 31.",
           "highlight": true,
           "highlight_label": "Recommended",
           "features": [
@@ -165,15 +170,14 @@
             "Books appointments into your calendar, with text confirmations",
             "Every lead saved to a simple CRM",
             "New leads followed up until they book, with messages you approve"
-          ]
+          ],
+          "price_label": "Tailored"
         },
         {
           "title": "Command",
           "subtitle": "Your whole front office, on autopilot",
-          "price": 1297,
-          "standard_price": 1797,
-          "period": "per month",
-          "note": "Setup included (standard setup $1,497).",
+          "period": "on your call",
+          "note": "Setup free until December 31.",
           "features": [
             "Everything in Capture",
             "Instant replies to website and ad leads",
@@ -181,56 +185,19 @@
             "Appointment reminders to cut no-shows",
             "Win-back messages to past customers",
             "A monthly report: calls, leads and bookings"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "restaurants",
-      "nav": "Restaurants",
-      "title": "For restaurants and food spots",
-      "subtitle": "Built for the rush. Founding price, locked in for as long as you stay. Month-to-month, no contracts. Canadian dollars, plus applicable taxes.",
-      "founding": {
-        "badge": "Founding price",
-        "save": "Save",
-        "standard": "Standard price",
-        "after": "once the 10 founding spots are filled."
-      },
-      "items": [
-        {
-          "title": "Essential",
-          "subtitle": "Never lose an order to a busy line",
-          "price": 197,
-          "standard_price": 297,
-          "period": "per month",
-          "note": "Setup included.",
-          "features": [
-            "Answers every call, day and night, even during the rush",
-            "Answers questions about your hours, menu, location and parking",
-            "Texts callers your online-order or reservation link",
-            "Catering, large-order and event requests sent to you by text right away",
-            "Allergy questions always go to your staff, never guessed",
-            "A summary of every call by text or email"
-          ]
+          ],
+          "price_label": "Tailored"
         }
       ]
     },
     {
       "id": "websites",
       "title": "Add a website",
-      "subtitle": "Optional. One-time payment, no monthly fees. Founding prices while the 10 founding spots last.",
-      "founding": {
-        "badge": "Founding price",
-        "save": "Save",
-        "standard": "Standard price",
-        "after": "once the 10 founding spots are filled."
-      },
+      "subtitle": "Optional. One-time payment, no monthly fees. Quoted with your plan.",
       "items": [
         {
           "title": "Site",
           "subtitle": "A fast website that brings in calls",
-          "price": 497,
-          "standard_price": 697,
           "period": "one-time",
           "note": "Pay once. No monthly fees.",
           "features": [
@@ -238,20 +205,20 @@
             "Click-to-call and booking built in",
             "Lead-capture form into your CRM",
             "Basic local SEO setup"
-          ]
+          ],
+          "price_label": "Quoted"
         },
         {
           "title": "Site Pro",
           "subtitle": "More pages, more reach",
-          "price": 997,
-          "standard_price": 1297,
           "period": "one-time",
           "note": "Pay once. No monthly fees.",
           "features": [
             "Everything in Site",
             "Service and area pages",
             "Priority support"
-          ]
+          ],
+          "price_label": "Quoted"
         }
       ]
     },
@@ -311,8 +278,8 @@
       "a": "Yes. Donna.AI introduces itself as an AI assistant for your business."
     },
     {
-      "q": "How does founding pricing work?",
-      "a": "Founding pricing is open for 10 spots. Take one and you pay the founding price for as long as you stay with us: $200 to $500 a month below the standard price, with setup included. Once the 10 spots are filled, new clients pay the standard price shown under each package."
+      "q": "How much does it cost?",
+      "a": "Plans start at $197 a month. Your exact price depends on what your business needs, and our AI specialist puts it together with you on a free 20-minute call. Book before December 31 and setup is included free. Month-to-month, no contracts."
     },
     {
       "q": "Is there a contract?",
@@ -335,10 +302,6 @@
       "a": "Yes. Hear Donna on our demo line, then test your own Donna on a test line before any customer hears it."
     },
     {
-      "q": "Do you work with restaurants and food spots?",
-      "a": "Yes. Essential is built for the rush: Donna answers every call, handles questions about hours, menu and location, texts callers your online-order or reservation link, and sends catering and large-order requests to you. Allergy questions always go to your staff."
-    },
-    {
       "q": "Can you build more than a receptionist?",
       "a": "Yes. Donna is where most businesses start. We also build custom AI automations, agents and full AI systems, quoted per project after a free scoping call."
     }
@@ -346,13 +309,13 @@
   "contact": {
     "title": "Book a demo or a free missed-call audit",
     "subtitle": "We reply within one business day. Prefer email? thedonnasystem@gmail.com",
-    "tagline": "Founding pricing · 10 spots"
+    "tagline": "Free setup until December 31"
   },
   "calculator": {
     "path": "calculator",
     "nav": "Calculator",
     "meta_title": "Missed-Call Cost Calculator | Donna.AI",
-    "meta_description": "Estimate what missed calls cost your service business each month, and what answering them could bring back. The math runs in your browser.",
+    "meta_description": "Estimate what missed calls cost your business each month, and what answering them could bring back. The math runs in your browser.",
     "tagline": "Missed-Call Cost Calculator",
     "title": "What are missed calls",
     "title_accent": "costing you?",
@@ -452,13 +415,12 @@
   },
   "owner_review": [
     "Package contents are a draft: only offer what is delivered and tested.",
-    "Founding pricing: the 10-spot cap and the standard prices (Answer $697, Capture $1,097, Command $1,797 / month; standard setup $497 / $997 / $1,497; Site $697, Site Pro $1,297) are owner decisions. To stay truthful, new clients must actually pay the standard price once the founding spots are filled; keep dated records (Competition Act s.74.01).",
-    "Setup included for founding clients and the free missed-call audit: owner to confirm.",
     "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
     "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com demo link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
     "Privacy policy and terms are placeholders for owner and counsel review.",
     "The domain is not chosen: donna.ai or a .ca variant must be checked and bought by the owner.",
     "Custom AI builds (Automations, Agents, Infrastructure) are quoted per project after a scoping call: only quote what can be delivered and tested.",
-    "Essential (restaurants and food spots): founding $197/month, standard $297/month once the 10 founding spots are filled (owner decision, Nov 24 2026). Charge $297 to new clients after the founding spots fill."
+    "December offer (owner decision, Nov 24 2026): setup included free for clients who book before December 31, 2026 (normally $497 / $997 / $1,497). The deadline is real: on January 1 end the offer or replace it with a new dated one; never roll the same deadline forward (Competition Act).",
+    "Prices (owner decision, Nov 24 2026): Essential $197, Answer $497, Capture $797, Command $1,297 a month; Site $497, Site Pro $997 one-time. The site shows only 'from $197'; exact prices are given on the call."
   ]
 }

@@ -19,7 +19,7 @@ def _read(*parts):
 
 
 SITE = json.loads(_read(ROOT, "sites", "donna", "site.json"))
-PROMPTS = {n: _read(HERE, "voice", "prompts", f"{n}.txt") for n in ("demo_line", "client_template")}
+PROMPTS = {n: _read(HERE, "voice", "prompts", f"{n}.txt") for n in ("demo_line", "client_template", "web_qualify")}
 
 
 class Voice(unittest.TestCase):
@@ -41,13 +41,14 @@ class Voice(unittest.TestCase):
         self.assertTrue(R.problems({**a, "langauge": "en-US"}, "CreateAgentBody"))
         self.assertTrue(R.problems({k: v for k, v in a.items() if k != "voice_id"}, "CreateAgentBody"))
 
-    def test_one_agent_ai_and_recording_disclosed_first(self):
+    def test_agents_disclose_ai_and_recording_first(self):
         src = R.load_source()
-        self.assertEqual(list(src), ["demo_line"])
-        msg = src["demo_line"]["llm"]["begin_message"]
-        self.assertIn("AI", msg)
-        self.assertIn("recorded", msg)
-        self.assertIn("what kind of business do you run", msg)
+        self.assertEqual(sorted(src), ["demo_line", "web_qualify"])
+        for name in src:
+            msg = src[name]["llm"]["begin_message"]
+            self.assertIn("AI", msg)
+            self.assertIn("recorded", msg)
+            self.assertIn("what kind of business do you run", msg)
 
     def test_prompts_keep_the_honesty_rules(self):
         for name, p in PROMPTS.items():
@@ -69,11 +70,28 @@ class Voice(unittest.TestCase):
         self.assertIn("no medical or dental advice", d)
         self.assertNotIn("agent_swap", json.dumps(R.load_source()))
 
-    def test_sales_prices_match_the_site(self):
+    def test_prices_stay_off_the_calls(self):
         items = {i["title"]: i for g in SITE["pricing"] if g["id"] == "packages" for i in g["items"]}
-        for t in ("Answer", "Capture", "Command"):
-            self.assertIn(f"${items[t]['price']:,}", PROMPTS["demo_line"])
-            self.assertIn(f"${items[t]['standard_price']:,}", PROMPTS["demo_line"])
+        self.assertEqual(items["Essential"]["price_label"], "From $197")
+        self.assertFalse(any("price" in i for i in items.values()), "the site shows no package prices")
+        for name in ("demo_line", "web_qualify"):
+            p = PROMPTS[name]
+            self.assertIn("Plans start at $197 a month", p)
+            self.assertIn("December 31", p)
+            self.assertIn("our AI specialist", p)
+            for amount in ("$497", "$797", "$1,297", "$697", "$1,097", "$1,797"):
+                self.assertNotIn(amount, p, f"{name} quotes {amount}")
+            self.assertNotIn("founding", p.lower())
+
+    def test_web_agent(self):
+        src = R.load_source()
+        self.assertIn("web_qualify", src)
+        llm, agent = R.bodies("web_qualify", src["web_qualify"])
+        self.assertEqual([t["type"] for t in llm["general_tools"]], ["end_call"])
+        self.assertIn("I'm an AI", llm["begin_message"])
+        w = PROMPTS["web_qualify"]
+        for k in ("Never promise a number of customers", "Never name or criticize another company", "Give a taste, not the blueprint"):
+            self.assertIn(k, w)
 
     def test_no_secrets_or_ids_in_the_kit(self):
         for base, _, files in os.walk(HERE):
@@ -113,13 +131,13 @@ class Site(unittest.TestCase):
 class Offer(unittest.TestCase):
     html = _read(HERE, "offer_sheet.html")
 
-    def test_founding_and_standard_prices(self):
-        for founding, standard in (("$497", "$697"), ("$797", "$1,097"), ("$1,297", "$1,797")):
-            self.assertIn(f'<span class="amt gold">{founding}</span>', self.html)
-            self.assertIn(f"<b>{standard} / month</b> once the 10 founding spots are filled", self.html)
+    def test_prices_and_december_offer(self):
+        for price in ("$497", "$797", "$1,297"):
+            self.assertIn(f'<span class="amt gold">{price}</span>', self.html)
         self.assertIn("Recommended", self.html)
-        for k in ("Setup included", "Month-to-month", "10 founding spots", "Free audit + test line", "+1 (825) 462-1250"):
+        for k in ("Essential from $197", "Setup free until Dec 31", "Month-to-month", "Free audit + test line", "+1 (825) 462-1250"):
             self.assertIn(k, self.html)
+        self.assertNotIn("founding", self.html.lower())
 
     def test_industry_neutral(self):
         text = re.sub(r"<!--.*?-->", " ", self.html, flags=re.S)

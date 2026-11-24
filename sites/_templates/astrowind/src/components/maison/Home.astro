@@ -4,6 +4,7 @@
 import Stage from './Stage.astro';
 import Phone from './Phone.astro';
 import Split from './Split.astro';
+import TalkToDonna from './TalkToDonna.astro';
 import ContactForm from '~/components/widgets/ContactForm.astro';
 import { Icon } from 'astro-icon/components';
 import { SITE_DATA as S, BOOKING, DEMO_PHONE, PLACE } from '~/data/site';
@@ -15,6 +16,7 @@ const saving = (g: any, p: any) => (g.founding && p.standard_price > p.price ? p
 const monthly = (p: any) => /month/i.test(p.period || '');
 const roman = (n: number) => ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'][n] || String(n + 1);
 const two = (n: number) => String(n).padStart(2, '0');
+const webDonna = Boolean(import.meta.env.PUBLIC_DONNA_WEB_KEY && import.meta.env.PUBLIC_DONNA_WEB_AGENT);
 const tel = DEMO_PHONE ? `tel:${DEMO_PHONE.replace(/[^0-9+]/g, '')}` : '';
 const services = S.services?.items || [];
 const steps = S.steps?.items || [];
@@ -39,9 +41,9 @@ const idx = () => two(++n);
       </h1>
       <p class="m-lead" data-hero style="--d:3">{S.hero.subtitle}</p>
       <div class="m-actions" data-hero style="--d:4">
-        <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>Book a demo</span></a>
-        {tel && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Call the demo line: {DEMO_PHONE}</span></a>}
-        <a href="#packages" class="m-btn m-btn-ghost" data-magnetic><span>See packages</span></a>
+        <TalkToDonna />
+        <a href={BOOKING} class="m-btn m-btn-ghost" data-magnetic><span>Book a demo</span></a>
+        {tel && webDonna && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Or call: {DEMO_PHONE}</span></a>}
       </div>
       {S.hero.offer && <a href="#packages" class="m-hero-offer" data-hero style="--d:5"><i class="m-pulse" aria-hidden="true" />{S.hero.offer}</a>}
     </div>
@@ -152,7 +154,7 @@ const idx = () => two(++n);
         </div>
         {g.subtitle && <p class="m-body m-sec-sub" data-reveal>{g.subtitle}</p>}
       </header>
-      <ul class:list={['m-plans', `m-plans-${Math.min(g.items.length, 3)}`]} data-reveal>
+      <ul class:list={['m-plans', `m-plans-${Math.min(g.items.length, 4)}`]} data-reveal>
         {g.items.map((p, i) => (
           <li class:list={['m-card', 'm-plan', p.highlight && 'is-featured']} data-spot style={`--i:${i}`}>
             {p.highlight && <span class="m-chip">{p.highlight_label || 'Recommended'}</span>}
