@@ -53,6 +53,7 @@
 20261201_shared_services_v1.sql
 20261202_monitoring_brain_v1.sql
 20261203_office_os_v1.sql
+20261208_heavy_bridge_v1.sql
 20261112_lockdown_v1.sql
 20261121_postlock_backup_identity_v1.sql
 20261122_postlock_backup_identity_v2.sql

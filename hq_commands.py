@@ -1140,6 +1140,21 @@ async def hq_invoices_cmd(update, context) -> None:
     await hq_core.reply_to(update.message, text[:4000])
 
 
+async def hq_heavy_cmd(update, context) -> None:
+    """/heavy  owner only, no AI: hand a heavy job to the scheduled Claude Code run (hq_heavy): <kind> | <what to do>, list, cancel <id>, on | off."""
+    if not _owner(update):
+        return
+    try:
+        import hq_heavy
+        parts = (getattr(update.message, "text", "") or "").strip().split(None, 1)      # the raw text keeps the line breaks of the instructions
+        raw = parts[1] if len(parts) > 1 else ""
+        text = await asyncio.to_thread(hq_heavy.command_text, raw)
+    except Exception as e:
+        logger.warning("HQ heavy command failed: %s", type(e).__name__)
+        text = f"Heavy bridge unavailable: {type(e).__name__}"
+    await hq_core.reply_to(update.message, text[:4000])
+
+
 async def hq_office_cmd(update, context) -> None:
     """/office  the corporate office. /office <name>  read-only status of one of the 8 offices (M7 office OS)."""
     if not _owner(update):
@@ -1408,7 +1423,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("invoices", hq_invoices_cmd), ("offices", hq_offices_cmd), ("approvals", hq_approvals_cmd), ("security", hq_security_cmd), ("services", hq_services_cmd), ("health", hq_health_cmd), ("brain", hq_brain_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd), ("gate", hq_gate_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("heavy", hq_heavy_cmd), ("invoices", hq_invoices_cmd), ("offices", hq_offices_cmd), ("approvals", hq_approvals_cmd), ("security", hq_security_cmd), ("services", hq_services_cmd), ("health", hq_health_cmd), ("brain", hq_brain_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd), ("gate", hq_gate_cmd)):
         app.add_handler(CommandHandler(name, fn))
     register_venture2(app, CommandHandler)  # venture2 hook
     try:  # Jarvis core v2: /core, /briefing, /report, /seedmemory (owner only, no AI). Worker + 07:00 report only with JARVIS_CORE=1.
@@ -1790,4 +1805,5 @@ def register_venture2(app, CommandHandler) -> None:
 MENU.extend([("reply", "Record a lead's reply; unsubscribe = do not contact"), ("deal", "Deals: new, move, won (owner confirms revenue)")])
 # --- venture2 end ---
 MENU.extend([("ffm", "FF Marketing: client brief -> draft campaign pack")])
+MENU.extend([("heavy", "Hand a heavy job to Claude Code: kind | what to do, list, cancel")])
 MENU.extend([("core", "Jarvis core status (queue, switches, model providers)"), ("briefing", "Jarvis's briefing to you"), ("report", "The daily report now")])
