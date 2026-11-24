@@ -1,7 +1,7 @@
 # Make.com scenarios for the demo line and client #1
 
 Retell can't text from Canadian numbers, so texts go out from Make.com using one of your existing Twilio Canadian numbers.
-One scenario covers the three jobs and runs once per call:
+One scenario covers the three jobs and runs once per call (about 3 to 5 credits per call):
 1. call summary to you;
 2. missed-call text-back;
 3. booking confirmation or booking link.
@@ -13,7 +13,7 @@ Building it takes about 15 minutes of clicks.
 
 | # | Module | Settings |
 |---|---|---|
-| 1 | **Webhooks > Custom webhook** | Add > name `retell-donna` > Save > **Copy address**. Paste it into both Retell agents (webhook URL, event `call_analyzed`). Then click **Run once** and make a test call, so Make learns the data structure. |
+| 1 | **Webhooks > Custom webhook** | Add > name `retell-donna` > Save > **Copy address**. Paste it into the Retell demo-line agent (webhook URL, event `call_analyzed`). Then click **Run once** and make a test call, so Make learns the data structure. |
 | 2 | **Filter** (on the line after 1) | `event` = `call_analyzed` AND `call.direction` = `inbound` |
 | 3 | **Router** | three routes below |
 
@@ -26,7 +26,7 @@ Retell sends `{event, call}`.
   - From: your Twilio Canadian number.
   - To: your mobile.
 - Body:
-  `{{if(call.call_analysis.custom_analysis_data.urgent; "URGENT "; "")}}Donna call from {{call.from_number}} ({{call.call_analysis.custom_analysis_data.caller_name}}): {{substring(call.call_analysis.call_summary; 0; 240)}} Booked: {{ifempty(call.call_analysis.custom_analysis_data.appointment_time; "no")}}`
+  `{{if(call.call_analysis.custom_analysis_data.urgent; "URGENT"; "")}} Donna call from {{call.from_number}} ({{call.call_analysis.custom_analysis_data.caller_name}}): {{substring(call.call_analysis.call_summary; 0; 240)}} Booked: {{ifempty(call.call_analysis.custom_analysis_data.appointment_time; "no")}}`
 - Alternative: **Gmail > Send an email** to yourself. Use it if you'd rather not pay for the text.
 
 **Route B: missed-call text-back**
@@ -41,14 +41,20 @@ Retell sends `{event, call}`.
   - Client #1: `Hi, it's [BUSINESS]. Sorry we missed your call. How can we help? Reply here or call us back at [NUMBER]. Reply STOP to opt out.`
 
 **Route C: confirmation or booking link (only with a yes)**
-- Filter:
-  - `call.call_analysis.custom_analysis_data.sms_ok` = `true`;
-  - AND `call.duration_ms` ≥ `15000`.
-- Module: **Twilio > Create a Message** to `{{ifempty(call.call_analysis.custom_analysis_data.callback_number; call.from_number)}}`.
-- Body for the demo line, both agents in one field:
-  `{{if(call.call_analysis.custom_analysis_data.booked; "DEMO - Northbeam Heating & Plumbing (a made-up company) by Donna.AI: you're booked for " + call.call_analysis.custom_analysis_data.appointment_time + ". This is the text your customers would get. "; "")}}Want Donna for your business? Book a free missed-call audit: [YOUR CAL.COM LINK]. Founding prices from $497/mo, 10 spots. Reply STOP to opt out.`
-- Body for client #1:
-  `[BUSINESS]: you're booked for {{call.call_analysis.custom_analysis_data.appointment_time}}. Questions? Call [NUMBER]. Reply STOP to opt out.`
+Split it into three routes, so each text is plain mapped text with no formulas.
+- Every C route filters `call.call_analysis.custom_analysis_data.sms_ok` = `true` AND `call.duration_ms` ≥ `15000`.
+- Every C route uses **Twilio > Create a Message** to `{{ifempty(call.call_analysis.custom_analysis_data.callback_number; call.from_number)}}`.
+
+| Route | Extra filter | Body (demo line) |
+|---|---|---|
+| C1 founder call booked | `booked` = `true` | `Donna.AI: your call with the founder is booked for {{...appointment_time}}. Talk soon! Reply STOP to opt out.` |
+| C2 demo booking only | `demo_booked` = `true` AND `booked` ≠ `true` | `DEMO - {{...demo_company}} (a made-up company) by Donna.AI: you're booked for {{...demo_appointment_time}}. This is the text your customers would get. Want it for your business? [YOUR CAL.COM LINK] Reply STOP to opt out.` |
+| C3 nothing booked | `booked` ≠ `true` AND `demo_booked` ≠ `true` | `Hi, it's Donna from Donna.AI. As promised: book your free missed-call audit here: [YOUR CAL.COM LINK]. Founding prices from $497/mo, 10 spots. Reply STOP to opt out.` |
+
+`{{...x}}` means the mapped field `call.call_analysis.custom_analysis_data.x`.
+
+Client #1 needs one C route only:
+`[BUSINESS]: you're booked for {{...appointment_time}}. Questions? Call [NUMBER]. Reply STOP to opt out.`
 
 **Optional Route D: log.** **Google Sheets > Add a row** to a sheet named "Donna calls" with these columns:
 - date
@@ -63,7 +69,7 @@ It makes the weekly results text a 2-minute job.
 
 Set the scenario to run **immediately** as data arrives, and switch it **ON**.
 
-**Credits:** about 3 to 5 per call (webhook, router, one to three messages). The free plan's 1,000 credits a month cover about 200 calls.
+**Credits:** about 3 to 5 per call (webhook, router, one or two messages). The free plan's 1,000 credits a month cover about 200 calls.
 
 ## Scenario 2 (Capture clients, optional for the demo): "Cal.com booking > you"
 1. In Cal.com: Settings > Developer > **Webhooks** > New. Paste a new Make custom-webhook URL. Trigger: Booking created.
@@ -80,5 +86,5 @@ Cal.com already emails the attendee a confirmation by itself.
 - **No marketing texts** to callers who didn't say yes.
 
 ## Known limits
-- Retell signs each webhook with `x-retell-signature`, but this simple Make scenario does not verify it. Keep the webhook URL private. In Route A, filter `call.agent_id` to your agents' IDs so stray posts are ignored.
+- Retell signs each webhook with `x-retell-signature`, but this simple Make scenario does not verify it. Keep the webhook URL private. In Route A, filter `call.agent_id` to your agent IDs so stray posts are ignored.
 - If a text doesn't arrive, check Make's scenario history first, then Twilio Console > Monitor > Messaging logs.

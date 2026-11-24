@@ -1,60 +1,20 @@
 {
-  "_note": "Source for the two Donna.AI demo agents on Retell. Prompts live in prompts/*.txt. `python3 retell_push.py build` writes the import-ready request bodies to retell/. ${NAME} placeholders are filled from environment variables by `retell_push.py push`; nothing secret is stored here. Cal.com booking tools are added in the Retell dashboard (connection-based integration), not here.",
+  "_note": "Source for the Donna.AI demo line on Retell: ONE agent (sales + multi-industry demo in one prompt, prompts/demo_line.txt). `python3 retell_push.py build` writes the import-ready request bodies to retell/. ${NAME} placeholders are filled from environment variables by `retell_push.py push`; nothing secret is stored here. Cal.com booking tools are added in the Retell dashboard (connection-based integration), not here.",
   "agents": {
-    "client_demo_hvac": {
-      "prompt_file": "prompts/client_demo_hvac.txt",
-      "env_agent_id": "DONNA_CLIENT_DEMO_AGENT_ID",
-      "llm": {
-        "model_config": {"type": "cascading", "primary": {"model": "gpt-4.1-mini"}, "temperature": 0.2},
-        "start_speaker": "agent",
-        "begin_message": "Thanks for calling Northbeam Heating and Plumbing, a made-up demo company from Donna.AI. I'm Donna, the AI receptionist, and this call is recorded. How can I help you today?",
-        "general_tools": [
-          {"type": "end_call", "name": "end_call", "description": "End the call after the wrap-up, or when the caller says goodbye."}
-        ]
-      },
-      "agent": {
-        "agent_name": "Donna.AI demo - Northbeam Heating & Plumbing (fictional)",
-        "voice_id": "11labs-Kate",
-        "voice_model": "eleven_flash_v2_5",
-        "language": "en-US",
-        "timezone": "America/Toronto",
-        "responsiveness": 0.9,
-        "interruption_sensitivity": 0.8,
-        "enable_backchannel": true,
-        "end_call_after_silence_ms": 30000,
-        "max_call_duration_ms": 600000,
-        "data_storage_setting": "everything",
-        "data_storage_retention_days": 30,
-        "webhook_url": "${DONNA_MAKE_WEBHOOK_URL}",
-        "webhook_events": ["call_analyzed"],
-        "post_call_analysis_model": "gpt-4.1-mini",
-        "post_call_analysis_data": [
-          {"type": "string", "name": "caller_name", "description": "The caller's first name, if given.", "required": false},
-          {"type": "string", "name": "callback_number", "description": "The callback number the caller confirmed, in E.164 format (+1XXXXXXXXXX). Empty if not confirmed.", "required": false},
-          {"type": "string", "name": "service_needed", "description": "What the caller needs, in a few words (for example: furnace not heating).", "required": false},
-          {"type": "boolean", "name": "urgent", "description": "True if the caller reported a gas smell, carbon monoxide alarm, no heat in cold weather, an active leak or flooding, a sewer backup, or a frozen or burst pipe.", "required": false},
-          {"type": "boolean", "name": "booked", "description": "True if a visit or quote was booked or demo-booked on this call.", "required": false},
-          {"type": "string", "name": "appointment_time", "description": "The booked day and time in plain words (for example: Tuesday 9:30 a.m.). Empty if nothing was booked.", "required": false},
-          {"type": "boolean", "name": "sms_ok", "description": "True only if the caller clearly said yes to receiving a text message.", "required": false},
-          {"type": "boolean", "name": "wants_donna", "description": "True if the caller asked how to get an AI receptionist like this for their own business.", "required": false}
-        ]
-      }
-    },
-    "sales_demo": {
-      "prompt_file": "prompts/sales_demo.txt",
-      "env_agent_id": "DONNA_SALES_AGENT_ID",
+    "demo_line": {
+      "prompt_file": "prompts/demo_line.txt",
+      "env_agent_id": "DONNA_DEMO_AGENT_ID",
       "llm": {
         "model_config": {"type": "cascading", "primary": {"model": "gpt-4.1-mini"}, "temperature": 0.3},
         "start_speaker": "agent",
         "begin_message": "Donna speaking — Donna.AI. Quick heads-up: I'm an AI, and this call is recorded. So you want to know what I'm about. Smart move. Tell me — what kind of business do you run?",
         "general_tools": [
           {"type": "end_call", "name": "end_call", "description": "End the call after the wrap-up, or when the caller says goodbye."},
-          {"type": "agent_swap", "name": "switch_to_hvac_demo", "description": "Switch to the Northbeam Heating & Plumbing demo receptionist, only after the caller agrees to hear the demo.", "agent_id": "${DONNA_CLIENT_DEMO_AGENT_ID}", "post_call_analysis_setting": "both_agents", "keep_current_voice": true, "speak_during_execution": true, "execution_message_type": "static_text", "execution_message_description": "Great. Switching you to Northbeam Heating and Plumbing now. Pretend you're a customer whose furnace just quit."},
           {"type": "transfer_call", "name": "transfer_to_founder", "description": "Transfer to the founder, only when the caller asks for a person and agrees to be transferred.", "transfer_destination": {"type": "predefined", "number": "${DONNA_FOUNDER_MOBILE}"}, "transfer_option": {"type": "cold_transfer"}}
         ]
       },
       "agent": {
-        "agent_name": "Donna.AI - Sales demo line",
+        "agent_name": "Donna.AI - Demo line (sales + multi-industry demo)",
         "voice_id": "11labs-Kate",
         "voice_model": "eleven_flash_v2_5",
         "language": "en-US",
@@ -71,14 +31,17 @@
         "post_call_analysis_model": "gpt-4.1-mini",
         "post_call_analysis_data": [
           {"type": "string", "name": "caller_name", "description": "The caller's name, if given.", "required": false},
-          {"type": "string", "name": "business_name", "description": "The caller's business name, if given.", "required": false},
-          {"type": "string", "name": "business_type", "description": "The kind of business (for example: HVAC, plumbing, dental).", "required": false},
+          {"type": "string", "name": "business_name", "description": "The caller's own business name, if given.", "required": false},
+          {"type": "string", "name": "business_type", "description": "The caller's kind of business (for example: plumbing, med spa, dental, law firm, auto repair, real estate, cleaning).", "required": false},
           {"type": "string", "name": "callback_number", "description": "The callback number the caller confirmed, in E.164 format (+1XXXXXXXXXX). Empty if not confirmed.", "required": false},
-          {"type": "string", "name": "avg_job_value", "description": "The average job value the caller said, in their words. Empty if not said.", "required": false},
-          {"type": "boolean", "name": "booked", "description": "True if a call with the founder or an audit was booked on this call.", "required": false},
-          {"type": "string", "name": "appointment_time", "description": "The booked day and time in plain words. Empty if nothing was booked.", "required": false},
+          {"type": "string", "name": "avg_job_value", "description": "What the caller said one customer or job is worth, in their words. Empty if not said.", "required": false},
+          {"type": "string", "name": "demo_company", "description": "The made-up demo company Donna played (for example: Northbeam Home Services, Willow & Ash Studio). Empty if no demo was played.", "required": false},
+          {"type": "boolean", "name": "demo_booked", "description": "True if a demo appointment was booked or demo-booked inside the demo.", "required": false},
+          {"type": "string", "name": "demo_appointment_time", "description": "The demo booking's day and time in plain words. Empty if none.", "required": false},
+          {"type": "boolean", "name": "booked", "description": "True if a real call with the founder or a free audit was booked on this call.", "required": false},
+          {"type": "string", "name": "appointment_time", "description": "The founder call or audit day and time in plain words. Empty if none.", "required": false},
           {"type": "boolean", "name": "sms_ok", "description": "True only if the caller clearly said yes to receiving a text message.", "required": false},
-          {"type": "boolean", "name": "urgent", "description": "True if the caller asked the founder to call back today.", "required": false},
+          {"type": "boolean", "name": "urgent", "description": "True if the caller asked the founder to call back today, or reported a real emergency.", "required": false},
           {"type": "enum", "name": "lead_temperature", "description": "Hot: wants to book or start. Warm: interested, not ready. Cold: not interested or not a business owner.", "choices": ["hot", "warm", "cold"], "required": false}
         ]
       }

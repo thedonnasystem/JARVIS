@@ -3,29 +3,50 @@
 The product has been ready since April and has zero clients, because nobody sold it every day. This playbook is a daily sales routine, not a plan to read.
 The rule: **no new building or tweaking until 50 businesses have been audited and called.** The demo line, the site and the offer sheet are good enough to sell today.
 
-## 1. Niche: HVAC first, plumbing second
-Why (from `docs/research/donna_competitors_2026.md`, researched 2026-11-23):
-- **The money in AI receptionists is in home services.** The vertical leader, Avoca, sells AI front offices to HVAC, plumbing, roofing and electrical companies. It raised $125M+ at a $1B valuation and reports 800+ customers (Fortune, 2026-04-27). Yelp bought Hatch, a home-services lead converter, for about $300M (Localogy, 2026-01). Owners in this trade already pay for this.
-- **Those leaders sell to big shops.** Avoca is quote-only and mid-market; Hatch is annual and per location. The 1-to-15-truck owner who answers his own phone from a crawl space is not their customer. He is ours: done-for-you, published price, month-to-month.
-- **Now is the season.** A furnace that quits in a Canadian winter is an emergency call that goes to whoever picks up first. After-hours and weekend calls are exactly what Donna answers.
-- **The demo already speaks HVAC.** Northbeam is a heating and plumbing company, so the demo call is the prospect's own world.
+## 1. Who to sell to: several service verticals at once
+Donna is for any service business that loses money when the phone isn't answered. Don't bet on one niche. Run the same audit across several verticals in parallel, and let your own audit numbers show where the misses are.
 
-Plumbing is the same demo and the same pitch: start mixing it in after the first 25 HVAC audits. Leave dental, legal and medical for later, since they bring more privacy rules.
+**Start with these 7, 7 to 8 businesses each, for the first 50:**
+| Vertical | Why they miss calls | Demo company on the demo line |
+|---|---|---|
+| Home services (HVAC, plumbing, electrical, roofing) | Owner and crew on jobs; emergencies after hours | Northbeam Home Services |
+| Med spa, salon, beauty | Staff busy with clients; evening and weekend bookings | Willow & Ash Studio |
+| Dental, chiropractic, clinic | Front desk on the other line; lunch and after-hours new-patient calls | Larkfield Family Dental & Wellness |
+| Law firms (family, real estate, wills, small business) | Lawyers in meetings or court; intake calls on evenings and weekends | Hollis & Grey Law |
+| Auto repair and detailing | Techs under cars; no one at the counter | Ironclad Auto Care |
+| Real estate agents | At showings; buyers call at night | Keystone Home Team |
+| Cleaning, landscaping, renovation | Crews on site; quote requests go to voicemail | Fresh Slate Property Care |
+
+**Why this mix** (from `docs/research/donna_competitors_2026.md`, researched 2026-11-23):
+- **Owners across service businesses already pay for call answering.**
+  - Podium claims 100,000+ businesses, Smith.ai 5,000+ and Ruby two decades in market (vendor claims on their pricing pages).
+  - In home services, Avoca raised $125M+ at a $1B valuation (Fortune, 2026-04-27), and Yelp bought Hatch for about $300M (Localogy, 2026-01).
+- **The big players leave the small owner-operator underserved.**
+  - The vertical leaders are enterprise, quote-only or on annual contracts.
+  - The cheap tools ($29 to $349 a month) make the owner build and maintain the agent.
+  - Donna is the done-for-you middle, with a published price and month-to-month terms.
+- **The demo line covers every vertical above,** so each prospect hears a call from their own world.
+
+**Notes for regulated verticals** (dental, clinics, law):
+- Donna only books and takes contact details. She gives no advice.
+- Any rules their regulator sets for AI phone answering are a question for the client. Put it on the intake form.
+
+**After 50 audits:** look at which verticals had the most after-hours voicemails and the warmest conversations, and put more of the next 50 there. Don't decide it before you have the data.
 
 ## 2. Build the list of 50 (method only; you build it, about 60 minutes)
 Use public sources only. Do not buy lists and do not scrape personal data.
 
-1. **Google Maps:** search "furnace repair [your city]", "HVAC [suburb]", "heating and cooling [city]". Open each listing.
+1. **Google Maps:** search per vertical, for example "plumber [city]", "med spa [city]", "dentist [suburb]", "family lawyer [city]", "auto repair [suburb]", "realtor [city]" and "cleaning company [city]". Open each listing.
 2. **Keep** owner-operated shops:
    - one location;
    - a website or listing that shows a phone number;
    - listed hours that close (for example, 5 p.m. weekdays);
-   - signs of a small team (owner named on the site, a few trucks, under about 200 reviews).
+   - signs of a small team (owner or practitioner named on the site, one location, under about 200 reviews).
 3. **Skip:**
    - franchises and big brands with a call centre;
    - anyone whose site says "24/7 live answering";
    - anyone whose site says they don't want sales calls or marketing email.
-4. **Cross-check** HomeStars, Yelp, the BBB, your Chamber of Commerce directory and trucks you see on the road.
+4. **Cross-check** Yelp, HomeStars (trades), the BBB, your Chamber of Commerce directory, professional directories (law society and dental association "find a" pages), and businesses you pass every day.
 5. **For each business, record in `audit_log.csv`:**
    - name, phone, website, the published business email if any, and the owner's name if published;
    - the **URL and date where you saw the email**. Take a screenshot. This is your CASL proof (section 7).
@@ -45,9 +66,9 @@ The audit is the proof: you show the owner his own missed calls, not anyone's st
    - what the greeting said (offers a callback? mentions emergencies? a full mailbox?).
 3. **Voicemail or no answer:** hang up. Leave no message.
 4. **A person answers:** be straight, never pose as a customer:
-   > "Hi, this is Moe from Donna.AI. I'm not a customer, sorry. I'm checking how local heating companies handle after-hours calls. Who's the best person to talk to about that, and when's a good time?"
+   > "Hi, this is Moe from Donna.AI. I'm not a customer, sorry. I'm checking how local businesses handle calls they can't pick up. Who's the best person to talk to about that, and when's a good time?"
    Log `ANS-H` or `ANS-S` and the callback time.
-5. **Do a daytime call too, at lunch (12 to 1).** That's when crews are on jobs and the phone often goes unanswered.
+5. **Do a daytime call too, at lunch (12 to 1).** That's when owners and staff are with customers and the phone often goes unanswered.
 
 **Outcome codes:**
 | Code | Meaning |
@@ -74,18 +95,27 @@ The audit is the proof: you show the owner his own missed calls, not anyone's st
 Then stop. Anyone who says no or stop goes on your **do-not-contact** list the same day.
 
 **Audit opener (call or walk-in):**
-> "Hi, is this [owner]? Moe from Donna.AI. Quick one. I called your line Tuesday at 7:40 at night, like a customer with no heat would. It rang out to voicemail. Not calling to shame you, most shops are the same. When a no-heat call hits voicemail at night in January, what usually happens to that customer?"
+> "Hi, is this [owner]? Moe from Donna.AI. Quick one. I called your line Tuesday at 7:40 at night, like a new customer would. It rang out to voicemail. Not calling to shame you, most businesses are the same. When a new customer hits voicemail at night, what usually happens to them?"
+
+Optional vertical line, after he answers:
+- **Home services:** "...and in January that's a no-heat call."
+- **Med spa or salon:** "...that's someone booking their next appointment from the couch."
+- **Clinic:** "...that's a new patient."
+- **Law:** "...that's an intake call for a matter worth thousands."
+- **Auto:** "...that's a car going to the next shop."
+- **Real estate:** "...that's a buyer calling about your listing."
+- **Cleaning or landscaping:** "...that's a quote request."
 
 Then listen. Ask what one average job is worth to him, and use his number, never a made-up one.
 
 **Email template** (CASL: identification, mailing address, unsubscribe):
 > **Subject:** Your after-hours line, Tuesday 7:40 p.m.
-> Hi [owner], I called [business] on [date] at [time] as a test and it went to [voicemail / rang out]. Donna.AI answers those calls for you with an AI receptionist, texts back missed callers, and books the job into your calendar. Hear it yourself: call 825-462-1250 and pretend your furnace just quit. Founding price from $497/month, setup included, month-to-month, 10 spots (one-page offer attached).
+> Hi [owner], I called [business] on [date] at [time] as a test and it went to [voicemail / rang out]. Donna.AI answers those calls for you with an AI receptionist, texts back missed callers, and books the job into your calendar. Hear it yourself: call 825-462-1250, tell Donna what business you run, and play a customer. Founding price from $497/month, setup included, month-to-month, 10 spots (one-page offer attached).
 > Moe [last name], Donna.AI, [mailing address], [phone]. Reply "unsubscribe" and I won't email you again.
 
 ## 5. The demo-call moment (the closer)
 Do it in person or on the phone, the moment he says "huh" or "how does it work".
-1. "Don't take my word for it. Call this number from your own phone right now: 825-462-1250. Say yes when she offers the heating company, then pretend your furnace just died."
+1. "Don't take my word for it. Call this number from your own phone right now: 825-462-1250. Tell her what you do, say yes to the demo, and be one of your own customers."
 2. **Stay quiet.** Let him hear the AI disclosure, the urgent handling, the booking.
 3. When the text lands on his phone: "That's what your 7:40 caller would have gotten, instead of your voicemail."
 4. Then: "Want yours set up with your hours and prices? You'd test it on a private line before any customer hears it."

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Donna.AI demo agents on Retell: build, validate and (optionally) push the config.
+"""Donna.AI demo line on Retell (one agent: sales + multi-industry demo): build, validate and (optionally) push the config.
 
     python3 retell_push.py build      # prompts + agents.json -> retell/*.json (import-ready request bodies, placeholders kept)
     python3 retell_push.py validate   # check retell/*.json against Retell's published OpenAPI schema (schema/retell_openapi_subset.json)
@@ -7,8 +7,7 @@
 
 push reads everything from environment variables; no key or id is ever written to a file:
     RETELL_API_KEY                 required for push
-    DONNA_CLIENT_DEMO_AGENT_ID     update this existing agent instead of creating one (optional)
-    DONNA_SALES_AGENT_ID           update this existing agent (the one on the demo number) instead of creating one (optional)
+    DONNA_DEMO_AGENT_ID            update this existing agent (the one on the demo number) instead of creating one (optional)
     DONNA_MAKE_WEBHOOK_URL         Make.com custom-webhook URL for call summaries and texts (optional; omitted if unset)
     DONNA_FOUNDER_MOBILE           +1XXXXXXXXXX for the sales agent's transfer tool (optional; the tool is dropped if unset)
 When updating an existing agent, its voice is kept (Kate) unless --set-voice is given.
@@ -26,7 +25,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 API = "https://api.retellai.com"
 PH = re.compile(r"\$\{([A-Z0-9_]+)\}")
-ORDER = ("client_demo_hvac", "sales_demo")          # the client demo first: the sales agent swaps to it
+ORDER = ("demo_line",)
 
 
 def load_source() -> dict:
@@ -149,8 +148,7 @@ def push(apply: bool, publish: bool, set_voice: bool, env=os.environ) -> None:
         spec = src[name]
         llm, agent = bodies(name, spec)
         agent_id = env.get(spec["env_agent_id"], "")
-        req = {"DONNA_CLIENT_DEMO_AGENT_ID"} if name == "sales_demo" else set()
-        llm = fill(llm, env, req)
+        llm = fill(llm, env, set())
         for label, b, root in (("llm", llm, "RetellLlmBody"), ("agent", {**agent, "response_engine": {"type": "retell-llm", "llm_id": "x"}}, "CreateAgentBody")):
             p = problems(fill(b, env, set()), root)
             if p:
@@ -158,8 +156,6 @@ def push(apply: bool, publish: bool, set_voice: bool, env=os.environ) -> None:
         print(f"[{name}] {'update agent ' + agent_id[:6] + '...' if agent_id else 'create new LLM + agent'}")
         if not apply:
             print(f"  dry run: would send LLM ({len(llm['general_prompt'])} chars of prompt, tools: {[t['name'] for t in llm.get('general_tools', [])]})")
-            if name == "client_demo_hvac" and not agent_id:
-                env["DONNA_CLIENT_DEMO_AGENT_ID"] = "(new agent id)"
             continue
         if agent_id:
             cur = _call("GET", f"/get-agent/{agent_id}", key)

@@ -8,10 +8,10 @@ It does not depend on merging any Jarvis PR: Netlify builds this branch (`build/
 | `SITE_GO_LIVE.md` | Put the site live on Netlify Free, with the working contact form; domain later |
 | `netlify.toml`, `build_site.sh` | Netlify build config (base directory `launch/donna`) |
 | `voice/VOICE_SETUP.md` | Demo line on Retell: why Retell, costs, dashboard steps, test-call checklist |
-| `voice/prompts/` | Sales demo prompt, Northbeam (fictional HVAC) demo prompt, client prompt template |
+| `voice/prompts/` | Demo-line prompt (sales + made-up demo companies in 8 industries, one agent), client prompt template |
 | `voice/agents.json`, `voice/retell/`, `voice/retell_push.py` | Import-ready Retell config, validated against Retell's schema; optional API push |
 | `voice/MAKE_SCENARIOS.md` | The Make.com scenario: call summary to you, missed-call text-back, confirmations |
-| `PLAYBOOK_FIRST_CLIENT.md` | Niche, list building, the after-hours audit, the sequence, the demo moment, closing, CASL |
+| `PLAYBOOK_FIRST_CLIENT.md` | Verticals, list building, the after-hours audit, the sequence, the demo moment, closing, CASL |
 | `audit_log.csv`, `scoreboard.csv` | The audit log sheet and the daily scoreboard (open in Google Sheets or Excel) |
 | `offer_sheet.html` | One-page founding offer (print to PDF, Letter) |
 | `ONBOARDING.md` | Client #1 in 48 h: Tally intake, cloning the agent, Cal.com, call forwarding codes, go-live test, weekly text |
@@ -29,24 +29,22 @@ It does not depend on merging any Jarvis PR: Netlify builds this branch (`build/
 3. Add an email notification.
 4. Send a test form.
 
-**3. Demo line (15 min): `voice/VOICE_SETUP.md`, steps A and B.**
+**3. Demo line (10 min): `voice/VOICE_SETUP.md`, section 4.**
 1. Copy the old prompt somewhere safe.
-2. Create the Northbeam agent and paste its prompt.
-3. Paste the sales prompt into the agent on 825-462-1250.
-4. Add the agent swap.
-5. Publish both.
+2. Paste the demo-line prompt and welcome message into the agent on 825-462-1250.
+3. Set the voice model and model, add the post-call fields, and Publish.
 
 **4. Texts and summaries (15 min): `voice/MAKE_SCENARIOS.md`.**
 1. Make > new scenario > webhook > router with routes A, B and C, using your Twilio Canadian number.
-2. Paste the webhook URL into both agents and Publish.
+2. Paste the webhook URL into the agent and Publish.
 
-**5. Test (10 min).** Run the 15-call checklist in `VOICE_SETUP.md`, and fix anything that fails before the number goes out.
+**5. Test (10 min).** Run the 18-call checklist in `VOICE_SETUP.md`, and fix anything that fails before the number goes out.
 
 **Tonight:** start `PLAYBOOK_FIRST_CLIENT.md` section 8: 20 after-hours audit calls, 6 to 7 p.m.
 
 **This week (not needed to start):**
 - Register as a telemarketer with the National DNCL (lnnte-dncl.gc.ca). Calls to businesses are exempt from the list itself, but registration is still required.
-- Add the Cal.com booking tools to both agents.
+- Add the Cal.com booking tools to the agent.
 - Build the Tally intake form (`ONBOARDING.md` §1).
 - Print 20 offer sheets.
 

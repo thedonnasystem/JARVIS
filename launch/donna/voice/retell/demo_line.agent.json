@@ -1,5 +1,5 @@
 {
-  "agent_name": "Donna.AI - Sales demo line",
+  "agent_name": "Donna.AI - Demo line (sales + multi-industry demo)",
   "voice_id": "11labs-Kate",
   "voice_model": "eleven_flash_v2_5",
   "language": "en-US",
@@ -26,13 +26,13 @@
     {
       "type": "string",
       "name": "business_name",
-      "description": "The caller's business name, if given.",
+      "description": "The caller's own business name, if given.",
       "required": false
     },
     {
       "type": "string",
       "name": "business_type",
-      "description": "The kind of business (for example: HVAC, plumbing, dental).",
+      "description": "The caller's kind of business (for example: plumbing, med spa, dental, law firm, auto repair, real estate, cleaning).",
       "required": false
     },
     {
@@ -44,19 +44,37 @@
     {
       "type": "string",
       "name": "avg_job_value",
-      "description": "The average job value the caller said, in their words. Empty if not said.",
+      "description": "What the caller said one customer or job is worth, in their words. Empty if not said.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "demo_company",
+      "description": "The made-up demo company Donna played (for example: Northbeam Home Services, Willow & Ash Studio). Empty if no demo was played.",
+      "required": false
+    },
+    {
+      "type": "boolean",
+      "name": "demo_booked",
+      "description": "True if a demo appointment was booked or demo-booked inside the demo.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "demo_appointment_time",
+      "description": "The demo booking's day and time in plain words. Empty if none.",
       "required": false
     },
     {
       "type": "boolean",
       "name": "booked",
-      "description": "True if a call with the founder or an audit was booked on this call.",
+      "description": "True if a real call with the founder or a free audit was booked on this call.",
       "required": false
     },
     {
       "type": "string",
       "name": "appointment_time",
-      "description": "The booked day and time in plain words. Empty if nothing was booked.",
+      "description": "The founder call or audit day and time in plain words. Empty if none.",
       "required": false
     },
     {
@@ -68,7 +86,7 @@
     {
       "type": "boolean",
       "name": "urgent",
-      "description": "True if the caller asked the founder to call back today.",
+      "description": "True if the caller asked the founder to call back today, or reported a real emergency.",
       "required": false
     },
     {

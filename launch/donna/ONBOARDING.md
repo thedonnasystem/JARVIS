@@ -61,16 +61,16 @@ Tally > Create form > add these as fields. Mark the starred ones required.
 28. \*Checkbox: "I authorize Donna.AI to answer calls forwarded to it on behalf of my business, to tell callers they are speaking with an AI assistant and that calls are recorded, and to text callers who call my business or agree to a text."
 29. Link to your privacy policy, if you have one
 
-## 2. Clone the demo agent in Retell (about 15 min)
-1. Agents > Northbeam demo agent > **⋯ > Duplicate**. Rename it `[Business] - Receptionist`.
+## 2. Clone the demo-line agent in Retell (about 15 min)
+1. Agents > the demo-line agent > **⋯ > Duplicate** (this keeps the voice, model and post-call fields). Rename it `[Business] - Receptionist`.
 2. Replace the prompt with `voice/prompts/client_template.txt`, filling every `[[...]]` from the intake. Leave `{{current_time}}`, `{{current_calendar}}` and `{{user_number}}` as they are: Retell fills those.
 3. Welcome message: *"Thanks for calling [Business], this is Donna, the virtual assistant. This call is recorded. How can I help?"*
 4. Functions:
    - keep `end_call`;
    - add **Transfer call** to the owner's mobile, named `transfer_to_owner`;
-   - add **Cal.com** `check_availability` and `book_appointment` on the client's own event type (step 4);
-   - remove any agent swap.
-5. Keep the post-call fields, except `wants_donna`.
+   - delete `transfer_to_founder` and any of your own Cal.com tools;
+   - add **Cal.com** `check_availability` and `book_appointment` on the client's own event type (step 4).
+5. Post-call fields: keep `caller_name`, `callback_number`, `booked`, `appointment_time`, `sms_ok` and `urgent`. Delete the demo and sales ones (`business_name`, `business_type`, `avg_job_value`, `demo_company`, `demo_booked`, `demo_appointment_time`, `lead_temperature`). Add `service_needed` (string).
 6. Webhook URL: the client's Make scenario (step 5), event `call_analyzed`.
 7. **Publish.**
 8. **Buy his local number:** Phone Numbers > **Add number** > Buy new number > Twilio > Canada > his area code (for example 613 or 343). **$2.00/month.** Bind the inbound agent to the new agent.
@@ -134,7 +134,7 @@ Put the client's new Retell number (10 digits) where it says NUMBER. Each carrie
 | 1 | Call his main number from a phone that isn't his, and let it ring out | Donna answers after the ring delay, with his business name and the AI and recording notice |
 | 2 | Call while his line is busy | Donna answers |
 | 3 | Ask hours, a price, the service area | Matches the intake exactly; no invented prices |
-| 4 | "I smell gas" | Safety instruction, then transfer or urgent text to him |
+| 4 | One of his urgent situations from the intake (for home services: "I smell gas") | Safety instruction if any, then transfer or urgent text to him |
 | 5 | Ask for a booking | A booking appears in his calendar; confirmation text if yes |
 | 6 | Hang up after 3 s | Missed-call text-back arrives (if he turned it on) |
 | 7 | After each call | He gets the summary by text or email |

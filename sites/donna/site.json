@@ -33,27 +33,27 @@
     "lines": [
       {
         "who": "caller",
-        "text": "Hi, my furnace stopped working. Can someone come out tomorrow?"
+        "text": "Hi, I called earlier and got voicemail. Can I book something for this week?"
       },
       {
         "who": "donna",
-        "text": "I'm sorry to hear that. I'm Donna, the AI assistant for this business. I can book a visit. Is morning or afternoon better?"
+        "text": "Sorry we missed you. I'm Donna, the AI assistant for this business. I can book you in right now. What do you need?"
       },
       {
         "who": "caller",
-        "text": "Morning, please."
+        "text": "A first appointment, ideally Thursday."
       },
       {
         "who": "donna",
-        "text": "I have 9:30 or 11:00 tomorrow morning. Which works?"
+        "text": "I have Thursday at 9:30 or 2:00. Which works?"
       },
       {
         "who": "caller",
-        "text": "9:30."
+        "text": "2:00."
       },
       {
         "who": "donna",
-        "text": "Booked for 9:30 tomorrow. You'll get a text confirmation now, and the technician will call before arriving."
+        "text": "Booked for Thursday at 2:00. You'll get a text confirmation now, and the team will have your details before you arrive."
       }
     ]
   },

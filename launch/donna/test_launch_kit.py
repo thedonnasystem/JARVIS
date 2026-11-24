@@ -19,7 +19,7 @@ def _read(*parts):
 
 
 SITE = json.loads(_read(ROOT, "sites", "donna", "site.json"))
-PROMPTS = {n: _read(HERE, "voice", "prompts", f"{n}.txt") for n in ("sales_demo", "client_demo_hvac", "client_template")}
+PROMPTS = {n: _read(HERE, "voice", "prompts", f"{n}.txt") for n in ("demo_line", "client_template")}
 
 
 class Voice(unittest.TestCase):
@@ -35,34 +35,45 @@ class Voice(unittest.TestCase):
             self.assertEqual(problems, [], k)
 
     def test_validator_catches_bad_values(self):
-        with open(os.path.join(HERE, "voice", "retell", "sales_demo.agent.json"), encoding="utf-8") as f:
+        with open(os.path.join(HERE, "voice", "retell", "demo_line.agent.json"), encoding="utf-8") as f:
             a = json.load(f)
         self.assertTrue(R.problems({**a, "voice_speed": 5}, "CreateAgentBody"))
         self.assertTrue(R.problems({**a, "langauge": "en-US"}, "CreateAgentBody"))
         self.assertTrue(R.problems({k: v for k, v in a.items() if k != "voice_id"}, "CreateAgentBody"))
 
-    def test_ai_and_recording_disclosed_first(self):
-        for name, spec in R.load_source().items():
-            msg = spec["llm"]["begin_message"]
-            self.assertIn("AI", msg, name)
-            self.assertIn("recorded", msg, name)
-        self.assertIn("made-up demo company", R.load_source()["client_demo_hvac"]["llm"]["begin_message"])
+    def test_one_agent_ai_and_recording_disclosed_first(self):
+        src = R.load_source()
+        self.assertEqual(list(src), ["demo_line"])
+        msg = src["demo_line"]["llm"]["begin_message"]
+        self.assertIn("AI", msg)
+        self.assertIn("recorded", msg)
+        self.assertIn("what kind of business do you run", msg)
 
     def test_prompts_keep_the_honesty_rules(self):
         for name, p in PROMPTS.items():
-            self.assertRegex(p, r"(?i)you are an ai", name)
+            self.assertRegex(p, r"(?i)you are (the )?(an )?ai", name)
             self.assertIn("card numbers", p, name)
-        self.assertIn("MADE-UP demo company", PROMPTS["client_demo_hvac"])
-        self.assertIn("never claim to be a real business", PROMPTS["client_demo_hvac"].lower())
-        self.assertIn("911", PROMPTS["client_demo_hvac"])
-        self.assertIn("Never claim clients, results, reviews", PROMPTS["sales_demo"])
+            self.assertIn("911", p, name)
+            self.assertRegex(p, r"(?i)never give medical, dental, legal", name)
+        d = PROMPTS["demo_line"]
+        self.assertIn("MADE UP", d)
+        self.assertIn("Never claim to be a real business", d)
+        self.assertIn("Never claim clients, results, reviews", d)
+
+    def test_demo_covers_every_industry_without_centering_one(self):
+        d = PROMPTS["demo_line"]
+        for company in ("Northbeam Home Services", "Willow & Ash Studio", "Larkfield Family Dental & Wellness", "Hollis & Grey Law",
+                        "Ironclad Auto Care", "Keystone Home Team", "Fresh Slate Property Care", "Example & Co."):
+            self.assertIn(company, d)
+        self.assertIn("No legal advice", d)
+        self.assertIn("no medical or dental advice", d)
+        self.assertNotIn("agent_swap", json.dumps(R.load_source()))
 
     def test_sales_prices_match_the_site(self):
         items = {i["title"]: i for g in SITE["pricing"] if g["id"] == "packages" for i in g["items"]}
         for t in ("Answer", "Capture", "Command"):
-            self.assertIn(f"{t}", PROMPTS["sales_demo"])
-            self.assertIn(f"${items[t]['price']:,}", PROMPTS["sales_demo"])
-            self.assertIn(f"${items[t]['standard_price']:,}", PROMPTS["sales_demo"])
+            self.assertIn(f"${items[t]['price']:,}", PROMPTS["demo_line"])
+            self.assertIn(f"${items[t]['standard_price']:,}", PROMPTS["demo_line"])
 
     def test_no_secrets_or_ids_in_the_kit(self):
         for base, _, files in os.walk(HERE):
@@ -71,14 +82,14 @@ class Voice(unittest.TestCase):
                     t = _read(base, n)
                     self.assertNotRegex(t, r"key_[A-Za-z0-9]{20,}|agent_[0-9a-f]{20,}|llm_[0-9a-f]{20,}|hook\.[a-z0-9]+\.make\.com/[A-Za-z0-9]{10,}", n)
 
-    def test_fill_drops_optional_and_requires_swap_target(self):
-        _, spec = "sales_demo", R.load_source()["sales_demo"]
-        llm, agent = R.bodies("sales_demo", spec)
-        out = R.fill(llm, {"DONNA_CLIENT_DEMO_AGENT_ID": "agent_x"}, {"DONNA_CLIENT_DEMO_AGENT_ID"})
-        self.assertEqual([t["name"] for t in out["general_tools"]], ["end_call", "switch_to_hvac_demo"])
+    def test_fill_drops_optional_tools_and_fields(self):
+        llm, agent = R.bodies("demo_line", R.load_source()["demo_line"])
+        self.assertEqual([x["name"] for x in R.fill(llm, {}, set())["general_tools"]], ["end_call"])
+        full = R.fill(llm, {"DONNA_FOUNDER_MOBILE": "+15555550100"}, set())
+        self.assertEqual(full["general_tools"][1]["transfer_destination"]["number"], "+15555550100")
         self.assertNotIn("webhook_url", R.fill(agent, {}, set()))
         with self.assertRaises(SystemExit):
-            R.fill(llm, {}, {"DONNA_CLIENT_DEMO_AGENT_ID"})
+            R.fill(llm, {}, {"DONNA_FOUNDER_MOBILE"})
 
 
 class Site(unittest.TestCase):
@@ -109,6 +120,12 @@ class Offer(unittest.TestCase):
         self.assertIn("Recommended", self.html)
         for k in ("Setup included", "Month-to-month", "10 founding spots", "Free audit + test line", "+1 (825) 462-1250"):
             self.assertIn(k, self.html)
+
+    def test_industry_neutral(self):
+        text = re.sub(r"<!--.*?-->", " ", self.html, flags=re.S)
+        self.assertNotRegex(text, r"(?i)furnace|heating company|hvac")
+        self.assertIn("what kind of business you run", text)
+        self.assertIn('class="example"', text)
 
     def test_no_reference_price_or_claim_words(self):
         text = re.sub(r"<[^>]+>", " ", re.sub(r"<style.*?</style>", " ", self.html, flags=re.S))
