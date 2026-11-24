@@ -437,3 +437,8 @@ html.maison .text-primary { color: var(--m-gold) !important; }
 .m-save { display: inline-block; padding: 0.32rem 0.75rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; color: #120a06; background: var(--m-metal); }
 .m-standard { margin: 0; font-size: 0.82rem; line-height: 1.5; color: var(--m-muted); font-weight: 300; }
 .m-plan.is-featured { box-shadow: 0 30px 90px -40px color-mix(in oklab, var(--m-gold) 55%, transparent); }
+
+/* quoted (non-numeric) prices, e.g. custom AI builds */
+.m-price-quote { flex-wrap: wrap; }
+.m-price-quote .m-price-num { font-size: clamp(2.2rem, 3.2vw, 2.8rem); white-space: nowrap; }
+.m-nav a, .m-header-cta .m-btn { white-space: nowrap; }

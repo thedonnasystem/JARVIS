@@ -159,7 +159,9 @@ const idx = () => two(++n);
             <h3 class="m-plan-title">{p.title}</h3>
             {p.subtitle && <p class="m-plan-sub">{p.subtitle}</p>}
             {saving(g, p) > 0 && <p class="m-founding-tag"><i class="m-diamond" aria-hidden="true" />{g.founding.badge}</p>}
-            <p class:list={['m-price', saving(g, p) > 0 && 'is-founding']}><span class="m-price-num">{money(p.price)}</span><span class="m-price-per">{per(p.period)}</span></p>
+            {typeof p.price === 'number'
+              ? <p class:list={['m-price', saving(g, p) > 0 && 'is-founding']}><span class="m-price-num">{money(p.price)}</span><span class="m-price-per">{per(p.period)}</span></p>
+              : <p class="m-price m-price-quote"><span class="m-price-num">{p.price_label || 'Custom quote'}</span>{p.period && <span class="m-price-per">{p.period}</span>}</p>}
             {saving(g, p) > 0 && (
               <div class="m-founding">
                 <span class="m-save">{`${g.founding.save} ${money(saving(g, p))}${monthly(p) ? ' / month' : ''}`}</span>

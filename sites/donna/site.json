@@ -20,6 +20,10 @@
     "booking_is_placeholder": true,
     "demo_phone": "+1 (825) 462-1250"
   },
+  "header_hide": [
+    "websites",
+    "calculator"
+  ],
   "hero": {
     "tagline": "AI receptionist for service businesses",
     "title": "We turn your missed calls and missed leads",
@@ -220,6 +224,50 @@
           ]
         }
       ]
+    },
+    {
+      "id": "custom-ai",
+      "title": "Beyond the front desk",
+      "subtitle": "Donna is where most businesses start. When you're ready, we build the AI systems behind it. Every build is quoted after a free scoping call.",
+      "items": [
+        {
+          "title": "AI Automations",
+          "subtitle": "Your busywork, done for you",
+          "price_label": "Custom quote",
+          "period": "per project",
+          "note": "Free scoping call first.",
+          "features": [
+            "Quotes, invoices and review requests that send themselves",
+            "Leads and jobs synced across the tools you already use",
+            "Reports that land in your inbox without anyone building them"
+          ]
+        },
+        {
+          "title": "AI Agents",
+          "subtitle": "Staff that never clock out",
+          "price_label": "Custom quote",
+          "period": "per project",
+          "note": "Free scoping call first.",
+          "features": [
+            "Custom AI agents for intake, scheduling and follow-up",
+            "Trained on your services, prices and policies",
+            "You approve every word before a customer sees it"
+          ]
+        },
+        {
+          "title": "AI Infrastructure",
+          "subtitle": "Your whole business, AI-ready",
+          "price_label": "Custom quote",
+          "period": "per project",
+          "note": "Free scoping call first.",
+          "features": [
+            "A plan showing where AI saves you time and money",
+            "Phone, text, booking, CRM and website working as one system",
+            "Ongoing support and tuning as you grow"
+          ]
+        }
+      ],
+      "nav": "Custom AI"
     }
   ],
   "results": {
@@ -281,13 +329,62 @@
     "presets_label": "Type of business",
     "presets_note": "Example values for a small business of that type, to start from. They are not research and not a promise: replace them with your own numbers.",
     "presets": [
-      {"id": "home", "label": "Home services and trades", "calls_per_week": 30, "missed_pct": 27, "job_value": 400, "close_pct": 40},
-      {"id": "beauty", "label": "Med spa, salon or beauty", "calls_per_week": 50, "missed_pct": 28, "job_value": 180, "close_pct": 50},
-      {"id": "clinic", "label": "Dental, chiro or clinic", "calls_per_week": 80, "missed_pct": 28, "job_value": 250, "close_pct": 60},
-      {"id": "law", "label": "Law firm intake", "calls_per_week": 20, "missed_pct": 28, "job_value": 3000, "close_pct": 20},
-      {"id": "auto", "label": "Auto repair or detailing", "calls_per_week": 40, "missed_pct": 28, "job_value": 350, "close_pct": 50},
-      {"id": "realestate", "label": "Real estate agent", "calls_per_week": 15, "missed_pct": 28, "job_value": 8000, "close_pct": 5},
-      {"id": "cleaning", "label": "Cleaning or landscaping", "calls_per_week": 25, "missed_pct": 28, "job_value": 250, "close_pct": 40}
+      {
+        "id": "home",
+        "label": "Home services and trades",
+        "calls_per_week": 30,
+        "missed_pct": 27,
+        "job_value": 400,
+        "close_pct": 40
+      },
+      {
+        "id": "beauty",
+        "label": "Med spa, salon or beauty",
+        "calls_per_week": 50,
+        "missed_pct": 28,
+        "job_value": 180,
+        "close_pct": 50
+      },
+      {
+        "id": "clinic",
+        "label": "Dental, chiro or clinic",
+        "calls_per_week": 80,
+        "missed_pct": 28,
+        "job_value": 250,
+        "close_pct": 60
+      },
+      {
+        "id": "law",
+        "label": "Law firm intake",
+        "calls_per_week": 20,
+        "missed_pct": 28,
+        "job_value": 3000,
+        "close_pct": 20
+      },
+      {
+        "id": "auto",
+        "label": "Auto repair or detailing",
+        "calls_per_week": 40,
+        "missed_pct": 28,
+        "job_value": 350,
+        "close_pct": 50
+      },
+      {
+        "id": "realestate",
+        "label": "Real estate agent",
+        "calls_per_week": 15,
+        "missed_pct": 28,
+        "job_value": 8000,
+        "close_pct": 5
+      },
+      {
+        "id": "cleaning",
+        "label": "Cleaning or landscaping",
+        "calls_per_week": 25,
+        "missed_pct": 28,
+        "job_value": 250,
+        "close_pct": 40
+      }
     ],
     "notes": {
       "calls_per_week": "Example value. Use your own count from your phone bill or call log.",
@@ -313,7 +410,7 @@
   },
   "legal": {
     "entity": "[OWNER: legal entity name]",
-    "contact": "[OWNER: business mailing address and email before launch]"
+    "contact": "thedonnasystem@gmail.com · [OWNER: business mailing address before launch]"
   },
   "owner_review": [
     "Package contents are a draft: only offer what is delivered and tested.",
@@ -322,6 +419,7 @@
     "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
     "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com demo link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
     "Privacy policy and terms are placeholders for owner and counsel review.",
-    "The domain is not chosen: donna.ai or a .ca variant must be checked and bought by the owner."
+    "The domain is not chosen: donna.ai or a .ca variant must be checked and bought by the owner.",
+    "Custom AI builds (Automations, Agents, Infrastructure) are quoted per project after a scoping call: only quote what can be delivered and tested."
   ]
 }
