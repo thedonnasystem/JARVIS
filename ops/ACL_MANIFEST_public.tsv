@@ -366,6 +366,16 @@ function	hands_run_now(uuid,text)	-	-	execute	security_definer		-
 function	hands_start(uuid)	-	-	execute	security_definer		-
 function	hands_submit_action(text,uuid,text,jsonb,timestamp with time zone,boolean,text)	-	-	execute	security_definer		-
 function	hands_token_refreshed(uuid,text,timestamp with time zone)	-	-	execute	security_definer		-
+function	heavy_cancel(bigint)	-	-	execute	security_definer		-
+function	heavy_claim(text)	-	-	execute	security_definer		-
+function	heavy_enqueue(text,text,text)	-	-	execute	security_definer		-
+function	heavy_finish(bigint,text,text,text)	-	-	execute	security_definer		-
+function	heavy_guard()	-	-	execute	security_definer		-
+function	heavy_job_json(bigint,boolean)	-	-	execute	security_definer		-
+function	heavy_list(integer)	-	-	execute	security_definer		-
+function	heavy_set_enabled(boolean)	-	-	execute	security_definer		-
+function	heavy_tell_owner(text)	-	-	execute	security_definer		-
+function	heavy_text_problem(text)	-	-	execute	invoker		-
 function	holding_pnl(integer)	-	-	execute	invoker		-
 function	is_app_owner()	-	execute	execute	security_definer		-
 function	is_group_scope()	-	-	execute	security_definer		-
