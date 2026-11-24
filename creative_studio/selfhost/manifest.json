@@ -1,0 +1,79 @@
+{
+ "_about": "Self-hosted ComfyUI worker (provider row comfyui-selfhost): the extra workflows this branch adds, VRAM floors for every workflow the worker may run (ours and creative_studio/comfyui/), the weight files per GPU profile with their licence, and the non-ComfyUI services on the worker (TTS). Licences checked on the Hugging Face model cards on 2026-11-23; re-check before enabling. Only commercially usable weights are listed: FLUX.1 [dev], F5-TTS (CC-BY-NC weights) and InsightFace-based identity models (InstantID / PuLID: non-commercial face models) are deliberately absent.",
+ "version": "2026-11-23.1",
+ "workflows": {
+  "z-image-turbo-t2i": {
+   "file": "z_image_turbo_t2i.json",
+   "model": "z-image-turbo",
+   "module": "image",
+   "output": "image",
+   "params": ["prompt", "width", "height", "seed"],
+   "files": ["z_image_turbo_bf16.safetensors", "qwen_3_4b.safetensors", "ae.safetensors"],
+   "min_vram_gb": 12,
+   "source": "Comfy-Org official Z-Image Turbo text-to-image template (native nodes): 9 steps, cfg 1, res_multistep, AuraFlow shift 3"
+  },
+  "z-image-turbo-lora-t2i": {
+   "file": "z_image_turbo_lora_t2i.json",
+   "model": "z-image-turbo-lora",
+   "module": "image",
+   "output": "image",
+   "params": ["prompt", "width", "height", "seed", "lora_name", "lora_strength"],
+   "files": ["z_image_turbo_bf16.safetensors", "qwen_3_4b.safetensors", "ae.safetensors"],
+   "min_vram_gb": 12,
+   "source": "z-image-turbo-t2i + core LoraLoaderModelOnly (the character LoRA of a persona pack)"
+  },
+  "wan22-s2v-14b": {
+   "file": "wan22_s2v_14b.json",
+   "model": "wan-2.2-s2v-14b",
+   "module": "ugc",
+   "output": "video",
+   "params": ["prompt", "negative", "width", "height", "frames", "fps", "seed", "ref_image", "audio_file"],
+   "uploads": {"ref_image": "image", "audio_file": "audio"},
+   "negative_default": "low quality, blurry, distorted face, extra fingers, deformed hands, static, subtitles, watermark",
+   "files": ["wan2.2_s2v_14B_fp8_scaled.safetensors", "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "wan_2.1_vae.safetensors", "wav2vec2_large_english_fp16.safetensors"],
+   "min_vram_gb": 24,
+   "fps": 16,
+   "max_frames": 77,
+   "source": "Comfy-Org Wan 2.2 S2V template (native nodes), one chunk (about 4.8 s at 16 fps): talking head from a persona reference image + a voice track"
+  }
+ },
+ "shared": {
+  "_about": "creative_studio/comfyui workflows (M8c) the selfhost worker also runs, with their VRAM floor here. ltx-video stays off unless CREATIVE_LTX_LICENCE_OK=1 (its manifest marks the licence 'verify').",
+  "flux-schnell-t2i": {"min_vram_gb": 12, "files": ["flux1-schnell-fp8.safetensors"]},
+  "flux-schnell-lora-t2i": {"min_vram_gb": 12, "files": ["flux1-schnell-fp8.safetensors"]},
+  "wan22-ti2v-5b": {"min_vram_gb": 14, "files": ["wan2.2_ti2v_5B_fp16.safetensors", "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "wan2.2_vae.safetensors"]},
+  "wan22-t2v-a14b": {"min_vram_gb": 24, "files": ["wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors", "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors", "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "wan_2.1_vae.safetensors"]},
+  "ltxv-t2v": {"min_vram_gb": 12, "files": [], "licence_gate": "CREATIVE_LTX_LICENCE_OK"}
+ },
+ "services": {
+  "kokoro-82m": {
+   "module": "voice",
+   "endpoint": "/fz/tts",
+   "repo": "hexgrad/Kokoro-82M",
+   "licence": "Apache-2.0",
+   "min_vram_gb": 0,
+   "voices": ["af_heart", "af_bella", "af_nicole", "am_michael", "am_fenrir", "bf_emma", "bm_george"],
+   "note": "82M parameters, runs on the worker's CPU or GPU; stock voices only (no voice cloning)"
+  }
+ },
+ "downloads": {
+  "z_image_turbo_bf16.safetensors": {"repo": "Comfy-Org/Z-Image-Turbo", "path": "split_files/diffusion_models/z_image_turbo_bf16.safetensors", "dir": "diffusion_models", "gb": 12.3, "licence": "Apache-2.0 (Tongyi-MAI/Z-Image-Turbo)"},
+  "qwen_3_4b.safetensors": {"repo": "Comfy-Org/Z-Image-Turbo", "path": "split_files/text_encoders/qwen_3_4b.safetensors", "dir": "text_encoders", "gb": 8.0, "licence": "Apache-2.0 (Qwen3-4B)"},
+  "ae.safetensors": {"repo": "Comfy-Org/Z-Image-Turbo", "path": "split_files/vae/ae.safetensors", "dir": "vae", "gb": 0.3, "licence": "Apache-2.0"},
+  "flux1-schnell-fp8.safetensors": {"repo": "Comfy-Org/Flux-1-Schnell", "path": "flux1-schnell-fp8.safetensors", "dir": "checkpoints", "gb": 17.2, "licence": "Apache-2.0"},
+  "wan2.2_ti2v_5B_fp16.safetensors": {"repo": "Comfy-Org/Wan-2.2", "path": "split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors", "dir": "diffusion_models", "gb": 10.0, "licence": "Apache-2.0"},
+  "wan2.2_vae.safetensors": {"repo": "Comfy-Org/Wan-2.2", "path": "split_files/vae/wan2.2_vae.safetensors", "dir": "vae", "gb": 1.4, "licence": "Apache-2.0"},
+  "wan_2.1_vae.safetensors": {"repo": "Comfy-Org/Wan-2.1", "path": "split_files/vae/wan_2.1_vae.safetensors", "dir": "vae", "gb": 0.3, "licence": "Apache-2.0"},
+  "umt5_xxl_fp8_e4m3fn_scaled.safetensors": {"repo": "Comfy-Org/Wan-2.1", "path": "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "dir": "text_encoders", "gb": 6.7, "licence": "Apache-2.0"},
+  "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors": {"repo": "Comfy-Org/Wan-2.2", "path": "split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors", "dir": "diffusion_models", "gb": 14.3, "licence": "Apache-2.0"},
+  "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors": {"repo": "Comfy-Org/Wan-2.2", "path": "split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors", "dir": "diffusion_models", "gb": 14.3, "licence": "Apache-2.0"},
+  "wan2.2_s2v_14B_fp8_scaled.safetensors": {"repo": "Comfy-Org/Wan-2.2", "path": "split_files/diffusion_models/wan2.2_s2v_14B_fp8_scaled.safetensors", "dir": "diffusion_models", "gb": 16.4, "licence": "Apache-2.0 (Wan-AI/Wan2.2-S2V-14B)"},
+  "wav2vec2_large_english_fp16.safetensors": {"repo": "Comfy-Org/Wan-2.2", "path": "split_files/audio_encoders/wav2vec2_large_english_fp16.safetensors", "dir": "audio_encoders", "gb": 0.6, "licence": "Apache-2.0 (Wan 2.2 repackage; upstream wav2vec2: verify)"}
+ },
+ "profiles": {
+  "_about": "What the worker downloads and serves per GPU class. Disk = sum of the files (GB, approximate).",
+  "t4": {"gpu": "Kaggle T4 (16 GB) or any 16 GB card", "workflows": ["z-image-turbo-t2i", "z-image-turbo-lora-t2i", "wan22-ti2v-5b"], "services": ["kokoro-82m"], "disk_gb": 39},
+  "24gb": {"gpu": "RTX 3090 / 4090 / L4 (24 GB)", "workflows": ["z-image-turbo-t2i", "z-image-turbo-lora-t2i", "wan22-ti2v-5b", "wan22-s2v-14b"], "services": ["kokoro-82m"], "disk_gb": 56},
+  "48gb": {"gpu": "L40S / A6000 / RTX 5090-class or larger", "workflows": ["z-image-turbo-t2i", "z-image-turbo-lora-t2i", "wan22-ti2v-5b", "wan22-s2v-14b", "wan22-t2v-a14b"], "services": ["kokoro-82m"], "disk_gb": 85}
+ }
+}
