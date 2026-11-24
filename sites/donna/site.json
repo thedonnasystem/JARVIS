@@ -18,7 +18,7 @@
   "links": {
     "booking": "#contact",
     "booking_is_placeholder": true,
-    "demo_phone": ""
+    "demo_phone": "+1 (825) 462-1250"
   },
   "hero": {
     "tagline": "AI receptionist for service businesses",
@@ -271,7 +271,7 @@
     "Founding pricing: the 10-spot cap and the standard prices (Answer $697, Capture $1,097, Command $1,797 / month; standard setup $497 / $997 / $1,497; Site $697, Site Pro $1,297) are owner decisions. To stay truthful, new clients must actually pay the standard price once the founding spots are filled; keep dated records (Competition Act s.74.01).",
     "Setup included for founding clients and the free missed-call audit: owner to confirm.",
     "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
-    "Cal.com booking link and demo line are placeholders.",
+    "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com demo link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
     "Privacy policy and terms are placeholders for owner and counsel review.",
     "The domain is not chosen: donna.ai or a .ca variant must be checked and bought by the owner."
   ]

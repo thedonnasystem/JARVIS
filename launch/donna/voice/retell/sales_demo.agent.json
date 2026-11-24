@@ -1,0 +1,90 @@
+{
+  "agent_name": "Donna.AI - Sales demo line",
+  "voice_id": "11labs-Kate",
+  "voice_model": "eleven_flash_v2_5",
+  "language": "en-US",
+  "timezone": "America/Toronto",
+  "responsiveness": 0.9,
+  "interruption_sensitivity": 0.8,
+  "enable_backchannel": true,
+  "end_call_after_silence_ms": 30000,
+  "max_call_duration_ms": 900000,
+  "data_storage_setting": "everything",
+  "data_storage_retention_days": 30,
+  "webhook_url": "${DONNA_MAKE_WEBHOOK_URL}",
+  "webhook_events": [
+    "call_analyzed"
+  ],
+  "post_call_analysis_model": "gpt-4.1-mini",
+  "post_call_analysis_data": [
+    {
+      "type": "string",
+      "name": "caller_name",
+      "description": "The caller's name, if given.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "business_name",
+      "description": "The caller's business name, if given.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "business_type",
+      "description": "The kind of business (for example: HVAC, plumbing, dental).",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "callback_number",
+      "description": "The callback number the caller confirmed, in E.164 format (+1XXXXXXXXXX). Empty if not confirmed.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "avg_job_value",
+      "description": "The average job value the caller said, in their words. Empty if not said.",
+      "required": false
+    },
+    {
+      "type": "boolean",
+      "name": "booked",
+      "description": "True if a call with the founder or an audit was booked on this call.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "appointment_time",
+      "description": "The booked day and time in plain words. Empty if nothing was booked.",
+      "required": false
+    },
+    {
+      "type": "boolean",
+      "name": "sms_ok",
+      "description": "True only if the caller clearly said yes to receiving a text message.",
+      "required": false
+    },
+    {
+      "type": "boolean",
+      "name": "urgent",
+      "description": "True if the caller asked the founder to call back today.",
+      "required": false
+    },
+    {
+      "type": "enum",
+      "name": "lead_temperature",
+      "description": "Hot: wants to book or start. Warm: interested, not ready. Cold: not interested or not a business owner.",
+      "choices": [
+        "hot",
+        "warm",
+        "cold"
+      ],
+      "required": false
+    }
+  ],
+  "response_engine": {
+    "type": "retell-llm",
+    "llm_id": "${LLM_ID}"
+  }
+}

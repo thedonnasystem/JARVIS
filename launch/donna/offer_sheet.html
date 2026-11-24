@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en-CA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Donna.AI Founding Offer</title>
+<meta name="description" content="Donna.AI one-page founding offer: AI receptionist packages, founding prices, free missed-call audit and demo line.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* One US Letter page. Colours match the site's maison theme: black, wine (brand.primary #7a1428), metallic gold (brand.accent #c9a24a). */
+  :root {
+    --ink: #0b0a09; --panel: #15110f; --line: #3a2a22; --wine: #7a1428; --wine-deep: #4a0c18;
+    --gold: #c9a24a; --gold-hi: #ecd593; --text: #efe8dc; --muted: #b9ad9b;
+  }
+  @page { size: letter; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #2a2522; }
+  body { font: 400 10.5pt/1.42 Inter, "Helvetica Neue", Arial, sans-serif; color: var(--text); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page {
+    width: 8.5in; height: 11in; margin: 0.25in auto; padding: 0.42in 0.5in 0.36in; position: relative; overflow: hidden;
+    background: radial-gradient(120% 60% at 85% -10%, rgba(122,20,40,.55), transparent 60%), radial-gradient(80% 40% at -10% 105%, rgba(122,20,40,.35), transparent 60%), var(--ink);
+    display: flex; flex-direction: column;
+  }
+  .page::before { content: ""; position: absolute; inset: 0.22in; border: 1px solid rgba(201,162,74,.35); pointer-events: none; }
+  .serif { font-family: "Cormorant Garamond", Georgia, "Times New Roman", serif; }
+  .gold { background: linear-gradient(100deg, var(--gold) 0%, var(--gold-hi) 45%, var(--gold) 70%, #9c7a2c 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header { display: flex; justify-content: space-between; align-items: baseline; }
+  .brand { font-size: 22pt; letter-spacing: .02em; }
+  .tag { font-size: 8pt; letter-spacing: .22em; text-transform: uppercase; color: var(--gold); }
+  h1 { font-family: "Cormorant Garamond", Georgia, serif; font-weight: 400; font-size: 26pt; line-height: 1.04; margin: .16in 0 .07in; }
+  h1 em { font-style: italic; }
+  .lede { color: var(--muted); font-size: 9.8pt; max-width: 6.4in; margin: 0; }
+  .demo {
+    margin: .13in 0 .17in; display: flex; align-items: center; gap: .2in; padding: .09in .18in;
+    border: 1px solid rgba(201,162,74,.55); border-radius: 10px; background: linear-gradient(90deg, rgba(122,20,40,.55), rgba(74,12,24,.25));
+  }
+  .demo .num { font-family: "Cormorant Garamond", Georgia, serif; font-size: 22pt; white-space: nowrap; }
+  .demo p { margin: 0; font-size: 8.8pt; color: var(--text); }
+  .demo b { color: var(--gold-hi); font-weight: 600; }
+  .grid { display: grid; grid-template-columns: 1fr 1.08fr 1fr; gap: .14in; align-items: stretch; }
+  .pkg { border: 1px solid var(--line); border-radius: 10px; padding: .13in .14in .11in; background: rgba(21,17,15,.92); display: flex; flex-direction: column; position: relative; }
+  .pkg.rec { border-color: var(--gold); background: linear-gradient(180deg, rgba(122,20,40,.6), rgba(21,17,15,.95) 55%); box-shadow: 0 0 0 1px rgba(201,162,74,.25) inset; }
+  .badge { position: absolute; top: -.1in; left: 50%; transform: translateX(-50%); background: var(--gold); color: var(--ink); font-size: 7pt; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; padding: 2px 10px; border-radius: 99px; white-space: nowrap; }
+  .pkg h2 { font-family: "Cormorant Garamond", Georgia, serif; font-weight: 500; font-size: 17pt; margin: 0; }
+  .pkg .sub { color: var(--muted); font-size: 8.5pt; margin: 0 0 .04in; min-height: 2.4em; line-height: 1.2; }
+  .price { display: flex; align-items: baseline; gap: 4px; }
+  .price .amt { font-family: "Cormorant Garamond", Georgia, serif; font-size: 26pt; line-height: 1; }
+  .price .per { color: var(--muted); font-size: 8.5pt; }
+  .fp { font-size: 6.6pt; letter-spacing: .1em; text-transform: uppercase; color: var(--gold); margin-top: .04in; }
+  .std { font-size: 7.6pt; line-height: 1.3; color: var(--muted); margin: .04in 0 .06in; padding-bottom: .06in; border-bottom: 1px solid var(--line); }
+  .std b { color: var(--text); font-weight: 600; }
+  ul { list-style: none; margin: 0; padding: 0; font-size: 8pt; line-height: 1.32; }
+  li { padding-left: 12px; position: relative; margin: 0 0 2px; }
+  li::before { content: ""; position: absolute; left: 0; top: .55em; width: 6px; height: 6px; border-radius: 50%; background: var(--gold); }
+  .terms { margin: .13in 0 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: .1in; }
+  .terms div { border-top: 1px solid var(--gold); padding-top: .05in; font-size: 7.8pt; line-height: 1.3; color: var(--muted); }
+  .terms b { display: block; color: var(--text); font-weight: 600; font-size: 8.6pt; }
+  .lower { margin-top: .13in; display: grid; grid-template-columns: 1.25fr 1fr; gap: .2in; }
+  .steps h3, .audit h3 { font-family: "Cormorant Garamond", Georgia, serif; font-weight: 500; font-size: 13pt; margin: 0 0 .04in; }
+  .steps ol { margin: 0; padding-left: 16px; font-size: 8pt; line-height: 1.32; color: var(--muted); }
+  .steps li::before { display: none; }
+  .steps ol li { padding-left: 2px; margin-bottom: 2px; }
+  .steps ol li b { color: var(--text); font-weight: 600; }
+  .audit { border: 1px dashed rgba(201,162,74,.6); border-radius: 10px; padding: .09in .14in; }
+  .audit p { margin: 0 0 .02in; font-size: 8pt; color: var(--muted); }
+  .audit .line { border-bottom: 1px solid rgba(239,232,220,.35); height: .22in; margin-bottom: 0; font-size: 8pt; color: var(--muted); display: flex; align-items: flex-end; }
+  footer { margin-top: auto; padding-bottom: .02in; display: flex; justify-content: space-between; align-items: flex-end; gap: .2in; font-size: 7.2pt; line-height: 1.35; color: var(--muted); padding-top: .08in; border-top: 1px solid var(--line); }
+  footer .contact { color: var(--text); font-size: 9pt; text-align: right; flex: 0 0 auto; white-space: nowrap; }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  @media screen and (max-width: 840px) { .page { zoom: .7; margin: 8px auto; } }
+  @media screen and (max-width: 600px) { .page { zoom: .45; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <div class="brand serif gold">Donna.AI</div>
+    <div class="tag">AI receptionist for service businesses</div>
+  </header>
+
+  <h1>We turn your missed calls and missed leads <em class="gold">into booked appointments.</em></h1>
+  <p class="lede">Every call answered. Every missed caller texted back in minutes. Every lead followed up until they book, day and night. Done for you, tested by you before any customer hears it.</p>
+
+  <section class="demo">
+    <div class="num gold">+1 (825) 462-1250</div>
+    <p><b>Hear it yourself, right now.</b> Call from your own phone and say yes when Donna offers the heating company demo. Pretend your furnace just quit. Donna is an AI and says so; the demo company is made up.</p>
+  </section>
+
+  <section class="grid" aria-label="Packages, founding prices">
+    <article class="pkg">
+      <h2>Answer</h2>
+      <p class="sub">Never miss a call</p>
+      <div class="price"><span class="amt gold">$497</span><span class="per">/ month</span></div>
+      <div class="fp">Founding price · save $200/mo</div>
+      <p class="std">Standard price <b>$697 / month</b> once the 10 founding spots are filled.</p>
+      <ul>
+        <li>Answers every call, day and night</li>
+        <li>Answers questions on services, hours and prices</li>
+        <li>Takes the caller's details and what they need</li>
+        <li>Urgent calls sent to you by text right away</li>
+        <li>A summary of every call by text or email</li>
+      </ul>
+    </article>
+    <article class="pkg rec">
+      <span class="badge">Recommended</span>
+      <h2>Capture</h2>
+      <p class="sub">Missed calls into booked appointments</p>
+      <div class="price"><span class="amt gold">$797</span><span class="per">/ month</span></div>
+      <div class="fp">Founding price · save $300/mo</div>
+      <p class="std">Standard price <b>$1,097 / month</b> once the 10 founding spots are filled.</p>
+      <ul>
+        <li>Everything in Answer</li>
+        <li>Missed-call text-back within minutes</li>
+        <li>Books appointments into your calendar, with text confirmations</li>
+        <li>Every lead saved to a simple CRM</li>
+        <li>New leads followed up until they book, with messages you approve</li>
+      </ul>
+    </article>
+    <article class="pkg">
+      <h2>Command</h2>
+      <p class="sub">Your whole front office, on autopilot</p>
+      <div class="price"><span class="amt gold">$1,297</span><span class="per">/ month</span></div>
+      <div class="fp">Founding price · save $500/mo</div>
+      <p class="std">Standard price <b>$1,797 / month</b> once the 10 founding spots are filled.</p>
+      <ul>
+        <li>Everything in Capture</li>
+        <li>Instant replies to website and ad leads</li>
+        <li>Follow-up on unsold quotes, with messages you approve</li>
+        <li>Appointment reminders to cut no-shows</li>
+        <li>Win-back messages to past customers</li>
+        <li>A monthly report: calls, leads and bookings</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="terms" aria-label="Founding terms">
+    <div><b>10 founding spots</b>Price locked in for as long as you stay.</div>
+    <div><b>Setup included</b>Standard setup $497 / $997 / $1,497, included for founding clients.</div>
+    <div><b>Month-to-month</b>No contracts. Stay because it books you jobs.</div>
+    <div><b>Free audit + test line</b>See your missed calls, then test your Donna before going live.</div>
+  </section>
+
+  <section class="lower">
+    <div class="steps">
+      <h3>How it works</h3>
+      <ol>
+        <li><b>Free missed-call audit.</b> We call your line during the day and after hours, like a new customer would, and show you what they get.</li>
+        <li><b>We build your Donna.</b> Your hours, services, prices, questions and calendar.</li>
+        <li><b>You test it first</b> on a private test line and approve every word.</li>
+        <li><b>It goes live</b> on your existing number: calls forward to Donna when you're busy or after hours.</li>
+      </ol>
+    </div>
+    <div class="audit">
+      <h3>Your missed-call audit</h3>
+      <p>We called your business line as a test:</p>
+      <div class="line">Day / time:</div>
+      <div class="line">What happened:</div>
+      <div class="line">After hours:</div>
+    </div>
+  </section>
+
+  <footer>
+    <div>Canadian dollars, plus applicable taxes. Package contents as listed; we only switch on what is built and tested for you.<br>Callers are told they are speaking with an AI assistant.</div>
+    <div class="contact">[OWNER: your name · phone · email]<br>Book a demo: [OWNER: Cal.com link]</div>
+  </footer>
+</main>
+</body>
+</html>
