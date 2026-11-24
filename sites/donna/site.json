@@ -186,6 +186,36 @@
       ]
     },
     {
+      "id": "restaurants",
+      "nav": "Restaurants",
+      "title": "For restaurants and food spots",
+      "subtitle": "Built for the rush. Founding price, locked in for as long as you stay. Month-to-month, no contracts. Canadian dollars, plus applicable taxes.",
+      "founding": {
+        "badge": "Founding price",
+        "save": "Save",
+        "standard": "Standard price",
+        "after": "once the 10 founding spots are filled."
+      },
+      "items": [
+        {
+          "title": "Essential",
+          "subtitle": "Never lose an order to a busy line",
+          "price": 197,
+          "standard_price": 297,
+          "period": "per month",
+          "note": "Setup included.",
+          "features": [
+            "Answers every call, day and night, even during the rush",
+            "Answers questions about your hours, menu, location and parking",
+            "Texts callers your online-order or reservation link",
+            "Catering, large-order and event requests sent to you by text right away",
+            "Allergy questions always go to your staff, never guessed",
+            "A summary of every call by text or email"
+          ]
+        }
+      ]
+    },
+    {
       "id": "websites",
       "title": "Add a website",
       "subtitle": "Optional. One-time payment, no monthly fees. Founding prices while the 10 founding spots last.",
@@ -420,6 +450,7 @@
     "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com demo link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
     "Privacy policy and terms are placeholders for owner and counsel review.",
     "The domain is not chosen: donna.ai or a .ca variant must be checked and bought by the owner.",
-    "Custom AI builds (Automations, Agents, Infrastructure) are quoted per project after a scoping call: only quote what can be delivered and tested."
+    "Custom AI builds (Automations, Agents, Infrastructure) are quoted per project after a scoping call: only quote what can be delivered and tested.",
+    "Essential (restaurants and food spots): founding $197/month, standard $297/month once the 10 founding spots are filled (owner decision, Nov 24 2026). Charge $297 to new clients after the founding spots fill."
   ]
 }

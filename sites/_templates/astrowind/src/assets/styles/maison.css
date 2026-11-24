@@ -442,3 +442,4 @@ html.maison .text-primary { color: var(--m-gold) !important; }
 .m-price-quote { flex-wrap: wrap; }
 .m-price-quote .m-price-num { font-size: clamp(2.2rem, 3.2vw, 2.8rem); white-space: nowrap; }
 .m-nav a, .m-header-cta .m-btn { white-space: nowrap; }
+.m-plans-1 { max-width: 30rem; }
