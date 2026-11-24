@@ -3,7 +3,10 @@ import { SITE_DATA as S, BOOKING, PLACE } from './data/site';
 
 const groups = (S.pricing || []).map((g: any) => ({ text: g.title.split(' ').slice(-1)[0].replace(/^./, (c: string) => c.toUpperCase()), href: getPermalink(`/#${g.id}`) }));
 const links = [{ text: 'Services', href: getPermalink('/#services') }, ...groups, { text: 'How it works', href: getPermalink('/#how-it-works') },
-  { text: 'FAQ', href: getPermalink('/#faq') }, { text: 'Contact', href: getPermalink('/#contact') }];
+  { text: 'FAQ', href: getPermalink('/#faq') },
+  // optional lead-magnet page (src/pages/[calculator].astro), only when site.json has a "calculator" block
+  ...(S.calculator ? [{ text: S.calculator.nav || 'Calculator', href: getPermalink(`/${S.calculator.path || 'calculator'}`) }] : []),
+  { text: 'Contact', href: getPermalink('/#contact') }];
 
 export const headerData = { links, actions: [{ text: 'Book a demo', href: BOOKING }] };
 

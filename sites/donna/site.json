@@ -18,7 +18,7 @@
   "links": {
     "booking": "#contact",
     "booking_is_placeholder": true,
-    "demo_phone": ""
+    "demo_phone": "+1 (825) 462-1250"
   },
   "hero": {
     "tagline": "AI receptionist for service businesses",
@@ -33,27 +33,27 @@
     "lines": [
       {
         "who": "caller",
-        "text": "Hi, my furnace stopped working. Can someone come out tomorrow?"
+        "text": "Hi, I called earlier and got voicemail. Can I book something for this week?"
       },
       {
         "who": "donna",
-        "text": "I'm sorry to hear that. I'm Donna, the AI assistant for this business. I can book a visit. Is morning or afternoon better?"
+        "text": "Sorry we missed you. I'm Donna, the AI assistant for this business. I can book you in right now. What do you need?"
       },
       {
         "who": "caller",
-        "text": "Morning, please."
+        "text": "A first appointment, ideally Thursday."
       },
       {
         "who": "donna",
-        "text": "I have 9:30 or 11:00 tomorrow morning. Which works?"
+        "text": "I have Thursday at 9:30 or 2:00. Which works?"
       },
       {
         "who": "caller",
-        "text": "9:30."
+        "text": "2:00."
       },
       {
         "who": "donna",
-        "text": "Booked for 9:30 tomorrow. You'll get a text confirmation now, and the technician will call before arriving."
+        "text": "Booked for Thursday at 2:00. You'll get a text confirmation now, and the team will have your details before you arrive."
       }
     ]
   },
@@ -262,6 +262,55 @@
     "subtitle": "We reply within one business day.",
     "tagline": "Founding pricing · 10 spots"
   },
+  "calculator": {
+    "path": "calculator",
+    "nav": "Calculator",
+    "meta_title": "Missed-Call Cost Calculator | Donna.AI",
+    "meta_description": "Estimate what missed calls cost your service business each month, and what answering them could bring back. The math runs in your browser.",
+    "tagline": "Missed-Call Cost Calculator",
+    "title": "What are missed calls",
+    "title_accent": "costing you?",
+    "subtitle": "Pick your type of business for example values, then change the four numbers to yours. The math runs in your browser and nothing you type is sent anywhere.",
+    "defaults": {
+      "calls_per_week": 30,
+      "missed_pct": 27,
+      "job_value": 400,
+      "close_pct": 40,
+      "recover_pct": 50
+    },
+    "presets_label": "Type of business",
+    "presets_note": "Example values for a small business of that type, to start from. They are not research and not a promise: replace them with your own numbers.",
+    "presets": [
+      {"id": "home", "label": "Home services and trades", "calls_per_week": 30, "missed_pct": 27, "job_value": 400, "close_pct": 40},
+      {"id": "beauty", "label": "Med spa, salon or beauty", "calls_per_week": 50, "missed_pct": 28, "job_value": 180, "close_pct": 50},
+      {"id": "clinic", "label": "Dental, chiro or clinic", "calls_per_week": 80, "missed_pct": 28, "job_value": 250, "close_pct": 60},
+      {"id": "law", "label": "Law firm intake", "calls_per_week": 20, "missed_pct": 28, "job_value": 3000, "close_pct": 20},
+      {"id": "auto", "label": "Auto repair or detailing", "calls_per_week": 40, "missed_pct": 28, "job_value": 350, "close_pct": 50},
+      {"id": "realestate", "label": "Real estate agent", "calls_per_week": 15, "missed_pct": 28, "job_value": 8000, "close_pct": 5},
+      {"id": "cleaning", "label": "Cleaning or landscaping", "calls_per_week": 25, "missed_pct": 28, "job_value": 250, "close_pct": 40}
+    ],
+    "notes": {
+      "calls_per_week": "Example value. Use your own count from your phone bill or call log.",
+      "missed_pct": "Starting value from industry research: 27% of calls to home services businesses go unanswered (Invoca, 2024), used for home services; 28% of calls to businesses go unanswered (CallRail, 2025), used for the other types. Your audit shows your real number.",
+      "job_value": "Example value. Use what a new customer is worth to you on average: a job, a visit, a case or a commission.",
+      "close_pct": "Example value. Of the new callers who reach you, how many become paying customers?",
+      "recover_pct": "Donna.AI planning assumption, not a measured result: the share of missed callers who would still book if they were answered, or texted back within minutes. Donna.AI has no client data yet."
+    },
+    "sources": [
+      {
+        "label": "Invoca, How much missed sales calls cost home services businesses (2024-05-23)",
+        "url": "https://invoca.com/blog/how-much-missed-sales-calls-cost-home-services-businesses"
+      },
+      {
+        "label": "CallRail, How missed calls are costing your business (2025-09-11)",
+        "url": "https://www.callrail.com/blog/missed-calls-costing-your-business"
+      }
+    ],
+    "disclaimer": "Estimates for planning only. Not every missed call is a new job: some are existing customers, spam, or callers who reach you later. Lower the numbers if that fits your business.",
+    "cta_title": "See your real numbers",
+    "cta_text": "The calculator uses estimates. The free missed-call audit uses your own line: we call it during the day and after hours, the way a new customer would, and show you what happened.",
+    "cta": "Book your free missed-call audit"
+  },
   "legal": {
     "entity": "[OWNER: legal entity name]",
     "contact": "[OWNER: business mailing address and email before launch]"
@@ -271,7 +320,7 @@
     "Founding pricing: the 10-spot cap and the standard prices (Answer $697, Capture $1,097, Command $1,797 / month; standard setup $497 / $997 / $1,497; Site $697, Site Pro $1,297) are owner decisions. To stay truthful, new clients must actually pay the standard price once the founding spots are filled; keep dated records (Competition Act s.74.01).",
     "Setup included for founding clients and the free missed-call audit: owner to confirm.",
     "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
-    "Cal.com booking link and demo line are placeholders.",
+    "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com demo link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
     "Privacy policy and terms are placeholders for owner and counsel review.",
     "The domain is not chosen: donna.ai or a .ca variant must be checked and bought by the owner."
   ]

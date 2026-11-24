@@ -1,0 +1,255 @@
+---
+// Missed-Call Cost Calculator (lead magnet). Copy, example defaults and sources come from site.json "calculator"; the package price shown is
+// the recommended package from site.json "pricing" (never typed here). The results are rendered at build time from the defaults, so the page
+// reads correctly without JS; the inline script recalculates in the browser. No network requests, no storage, nothing is sent.
+// Mobile-first: one column on phones, form + sticky results card from 64rem. Motion: none beyond the theme's reveal layer.
+import Stage from './Stage.astro';
+import { SITE_DATA as S, BOOKING, DEMO_PHONE, MAISON } from '~/data/site';
+
+const c = S.calculator;
+// business-type presets (example values from site.json, labelled as examples on the page); the first one is the starting point
+const presets = (c.presets || []).map((p: any) => ({ id: String(p.id), label: String(p.label), calls_per_week: p.calls_per_week, missed_pct: p.missed_pct, job_value: p.job_value, close_pct: p.close_pct }));
+const first = presets[0] || {};
+const d = { calls_per_week: 30, missed_pct: 27, job_value: 400, close_pct: 40, recover_pct: 50, ...(c.defaults || {}), ...Object.fromEntries(Object.entries(first).filter(([k]) => k !== 'id' && k !== 'label')) } as any;
+const notes = c.notes || {};
+const book = BOOKING.startsWith('#') ? `/${BOOKING}` : BOOKING;
+const tel = DEMO_PHONE ? `tel:${DEMO_PHONE.replace(/[^0-9+]/g, '')}` : '';
+// the recommended monthly package (highlight) from the owner's price list
+const plans = (S.pricing || []).flatMap((g: any) => g.items || []).filter((p: any) => /month/i.test(p.period || ''));
+const plan = plans.find((p: any) => p.highlight) || plans[0];
+
+const WEEKS = 52 / 12; // weeks per month
+const calc = (v: any) => {
+  const missed = v.calls_per_week * WEEKS * (v.missed_pct / 100);
+  const jobs = missed * (v.close_pct / 100);
+  const lost = jobs * v.job_value;
+  const back = lost * (v.recover_pct / 100);
+  const cover = plan && v.job_value > 0 ? Math.ceil(plan.price / v.job_value) : 0;
+  return { missed, jobs, lost, year: lost * 12, back, cover };
+};
+const r = calc(d);
+const money = (n: number) => `$${Math.round(n).toLocaleString('en-CA')}`;
+const num = (n: number) => (n >= 10 ? Math.round(n).toLocaleString('en-CA') : n.toFixed(1));
+
+const fields = [
+  { id: 'calls_per_week', label: 'Calls per week', unit: 'calls', min: 0, max: 2000, step: 1, range: [0, 200] },
+  { id: 'missed_pct', label: 'Share of calls missed', unit: '%', min: 0, max: 100, step: 1, range: [0, 100] },
+  { id: 'job_value', label: 'Average value of a new customer', unit: '$', prefix: true, min: 0, max: 100000, step: 10, range: [0, 10000] },
+  { id: 'close_pct', label: 'Close rate when you answer', unit: '%', min: 0, max: 100, step: 1, range: [0, 100] },
+];
+---
+
+{MAISON && <Stage />}
+
+<section class="m-sec c-top" aria-labelledby="calc-title" data-scene="offer">
+  <div class="m-wrap">
+    <header class="c-head">
+      <p class="m-eyebrow"><span class="m-rule"></span>{c.tagline}</p>
+      <h1 class="m-h1 c-h1" id="calc-title">
+        <span class="m-line">{c.title}</span>
+        {c.title_accent && <span class="m-line m-metal-text"><em>{c.title_accent}</em></span>}
+      </h1>
+      <p class="m-lead">{c.subtitle}</p>
+    </header>
+
+    <div class="c-grid">
+      <form class="c-form" data-calc aria-label="Your numbers" onsubmit="return false">
+        {presets.length > 0 && (
+          <div class="c-field c-preset">
+            <label for="c-preset" class="c-label">{c.presets_label || 'Type of business'}</label>
+            <select id="c-preset" class="c-select" data-preset aria-describedby="c-preset-note">
+              {presets.map((p: any, i: number) => <option value={p.id} selected={i === 0}>{p.label}</option>)}
+            </select>
+            {c.presets_note && <p class="c-note" id="c-preset-note">{c.presets_note}</p>}
+          </div>
+        )}
+        {fields.map((f) => (
+          <div class="c-field">
+            <label for={`c-${f.id}`} class="c-label">{f.label}</label>
+            <div class="c-input">
+              {f.prefix && <span class="c-unit c-unit-pre" aria-hidden="true">{f.unit}</span>}
+              <input id={`c-${f.id}`} name={f.id} type="number" inputmode="decimal" min={f.min} max={f.max} step={f.step} value={d[f.id]}
+                aria-describedby={`c-${f.id}-note`} data-in={f.id} />
+              {!f.prefix && <span class="c-unit" aria-hidden="true">{f.unit === 'calls' ? '/ week' : f.unit}</span>}
+            </div>
+            <input type="range" class="c-range" min={f.range[0]} max={f.range[1]} step={f.step} value={Math.min(d[f.id], f.range[1])}
+              aria-hidden="true" data-range={f.id} tabindex="-1" />
+            {notes[f.id] && <p class="c-note" id={`c-${f.id}-note`}>{notes[f.id]}</p>}
+          </div>
+        ))}
+        <details class="c-assume">
+          <summary>Assumption: share of missed callers Donna could win back <span class="c-pill" data-out="recover_pct_label">{d.recover_pct}%</span></summary>
+          <div class="c-field">
+            <label for="c-recover_pct" class="c-label">Share of missed callers who would still book</label>
+            <div class="c-input">
+              <input id="c-recover_pct" name="recover_pct" type="number" inputmode="decimal" min="0" max="100" step="1" value={d.recover_pct}
+                aria-describedby="c-recover_pct-note" data-in="recover_pct" />
+              <span class="c-unit" aria-hidden="true">%</span>
+            </div>
+            <input type="range" class="c-range" min="0" max="100" step="1" value={d.recover_pct} aria-hidden="true" data-range="recover_pct" tabindex="-1" />
+            {notes.recover_pct && <p class="c-note" id="c-recover_pct-note">{notes.recover_pct}</p>}
+          </div>
+        </details>
+        <noscript><p class="c-note">Turn on JavaScript to recalculate. The results show the example values above.</p></noscript>
+      </form>
+
+      <aside class="c-out m-card" aria-labelledby="c-out-title">
+        <p class="c-out-k" id="c-out-title">Estimated revenue lost each month</p>
+        <p class="c-big m-metal-text" aria-live="polite" aria-atomic="true"><span data-out="lost">{money(r.lost)}</span></p>
+        <p class="c-sub">About <span data-out="year">{money(r.year)}</span> a year.</p>
+        <div class="c-bar" aria-hidden="true"><span class="c-bar-lost"></span><span class="c-bar-back" data-bar style={`width:${d.recover_pct}%`}></span></div>
+        <dl class="c-rows">
+          <div><dt>Missed calls a month</dt><dd data-out="missed">{num(r.missed)}</dd></div>
+          <div><dt>New customers those calls could have been</dt><dd data-out="jobs">{num(r.jobs)}</dd></div>
+          <div class="c-row-back"><dt>Donna.AI could help bring back, at your assumption</dt><dd data-out="back">{money(r.back)} / month</dd></div>
+          {plan && <div><dt>{`New customers a month that cover ${plan.title} (${money(plan.price)} / month founding price)`}</dt><dd data-out="cover">{r.cover}</dd></div>}
+        </dl>
+        <p class="c-fine">{c.disclaimer}</p>
+        <a href={book} class="m-btn m-btn-metal m-btn-block" data-magnetic><span>{c.cta}</span></a>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<section class="m-sec c-sources" aria-labelledby="c-src-title" data-scene="contact">
+  <div class="m-wrap c-src-grid">
+    <div>
+      <p class="m-eyebrow"><span class="m-rule"></span>How the estimate works</p>
+      <h2 class="m-h3" id="c-src-title">The math, in one line</h2>
+      <p class="m-body">Calls per week × 4.33 weeks × share missed × close rate × average value of a new customer = revenue lost each month. The amount Donna.AI could help bring back is that figure × your assumption.</p>
+      <p class="m-body">Where the starting values come from:</p>
+      <ul class="c-src">
+        {(c.sources || []).map((s: any) => <li><a href={s.url} rel="noopener nofollow" target="_blank">{s.label}</a></li>)}
+        <li>Calls per week, customer value and close rate for each type of business: example values, not research. Replace them with yours.</li>
+      </ul>
+    </div>
+    <div class="c-cta m-card">
+      <h2 class="m-h2 c-cta-h">{c.cta_title}</h2>
+      <p class="m-body">{c.cta_text}</p>
+      <div class="m-actions">
+        <a href={book} class="m-btn m-btn-metal" data-magnetic><span>{c.cta}</span></a>
+        {tel && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Call the demo line: {DEMO_PHONE}</span></a>}
+      </div>
+    </div>
+  </div>
+</section>
+
+<script is:inline define:vars={{ price: plan ? plan.price : 0, presets }}>
+  (function () {
+    var form = document.querySelector('[data-calc]');
+    if (!form) return;
+    var W = 52 / 12;
+    var lim = { calls_per_week: [0, 2000], missed_pct: [0, 100], job_value: [0, 100000], close_pct: [0, 100], recover_pct: [0, 100] };
+    var $ = function (k) { return document.querySelector('[data-out="' + k + '"]'); };
+    var money = function (n) { return '$' + Math.round(n).toLocaleString('en-CA'); };
+    var num = function (n) { return n >= 10 ? Math.round(n).toLocaleString('en-CA') : n.toFixed(1); };
+    var val = function (k) {
+      var el = form.querySelector('[data-in="' + k + '"]');
+      var n = parseFloat(el && el.value);
+      if (!isFinite(n)) n = 0;
+      return Math.min(lim[k][1], Math.max(lim[k][0], n));
+    };
+    var set = function (k, t) { var el = $(k); if (el && el.textContent !== t) el.textContent = t; };
+    function run() {
+      var v = {}; Object.keys(lim).forEach(function (k) { v[k] = val(k); });
+      var missed = v.calls_per_week * W * v.missed_pct / 100;
+      var jobs = missed * v.close_pct / 100;
+      var lost = jobs * v.job_value;
+      var back = lost * v.recover_pct / 100;
+      set('lost', money(lost));
+      set('year', money(lost * 12));
+      set('missed', num(missed));
+      set('jobs', num(jobs));
+      set('back', money(back) + ' / month');
+      set('recover_pct_label', Math.round(v.recover_pct) + '%');
+      if (price) set('cover', v.job_value > 0 ? String(Math.ceil(price / v.job_value)) : '–');
+      var bar = document.querySelector('[data-bar]');
+      if (bar) bar.style.width = v.recover_pct + '%';
+    }
+    form.addEventListener('input', function (e) {
+      var t = e.target;
+      var k = t.getAttribute('data-range');
+      if (k) { var box = form.querySelector('[data-in="' + k + '"]'); if (box) box.value = t.value; }
+      k = t.getAttribute('data-in');
+      if (k) { var r = form.querySelector('[data-range="' + k + '"]'); if (r) r.value = String(Math.min(Number(r.max), val(k))); }
+      run();
+    });
+    var sel = form.querySelector('[data-preset]');
+    if (sel) sel.addEventListener('change', function () {
+      var p = null; presets.forEach(function (x) { if (x.id === sel.value) p = x; });
+      if (!p) return;
+      ['calls_per_week', 'missed_pct', 'job_value', 'close_pct'].forEach(function (k) {
+        var box = form.querySelector('[data-in="' + k + '"]'); if (box) box.value = String(p[k]);
+        var r = form.querySelector('[data-range="' + k + '"]'); if (r) r.value = String(Math.min(Number(r.max), p[k]));
+      });
+      run();
+    });
+    form.addEventListener('change', function (e) {
+      var k = e.target.getAttribute('data-in');
+      if (k && e.target.value !== '') e.target.value = String(val(k));
+    });
+    run();
+  })();
+</script>
+
+<style>
+  .c-top { padding-top: calc(76px + clamp(2.5rem, 7vw, 5.5rem)); }
+  .c-head { max-width: 52rem; margin-bottom: clamp(2.2rem, 5vw, 4rem); }
+  .c-h1 { font-size: clamp(2.5rem, 6.2vw, 5.4rem); }
+  .c-h1 .m-line { display: block; }
+  .c-grid { display: grid; gap: clamp(1.5rem, 3vw, 3rem); align-items: start; }
+  @media (min-width: 64rem) { .c-grid { grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr); } .c-out { position: sticky; top: 96px; } }
+
+  .c-form { display: grid; gap: 1.1rem; margin: 0; }
+  .c-field { border-radius: 18px; padding: 1.15rem 1.2rem 1.2rem; border: 1px solid var(--m-line-soft, rgba(201, 162, 74, 0.16));
+    background: linear-gradient(160deg, rgba(36, 22, 26, 0.62), rgba(14, 9, 11, 0.72)); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .c-field:focus-within { border-color: var(--m-gold, #c9a24a); }
+  .c-select { width: 100%; min-height: 44px; margin-top: 0.2rem; padding: 0.6rem 2.2rem 0.6rem 0; border: 0; border-bottom: 1px solid var(--m-line, rgba(201, 162, 74, 0.3));
+    background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23c9a24a' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 0.4rem center;
+    color: var(--m-ivory, #f4ede1); font-family: var(--m-serif, serif); font-size: clamp(1.2rem, 3.6vw, 1.5rem); appearance: none; -webkit-appearance: none; cursor: pointer; }
+  .c-select:focus-visible { outline: none; border-bottom-color: var(--m-gold-hi, #e6cf98); box-shadow: 0 1px 0 0 var(--m-gold-hi, #e6cf98); }
+  .c-select option { color: #120a06; background: #f4ede1; }
+  .c-label { display: block; font-size: 0.7rem; font-weight: 500; letter-spacing: 0.22em; text-transform: uppercase; color: var(--m-muted, #bdb3a6); margin-bottom: 0.45rem; }
+  .c-input { display: flex; align-items: baseline; gap: 0.5rem; border-bottom: 1px solid var(--m-line, rgba(201, 162, 74, 0.3)); }
+  .c-input:focus-within { border-bottom-color: var(--m-gold-hi, #e6cf98); box-shadow: 0 1px 0 0 var(--m-gold-hi, #e6cf98); }
+  .c-input input { flex: 1; min-width: 0; width: 100%; border: 0; background: transparent; color: var(--m-ivory, #f4ede1); padding: 0.25rem 0 0.45rem;
+    font-family: var(--m-serif, serif); font-size: clamp(2rem, 6vw, 2.6rem); font-weight: 300; line-height: 1.1; font-variant-numeric: lining-nums tabular-nums; }
+  .c-input input:focus { outline: none; }
+  .c-input input:focus-visible { outline: none; }
+  .c-unit { color: var(--m-gold, #c9a24a); font-size: 0.95rem; letter-spacing: 0.06em; white-space: nowrap; }
+  .c-unit-pre { font-family: var(--m-serif, serif); font-size: 1.8rem; }
+  .c-range { width: 100%; margin: 0.85rem 0 0.2rem; accent-color: var(--m-gold, #c9a24a); height: 1.5rem; background: transparent; cursor: pointer; }
+  .c-note { margin: 0.55rem 0 0; color: var(--m-faint, #8f8579); font-size: 0.82rem; line-height: 1.55; }
+  .c-assume { border-radius: 18px; border: 1px dashed var(--m-line, rgba(201, 162, 74, 0.3)); padding: 0.2rem 0.2rem; }
+  .c-assume > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem;
+    padding: 0.95rem 1rem; color: var(--m-muted, #bdb3a6); font-size: 0.9rem; min-height: 44px; }
+  .c-assume > summary::-webkit-details-marker { display: none; }
+  .c-assume > summary:focus-visible { outline: 1px solid var(--m-gold-hi, #e6cf98); outline-offset: 2px; border-radius: 14px; }
+  .c-assume[open] > summary { color: var(--m-ivory, #f4ede1); }
+  .c-assume .c-field { margin: 0 0.4rem 0.4rem; }
+  .c-pill { padding: 0.25rem 0.7rem; border-radius: 999px; border: 1px solid var(--m-line, rgba(201, 162, 74, 0.3)); color: var(--m-gold-hi, #e6cf98); font-size: 0.8rem; }
+
+  .c-out { display: block; }
+  .c-out-k { font-size: 0.7rem; letter-spacing: 0.24em; text-transform: uppercase; color: var(--m-gold, #c9a24a); margin: 0 0 0.8rem; }
+  .c-big { font-family: var(--m-serif, serif); font-weight: 300; font-size: clamp(3.2rem, 11vw, 5.6rem); line-height: 1; margin: 0; letter-spacing: -0.02em; font-variant-numeric: lining-nums tabular-nums; }
+  .c-sub { color: var(--m-muted, #bdb3a6); margin: 0.6rem 0 1.4rem; }
+  .c-bar { position: relative; height: 6px; border-radius: 999px; overflow: hidden; background: color-mix(in oklab, var(--m-wine, #7a1428) 70%, #000); margin-bottom: 1.4rem; }
+  .c-bar-back { position: absolute; inset: 0 auto 0 0; background: var(--m-metal, #c9a24a); border-radius: inherit; transition: width 0.5s var(--m-ease, ease); }
+  @media (prefers-reduced-motion: reduce) { .c-bar-back { transition: none; } }
+  .c-rows { margin: 0 0 1.2rem; display: grid; }
+  .c-rows > div { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: 0.8rem 0; border-top: 1px solid var(--m-line-soft, rgba(201, 162, 74, 0.16)); }
+  .c-rows dt { color: var(--m-muted, #bdb3a6); font-size: 0.92rem; line-height: 1.45; }
+  .c-rows dd { margin: 0; font-family: var(--m-serif, serif); font-size: 1.5rem; color: var(--m-ivory, #f4ede1); white-space: nowrap; font-variant-numeric: lining-nums tabular-nums; }
+  .c-row-back dd { color: var(--m-gold-hi, #e6cf98); }
+  .c-fine { color: var(--m-faint, #8f8579); font-size: 0.8rem; line-height: 1.55; margin: 0 0 1.4rem; }
+
+  .c-src-grid { display: grid; gap: clamp(2rem, 4vw, 4rem); align-items: start; }
+  @media (min-width: 64rem) { .c-src-grid { grid-template-columns: 1fr 1fr; } }
+  .c-src { margin: 0 0 1rem; padding: 0; list-style: none; display: grid; gap: 0.6rem; max-width: 34rem; }
+  .c-src li { color: var(--m-muted, #bdb3a6); font-size: 0.92rem; line-height: 1.55; padding-left: 1.1rem; position: relative; }
+  .c-src li::before { content: ''; position: absolute; left: 0; top: 0.6em; width: 5px; height: 5px; transform: rotate(45deg); background: var(--m-gold, #c9a24a); }
+  .c-src a { color: var(--m-gold-hi, #e6cf98); text-decoration: underline; text-underline-offset: 3px; }
+  .c-cta-h { font-size: clamp(2rem, 4vw, 3.2rem); margin-bottom: 1rem; }
+  .c-cta .m-actions { margin-top: 1.6rem; }
+  @media (max-width: 30rem) { .c-out .m-btn, .c-cta .m-btn { letter-spacing: 0.1em; padding: 0 1.1rem; } }
+</style>
