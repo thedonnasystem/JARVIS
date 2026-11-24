@@ -15,6 +15,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 MIG = open(os.path.join(ROOT, "migrations", "20261203_office_os_v1.sql")).read()
 SEED = {m.group(2): {"id": m.group(1), "roles": re.findall(r"'([^']+)'", m.group(3)), "integrations": re.findall(r"'([^']+)'", m.group(4))}
         for m in re.finditer(r"\('(f0000000-[0-9a-f-]+)', '([a-z0-9-]+)', '.*?', array\[(.*?)\], array\[(.*?)\]", MIG)}
+# Donna's row is replaced by the v1 profile migration (data-only follow-up of M7)
+_V1 = open(os.path.join(ROOT, "migrations", "20261204_donna_v1_profile_v1.sql")).read()
+SEED["donna"].update(roles=re.findall(r"'([^']+)'", re.search(r"v_roles text\[\] := array\[(.*?)\]", _V1).group(1)),
+                     integrations=re.findall(r"'([^']+)'", re.search(r"v_integrations text\[\] := array\[(.*?)\]", _V1).group(1)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import check_integrations  # noqa: E402
 
@@ -111,16 +115,16 @@ class Brain(unittest.TestCase):
         self.assertEqual([r["fact"] for r in got], ["group fact", "wolf secret"])
 
     def test_prompt(self):
-        p = O.system_prompt(PROFILE, "client-success", facts=self.ROWS)
-        for want in ("client-success agent of Donna", "Run Donna, the AI agency.", "(red): send_email", "(prohibited): email_without_consent", "donna fact", "group fact"):
+        p = O.system_prompt(PROFILE, "outreach-prep", facts=self.ROWS)
+        for want in ("outreach-prep agent of Donna", "Run Donna, the AI agency.", "(red): send_email", "(prohibited): email_without_consent", "donna fact", "group fact"):
             self.assertIn(want, p)
         self.assertNotIn("wolf secret", p)
         with self.assertRaises(ValueError):
             O.system_prompt(PROFILE, "prospector")            # a Wolf Squad role is not allowed in Donna
         with self.assertRaises(ValueError):                    # defined in offices/donna.json but not allowed by the database profile
-            O.system_prompt(dict(PROFILE, agent_roles=["agency-manager"]), "client-success")
+            O.system_prompt(dict(PROFILE, agent_roles=["market-research"]), "outreach-prep")
         with self.assertRaises(ValueError):
-            O.system_prompt(dict(PROFILE, office="group"), "client-success")
+            O.system_prompt(dict(PROFILE, office="group"), "outreach-prep")
 
 
 class Command(unittest.TestCase):
@@ -171,7 +175,7 @@ class DonnaV1(unittest.TestCase):
             self.assertIn(want, cfg["brief"])
         self.assertEqual([a["title"] for a in cfg["agents"]], ["Market research", "Offer and pricing", "Outreach prep", "Delivery and onboarding"])
         self.assertTrue(all(a["model_tier"] == "small" for a in cfg["agents"]))
-        p = O.system_prompt(PROFILE, "client-success")
+        p = O.system_prompt(PROFILE, "outreach-prep")
         self.assertIn("Owner direction v1", p)
         self.assertIn("CASL-compliant", p)
         self.assertIn("every send needs the owner's approval", p)
