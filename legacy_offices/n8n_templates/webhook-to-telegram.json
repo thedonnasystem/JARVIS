@@ -1,0 +1,78 @@
+{
+ "id": "webhook-to-telegram",
+ "title": "Webhook -> Telegram alert",
+ "description": "Any system POSTs to a webhook; the owner gets the message on Telegram.",
+ "keywords": [
+  "webhook",
+  "alert",
+  "notify",
+  "telegram",
+  "message me",
+  "ping me"
+ ],
+ "params": {
+  "name": {
+   "required": true,
+   "desc": "workflow name"
+  },
+  "path": {
+   "required": true,
+   "desc": "webhook path, letters/digits/dashes",
+   "pattern": "^[a-z0-9-]{3,40}$"
+  },
+  "chat_id": {
+   "required": true,
+   "desc": "the owner's Telegram chat id",
+   "pattern": "^-?[0-9]{5,16}$"
+  }
+ },
+ "workflow": {
+  "name": "<<name>>",
+  "settings": {
+   "executionOrder": "v1"
+  },
+  "nodes": [
+   {
+    "name": "Webhook",
+    "type": "n8n-nodes-base.webhook",
+    "typeVersion": 2,
+    "position": [
+     0,
+     0
+    ],
+    "parameters": {
+     "httpMethod": "POST",
+     "path": "<<path>>",
+     "responseMode": "onReceived"
+    }
+   },
+   {
+    "name": "Telegram",
+    "type": "n8n-nodes-base.telegram",
+    "typeVersion": 1.2,
+    "position": [
+     260,
+     0
+    ],
+    "parameters": {
+     "chatId": "<<chat_id>>",
+     "text": "={{ JSON.stringify($json.body).slice(0, 3500) }}",
+     "additionalFields": {}
+    }
+   }
+  ],
+  "connections": {
+   "Webhook": {
+    "main": [
+     [
+      {
+       "node": "Telegram",
+       "type": "main",
+       "index": 0
+      }
+     ]
+    ]
+   }
+  }
+ }
+}

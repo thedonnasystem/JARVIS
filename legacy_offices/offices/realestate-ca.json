@@ -1,0 +1,152 @@
+{
+ "office": "realestate-ca",
+ "title": "Real Estate Canada",
+ "manager": "appointed by the owner only (office_os_set_manager)",
+ "brain_scope": [
+  "group",
+  "realestate-ca"
+ ],
+ "status": "dormant (legacy system; not in the M1/M7 database yet: docs/proposals/legacy_offices.md)",
+ "brief": "Legacy system: the Canada wholesale deal funnel (private repo thedonnasystem/canada-wholesale-pipeline). It scrapes public listings and tax-sale notices in ON, AB, SK, NS, values fixer leads (ARV, MAO) and matches them to investor buy boxes. Jarvis reads only aggregate counts from it. Lead, owner and investor records stay in the private repo and its own store; they never enter Jarvis prompts or logs. No outreach letter, offer or contract goes out without the owner's approval.",
+ "agents": [
+  {
+   "role": "deal-analyst",
+   "title": "Deal analyst",
+   "model_tier": "small",
+   "purpose": "Checks valuations and flags the next best leads",
+   "prompt": "Review the day's funnel counts (found, priced, buyer-matched, HOT) and the valuation gaps (unpriced, insufficient comps). Recommend which fixes would turn the most leads into priced, buyer-matched deals. Aggregates only: never ask for or repeat an address, a name or a phone number."
+  },
+  {
+   "role": "pipeline-keeper",
+   "title": "Pipeline keeper",
+   "model_tier": "small",
+   "purpose": "Keeps the daily run healthy",
+   "prompt": "Watch the daily GitHub Actions run (success, minutes used, store sync errors, data age). Report a failure the same day in plain words with the one fix. Never change a schedule, a secret or a billing setting: those are the owner's."
+  }
+ ],
+ "legacy": {
+  "repo": "thedonnasystem/canada-wholesale-pipeline",
+  "private": true,
+  "stack": "Python 3.11 (requests, beautifulsoup4, lxml, pdfplumber, anthropic); GitHub Actions daily cron; GitHub Pages phone page; Supabase store (store.py)",
+  "hosting": "github-actions",
+  "workflow": "daily-pipeline.yml",
+  "entry_points": [
+   "scraper/run_pipeline.py",
+   "scraper/arv_refresh.py",
+   "scraper/funnel_page.py",
+   "webapp/app.py"
+  ],
+  "env": [
+   "PIPELINE_TOKEN",
+   "ANTHROPIC_API_KEY",
+   "RUN_ALBERTA",
+   "ONLINE_ONLY",
+   "AD_DETAIL_MAX_FETCH"
+  ],
+  "secrets": [
+   "PIPELINE_TOKEN",
+   "ANTHROPIC_API_KEY"
+  ],
+  "tests": [
+   [
+    "python3",
+    "tests/test_audit_regressions.py"
+   ],
+   [
+    "python3",
+    "tests/test_investor_network.py"
+   ],
+   [
+    "python3",
+    "tests/test_lead_quality_v4.py"
+   ],
+   [
+    "python3",
+    "tests/test_ad_attrs_in_valuation.py"
+   ],
+   [
+    "python3",
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "tests/test_arv_engine.py"
+   ]
+  ],
+  "tests_cwd": "scraper",
+  "dependency_files": [
+   "requirements.txt"
+  ],
+  "data_freshness_path": "scraper/funnel_latest.json",
+  "fresh_days": 2,
+  "actions_free_minutes": 2000,
+  "dry_run": {
+   "cwd": "scraper",
+   "cmd": [
+    "python3",
+    "tests/test_lead_quality_v4.py"
+   ],
+   "env": {},
+   "note": "The real job scrapes live sites and writes the store; demo mode runs the lead-quality regression suite only (no network, no store, no key)."
+  }
+ },
+ "qc": {
+  "collector": "wholesale",
+  "stages": [
+   "found",
+   "qualified",
+   "priced",
+   "buyer_matched",
+   "contacted",
+   "replied",
+   "booked",
+   "closed"
+  ],
+  "targets": {
+   "qualified_per_week": 10,
+   "priced_share": 0.8,
+   "buyer_match_share": 0.5,
+   "contacted_per_week": 5,
+   "closed_per_month": 1
+  },
+  "fee_per_close_cad": 15000,
+  "cost_per_week_usd_note": "GitHub Actions minutes over the free 2,000 per month bill per minute; AI calls bill on ANTHROPIC_API_KEY",
+  "changes": [
+   {
+    "change": "Restore the daily run: GitHub stopped it on Nov 22 (account payment failed / spending limit). Owner fixes billing or sets a spending limit; about 1,000 minutes a month over the free tier at today's run length.",
+    "impact": 5,
+    "effort": "10 min (owner)",
+    "needs": "owner"
+   },
+   {
+    "change": "Track outcomes (contacted, replied, booked, closed, fee) per lead so the funnel past 'buyer matched' can be measured; without it revenue cannot be attributed.",
+    "impact": 4,
+    "effort": "S (code, PR opened)",
+    "needs": "code"
+   },
+   {
+    "change": "Price the unpriced leads: 6 of 30 have no FSA parsed and 18 of 30 carry no price verdict; fixing comps coverage turns more leads into offers.",
+    "impact": 4,
+    "effort": "M",
+    "needs": "code"
+   },
+   {
+    "change": "Cut ARV-refresh minutes (46 of ~100 minutes a day) by running it every second day or lowering AD_DETAIL_MAX_FETCH, if the owner prefers that to paying for minutes.",
+    "impact": 3,
+    "effort": "S (owner decision)",
+    "needs": "owner"
+   }
+  ],
+  "stage_labels": {
+   "found": "listings scanned",
+   "qualified": "open leads (screened)",
+   "priced": "priced",
+   "buyer_matched": "buyer-matched",
+   "contacted": "contacted",
+   "replied": "replied",
+   "booked": "under contract",
+   "closed": "assigned (fee paid)"
+  }
+ }
+}

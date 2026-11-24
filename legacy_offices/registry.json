@@ -1,0 +1,63 @@
+{
+ "about": "Legacy systems brought into Jarvis as offices (owner request Nov 23 2026). Each viable system has legacy_offices/offices/<slug>.json in the offices/TEMPLATE.json format plus a 'legacy' block (repo, stack, entry points, env NAMES, tests, dry run) and a 'qc' block (funnel, targets, ranked changes). Private repos are referenced by name only; no lead, contact, key or personal data is stored here.",
+ "systems": [
+  {
+   "slug": "realestate-ca",
+   "repo": "thedonnasystem/canada-wholesale-pipeline",
+   "viable": true,
+   "aliases": [
+    "realestate",
+    "real-estate",
+    "wholesale",
+    "canada",
+    "canada-wholesale"
+   ]
+  },
+  {
+   "slug": "freelance-hunter",
+   "repo": "thedonnasystem/freelance-pipeline",
+   "viable": true,
+   "aliases": [
+    "freelance",
+    "freelance-pipeline",
+    "proposals"
+   ]
+  },
+  {
+   "slug": "power-dialer",
+   "repo": "thedonnasystem/dialer",
+   "viable": true,
+   "aliases": [
+    "dialer",
+    "coach",
+    "sales-coach",
+    "calls"
+   ]
+  },
+  {
+   "slug": "paper-trading",
+   "repo": "thedonnasystem/mss-ifvg-paper",
+   "viable": true,
+   "aliases": [
+    "trading",
+    "paper",
+    "mss",
+    "mss-ifvg",
+    "mss-ifvg-paper"
+   ]
+  },
+  {
+   "slug": "n8n-railway",
+   "repo": "thedonnasystem/n8n-railway",
+   "viable": false,
+   "aliases": [
+    "n8n"
+   ],
+   "kind": "shared-service",
+   "note": "Rebuilt as a SHARED SERVICE (owner, Nov 24: nothing gets killed), not an office: pinned official n8n image, Postgres, encryption key, public API (PR on thedonnasystem/n8n-railway). Jarvis builds workflows in it with /n8n (legacy_offices/n8n.py) from vetted templates, imported inactive; activation needs owner confirmation."
+  }
+ ],
+ "in_repo": {
+  "hq_wholesale.py": "Jarvis's existing real-estate bridge (reads valuation candidates, writes AI valuations back). Dormant until WHOLESALE_SUPABASE_SERVICE_KEY is set; it belongs to the realestate-ca office."
+ }
+}
