@@ -123,7 +123,7 @@
     {
       "id": "packages",
       "title": "Packages",
-      "subtitle": "Founding prices, locked in for as long as you stay. Canadian dollars, plus applicable taxes.",
+      "subtitle": "Founding prices, locked in for as long as you stay. Month-to-month, no contracts. Canadian dollars, plus applicable taxes.",
       "founding": {
         "badge": "Founding price",
         "save": "Save",
@@ -235,6 +235,10 @@
     {
       "q": "How does founding pricing work?",
       "a": "Founding pricing is open for 10 spots. Take one and you pay the founding price for as long as you stay with us: $200 to $500 a month below the standard price, with setup included. Once the 10 spots are filled, new clients pay the standard price shown under each package."
+    },
+    {
+      "q": "Is there a contract?",
+      "a": "No. Every package is month-to-month. Stay because it books you appointments, not because you signed for a year."
     },
     {
       "q": "What is the free missed-call audit?",
