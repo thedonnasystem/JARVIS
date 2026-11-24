@@ -1154,15 +1154,47 @@ async def hq_creative_cmd(update, context) -> None:
 
 
 async def hq_reception_cmd(update, context) -> None:
-    """/reception  owner only: Donna Receptionist clients, calls, missed calls, bookings, estimated cost and texts waiting for approval (read-only)."""
+    """/reception  owner only: Donna Receptionist clients, calls, missed calls, bookings, estimated cost and texts waiting for approval (read-only).
+    /reception kit  the deploy kit (env checklist, Twilio webhooks, cost). /reception golive <client>  the demo -> live checklist and your SQL steps (read-only)."""
     if not _owner(update):
         return
+    args = getattr(context, "args", None) or []
     try:
-        import hq_receptionist
-        text = hq_receptionist.report_text()
+        if args and args[0].lower() == "kit":
+            import hq_donna
+            text = hq_donna.kit_text()
+        elif args and args[0].lower() == "golive":
+            import hq_donna
+            text = await asyncio.to_thread(hq_donna.golive_text, args[1] if len(args) > 1 else "")
+        else:
+            import hq_receptionist
+            text = hq_receptionist.report_text()
     except Exception as e:
         logger.warning("HQ reception command failed: %s", str(e)[:150])
         text = f"Receptionist unavailable: {type(e).__name__}"
+    await hq_core.reply_to(update.message, text[:4000])
+
+
+async def hq_donna_cmd(update, context) -> None:
+    """/donna  owner only: Donna's pipeline, drafts waiting and next actions (read-only). /donna drafts  the drafts to decide.
+    /donna run <mission>  run one of Donna's missions now (refused while she is dormant; drafts only, nothing is sent). /donna report  the weekly KPI report."""
+    if not _owner(update):
+        return
+    args = [a.lower() for a in (getattr(context, "args", None) or [])]
+    try:
+        import hq_donna
+        if args and args[0] == "drafts":
+            text = await asyncio.to_thread(hq_donna.drafts_text)
+        elif args and args[0] in ("run", "report"):
+            mission = "weekly-report" if args[0] == "report" else (args[1] if len(args) > 1 else "")
+            r = await asyncio.to_thread(hq_donna.run, mission, {})
+            text = (f"Donna {mission}: done (run {r.get('run')}). /donna drafts to review." if r.get("ok")
+                    else f"Donna {mission}: {r.get('refused') or r.get('error')}")
+        else:
+            text = await asyncio.to_thread(hq_donna.digest_text)
+    except Exception as e:
+        logger.warning("HQ donna command failed: %s", str(e)[:150])
+        text = f"Donna: {str(e)[:200]}"
     await hq_core.reply_to(update.message, text[:4000])
 
 
@@ -1387,7 +1419,7 @@ MENU_HQUI = [("needs", "Everything waiting on you, ranked")]
 
 
 MENU = [
-    ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("gate", "Outreach gate and sender anchor"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office; /office <name>: one office's status, manager, agents, tiers"), ("invoices", "Client invoices: list, request a send approval, send an approved one"), ("reception", "Donna Receptionist: calls, missed, booked, cost, texts waiting"), ("creative", "Creative studio: queue, cost per asset, office spend, providers"), ("offices", "Office money: allocated, spent, revenue, profit, available"), ("approvals", "Everything waiting on your decision, one line each"), ("security", "Security report: audit chain, grants, identities, tokens"), ("services", "Shared services: owner office, tables, office stamp, scoped reads"), ("health", "Health: caps, kill switch, jobs, approvals, audit chain, security"), ("site", "Web Studio: list, new, edit, preview, publish, leads"), ("brainstatus", "Which free model answered last, which are rate-limited"), ("memory", "Jarvis's long-term memory: list, find, links, forget, stats"), ("brain", "Search the shared brain (group facts)"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
+    ("hq", "Company status"), ("backup", "Encrypted off-site backup: status, check, now"), ("gate", "Outreach gate and sender anchor"), ("missions", "Live missions"), ("mission", "Mission detail / new / pause / resume"), ("policy", "What agents may do alone"), ("capital", "Operating fund and spending limits"), ("bank", "Bank balance, statements, reconciliation"), ("pay", "Payments waiting; /pay done after you pay in RBC"), ("account", "Accounts to create; /account done after you sign up"), ("office", "Corporate office; /office <name>: one office's status, manager, agents, tiers"), ("invoices", "Client invoices: list, request a send approval, send an approved one"), ("reception", "Donna Receptionist: calls, missed, booked, cost, texts waiting"), ("donna", "Donna office: pipeline, drafts, next actions; run a mission"), ("creative", "Creative studio: queue, cost per asset, office spend, providers"), ("offices", "Office money: allocated, spent, revenue, profit, available"), ("approvals", "Everything waiting on your decision, one line each"), ("security", "Security report: audit chain, grants, identities, tokens"), ("services", "Shared services: owner office, tables, office stamp, scoped reads"), ("health", "Health: caps, kill switch, jobs, approvals, audit chain, security"), ("site", "Web Studio: list, new, edit, preview, publish, leads"), ("brainstatus", "Which free model answered last, which are rate-limited"), ("memory", "Jarvis's long-term memory: list, find, links, forget, stats"), ("brain", "Search the shared brain (group facts)"), ("setter", "Donna setters: standings, log booked/closed, record payouts"), ("waterfall", "Where received cash goes: tax, buffer, draw, reinvestment, HST watch"), ("succession", "Continuity sheet: ventures, accounts, vault pointers, tools, runbooks"), ("autonomy", "Evidence for promoting a message type to auto-send"), ("tool", "Recurring charges: add, mark used, cancel; idle audit"), ("venture", "Ventures: list, new, activate, workspace"), ("pnl", "Holding company profit and loss"), ("systems", "Every system and its health"), ("brief", "Full daily brief now"), ("due", "Follow-ups due now"), ("day", "Log today: dials pitches submissions"), ("paid", "A deal paid out"), ("lead", "Save a lead: name | phone | note | days"),
     ("done", "Log a call: # days note"), ("money", "Log money: in/out amount venture note"),
     ("ask", "Give an agent a task"), ("drafts", "Review outreach drafts"), ("sent", "Mark an approved email as sent"), ("setaddress", "Business mailing address for emails (CASL)"), ("ideas", "Idea lab, best first"), ("testidea", "Start a 7-day test"), ("parkidea", "Park an idea"), ("agents", "List agents"), ("leads", "Lead counts"),
     ("nightshift", "Overnight work with a budget: /nightshift 8"), ("kill", "Stop all agents"), ("resume", "Restart agents"),
@@ -1466,7 +1498,7 @@ def register(app, CommandHandler, CallbackQueryHandler=None) -> None:
                      ("ask", hq_ask), ("agents", hq_agents), ("leads", hq_leads),
                      ("lead", hq_lead), ("done", hq_done), ("due", hq_due), ("brief", hq_brief),
                      ("ideas", hq_ideas), ("testidea", hq_testidea), ("parkidea", hq_parkidea), ("drafts", hq_drafts), ("sent", hq_sent), ("systems", hq_systems_cmd), ("day", hq_day), ("paid", hq_paid), ("setaddress", hq_setaddress), ("nightshift", hq_nightshift),
-                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("invoices", hq_invoices_cmd), ("reception", hq_reception_cmd), ("creative", hq_creative_cmd), ("offices", hq_offices_cmd), ("approvals", hq_approvals_cmd), ("security", hq_security_cmd), ("services", hq_services_cmd), ("health", hq_health_cmd), ("site", hq_site_cmd), ("brainstatus", hq_brainstatus_cmd), ("memory", hq_memory_cmd), ("brain", hq_brain_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd), ("gate", hq_gate_cmd)):
+                     ("missions", hq_missions_cmd), ("mission", hq_mission_cmd), ("policy", hq_policy_cmd), ("capital", hq_capital_cmd), ("bank", hq_bank_cmd), ("venture", hq_venture_cmd), ("pnl", hq_pnl_cmd), ("pay", hq_pay_cmd), ("account", hq_account_cmd), ("office", hq_office_cmd), ("invoices", hq_invoices_cmd), ("reception", hq_reception_cmd), ("donna", hq_donna_cmd), ("creative", hq_creative_cmd), ("offices", hq_offices_cmd), ("approvals", hq_approvals_cmd), ("security", hq_security_cmd), ("services", hq_services_cmd), ("health", hq_health_cmd), ("site", hq_site_cmd), ("brainstatus", hq_brainstatus_cmd), ("memory", hq_memory_cmd), ("brain", hq_brain_cmd), ("setter", hq_setter_cmd), ("waterfall", hq_waterfall_cmd), ("succession", hq_succession_cmd), ("autonomy", hq_autonomy_cmd), ("tool", hq_tool_cmd), ("backup", hq_backup_cmd), ("gate", hq_gate_cmd)):
         app.add_handler(CommandHandler(name, fn))
     register_venture2(app, CommandHandler)  # venture2 hook
     try:  # Jarvis core v2: /core, /briefing, /report, /seedmemory (owner only, no AI). Worker + 07:00 report only with JARVIS_CORE=1.

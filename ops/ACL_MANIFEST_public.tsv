@@ -139,6 +139,22 @@ function	daily_brief_text()	-	-	execute	invoker		-
 function	dayjob_week_text()	-	-	execute	invoker		-
 function	decide_account(uuid,boolean,text)	-	-	execute	security_definer		-
 function	decide_payment(uuid,boolean,text)	-	-	execute	security_definer		-
+function	donna_add_prospect(uuid,text,text,text,text,boolean,text)	-	-	execute	security_definer		-
+function	donna_check_action(uuid,text)	-	-	execute	security_definer		-
+function	donna_drafts(text,integer)	-	-	execute	security_definer		-
+function	donna_golive_checklist(text)	-	-	execute	security_definer		-
+function	donna_lead_label(uuid)	-	-	execute	security_definer		-
+function	donna_owner_apply_intake(uuid,text,uuid)	-	-	execute	security_definer		-
+function	donna_owner_decide_draft(uuid,boolean,text)	-	-	execute	security_definer		-
+function	donna_owner_decide_intake(uuid,boolean)	-	-	execute	security_definer		-
+function	donna_owner_edit_draft(uuid,text,text)	-	-	execute	security_definer		-
+function	donna_owner_golive_approve(text,boolean,boolean,boolean)	-	-	execute	security_definer		-
+function	donna_pipeline(integer)	-	-	execute	security_definer		-
+function	donna_run_begin(text)	-	-	execute	security_definer		-
+function	donna_run_finish(uuid,text,text,jsonb,jsonb)	-	-	execute	security_definer		-
+function	donna_save_draft(uuid,text,text,uuid,text,text,jsonb)	-	-	execute	security_definer		-
+function	donna_save_intake(uuid,text,uuid,jsonb,jsonb,jsonb)	-	-	execute	security_definer		-
+function	donna_weekly_report(boolean)	-	-	execute	security_definer		-
 function	enforce_build_rules()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	enforce_max_active_ventures()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	enforce_mission_plan_limit()	-	-	execute	invoker	trigger function: cannot be called directly	-
