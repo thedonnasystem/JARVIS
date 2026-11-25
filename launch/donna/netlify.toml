@@ -1,0 +1,23 @@
+# Netlify config for the Donna.AI site (launch kit). In Netlify set: Base directory = launch/donna (everything else comes from here).
+# The build runs the repo's own Web Studio pipeline (hq_webstudio.py build donna: lockfile install, no install scripts, Astro build, content QA),
+# so the published site is exactly what the QA checked. Netlify sets URL, which the template uses for the sitemap and canonical links.
+
+[build]
+  command = "bash build_site.sh"
+  publish = ".out/dist"
+  # Skip the build (and its 15 credits) when nothing the site is made from changed. Paths are relative to the base directory.
+  # (Netlify's default would only watch launch/donna, so an edit to sites/donna/site.json would not rebuild.) Exit 1 = build; the first build always runs.
+  ignore = "if [ \"$CACHED_COMMIT_REF\" = \"$COMMIT_REF\" ]; then exit 1; fi; git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- ../../sites ../../hq_webstudio.py netlify.toml build_site.sh"
+
+[build.environment]
+  NODE_VERSION = "22"
+  PYTHON_VERSION = "3.12"
+  NPM_CONFIG_FUND = "false"
+  NPM_CONFIG_AUDIT = "false"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Frame-Options = "DENY"

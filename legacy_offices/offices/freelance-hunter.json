@@ -1,0 +1,104 @@
+{
+ "office": "freelance-hunter",
+ "title": "Freelance Hunter",
+ "manager": "appointed by the owner only (office_os_set_manager)",
+ "brain_scope": [
+  "group",
+  "freelance-hunter"
+ ],
+ "status": "dormant (legacy system; not in the M1/M7 database yet: docs/proposals/legacy_offices.md)",
+ "brief": "Legacy system: the freelance job pipeline (private repo thedonnasystem/freelance-pipeline). Polls RemoteOK, WeWorkRemotely and Freelancer.com for AI-automation work and drafts proposals for AAA Adoption. Every proposal and bid is a draft for the owner's review: nothing is submitted without his approval.",
+ "agents": [
+  {
+   "role": "job-scout",
+   "title": "Job scout",
+   "model_tier": "small",
+   "purpose": "Finds and scores freelance jobs",
+   "prompt": "Score job posts for fit: a contract or freelance engagement AAA Adoption can deliver (AI automation, n8n, chatbots, agents). Reject full-time employee roles and posts that only mention AI in company boilerplate. Report counts and the reason for every rejection class."
+  },
+  {
+   "role": "proposal-writer",
+   "title": "Proposal writer",
+   "model_tier": "small",
+   "purpose": "Drafts proposals for review",
+   "prompt": "Draft a 3 to 5 sentence proposal that cites one specific detail of the post, states the delivered capability honestly and ends with one low-friction next step. Never invent results, prices or clients. Drafts go to the owner; submitting is red."
+  }
+ ],
+ "legacy": {
+  "repo": "thedonnasystem/freelance-pipeline",
+  "private": true,
+  "stack": "Python (requests, feedparser, APScheduler, anthropic), SQLite on a Railway volume, Telegram push",
+  "hosting": "railway",
+  "railway_project": "remarkable-exploration / freelance-pipeline",
+  "entry_points": [
+   "main.py",
+   "report.py",
+   "authorize_freelancer.py"
+  ],
+  "env": [
+   "ANTHROPIC_API_KEY",
+   "TELEGRAM_BOT_TOKEN",
+   "TELEGRAM_CHAT_ID",
+   "PIPELINE_DB_PATH",
+   "FREELANCER_CLIENT_ID",
+   "FREELANCER_CLIENT_SECRET",
+   "FREELANCER_REDIRECT_URI",
+   "POLL_INTERVAL_MINUTES",
+   "CLAUDE_MODEL"
+  ],
+  "tests": [],
+  "dependency_files": [
+   "requirements.txt"
+  ],
+  "dry_run": {
+   "cwd": ".",
+   "cmd": [
+    "python3",
+    "dry_run.py"
+   ],
+   "env": {
+    "PIPELINE_DB_PATH": ":memory:"
+   },
+   "note": "dry_run.py ships on the improvement PR: fetches the public boards, filters, and prints counts; no AI call, no Telegram, no bid."
+  },
+  "tests_note": "No tests on main; the improvement PR adds tests/ (stdlib unittest)."
+ },
+ "qc": {
+  "collector": "freelance",
+  "stages": [
+   "found",
+   "qualified",
+   "contacted",
+   "replied",
+   "booked",
+   "closed"
+  ],
+  "targets": {
+   "qualified_per_week": 10,
+   "precision": 0.6,
+   "contacted_per_week": 10,
+   "reply_rate": 0.1,
+   "closed_per_month": 1
+  },
+  "changes": [
+   {
+    "change": "Fix the job filter: on the live boards (Nov 23) 70 of 370 posts 'qualified', almost all full-time roles whose boilerplate mentions AI agents, so each paid AI draft went to a post nobody can bid on. The PR's title-and-contract scoring passes 3 (one real independent-contract role). The boards carry almost no freelance gigs: Freelancer.com is where volume would come from.",
+    "impact": 5,
+    "effort": "S (code, PR opened)",
+    "needs": "code"
+   },
+   {
+    "change": "Redeploy the service (the Railway deployment was removed in July) once the owner sets ANTHROPIC_API_KEY billing and TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID.",
+    "impact": 4,
+    "effort": "15 min (owner)",
+    "needs": "owner"
+   },
+   {
+    "change": "Freelancer.com bids auto-submitted with no review; the PR makes review the default (FREELANCER_AUTO_SUBMIT=0). Owner creates the Freelancer.com developer app and completes the one-time OAuth.",
+    "impact": 3,
+    "effort": "30 min (owner)",
+    "needs": "owner"
+   }
+  ]
+ }
+}

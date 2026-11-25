@@ -1,0 +1,23 @@
+{
+ "_about": "EXAMPLE persona pack (fictional adult, no real person). Real packs live in the PRIVATE bucket at <office>/personas/<slug>/persona.json with their reference images next to them; never commit reference images to this public repository. Checked by hq_creative_selfhost.persona_problems on every job.",
+ "slug": "nova-example",
+ "office": "pimp-ai",
+ "display_name": "Nova (example)",
+ "fictional": true,
+ "real_person": false,
+ "consent_id": null,
+ "adult_age": 27,
+ "ai_generated": true,
+ "disclosure": "AI-generated content.",
+ "appearance": "nv4x woman, 27 years old, shoulder-length dark curly hair, warm brown eyes, light freckles, small silver hoop earrings, casual streetwear",
+ "negative": "different face, different hairstyle, tattoos",
+ "trigger_word": "nv4x",
+ "lora": {"file": "nova-example.safetensors", "strength": 0.9},
+ "references": [
+  {"path": "pimp-ai/personas/nova-example/ref-front.png", "source": "generated", "view": "front"},
+  {"path": "pimp-ai/personas/nova-example/ref-three-quarter.png", "source": "generated", "view": "three-quarter"}
+ ],
+ "voice": {"engine": "kokoro-82m", "voice": "af_heart"},
+ "content_rating": "sfw",
+ "blocked_names": []
+}

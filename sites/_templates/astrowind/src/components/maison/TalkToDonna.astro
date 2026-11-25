@@ -1,0 +1,105 @@
+---
+// "Talk to Donna now": a live voice call with the site's Retell agent, in the browser (microphone, no phone needed).
+// Configured at build time from two PUBLIC env vars (both safe to ship to the browser):
+//   PUBLIC_DONNA_WEB_KEY    a Retell PUBLIC key scoped to this site's domain(s) (never the secret API key)
+//   PUBLIC_DONNA_WEB_AGENT  the Retell agent id of the website agent (prompt: launch/donna/voice/prompts/web_qualify.txt)
+// Without them the button simply calls the demo line, so the page never shows a dead button.
+// While Donna speaks, her voice level drives the 3D scene's gold heart (the same 'm:voice' event the phone demo uses).
+import { DEMO_PHONE } from '~/data/site';
+
+const KEY = import.meta.env.PUBLIC_DONNA_WEB_KEY || '';
+const AGENT = import.meta.env.PUBLIC_DONNA_WEB_AGENT || '';
+const tel = DEMO_PHONE ? `tel:${DEMO_PHONE.replace(/[^0-9+]/g, '')}` : '';
+const live = Boolean(KEY && AGENT);
+const { label = 'Talk to Donna now', cls = 'm-btn m-btn-metal' } = Astro.props;
+---
+
+{live ? (
+  <button type="button" class={cls} data-magnetic data-talk data-key={KEY} data-agent={AGENT} data-tel={tel} data-phone={DEMO_PHONE}><span>{label}</span></button>
+) : (
+  tel && <a href={tel} class={cls} data-magnetic><span>{label}</span></a>
+)}
+
+{live && (
+  <div class="m-talk" data-talk-panel hidden role="dialog" aria-modal="false" aria-live="polite" aria-label="Live call with Donna">
+    <span class="m-talk-orb" aria-hidden="true"><i data-talk-level></i></span>
+    <div class="m-talk-copy">
+      <p class="m-talk-title">Donna</p>
+      <p class="m-talk-status" data-talk-status>Connecting…</p>
+    </div>
+    <button type="button" class="m-btn m-btn-ghost m-btn-sm" data-talk-end><span>End call</span></button>
+  </div>
+)}
+
+<script>
+  let busy = false;
+  const btn = document.querySelector<HTMLButtonElement>('[data-talk]');
+  const panel = document.querySelector<HTMLElement>('[data-talk-panel]');
+  // fixed to the viewport: lift it out of the animated hero (a transformed ancestor would trap position: fixed)
+  if (panel && panel.parentElement !== document.body) document.body.appendChild(panel);
+  const status = document.querySelector<HTMLElement>('[data-talk-status]');
+  const level = document.querySelector<HTMLElement>('[data-talk-level]');
+  const endBtn = document.querySelector<HTMLButtonElement>('[data-talk-end]');
+  const say = (t: string) => { if (status) status.textContent = t; };
+  const voice = (v: number) => {
+    window.dispatchEvent(new CustomEvent('m:voice', { detail: v }));
+    if (level) level.style.transform = `scale(${1 + v * 1.6})`;
+  };
+  let session: any = null;
+  let wentLive = false, failed = false;
+  const close = (msg: string, ms = 2600) => {
+    voice(0);
+    say(msg);
+    busy = false;
+    setTimeout(() => { if (!busy && panel) panel.hidden = true; }, ms);
+  };
+  btn?.addEventListener('click', async () => {
+    if (busy || !btn || !panel) return;
+    busy = true;
+    wentLive = false;
+    failed = false;
+    panel.hidden = false;
+    say('Connecting… allow the microphone when your browser asks.');
+    try {
+      const { RetellClient } = await import('retell-client-js-sdk');
+      const client = new RetellClient({ key: btn.dataset.key || '' });
+      session = client.createWebCall({
+        agent_id: btn.dataset.agent || '',
+        metadata: { source: 'website', page: location.pathname },
+        audio: { emitRawAudioSamples: true },
+        hooks: {
+          onStatus: (s: string) => { if (s === 'live') { wentLive = true; say('Live. Say hi to Donna.'); } },
+          onAgentStartTalking: () => say('Donna is speaking…'),
+          onAgentStopTalking: () => { say('Listening…'); voice(0); },
+          onAudio: (samples: Float32Array) => {
+            if (!session?.isAgentTalking) return;
+            let sum = 0;
+            for (let i = 0; i < samples.length; i += 4) sum += samples[i] * samples[i];
+            voice(Math.min(1, Math.sqrt(sum / Math.max(1, samples.length / 4)) * 4));
+          },
+          onEnd: () => {
+            session = null;
+            if (failed) return;
+            const tel = btn.dataset.phone ? ` Call ${btn.dataset.phone} instead.` : '';
+            close(wentLive ? 'Call ended. Thanks for talking with Donna.' : `Couldn't connect.${tel}`, wentLive ? 2600 : 6000);
+          },
+          onError: (e: Error) => {
+            session = null;
+            failed = true;
+            const tel = btn.dataset.phone ? ` Call ${btn.dataset.phone} instead.` : '';
+            close(/permission|notallowed|denied/i.test(String(e?.message || e)) ? `Microphone blocked.${tel}` : `Couldn't connect.${tel}`, 6000);
+          },
+        },
+      });
+    } catch (e) {
+      session = null;
+      const tel = btn.dataset.phone ? ` Call ${btn.dataset.phone} instead.` : '';
+      close(`Couldn't start the call.${tel}`, 6000);
+    }
+  });
+  endBtn?.addEventListener('click', async () => {
+    try { await session?.end(); } catch {}
+    session = null;
+    close('Call ended.');
+  });
+</script>

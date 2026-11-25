@@ -1,0 +1,4 @@
+# Donna Receptionist webhook / voice server ONLY (a separate process; bot.py does not need these).
+# Pipecat: BSD-2-Clause. Pinned; upgrade deliberately. FastAPI comes in through pipecat-ai's websocket extra (resolved by pip against this pin).
+pipecat-ai[websocket,silero,whisper,kokoro,piper]==1.15.0
+uvicorn==0.34.2

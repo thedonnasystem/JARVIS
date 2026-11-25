@@ -1,0 +1,44 @@
+---
+// "Live-looking" call transcript, clearly labelled as an illustration. All lines are in the HTML (readable without JS, by screen readers and
+// under prefers-reduced-motion); with motion allowed they appear one by one when the panel scrolls into view.
+import { SITE_DATA } from '~/data/site';
+const demo = SITE_DATA.demo;
+---
+
+{
+  demo && (
+    <section class="px-4 py-12 md:py-16 mx-auto max-w-3xl" aria-labelledby="call-demo-title">
+      <div class="fx-glass rounded-2xl p-6 md:p-8">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-5">
+          <h2 id="call-demo-title" class="text-xl font-bold">
+            <span class="fx-live" aria-hidden="true"></span> {SITE_DATA.brand.name} on a call
+          </h2>
+          <span class="text-xs uppercase tracking-widest opacity-70">{demo.label}</span>
+        </div>
+        <ol class="fx-transcript space-y-3">
+          {demo.lines.map((l) => (
+            <li class:list={['fx-line', l.who === 'caller' ? 'fx-caller' : 'fx-agent']}>
+              <span class="fx-who">{l.who === 'caller' ? 'Caller' : SITE_DATA.brand.name}</span>
+              <span>{l.text}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  )
+}
+
+<script>
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.querySelectorAll<HTMLElement>('.fx-transcript').forEach((list) => {
+    if (reduce) return;
+    const lines = Array.from(list.querySelectorAll<HTMLElement>('.fx-line'));
+    lines.forEach((l) => l.classList.add('fx-pending'));
+    const io = new IntersectionObserver(([e]) => {
+      if (!e.isIntersecting) return;
+      io.disconnect();
+      lines.forEach((l, i) => setTimeout(() => l.classList.remove('fx-pending'), 450 + i * 1100));
+    }, { threshold: 0.4 });
+    io.observe(list);
+  });
+</script>

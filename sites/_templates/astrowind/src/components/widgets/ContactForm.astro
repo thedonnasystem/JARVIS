@@ -1,0 +1,26 @@
+---
+// The Web Studio contact form (every site and theme): a same-site Netlify form (no third-party endpoint, no secret in the page) with a honeypot,
+// the CASL inquiry notice and an optional, unticked marketing box shown verbatim from site.json's consent block, and the wording version recorded.
+// Themes restyle it with CSS only; the markup and wording live here, once.
+import { CONSENT, SENDER } from '~/data/site';
+
+const { class: formClass = '', field = '' } = Astro.props;
+---
+
+<form name={CONSENT.form_name} method="POST" action="/thanks" data-netlify="true" netlify-honeypot="bot-field" class={formClass}>
+  <input type="hidden" name="form-name" value={CONSENT.form_name} />
+  <input type="hidden" name="consent_version" value={CONSENT.version} />
+  <p class="hidden"><label>Leave this empty: <input name="bot-field" tabindex="-1" autocomplete="off" /></label></p>
+  <div class="mb-5"><label for="name" class="block text-sm font-medium">Your name</label><input id="name" name="name" autocomplete="name" required maxlength="120" class={field} /></div>
+  <div class="mb-5"><label for="business" class="block text-sm font-medium">Business name</label><input id="business" name="business" autocomplete="organization" maxlength="160" class={field} /></div>
+  <div class="mb-5"><label for="phone" class="block text-sm font-medium">Phone</label><input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="40" class={field} /></div>
+  <div class="mb-5"><label for="email" class="block text-sm font-medium">Email</label><input id="email" name="email" type="email" autocomplete="email" maxlength="200" class={field} /></div>
+  <div class="mb-5"><label for="message" class="block text-sm font-medium">How can we help?</label><textarea id="message" name="message" rows="4" maxlength="2000" class={field}></textarea></div>
+  <p class="text-sm opacity-80 mb-4" data-consent="inquiry">{CONSENT.inquiry_notice}</p>
+  <div class="flex items-start mb-6">
+    <input id="marketing_consent" name="marketing_consent" type="checkbox" value="yes" class="mt-1 cursor-pointer" />
+    <label for="marketing_consent" class="ml-3 cursor-pointer text-sm opacity-80" data-consent="marketing">{CONSENT.marketing_checkbox}</label>
+  </div>
+  <button type="submit" class="btn-primary w-full">Send</button>
+  <p class="mt-4 text-xs opacity-70" data-consent="sender">{SENDER} See our <a class="underline" href="/privacy">privacy policy</a>.</p>
+</form>

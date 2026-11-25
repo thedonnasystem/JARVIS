@@ -98,3 +98,13 @@ SQL editor, each statement with your app user id:
 6. Check with `/office donna` in Telegram: ACTIVE, manager set, no DRIFT line.
 
 Next offices, same steps, only after Donna is running: Wolf Squad, then FF Marketing. Connections: `ops/CONNECT_SESSION_CHECKLIST.md`.
+
+## 6. Follow-up release: Donna v1 profile
+
+Run it with Donna still dormant. Same workflow as section 2:
+1. Set `START_AT: 20261204_donna_v1_profile_v1.sql` and push `release/prod-db` with the merged head.
+2. Check it (read-only):
+   `select mission like 'Run Donna, an Ottawa%', agent_roles from fz_office_os.fz_office_profiles where slug = 'donna';` must return `true` and the 4 v1 roles.
+3. `/office donna` must list the 8 enforced prohibitions.
+
+Rollback: `psql "$PROD_DB_URL" -v ON_ERROR_STOP=1 -f ops/rollback_donna_v1_profile.sql`.

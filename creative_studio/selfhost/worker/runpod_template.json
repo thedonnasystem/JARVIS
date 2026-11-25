@@ -1,0 +1,17 @@
+{
+ "_about": "RunPod pod template (console: Templates > New Template, paste these fields). The pod's own https proxy serves port 8189, so no tunnel is needed. Billing runs while the pod runs; the worker stops the pod after FZ_IDLE_MINUTES idle or FZ_MAX_HOURS.",
+ "name": "fendezy-creative-worker",
+ "imageName": "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
+ "containerDiskInGb": 80,
+ "volumeInGb": 0,
+ "ports": "8189/http",
+ "env": {
+  "FZ_WORKER_TOKEN": "",
+  "FZ_IDLE_MINUTES": "20",
+  "FZ_MAX_HOURS": "3",
+  "FZ_PROFILE": "24gb",
+  "FZ_BRANCH": "build/creative-selfhost"
+ },
+ "dockerStartCmd": "bash -c 'git clone -q --depth 1 -b $FZ_BRANCH https://github.com/thedonnasystem/JARVIS /workspace/fz && python3 /workspace/fz/creative_studio/selfhost/worker/fz_worker.py --profile $FZ_PROFILE --tunnel runpod --root /workspace/fzw'",
+ "vast_onstart": "git clone -q --depth 1 -b build/creative-selfhost https://github.com/thedonnasystem/JARVIS /root/fz && python3 /root/fz/creative_studio/selfhost/worker/fz_worker.py --profile 24gb --tunnel cloudflared --root /root/fzw --idle-minutes 20 --max-hours 3"
+}

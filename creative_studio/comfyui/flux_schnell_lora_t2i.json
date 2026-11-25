@@ -1,0 +1,102 @@
+{
+ "30": {
+  "class_type": "CheckpointLoaderSimple",
+  "inputs": {
+   "ckpt_name": "flux1-schnell-fp8.safetensors"
+  }
+ },
+ "6": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "{{prompt}}",
+   "clip": [
+    "40",
+    1
+   ]
+  }
+ },
+ "33": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "",
+   "clip": [
+    "40",
+    1
+   ]
+  }
+ },
+ "27": {
+  "class_type": "EmptySD3LatentImage",
+  "inputs": {
+   "width": "{{width}}",
+   "height": "{{height}}",
+   "batch_size": 1
+  }
+ },
+ "31": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": "{{seed}}",
+   "steps": 4,
+   "cfg": 1.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1.0,
+   "model": [
+    "40",
+    0
+   ],
+   "positive": [
+    "6",
+    0
+   ],
+   "negative": [
+    "33",
+    0
+   ],
+   "latent_image": [
+    "27",
+    0
+   ]
+  }
+ },
+ "8": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "31",
+    0
+   ],
+   "vae": [
+    "30",
+    2
+   ]
+  }
+ },
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "fendezy",
+   "images": [
+    "8",
+    0
+   ]
+  }
+ },
+ "40": {
+  "class_type": "LoraLoader",
+  "inputs": {
+   "lora_name": "{{lora_name}}",
+   "strength_model": "{{lora_strength}}",
+   "strength_clip": "{{lora_strength}}",
+   "model": [
+    "30",
+    0
+   ],
+   "clip": [
+    "30",
+    1
+   ]
+  }
+ }
+}

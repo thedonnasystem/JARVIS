@@ -92,7 +92,7 @@ begin
   -- S2 (review 1) the chain is by id, uses OUR first-seen time, ignores audit_log.at
   perform public.fz_audit_chain_extend();                                -- observes everything that exists now
   update public.fz_audit_pending set first_seen = now() - interval '10 minutes';   -- (test clock) the existing rows were seen 10 minutes ago
-  perform public.fz_audit_chain_extend();
+  perform public.fz_audit_chain_extend(1000000);   -- chain the WHOLE backlog: the default batch is 5000, so a replica holding more older rows would leave some for the S2 call below
   select genesis_id into g from public.fz_audit_state;
   if g is null or (select count(*) from public.fz_audit_chain) < 10 then raise exception 'S2 nothing chained'; end if;
   v := public.fz_audit_verify(true);
