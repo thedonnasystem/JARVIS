@@ -1,4 +1,5 @@
 # Netlify config for the Donna.AI site (launch kit). In Netlify set: Base directory = launch/donna (everything else comes from here).
+# Live: https://donna-ai-solutions.netlify.app (project donna-ai-solutions, branch build/donna-site-r). Form detection is on in Netlify.
 # The build runs the repo's own Web Studio pipeline (hq_webstudio.py build donna: lockfile install, no install scripts, Astro build, content QA),
 # so the published site is exactly what the QA checked. Netlify sets URL, which the template uses for the sitemap and canonical links.
 
