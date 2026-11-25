@@ -24,13 +24,14 @@
   },
   "header_hide": [
     "websites",
-    "calculator"
+    "calculator",
+    "custom-ai"
   ],
   "hero": {
     "tagline": "AI solutions & infrastructure integration",
-    "title": "What if your business",
-    "title_accent": "never missed a thing?",
-    "subtitle": "We turn your missed calls and missed leads into booked appointments. Then we automate the busywork, build AI agents for your team and connect it all to the tools you already use. Done for you, month-to-month.",
+    "title": "The AI infrastructure",
+    "title_accent": "your business runs on.",
+    "subtitle": "We turn your missed calls and missed leads into booked appointments. Then we build the AI behind everything else: automations, AI agents and custom software, connected to the tools you already use. Done for you, month-to-month.",
     "offer": "Free 20-min AI consultation · Plans from $197 / month · Free setup until December 31",
     "foot": "Free 20-min AI consultation",
     "deadline": "2026-12-31T23:59:59-05:00"
@@ -596,6 +597,82 @@
           "Find where AI saves you the most time and money",
           "Automate the busywork your team hates",
           "Connect your tools into one system that runs itself"
+        ]
+      }
+    ]
+  },
+  "chapters": {
+    "items": [
+      {
+        "key": "receptionist",
+        "name": "AI Receptionist",
+        "title": "Every call answered. Every caller booked.",
+        "icon": "tabler:phone-call",
+        "text": "Donna answers every call day and night, texts back anyone who hangs up and books the appointment straight into your calendar.",
+        "points": [
+          "Answers in seconds, 24/7, in a warm, natural voice",
+          "Missed callers texted back automatically",
+          "Appointments booked straight into your calendar"
+        ]
+      },
+      {
+        "key": "leads",
+        "name": "Lead capture & follow-up",
+        "title": "Every lead followed up until they book.",
+        "icon": "tabler:user-check",
+        "text": "Calls, website forms, ads and messages land in one place, and every lead gets a fast reply and a follow-up you approve.",
+        "points": [
+          "Instant replies to website and ad leads",
+          "Follow-ups that stop the moment they answer",
+          "One simple pipeline, so no lead gets lost"
+        ]
+      },
+      {
+        "key": "automation",
+        "name": "Workflow automation",
+        "title": "The busywork runs itself.",
+        "icon": "tabler:settings-automation",
+        "text": "Quotes, invoices, reminders, review requests and reports run on their own, so your team spends its time on the work that pays.",
+        "points": [
+          "Quotes and invoices that send themselves",
+          "Reminders and review requests on autopilot",
+          "Weekly reports that land in your inbox"
+        ]
+      },
+      {
+        "key": "agents",
+        "name": "AI agents",
+        "title": "AI agents that know your business.",
+        "icon": "tabler:robot",
+        "text": "Custom AI agents trained on your services, prices and policies, for intake, scheduling, support and your team's everyday questions.",
+        "points": [
+          "Trained on how your business actually works",
+          "You approve every word before a customer sees it",
+          "Hands off to a person whenever it matters"
+        ]
+      },
+      {
+        "key": "software",
+        "name": "Custom software & integrations",
+        "title": "One system instead of ten apps.",
+        "icon": "tabler:plug-connected",
+        "text": "We connect your phone, calendar, CRM, email, accounting and website, and build custom software where off-the-shelf tools fall short.",
+        "points": [
+          "Your existing tools connected, nothing ripped out",
+          "Custom dashboards and internal tools",
+          "Built, documented and run for you"
+        ]
+      },
+      {
+        "key": "websites",
+        "name": "Websites",
+        "title": "A website that books, not just looks good.",
+        "icon": "tabler:world",
+        "text": "A fast website with your AI front desk built in, so every visitor can talk to Donna, book or leave a request. An optional add-on.",
+        "points": [
+          "Designed to turn visitors into bookings",
+          "Donna and booking built right in",
+          "One-time price, no monthly fees"
         ]
       }
     ]

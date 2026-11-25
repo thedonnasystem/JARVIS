@@ -485,3 +485,15 @@ html.maison .text-primary { color: var(--m-gold) !important; }
 .m-try-cta { display: flex; flex-wrap: wrap; gap: 0.7rem; }
 .m-try-book { display: inline-block; margin-top: 1.2rem; color: var(--m-gold); font-size: 0.95rem; }
 .m-countdown { font-weight: 600; color: var(--m-gold); }
+
+/* solution chapters (Chapters.astro) */
+.m-chap { min-height: 100svh; display: flex; align-items: center; }
+.m-chap-grid { display: grid; grid-template-columns: 1fr; width: 100%; }
+@media (min-width: 64rem) { .m-chap-grid { grid-template-columns: 1fr 1fr; } .m-chap.is-right .m-chap-copy { grid-column: 2; } }
+.m-chap-copy { max-width: 36rem; }
+.m-chap-text { margin-top: 1.4rem; font-size: clamp(1.05rem, 1.4vw, 1.2rem); }
+.m-chap-points { list-style: none; padding: 0; margin: 1.8rem 0 2.2rem; display: grid; gap: 0.95rem; }
+.m-chap-points li { display: flex; gap: 0.8rem; align-items: center; line-height: 1.45; }
+.m-chap-points svg { width: 1.3rem; height: 1.3rem; color: var(--m-gold); flex: none; }
+.m-chap-cta { display: flex; flex-wrap: wrap; gap: 0.7rem; }
+@media (max-width: 63.99rem) { .m-chap-copy { padding: 1.6rem; border-radius: 1.4rem; background: rgba(10, 7, 8, 0.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); } }

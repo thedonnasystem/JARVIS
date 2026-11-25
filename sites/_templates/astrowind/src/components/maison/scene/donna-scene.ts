@@ -152,6 +152,13 @@ const DESK: Record<string, State> = {
   results: S({ ix: 5.0, iy: 2.9, iz: -4.5, is: 0.6, spread: 0.35, orbit: 1, grid: 0.4, book: 1.02, cy: 1.8, ly: -0.6, kx: 0, ky: -5.0, kz: -4.5, kr: -1.38, kt: -0.06, ks: 1.3, dim: 0.42 }),
   faq: S({ ix: -2.95, iy: -1.0, iz: -1.2, is: 0.82, spread: 0.7, orbit: 1, book: 1.02, dim: 0.62 }),
   contact: S({ ix: -2.7, iy: -1.35, iz: -1.4, is: 0.9, spread: 0.18, orbit: 1, book: 1.02, dim: 0.65 }),
+  // solution chapters: the instrument swaps sides opposite the text and changes mood per chapter
+  ch1: S({ ix: 2.5, iy: 0, iz: -1.2, is: 0.98, spread: 0.15, orbit: 1, lx: 0.3, dim: 0.9 }),
+  ch2: S({ ix: -2.6, iy: 0.1, iz: -1.6, is: 0.86, spread: 0.55, orbit: 1, flow: 1, fy: -0.1, fz: -0.4, dim: 0.78 }),
+  ch3: S({ ix: 2.6, iy: -0.1, iz: -2.2, is: 0.8, spread: 0.3, flow: 1, fy: -0.12, fz: -0.4, dim: 0.8 }),
+  ch4: S({ ix: -2.5, iy: 0, iz: -1.8, is: 0.92, spread: 0.75, orbit: 1, dim: 0.72 }),
+  ch5: S({ ix: 2.5, iy: 0.1, iz: -2.6, is: 0.76, spread: 0.2, grid: 1, dim: 0.7 }),
+  ch6: S({ ix: -2.4, iy: 0, iz: -2, is: 0.82, spread: 0.4, orbit: 1, dim: 0.66 }),
 };
 const MOB: Record<string, State> = {
   hero: S({ iy: 1.66, is: 0.66, spread: 1, cz: 9.5, ly: 0.15 }),
@@ -163,6 +170,12 @@ const MOB: Record<string, State> = {
   results: S({ ix: 0, iy: 2.6, iz: -8, is: 1.0, orbit: 1, grid: 0.3, book: 1.02, cy: 2, ly: -0.9, ky: -6.5, kz: -6, kr: -1.3, ks: 0.85, cz: 9.5, dim: 0.36 }),
   faq: S({ ix: -1.4, iy: -3.4, iz: -5, is: 0.8, spread: 0.7, orbit: 1, book: 1.02, cz: 9.5, dim: 0.34 }),
   contact: S({ iy: -2.5, iz: -3.2, is: 1.0, spread: 0.18, orbit: 1, book: 1.02, cz: 9.5, dim: 0.42 }),
+  ch1: S({ iy: 2.6, iz: -2.6, is: 0.9, spread: 0.15, orbit: 1, cz: 9.5, dim: 0.42 }),
+  ch2: S({ ix: 0.8, iy: 2.8, iz: -3.2, is: 0.8, spread: 0.55, orbit: 1, flow: 1, cz: 9.5, dim: 0.38 }),
+  ch3: S({ ix: -0.8, iy: 2.8, iz: -3.4, is: 0.75, spread: 0.3, flow: 1, cz: 9.5, dim: 0.38 }),
+  ch4: S({ ix: 0.6, iy: 2.7, iz: -3, is: 0.85, spread: 0.75, orbit: 1, cz: 9.5, dim: 0.38 }),
+  ch5: S({ ix: -0.6, iy: 2.9, iz: -3.6, is: 0.72, spread: 0.2, grid: 1, cz: 9.5, dim: 0.36 }),
+  ch6: S({ iy: 2.7, iz: -3.2, is: 0.8, spread: 0.4, orbit: 1, cz: 9.5, dim: 0.36 }),
 };
 
 const ease = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
