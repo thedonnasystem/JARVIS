@@ -7,7 +7,12 @@
   publish = ".out/dist"
   # Skip the build (and its 15 credits) when nothing the site is made from changed. Paths are relative to the base directory.
   # (Netlify's default would only watch launch/donna, so an edit to sites/donna/site.json would not rebuild.) Exit 1 = build; the first build always runs.
-  ignore = "if [ \"$CACHED_COMMIT_REF\" = \"$COMMIT_REF\" ]; then exit 1; fi; git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- ../../sites ../../hq_webstudio.py netlify.toml build_site.sh"
+  ignore = "if [ \"$CACHED_COMMIT_REF\" = \"$COMMIT_REF\" ]; then exit 1; fi; git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- ../../sites ../../hq_webstudio.py netlify.toml build_site.sh netlify"
+
+[functions]
+  # Lead alerts: netlify/functions/retell-webhook.mjs (Retell call_analyzed -> Telegram) and submission-created.mjs (form -> Telegram).
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
 
 [build.environment]
   NODE_VERSION = "22"

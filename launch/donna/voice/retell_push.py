@@ -8,7 +8,7 @@
 push reads everything from environment variables; no key or id is ever written to a file:
     RETELL_API_KEY                 required for push
     DONNA_DEMO_AGENT_ID            update this existing agent (the one on the demo number) instead of creating one (optional)
-    DONNA_MAKE_WEBHOOK_URL         Make.com custom-webhook URL for call summaries and texts (optional; omitted if unset)
+    DONNA_ALERT_WEBHOOK_URL        https://<site>/.netlify/functions/retell-webhook : verified lead alerts to Telegram, forwards to Make (optional; omitted if unset)
     DONNA_FOUNDER_MOBILE           +1XXXXXXXXXX for the sales agent's transfer tool (optional; the tool is dropped if unset)
 When updating an existing agent, its voice is kept (Kate) unless --set-voice is given.
 Standard library only. Untested against the live API from this repo (no key here): run without --apply first.

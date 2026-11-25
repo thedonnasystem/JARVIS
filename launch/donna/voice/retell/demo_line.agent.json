@@ -11,7 +11,7 @@
   "max_call_duration_ms": 900000,
   "data_storage_setting": "everything",
   "data_storage_retention_days": 30,
-  "webhook_url": "${DONNA_MAKE_WEBHOOK_URL}",
+  "webhook_url": "${DONNA_ALERT_WEBHOOK_URL}",
   "webhook_events": [
     "call_analyzed"
   ],

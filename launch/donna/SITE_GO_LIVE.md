@@ -59,3 +59,15 @@ The demo line `+1 (825) 462-1250` is already on the site: the hero and the conta
 3. Cloudflare Pages limits, accessed 2026-11-24: https://developers.cloudflare.com/pages/platform/limits
 4. Netlify Forms setup ("enable form detection"), accessed 2026-11-24: https://docs.netlify.com/manage/forms/setup
 5. Netlify build software (Node 24 default, Python 3 available, NODE_VERSION / PYTHON_VERSION), accessed 2026-11-24: https://docs.netlify.com/build/configure-builds/available-software-at-build-time/
+
+## Lead alerts on your phone (Telegram), about 5 minutes
+Every website form submission and every analyzed Donna call (website or phone line) pings you on Telegram within seconds: who, what problem, what fits, booked or not.
+1. Netlify → Site configuration → Environment variables. Add these yourself (Claude never handles them):
+   - `TELEGRAM_BOT_TOKEN`: your bot's token (Jarvis's bot works).
+   - `TELEGRAM_CHAT_ID`: your chat id with that bot.
+   - `RETELL_API_KEY`: your Retell API key. It is only used to check that a webhook really came from Retell.
+   - Optional: `DONNA_AGENT_IDS` (your two agent ids, comma-separated) and `DONNA_MAKE_WEBHOOK_URL` (to keep Make's text-backs running).
+2. Deploys → Trigger deploy.
+3. In Retell, on both agents, set Webhook URL to `https://<your-site>/.netlify/functions/retell-webhook` (event: call analyzed).
+4. Test: submit the site form once and make one Talk to Donna call. Both should reach Telegram.
+Form alerts need no Retell setup: Netlify runs `submission-created` on every verified form submission.

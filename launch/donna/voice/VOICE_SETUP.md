@@ -83,7 +83,7 @@ These are Retell's prices in USD. Your Retell billing settings decide whether cr
 ```
 export RETELL_API_KEY=...            # Retell > Settings > API keys
 export DONNA_DEMO_AGENT_ID=...       # existing agent on the 825 number (updated; its voice is kept)
-export DONNA_MAKE_WEBHOOK_URL=...    # optional
+export DONNA_ALERT_WEBHOOK_URL=https://<your-site>/.netlify/functions/retell-webhook    # optional: lead alerts
 python3 launch/donna/voice/retell_push.py push            # dry run
 python3 launch/donna/voice/retell_push.py push --apply    # sends it; then Publish in the dashboard
 ```

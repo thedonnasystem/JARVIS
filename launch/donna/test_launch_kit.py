@@ -3,6 +3,8 @@ import csv
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
 import unittest
@@ -164,3 +166,19 @@ class Sheets(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeadAlerts(unittest.TestCase):
+    def test_functions_and_config(self):
+        toml = _read(HERE, "netlify.toml")
+        self.assertIn('directory = "netlify/functions"', toml)
+        fns = sorted(os.listdir(os.path.join(HERE, "netlify", "functions")))
+        self.assertEqual(fns, ["retell-webhook.mjs", "submission-created.mjs"], "only real functions live in the functions folder")
+        src = _read(HERE, "netlify", "lib", "alert.mjs")
+        self.assertIn("timingSafeEqual", src)
+        self.assertNotRegex(src, r"(?i)(bot\d{6,}:|key_[a-z0-9]{10,})", "no secrets in code")
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_node_suite(self):
+        r = subprocess.run(["node", "--test", os.path.join(HERE, "netlify", "alert.test.mjs")], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])

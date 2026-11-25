@@ -1,5 +1,5 @@
 {
-  "_note": "Source for the Donna.AI demo line on Retell: two agents: demo_line (phone: sales + multi-industry demo, prompts/demo_line.txt) and web_qualify (the website's 'Talk to Donna now' web call: qualify, sell, book with our AI specialist, prompts/web_qualify.txt). `python3 retell_push.py build` writes the import-ready request bodies to retell/. ${NAME} placeholders are filled from environment variables by `retell_push.py push`; nothing secret is stored here. Cal.com booking tools are added in the Retell dashboard (connection-based integration), not here.",
+  "_note": "Source for the Donna.AI demo line on Retell: two agents: demo_line (phone: sales + multi-industry demo, prompts/demo_line.txt) and web_qualify (the website's 'Talk to Donna now' web call: qualify, sell, book with our AI specialist, prompts/web_qualify.txt). `python3 retell_push.py build` writes the import-ready request bodies to retell/. ${NAME} placeholders are filled from environment variables by `retell_push.py push`; nothing secret is stored here. Cal.com booking tools are added in the Retell dashboard (connection-based integration), not here. Webhook: both agents post call_analyzed to the site's verified function (https://<site>/.netlify/functions/retell-webhook), which alerts the owner on Telegram and forwards to Make if DONNA_MAKE_WEBHOOK_URL is set.",
   "agents": {
     "demo_line": {
       "prompt_file": "prompts/demo_line.txt",
@@ -47,7 +47,7 @@
         "max_call_duration_ms": 900000,
         "data_storage_setting": "everything",
         "data_storage_retention_days": 30,
-        "webhook_url": "${DONNA_MAKE_WEBHOOK_URL}",
+        "webhook_url": "${DONNA_ALERT_WEBHOOK_URL}",
         "webhook_events": [
           "call_analyzed"
         ],
@@ -173,7 +173,7 @@
         "max_call_duration_ms": 480000,
         "data_storage_setting": "everything",
         "data_storage_retention_days": 30,
-        "webhook_url": "${DONNA_MAKE_WEBHOOK_URL}",
+        "webhook_url": "${DONNA_ALERT_WEBHOOK_URL}",
         "webhook_events": [
           "call_analyzed"
         ],
