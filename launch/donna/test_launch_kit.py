@@ -126,7 +126,7 @@ class Site(unittest.TestCase):
             b = tomllib.load(f)["build"]
         self.assertEqual(b["command"], "bash build_site.sh")
         self.assertEqual(b["publish"], ".out/dist")
-        self.assertIn("../../sites", b["ignore"])
+        self.assertEqual(b["ignore"], "exit 1", "always build: Netlify skips builds when only files outside the base directory changed")
         self.assertIn("build donna --out", _read(HERE, "build_site.sh"))
 
 

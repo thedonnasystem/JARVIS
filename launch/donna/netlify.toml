@@ -6,8 +6,10 @@
 [build]
   command = "bash build_site.sh"
   publish = ".out/dist"
-  # Skip the build (and its 15 credits) when nothing the site is made from changed. Paths are relative to the base directory.
-  # (Netlify's default would only watch launch/donna, so an edit to sites/donna/site.json would not rebuild.) Exit 1 = build; the first build always runs.
+  # Always build. Netlify's default skips a build when nothing under the base directory (launch/donna) changed, which
+  # cancelled real site edits (sites/donna, the template); a path-diff ignore rule also failed in Netlify's shallow clone.
+  # Exit 1 = build. Each build costs 15 of the free plan's 300 monthly credits.
+  ignore = "exit 1"
 
 [functions]
   # Lead alerts: netlify/functions/retell-webhook.mjs (Retell call_analyzed -> Telegram) and submission-created.mjs (form -> Telegram).
