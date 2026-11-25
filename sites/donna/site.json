@@ -485,13 +485,13 @@
   },
   "owner_review": [
     "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
-    "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com demo link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
-    "Privacy policy and terms are placeholders for owner and counsel review.",
-    "The domain is not chosen: donna.ai or a .ca variant must be checked and bought by the owner.",
+    "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com \"Free 20-min AI consultation\" link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
     "December offer (owner decision, Nov 24 2026): setup included free for clients who book before December 31, 2026 (normally $497 / $997 / $1,497). The deadline is real: on January 1 end the offer or replace it with a new dated one; never roll the same deadline forward (Competition Act).",
     "Prices (owner decision, Nov 24 2026): Essential $197, Answer $497, Capture $797, Command $1,297 a month; Site $497, Site Pro $997 one-time. The site shows only 'from $197'; exact prices are given on the call.",
     "Promises on the site you must keep (owner decision needed if not): free 20-min AI consultation; a plain-English playbook for everything built; monitoring, fixes and tuning included in every plan (no break-fix invoices); a clear plan and one price before any build; client data used only to run their systems and never sold.",
-    "Comparison section describes the usual AI vendor in general terms (no competitor named). Keep every Donna.AI line true."
+    "Comparison section describes the usual AI vendor in general terms (no competitor named). Keep every Donna.AI line true.",
+    "Privacy policy and terms are real drafts (calls, recordings, processors, retention, offer terms): owner and counsel review them before relying on them; confirm the retention periods.",
+    "Domain not bought yet (donna.ai is not an option): pick one and point it at Netlify; then restrict the Retell public key to it."
   ],
   "compare": {
     "tagline": "Why Donna.AI",
