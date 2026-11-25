@@ -15,7 +15,7 @@ const notes = c.notes || {};
 const book = BOOKING.startsWith('#') ? `/${BOOKING}` : BOOKING;
 const tel = DEMO_PHONE ? `tel:${DEMO_PHONE.replace(/[^0-9+]/g, '')}` : '';
 // the recommended monthly package (highlight) from the owner's price list
-const plans = (S.pricing || []).flatMap((g: any) => g.items || []).filter((p: any) => /month/i.test(p.period || ''));
+const plans = (S.pricing || []).flatMap((g: any) => g.items || []).filter((p: any) => /month/i.test(p.period || '') && typeof p.price === 'number');
 const plan = plans.find((p: any) => p.highlight) || plans[0];
 
 const WEEKS = 52 / 12; // weeks per month
@@ -102,7 +102,7 @@ const fields = [
           <div><dt>Missed calls a month</dt><dd data-out="missed">{num(r.missed)}</dd></div>
           <div><dt>New customers those calls could have been</dt><dd data-out="jobs">{num(r.jobs)}</dd></div>
           <div class="c-row-back"><dt>Donna.AI could help bring back, at your assumption</dt><dd data-out="back">{money(r.back)} / month</dd></div>
-          {plan && <div><dt>{`New customers a month that cover ${plan.title} (${money(plan.price)} / month founding price)`}</dt><dd data-out="cover">{r.cover}</dd></div>}
+          {plan && <div><dt>{`New customers a month that cover ${plan.title} (${money(plan.price)} / month)`}</dt><dd data-out="cover">{r.cover}</dd></div>}
         </dl>
         <p class="c-fine">{c.disclaimer}</p>
         <a href={book} class="m-btn m-btn-metal m-btn-block" data-magnetic><span>{c.cta}</span></a>

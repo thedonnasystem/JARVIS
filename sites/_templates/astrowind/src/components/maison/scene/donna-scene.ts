@@ -50,6 +50,7 @@ void main(){
 const CALL_V = `
 attribute vec4 aSeed;attribute float aTrail;attribute vec4 aGrid;
 uniform float uTime;uniform float uOrbit;uniform float uFlow;uniform float uGrid;uniform float uBook;uniform float uSize;uniform float uPR;uniform float uIntro;
+uniform vec2 uMouse;uniform float uMouseOn;uniform float uKick;uniform float uAspect;
 uniform vec3 uCore;uniform float uCoreScale;uniform vec3 uFlowC;uniform mat4 uCal;uniform vec3 uMissed;uniform vec3 uGold;uniform vec3 uWine;
 varying vec3 vCol;varying float vA;
 mat3 rx(float a){float c=cos(a),s=sin(a);return mat3(1.,0.,0.,0.,c,s,0.,-s,c);}
@@ -94,9 +95,15 @@ void main(){
   float sz=mix(sA,1.,max(max(wB,wC),wD))*mix(1.,.7,wD);
   float tf=1.-tr;
   vA=al*tf*tf*uIntro;
-  vCol=col;
   vec4 mv=modelViewMatrix*vec4(p,1.);
-  gl_PointSize=min(30.,uSize*sz*(.55+.9*s.y)*(.35+.65*tf)*uPR*(10./max(.5,-mv.z)));
+  // cursor / touch field: particles near the pointer are pushed aside, swirl around it and light up; a click or tap sends a shockwave
+  vec4 cp=projectionMatrix*mv;vec2 nd=cp.xy/max(cp.w,1e-3);vec2 dv=(nd-uMouse)*vec2(uAspect,1.);float md=length(dv);
+  float fld=uMouseOn*exp(-md*md*(14.-uKick*9.))*(1.+uKick*2.5);
+  vec2 dir=dv/max(md,1e-4);
+  mv.xy+=(dir*.55+vec2(-dir.y,dir.x)*.35*(s.z-.5))*fld*(-mv.z)*.16;
+  col+=uGold*fld*1.6;
+  vCol=col;
+  gl_PointSize=min(34.,uSize*sz*(1.+fld*.9)*(.55+.9*s.y)*(.35+.65*tf)*uPR*(10./max(.5,-mv.z)));
   gl_Position=projectionMatrix*mv;}`;
 const CALL_F = `
 varying vec3 vCol;varying float vA;
@@ -346,7 +353,7 @@ export function mount(canvas: HTMLCanvasElement, o: Options) {
   pg.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 100);
   const callU = {
     uTime: { value: 0 }, uOrbit: { value: 0 }, uFlow: { value: 0 }, uGrid: { value: 0 }, uBook: { value: 0 }, uSize: { value: mobile ? 6 : 5.5 }, uPR: { value: dpr() },
-    uIntro: { value: 0 }, uCore: { value: new THREE.Vector3() }, uCoreScale: { value: 1 }, uFlowC: { value: new THREE.Vector3() }, uCal: { value: new THREE.Matrix4() },
+    uIntro: { value: 0 }, uMouse: { value: new THREE.Vector2(9, 9) }, uMouseOn: { value: 0 }, uKick: { value: 0 }, uAspect: { value: 1 }, uCore: { value: new THREE.Vector3() }, uCoreScale: { value: 1 }, uFlowC: { value: new THREE.Vector3() }, uCal: { value: new THREE.Matrix4() },
     uMissed: { value: new THREE.Vector3(1.0, 0.06, 0.13).multiplyScalar(1.7) }, uGold: { value: goldV }, uWine: { value: wineV },
   };
   const calls = new THREE.Points(pg, new THREE.ShaderMaterial({ vertexShader: CALL_V, fragmentShader: CALL_F, uniforms: callU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
@@ -409,11 +416,17 @@ export function mount(canvas: HTMLCanvasElement, o: Options) {
 
   const pointer = { x: 0, y: 0, tx: 0, ty: 0, px: -9, py: -9 };
   const fine = window.matchMedia('(pointer: fine)').matches;
-  const onMove = (e: PointerEvent) => { pointer.tx = (e.clientX / innerWidth) * 2 - 1; pointer.ty = -((e.clientY / innerHeight) * 2 - 1); };
+  let lastInput = -99, kick = 0, mx = 9, my = 9;
+  const aim = (cx: number, cy: number) => { pointer.tx = (cx / innerWidth) * 2 - 1; pointer.ty = -((cy / innerHeight) * 2 - 1); lastInput = performance.now(); };
+  const onMove = (e: PointerEvent) => aim(e.clientX, e.clientY);
+  const onTouch = (e: TouchEvent) => { const t = e.touches[0]; if (t) aim(t.clientX, t.clientY); };
+  const onDown = (e: PointerEvent) => { aim(e.clientX, e.clientY); kick = 1; };
   const onTilt = (e: DeviceOrientationEvent) => { if (e.gamma == null || e.beta == null) return; pointer.tx = Math.max(-1, Math.min(1, e.gamma / 30)); pointer.ty = Math.max(-1, Math.min(1, (45 - e.beta) / 30)); };
   if (!o.reduce) {
-    if (fine) window.addEventListener('pointermove', onMove, { passive: true });
-    else window.addEventListener('deviceorientation', onTilt, { passive: true });
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerdown', onDown, { passive: true });
+    window.addEventListener('touchmove', onTouch, { passive: true });
+    if (!fine) window.addEventListener('deviceorientation', onTilt, { passive: true });
   }
   let amp = 0, ampT = 0;
   const onVoice = (e: Event) => { ampT = (e as CustomEvent).detail || 0; };
@@ -427,6 +440,7 @@ export function mount(canvas: HTMLCanvasElement, o: Options) {
     renderer.setPixelRatio(pr);
     renderer.setSize(W, H, false);
     camera.aspect = W / H;
+    callU.uAspect.value = W / H;
     camera.updateProjectionMatrix();
     callU.uPR.value = pr * (H / 900);
     if (composer) {
@@ -454,14 +468,20 @@ export function mount(canvas: HTMLCanvasElement, o: Options) {
     const tg = sample(y);
     const k = o.reduce ? 1e3 : 3.2;
     for (const key in tg) cur[key] = damp(cur[key] ?? tg[key], tg[key], key === 'book' ? 2.2 : k, dt);
-    if (!fine && !o.reduce && !pointer.tx && !pointer.ty) { pointer.tx = Math.sin(time * 0.21) * 0.5; pointer.ty = Math.cos(time * 0.17) * 0.35; }
-    pointer.x = damp(pointer.x, pointer.tx, 3, dt);
-    pointer.y = damp(pointer.y, pointer.ty, 3, dt);
+    const live = performance.now() - lastInput < 2500;
+    if (!fine && !o.reduce && !live) { pointer.tx = Math.sin(time * 0.21) * 0.5; pointer.ty = Math.cos(time * 0.17) * 0.35; }
+    pointer.x = damp(pointer.x, pointer.tx, 6, dt);
+    pointer.y = damp(pointer.y, pointer.ty, 6, dt);
+    mx = damp(mx, pointer.tx, 14, dt); my = damp(my, pointer.ty, 14, dt);
+    kick = Math.max(0, kick - dt * 1.4);
+    callU.uMouse.value.set(mx, my);
+    callU.uMouseOn.value = damp(callU.uMouseOn.value, live && !o.reduce ? 1 : 0, 4, dt);
+    callU.uKick.value = kick;
     amp = damp(amp, ampT * (0.55 + 0.45 * Math.sin(time * 11) * Math.sin(time * 3.7)), 10, dt);
 
     const ie = ease(intro);
     // camera: section framing + pointer parallax + a slow breathing drift
-    camera.position.set(cur.cx + pointer.x * 0.45 + Math.sin(time * 0.11) * 0.12, cur.cy + pointer.y * 0.28 + Math.cos(time * 0.09) * 0.08, cur.cz + (1 - ie) * 2.2);
+    camera.position.set(cur.cx + pointer.x * 0.75 + Math.sin(time * 0.11) * 0.12, cur.cy + pointer.y * 0.45 + Math.cos(time * 0.09) * 0.08, cur.cz + (1 - ie) * 2.2);
     look.set(cur.lx + pointer.x * 0.1, cur.ly + pointer.y * 0.06, cur.lz);
     camera.lookAt(look);
 
@@ -469,18 +489,18 @@ export function mount(canvas: HTMLCanvasElement, o: Options) {
     inst.position.set(cur.ix, cur.iy + Math.sin(time * 0.6) * 0.04, cur.iz);
     const s = cur.is * (0.82 + 0.18 * ie);
     inst.scale.setScalar(s);
-    spin += dt * (0.18 + Math.min(2.5, Math.abs(scrollV) / 900));
+    spin += dt * (0.18 + Math.min(2.5, Math.abs(scrollV) / 900) + kick * 5);
     const sp = cur.spread * (0.4 + 0.6 * ie);
-    inst.rotation.set(-0.12 + pointer.y * 0.12, -0.25 + pointer.x * 0.22, 0.05);
+    inst.rotation.set(-0.12 + pointer.y * 0.32, -0.25 + pointer.x * 0.55, 0.05 + pointer.x * 0.08);
     gA.rotation.set(sp * 1.05, sp * 0.35 + Math.sin(spin * 0.4) * 0.12 * sp, spin * 0.12);
     gB.rotation.set(sp * -0.55 + Math.sin(spin * 0.5) * 0.25 * sp, sp * 1.25, -spin * 0.2);
     gC.rotation.set(sp * 0.35, sp * -0.9 + Math.cos(spin * 0.45) * 0.3 * sp, spin * 0.33);
     gD.rotation.set(sp * 1.35 + 0.15, sp * 0.15, spin * 0.5);
     heart.rotation.y = time * 0.25;
     core.rotation.set(0.32, time * 0.22, 0.12);
-    heart.scale.setScalar(1 + amp * 0.25);
+    heart.scale.setScalar(1 + amp * 0.25 + kick * 0.35);
     heartU.uTime.value = time;
-    heartU.uAmp.value = amp;
+    heartU.uAmp.value = Math.max(amp, kick);
     heartU.uGlow.value = 0.25 + 0.75 * ie;
 
     cursorLight.position.set(cur.ix + pointer.x * 2.6, cur.iy + pointer.y * 1.8, cur.iz + 2.2);

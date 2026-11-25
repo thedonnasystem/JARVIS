@@ -31,7 +31,9 @@
     "astro-icon": "^1.1.5",
     "astro-seo": "^1.2.0",
     "limax": "4.2.3",
+    "livekit-client": "2.23.0",
     "lodash.merge": "^4.6.2",
+    "retell-client-js-sdk": "3.0.4",
     "unpic": "^4.2.2"
   },
   "devDependencies": {

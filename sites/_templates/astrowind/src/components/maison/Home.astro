@@ -4,9 +4,10 @@
 import Stage from './Stage.astro';
 import Phone from './Phone.astro';
 import Split from './Split.astro';
+import TalkToDonna from './TalkToDonna.astro';
 import ContactForm from '~/components/widgets/ContactForm.astro';
 import { Icon } from 'astro-icon/components';
-import { SITE_DATA as S, BOOKING, DEMO_PHONE, PLACE } from '~/data/site';
+import { SITE_DATA as S, BOOKING, BOOK_LABEL, DEMO_PHONE, PLACE } from '~/data/site';
 
 const money = (n: number) => `$${Number(n).toLocaleString('en-CA')}`;
 const per = (p: string) => (/month/i.test(p || '') ? '/ month' : p || '');
@@ -15,6 +16,7 @@ const saving = (g: any, p: any) => (g.founding && p.standard_price > p.price ? p
 const monthly = (p: any) => /month/i.test(p.period || '');
 const roman = (n: number) => ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'][n] || String(n + 1);
 const two = (n: number) => String(n).padStart(2, '0');
+const webDonna = Boolean(import.meta.env.PUBLIC_DONNA_WEB_KEY && import.meta.env.PUBLIC_DONNA_WEB_AGENT);
 const tel = DEMO_PHONE ? `tel:${DEMO_PHONE.replace(/[^0-9+]/g, '')}` : '';
 const services = S.services?.items || [];
 const steps = S.steps?.items || [];
@@ -39,9 +41,9 @@ const idx = () => two(++n);
       </h1>
       <p class="m-lead" data-hero style="--d:3">{S.hero.subtitle}</p>
       <div class="m-actions" data-hero style="--d:4">
-        <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>Book a demo</span></a>
-        {tel && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Call the demo line: {DEMO_PHONE}</span></a>}
-        <a href="#packages" class="m-btn m-btn-ghost" data-magnetic><span>See packages</span></a>
+        <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>{BOOK_LABEL}</span></a>
+        <TalkToDonna cls="m-btn m-btn-ghost" />
+        {tel && webDonna && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Or call: {DEMO_PHONE}</span></a>}
       </div>
       {S.hero.offer && <a href="#packages" class="m-hero-offer" data-hero style="--d:5"><i class="m-pulse" aria-hidden="true" />{S.hero.offer}</a>}
     </div>
@@ -135,7 +137,7 @@ const idx = () => two(++n);
           <p class="m-eyebrow"><span class="m-idx">{idx()}</span>{S.brand.name}</p>
           <h2 class="m-h2" id="offer-title">{S.offer.title}</h2>
           <p class="m-offer-text">{S.offer.text}</p>
-          <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>Book a demo</span></a>
+          <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>{BOOK_LABEL}</span></a>
         </div>
       </div>
     </div>
@@ -147,19 +149,21 @@ const idx = () => two(++n);
     <div class="m-wrap">
       <header class="m-sec-head m-sec-head-split">
         <div>
-          <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>Pricing</p>
+          <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{g.eyebrow || 'Pricing'}</p>
           <Split as="h2" id={`${g.id}-title`} class="m-h2" text={g.title} />
         </div>
         {g.subtitle && <p class="m-body m-sec-sub" data-reveal>{g.subtitle}</p>}
       </header>
-      <ul class:list={['m-plans', `m-plans-${Math.min(g.items.length, 3)}`]} data-reveal>
+      <ul class:list={['m-plans', `m-plans-${Math.min(g.items.length, 4)}`]} data-reveal>
         {g.items.map((p, i) => (
           <li class:list={['m-card', 'm-plan', p.highlight && 'is-featured']} data-spot style={`--i:${i}`}>
             {p.highlight && <span class="m-chip">{p.highlight_label || 'Recommended'}</span>}
             <h3 class="m-plan-title">{p.title}</h3>
             {p.subtitle && <p class="m-plan-sub">{p.subtitle}</p>}
             {saving(g, p) > 0 && <p class="m-founding-tag"><i class="m-diamond" aria-hidden="true" />{g.founding.badge}</p>}
-            <p class:list={['m-price', saving(g, p) > 0 && 'is-founding']}><span class="m-price-num">{money(p.price)}</span><span class="m-price-per">{per(p.period)}</span></p>
+            {typeof p.price === 'number'
+              ? <p class:list={['m-price', saving(g, p) > 0 && 'is-founding']}><span class="m-price-num">{money(p.price)}</span><span class="m-price-per">{per(p.period)}</span></p>
+              : <p class="m-price m-price-quote"><span class="m-price-num">{p.price_label || 'Custom quote'}</span>{p.period && <span class="m-price-per">{p.period}</span>}</p>}
             {saving(g, p) > 0 && (
               <div class="m-founding">
                 <span class="m-save">{`${g.founding.save} ${money(saving(g, p))}${monthly(p) ? ' / month' : ''}`}</span>
@@ -171,7 +175,7 @@ const idx = () => two(++n);
             <ul class="m-features">
               {(p.features || []).map((f) => <li><i class="m-diamond" aria-hidden="true" />{f}</li>)}
             </ul>
-            <a href={BOOKING} class:list={['m-btn', p.highlight ? 'm-btn-metal' : 'm-btn-ghost', 'm-btn-block']} data-magnetic><span>Book a demo</span></a>
+            <a href={BOOKING} class:list={['m-btn', p.highlight ? 'm-btn-metal' : 'm-btn-ghost', 'm-btn-block']} data-magnetic><span>{BOOK_LABEL}</span></a>
           </li>
         ))}
       </ul>
@@ -179,7 +183,32 @@ const idx = () => two(++n);
   </section>
 ))}
 
-{S.results && (
+{S.compare && (
+  <section class="m-sec" id="why" aria-labelledby="why-title" data-scene="results">
+    <div class="m-wrap">
+      <header class="m-sec-head m-sec-head-split">
+        <div>
+          <p class="m-eyebrow" data-reveal><span class="m-idx">{idx()}</span>{S.compare.tagline || S.brand.name}</p>
+          <Split as="h2" id="why-title" class="m-h2" text={S.compare.title} />
+        </div>
+        {S.compare.subtitle && <p class="m-body m-sec-sub" data-reveal>{S.compare.subtitle}</p>}
+      </header>
+      <div class="m-compare" data-reveal>
+        <div class="m-card m-compare-col is-them">
+          <h3 class="m-h3">{S.compare.them.title}</h3>
+          <ul>{S.compare.them.items.map((t: string) => <li><span class="m-x" aria-hidden="true">×</span>{t}</li>)}</ul>
+        </div>
+        <div class="m-card m-compare-col is-us" data-spot>
+          <h3 class="m-h3">{S.compare.us.title}</h3>
+          <ul>{S.compare.us.items.map((t: string) => <li><i class="m-diamond" aria-hidden="true" />{t}</li>)}</ul>
+          <a href={BOOKING} class="m-btn m-btn-metal m-btn-block" data-magnetic><span>{BOOK_LABEL}</span></a>
+        </div>
+      </div>
+    </div>
+  </section>
+)}
+
+{!S.compare && S.results && (
   <section class="m-sec" id="results" aria-labelledby="results-title" data-scene="results">
     <div class="m-wrap">
       <header class="m-sec-head m-sec-head-split">
@@ -228,7 +257,7 @@ const idx = () => two(++n);
       <Split as="h2" id="contact-title" class="m-h2" text={S.contact.title} />
       {S.contact.subtitle && <p class="m-body" data-reveal>{S.contact.subtitle}</p>}
       <div class="m-actions" data-reveal>
-        {BOOKING !== '#contact' && <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>Book a demo</span></a>}
+        {BOOKING !== '#contact' && <a href={BOOKING} class="m-btn m-btn-metal" data-magnetic><span>{BOOK_LABEL}</span></a>}
         {tel && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Call the demo line: {DEMO_PHONE}</span></a>}
       </div>
     </div>
