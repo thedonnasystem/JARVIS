@@ -5,6 +5,7 @@ import Stage from './Stage.astro';
 import Phone from './Phone.astro';
 import Split from './Split.astro';
 import TalkToDonna from './TalkToDonna.astro';
+import TryDonna from './TryDonna.astro';
 import ContactForm from '~/components/widgets/ContactForm.astro';
 import { Icon } from 'astro-icon/components';
 import { SITE_DATA as S, BOOKING, BOOK_LABEL, DEMO_PHONE, PLACE } from '~/data/site';
@@ -45,7 +46,7 @@ const idx = () => two(++n);
         <TalkToDonna cls="m-btn m-btn-ghost" />
         {tel && webDonna && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Or call: {DEMO_PHONE}</span></a>}
       </div>
-      {S.hero.offer && <a href="#packages" class="m-hero-offer" data-hero style="--d:5"><i class="m-pulse" aria-hidden="true" />{S.hero.offer}</a>}
+      {S.hero.offer && <a href="#packages" class="m-hero-offer" data-hero style="--d:5"><i class="m-pulse" aria-hidden="true" />{S.hero.offer}{S.hero.deadline && <b class="m-countdown" data-deadline={S.hero.deadline} hidden></b>}</a>}
     </div>
   </div>
   <div class="m-wrap m-hero-foot" aria-hidden="true">
@@ -63,6 +64,8 @@ const idx = () => two(++n);
     ))}
   </div>
 </div>
+
+<TryDonna idx={(S as any).tryit ? idx() : ''} />
 
 {S.demo && (
   <section class="m-sec m-call" aria-labelledby="call-title" data-scene="call">
@@ -266,3 +269,15 @@ const idx = () => two(++n);
     </div>
   </div>
 </section>
+
+<script>
+  // real deadline only (site.json hero.deadline): shows "N days left" until it passes, then hides itself
+  document.querySelectorAll<HTMLElement>('[data-deadline]').forEach((el) => {
+    const end = Date.parse(el.dataset.deadline || '');
+    const ms = end - Date.now();
+    if (!Number.isFinite(end) || ms <= 0) return;
+    const d = Math.ceil(ms / 86400000);
+    el.textContent = d <= 1 ? ' · last day' : ` · ${d} days left`;
+    el.hidden = false;
+  });
+</script>

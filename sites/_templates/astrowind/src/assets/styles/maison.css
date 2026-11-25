@@ -83,7 +83,7 @@ html.maison :focus-visible { outline: 1px solid var(--m-gold-hi); outline-offset
 
 /* header */
 .m-header { position: fixed; inset: 0 0 auto; z-index: 50; transition: background 0.6s var(--m-ease), border-color 0.6s; border-bottom: 1px solid transparent; }
-.m-header.is-scrolled { background: rgba(10, 7, 8, 0.72); backdrop-filter: blur(18px) saturate(1.2); -webkit-backdrop-filter: blur(18px) saturate(1.2); border-bottom-color: var(--m-line-soft); }
+.m-header.is-scrolled { background: rgba(10, 7, 8, 0.88); backdrop-filter: blur(18px) saturate(1.2); -webkit-backdrop-filter: blur(18px) saturate(1.2); border-bottom-color: var(--m-line-soft); }
 .m-header-in { display: flex; align-items: center; justify-content: space-between; gap: 2rem; height: 76px; max-width: 1320px; margin: 0 auto; padding: 0 clamp(1.25rem, 4vw, 3.5rem); }
 .m-brand { text-decoration: none; }
 .m-nav { display: none; gap: 2.2rem; }
@@ -467,3 +467,21 @@ html.maison .text-primary { color: var(--m-gold) !important; }
 .m-compare-col.is-them li { color: var(--m-muted); }
 .m-compare-col.is-us { border-color: color-mix(in oklab, var(--m-gold) 60%, transparent); }
 .m-x { color: #b55; font-weight: 600; flex: none; width: 0.9rem; }
+
+/* pick your business (TryDonna.astro) */
+.m-try-chips { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1.6rem; }
+.m-tchip { padding: 0.7rem 1.15rem; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--m-gold) 35%, transparent); background: transparent; color: var(--m-ivory); font-size: 0.95rem; cursor: pointer; transition: background 0.2s, border-color 0.2s, color 0.2s; }
+.m-tchip:hover { border-color: var(--m-gold); }
+.m-tchip[aria-selected="true"] { background: linear-gradient(90deg, #a8822f, #e9d29a 55%, #c9a24a); color: #1a1208; border-color: transparent; font-weight: 600; }
+.m-try-panel { display: grid; gap: 1.1rem; grid-template-columns: 1fr; }
+@media (min-width: 56rem) { .m-try-panel { grid-template-columns: 1fr 1.1fr; } }
+.m-try-panel[hidden] { display: none; }
+.m-try-ai, .m-try-say { padding: clamp(1.5rem, 3vw, 2.3rem); }
+.m-try-k { font-size: 0.8rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--m-gold); margin-bottom: 1.1rem; }
+.m-try-ai ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; }
+.m-try-ai li { display: flex; gap: 0.75rem; align-items: baseline; line-height: 1.5; }
+.m-try-say { border-color: color-mix(in oklab, var(--m-gold) 60%, transparent); }
+.m-try-quote { font-family: var(--m-serif); font-size: clamp(1.5rem, 2.6vw, 2.1rem); line-height: 1.25; color: var(--m-ivory); margin-bottom: 1.6rem; }
+.m-try-cta { display: flex; flex-wrap: wrap; gap: 0.7rem; }
+.m-try-book { display: inline-block; margin-top: 1.2rem; color: var(--m-gold); font-size: 0.95rem; }
+.m-countdown { font-weight: 600; color: var(--m-gold); }

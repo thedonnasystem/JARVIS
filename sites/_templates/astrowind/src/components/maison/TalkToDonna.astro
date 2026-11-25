@@ -33,8 +33,11 @@ const { label = 'Talk to Donna now', cls = 'm-btn m-btn-metal' } = Astro.props;
 
 <script>
   let busy = false;
-  const btn = document.querySelector<HTMLButtonElement>('[data-talk]');
-  const panel = document.querySelector<HTMLElement>('[data-talk-panel]');
+  // the button can appear several times (hero, 'pick your business' panels): every one opens the same single call panel
+  const btns = document.querySelectorAll<HTMLButtonElement>('[data-talk]');
+  const panels = document.querySelectorAll<HTMLElement>('[data-talk-panel]');
+  const panel = panels[0] || null;
+  panels.forEach((p, i) => { if (i > 0) p.remove(); });
   // fixed to the viewport: lift it out of the animated hero (a transformed ancestor would trap position: fixed)
   if (panel && panel.parentElement !== document.body) document.body.appendChild(panel);
   const status = document.querySelector<HTMLElement>('[data-talk-status]');
@@ -53,8 +56,8 @@ const { label = 'Talk to Donna now', cls = 'm-btn m-btn-metal' } = Astro.props;
     busy = false;
     setTimeout(() => { if (!busy && panel) panel.hidden = true; }, ms);
   };
-  btn?.addEventListener('click', async () => {
-    if (busy || !btn || !panel) return;
+  const start = async (btn: HTMLButtonElement) => {
+    if (busy || !panel) return;
     busy = true;
     wentLive = false;
     failed = false;
@@ -96,7 +99,8 @@ const { label = 'Talk to Donna now', cls = 'm-btn m-btn-metal' } = Astro.props;
       const tel = btn.dataset.phone ? ` Call ${btn.dataset.phone} instead.` : '';
       close(`Couldn't start the call.${tel}`, 6000);
     }
-  });
+  };
+  btns.forEach((b) => b.addEventListener('click', () => start(b)));
   endBtn?.addEventListener('click', async () => {
     try { await session?.end(); } catch {}
     session = null;

@@ -28,11 +28,12 @@
   ],
   "hero": {
     "tagline": "AI solutions & infrastructure integration",
-    "title": "AI solutions and infrastructure,",
-    "title_accent": "built into your business.",
+    "title": "What if your business",
+    "title_accent": "never missed a thing?",
     "subtitle": "We turn your missed calls and missed leads into booked appointments. Then we automate the busywork, build AI agents for your team and connect it all to the tools you already use. Done for you, month-to-month.",
-    "offer": "Free 20-min AI consultation · Plans from $197 / month · Setup free until December 31",
-    "foot": "Free 20-min AI consultation"
+    "offer": "Free 20-min AI consultation · Plans from $197 / month · Free setup until December 31",
+    "foot": "Free 20-min AI consultation",
+    "deadline": "2026-12-31T23:59:59-05:00"
   },
   "demo": {
     "label": "Illustration of a call, not a real customer",
@@ -519,5 +520,84 @@
         "A clear plan and one price before we build anything"
       ]
     }
+  },
+  "tryit": {
+    "tagline": "Try it in 30 seconds",
+    "title": "Pick your business. Then test Donna.",
+    "subtitle": "See what AI would take off your plate, then talk to Donna and say the line. She'll answer like she already works for you.",
+    "industries": [
+      {
+        "name": "Trades & home services",
+        "say": "My furnace just stopped working. Can someone come out today?",
+        "ai": [
+          "Every call answered, even when you're on a job or it's after hours",
+          "Missed callers texted back and booked into your open slots",
+          "Quotes followed up until the job is won or lost"
+        ]
+      },
+      {
+        "name": "Med spa & beauty",
+        "say": "Hi, I'd like to book a consultation. What do you have Thursday?",
+        "ai": [
+          "Bookings and rebookings handled day and night",
+          "A reminder before every appointment",
+          "Past clients invited back with messages you approve"
+        ]
+      },
+      {
+        "name": "Clinic & dental",
+        "say": "I chipped a tooth. Can I get in this week?",
+        "ai": [
+          "New-patient calls answered and booked",
+          "Appointment reminders sent automatically",
+          "Your front desk freed from routine questions"
+        ]
+      },
+      {
+        "name": "Law firm",
+        "say": "I was in a car accident and I need to talk to a lawyer.",
+        "ai": [
+          "Every intake call answered and qualified",
+          "Consultations booked into the right calendar",
+          "Every lead that didn't book gets followed up"
+        ]
+      },
+      {
+        "name": "Auto",
+        "say": "My check-engine light came on. Can you look at it tomorrow?",
+        "ai": [
+          "Service calls answered while your techs work",
+          "Appointments booked and confirmed by text",
+          "Customers reminded when their next service is due"
+        ]
+      },
+      {
+        "name": "Real estate",
+        "say": "I saw one of your listings. Is it still available?",
+        "ai": [
+          "Listing inquiries answered in seconds, day or night",
+          "Showings booked straight into your calendar",
+          "Every lead followed up until they're ready to move"
+        ]
+      },
+      {
+        "name": "Restaurants & food",
+        "say": "Can I book a table for six on Saturday at seven?",
+        "ai": [
+          "Calls answered during the rush",
+          "Order and reservation links texted to callers",
+          "Catering and big-group requests sent straight to you"
+        ]
+      },
+      {
+        "name": "Something else",
+        "say": "I run a small business. What could AI do for me?",
+        "ai": [
+          "Find where AI saves you the most time and money",
+          "Automate the busywork your team hates",
+          "Connect your tools into one system that runs itself"
+        ]
+      }
+    ]
   }
 }
