@@ -417,7 +417,71 @@
   },
   "legal": {
     "entity": "[OWNER: legal entity name]",
-    "contact": "thedonnasystem@gmail.com · [OWNER: business mailing address before launch]"
+    "contact": "thedonnasystem@gmail.com · [OWNER: business mailing address before launch]",
+    "privacy": [
+      {
+        "h": "What we collect.",
+        "p": "From the contact form: your name, business name, phone, email, your message, the time you sent it and whether you ticked the optional marketing box. From a conversation with Donna, our AI receptionist, on this website or by phone: a recording and transcript of the call, an automatic summary, the details you choose to share (such as your name, business, email and the problem you want solved) and, for phone calls, your phone number. From a booking: your name, email and the time you picked."
+      },
+      {
+        "h": "Donna is an AI.",
+        "p": "Every call starts by telling you that you are speaking with an AI and that the call is recorded. If you do not want to be recorded, end the call and use the contact form or email us instead."
+      },
+      {
+        "h": "Why we use it.",
+        "p": "To answer your inquiry, book and hold your consultation, follow up about it, and improve how Donna answers. If you ticked the marketing box, also to send you occasional messages about our services. We do not sell your information."
+      },
+      {
+        "h": "Who processes it for us.",
+        "p": "Netlify (website hosting and forms), Retell AI (voice calls, recordings and transcripts, using AI speech and language models from its providers), Cal.com (bookings), Google (email) and Telegram (instant alerts to our team about new requests). Some of these providers store or process data outside Canada, including in the United States, where it may be accessible to authorities under local law."
+      },
+      {
+        "h": "How long we keep it.",
+        "p": "Call recordings and transcripts are kept by our voice provider for 30 days, then deleted. Form submissions and booking details are kept for up to 24 months after our last contact, unless you become a client, in which case your client agreement applies. [OWNER: confirm these periods.]"
+      },
+      {
+        "h": "Consent and unsubscribing.",
+        "p": "Every marketing message identifies us and includes a way to unsubscribe. You can withdraw consent at any time by replying STOP to a text, using the unsubscribe link in an email, or writing to us."
+      },
+      {
+        "h": "Cookies.",
+        "p": "This site does not use advertising or analytics cookies."
+      },
+      {
+        "h": "Your rights.",
+        "p": "You can ask to see, correct or delete your information, or ask questions about this policy, by writing to us at the contact above. If you are not satisfied with our answer, you can contact the Office of the Privacy Commissioner of Canada."
+      }
+    ],
+    "terms": [
+      {
+        "h": "Free consultation.",
+        "p": "The free 20-minute AI consultation is free and carries no obligation. Any plan or project starts only after you accept a written quote or agreement."
+      },
+      {
+        "h": "Services and results.",
+        "p": "We describe our services on this site. We build and run AI systems for your business, but we do not promise a specific number of calls, bookings, customers, sales or savings."
+      },
+      {
+        "h": "Prices.",
+        "p": "Plans start at $197 a month. Prices are in Canadian dollars, plus applicable taxes. Your exact price is in your written quote or agreement, and that price applies."
+      },
+      {
+        "h": "Month-to-month.",
+        "p": "Monthly plans are month-to-month with no long-term contract. Notice and cancellation terms are in your agreement."
+      },
+      {
+        "h": "Current offer.",
+        "p": "Setup is free for plans booked before December 31, 2026 (setup is otherwise $497, $997 or $1,497 depending on the plan). The offer ends on that date."
+      },
+      {
+        "h": "AI disclosure.",
+        "p": "Donna is an AI. Calls with Donna are recorded and transcribed as described in our Privacy Policy."
+      },
+      {
+        "h": "Website content.",
+        "p": "Provided as is, for information only."
+      }
+    ]
   },
   "owner_review": [
     "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",

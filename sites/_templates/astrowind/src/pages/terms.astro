@@ -7,6 +7,16 @@ const metadata = { title: `Terms of Service | ${b}`, ignoreTitleTemplate: true }
 
 <Layout metadata={metadata}>
   <section class="mx-auto max-w-3xl px-6 py-16 prose dark:prose-invert">
+    {L.terms ? (
+      <>
+        <h1>Terms of Use</h1>
+        <p><strong>DRAFT PLACEHOLDER: the owner (and counsel) must review this before it is in force.</strong> It is not legal advice.</p>
+        <p><em>Last updated: {L.approved_on || '[OWNER: date]'}</em></p>
+        <p><strong>Who we are.</strong> {b} ({L.entity}){PLACE && `, ${PLACE}`}. Contact: {L.contact}.</p>
+        {L.terms.map((x: any) => <p><strong>{x.h}</strong> {x.p}</p>)}
+      </>
+    ) : (
+      <>
     <h1>Terms of Service</h1>
     <p><strong>DRAFT PLACEHOLDER: the owner (and counsel) must review this before launch.</strong> It is not legal advice and it is not yet in force.</p>
     <p><em>Last updated: [OWNER: date]</em></p>
@@ -15,5 +25,7 @@ const metadata = { title: `Terms of Service | ${b}`, ignoreTitleTemplate: true }
     <p><strong>Prices.</strong> In Canadian dollars, plus applicable taxes. Prices may change; the price in your signed agreement applies.</p>
     <p><strong>Website content.</strong> Provided as is, for information only.</p>
     <p><strong>Contact.</strong> {L.contact}.</p>
+  </>
+    )}
   </section>
 </Layout>

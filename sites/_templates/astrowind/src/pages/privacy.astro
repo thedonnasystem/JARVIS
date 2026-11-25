@@ -7,6 +7,16 @@ const metadata = { title: `Privacy Policy | ${b}`, ignoreTitleTemplate: true };
 
 <Layout metadata={metadata}>
   <section class="mx-auto max-w-3xl px-6 py-16 prose dark:prose-invert">
+    {L.privacy ? (
+      <>
+        <h1>Privacy Policy</h1>
+        <p><strong>DRAFT PLACEHOLDER: the owner (and counsel) must review this before it is in force.</strong> It is not legal advice.</p>
+        <p><em>Last updated: {L.approved_on || '[OWNER: date]'}</em></p>
+        <p><strong>Who we are.</strong> {b} ({L.entity}){PLACE && `, ${PLACE}`}. Contact: {L.contact}.</p>
+        {L.privacy.map((x: any) => <p><strong>{x.h}</strong> {x.p}</p>)}
+      </>
+    ) : (
+      <>
     <h1>Privacy Policy</h1>
     <p><strong>DRAFT PLACEHOLDER: the owner (and counsel) must review this before launch.</strong> It is not legal advice and it is not yet in force.</p>
     <p><em>Last updated: [OWNER: date]</em></p>
@@ -17,5 +27,7 @@ const metadata = { title: `Privacy Policy | ${b}`, ignoreTitleTemplate: true };
     <p><strong>Where it is stored.</strong> Form submissions are received by our website host (Netlify) and then stored in our customer system. [OWNER: confirm data locations and service providers.]</p>
     <p><strong>How long.</strong> [OWNER: retention period.]</p>
     <p><strong>Your rights.</strong> You can ask to see, correct or delete your information by writing to {L.contact}.</p>
+  </>
+    )}
   </section>
 </Layout>
