@@ -12,15 +12,15 @@
     "accent": "#c9a24a"
   },
   "meta": {
-    "title": "Donna.AI | AI solutions and infrastructure for your business",
-    "description": "Donna.AI builds and integrates AI into your business: an AI front desk that turns missed calls and missed leads into booked appointments, workflow automation, custom AI agents and the infrastructure that connects them. Free 20-min AI consultation. Plans from $197 a month."
+    "title": "Donna.AI | Revenue growth and loss-prevention infrastructure",
+    "description": "Donna.AI finds where your business is losing revenue (missed calls, slow follow-up, forgotten quotes, no-shows, busywork) and builds the AI that plugs the leaks and grows what's left. Free 20-min Revenue Leak Audit. Plans from $197 a month."
   },
   "links": {
     "booking": "#contact",
     "booking_is_placeholder": true,
     "demo_phone": "+1 (825) 462-1250",
-    "booking_label": "Book your free 20-min AI consultation",
-    "booking_label_short": "Free AI consultation"
+    "booking_label": "Get your free Revenue Leak Audit",
+    "booking_label_short": "Free Leak Audit"
   },
   "header_hide": [
     "websites",
@@ -28,12 +28,12 @@
     "custom-ai"
   ],
   "hero": {
-    "tagline": "AI solutions & infrastructure integration",
-    "title": "The AI infrastructure",
-    "title_accent": "your business runs on.",
-    "subtitle": "We turn your missed calls and missed leads into booked appointments. Then we build the AI behind everything else: automations, AI agents and custom software, connected to the tools you already use. Done for you, month-to-month.",
-    "offer": "Free 20-min AI consultation · Plans from $197 / month · Free setup until December 31",
-    "foot": "Free 20-min AI consultation",
+    "tagline": "Revenue growth & loss-prevention infrastructure",
+    "title": "Stop losing revenue",
+    "title_accent": "you've already earned.",
+    "subtitle": "We turn your missed calls and missed leads into booked appointments. Then we plug every other leak, from forgotten quotes to no-shows to busywork, and build the AI that grows what's left. Done for you, month-to-month.",
+    "offer": "Free 20-min Revenue Leak Audit · Plans from $197 / month · Free setup until December 31",
+    "foot": "Free 20-min Revenue Leak Audit",
     "deadline": "2026-12-31T23:59:59-05:00"
   },
   "demo": {
@@ -105,7 +105,7 @@
     "title": "How it works",
     "items": [
       {
-        "title": "Free 20-min AI consultation",
+        "title": "Free 20-min Revenue Leak Audit",
         "description": "We find where AI saves you the most time and money, and show you what we'd build. No cost, no obligation."
       },
       {
@@ -123,20 +123,20 @@
     ]
   },
   "offer": {
-    "title": "Free 20-min AI consultation",
-    "text": "In 20 minutes we find where AI saves your business the most time and money, and show you exactly what we'd build. No cost, no obligation. Book before December 31 and setup is free on any plan.",
+    "title": "Free 20-min Revenue Leak Audit",
+    "text": "In 20 minutes our AI specialist finds where your business is losing revenue and shows you what we'd build to plug it. No cost, no obligation. Book before December 31 and setup is free on any plan.",
     "seal": "Free"
   },
   "pricing": [
     {
       "id": "custom-ai",
       "title": "AI solutions and infrastructure",
-      "subtitle": "Automations, AI agents and full AI integration, built around how your business already runs. Scoped and priced in your free 20-min AI consultation.",
+      "subtitle": "Automations, AI agents and full AI integration, built around how your business already runs. Scoped and priced in your free 20-min Revenue Leak Audit.",
       "items": [
         {
           "title": "AI Automations",
           "subtitle": "Your busywork, done for you",
-          "price_label": "Free consultation",
+          "price_label": "Free audit",
           "period": "then one clear price",
           "note": "Built into the tools you already use.",
           "features": [
@@ -148,7 +148,7 @@
         {
           "title": "AI Agents",
           "subtitle": "Staff that never clock out",
-          "price_label": "Free consultation",
+          "price_label": "Free audit",
           "period": "then one clear price",
           "note": "Built into the tools you already use.",
           "features": [
@@ -160,7 +160,7 @@
         {
           "title": "AI Infrastructure & Integration",
           "subtitle": "Every system talking to each other",
-          "price_label": "Free consultation",
+          "price_label": "Free audit",
           "period": "then one clear price",
           "note": "Built into the tools you already use.",
           "features": [
@@ -176,7 +176,7 @@
     {
       "id": "packages",
       "title": "AI front desk plans",
-      "subtitle": "Plans starting from $197 a month, month-to-month. Book before December 31 and setup is free. Your exact plan and price come out of your free 20-min AI consultation.",
+      "subtitle": "Plans starting from $197 a month, month-to-month. Book before December 31 and setup is free. Your exact plan and price come out of your free 20-min Revenue Leak Audit.",
       "items": [
         {
           "title": "Essential",
@@ -282,8 +282,8 @@
   },
   "faq": [
     {
-      "q": "What happens in the free 20-min AI consultation?",
-      "a": "Our AI specialist asks how your business runs, finds where you're losing time or customers, and shows you what we'd build first. You leave with a clear plan and a price. No cost and no obligation."
+      "q": "What happens in the free Revenue Leak Audit?",
+      "a": "In 20 minutes our AI specialist walks through how your business handles calls, leads, quotes, bookings and admin, finds where revenue is slipping away, and shows you what we'd build first and what it costs. No cost and no obligation."
     },
     {
       "q": "What can you build?",
@@ -295,7 +295,7 @@
     },
     {
       "q": "How much does it cost?",
-      "a": "Plans start at $197 a month. Your exact price depends on what you need, and you get it in your free consultation, before we build anything. Book before December 31 and setup is free."
+      "a": "Plans start at $197 a month. Your exact price depends on what you need, and you get it in your free audit, before we build anything. Book before December 31 and setup is free."
     },
     {
       "q": "Is there a contract?",
@@ -315,8 +315,8 @@
     }
   ],
   "contact": {
-    "title": "Book your free 20-min AI consultation",
-    "subtitle": "Tell us a little about your business and we'll book you in. Prefer email? thedonnasystem@gmail.com",
+    "title": "Get your free Revenue Leak Audit",
+    "subtitle": "Tell us a little about your business and we'll book your audit. Prefer email? thedonnasystem@gmail.com",
     "tagline": "Setup free until December 31"
   },
   "calculator": {
@@ -431,7 +431,7 @@
       },
       {
         "h": "Why we use it.",
-        "p": "To answer your inquiry, book and hold your consultation, follow up about it, and improve how Donna answers. If you ticked the marketing box, also to send you occasional messages about our services. We do not sell your information."
+        "p": "To answer your inquiry, book and hold your audit, follow up about it, and improve how Donna answers. If you ticked the marketing box, also to send you occasional messages about our services. We do not sell your information."
       },
       {
         "h": "Who processes it for us.",
@@ -456,8 +456,8 @@
     ],
     "terms": [
       {
-        "h": "Free consultation.",
-        "p": "The free 20-minute AI consultation is free and carries no obligation. Any plan or project starts only after you accept a written quote or agreement."
+        "h": "Free Revenue Leak Audit.",
+        "p": "The free 20-minute Revenue Leak Audit is free and carries no obligation. Any plan or project starts only after you accept a written quote or agreement."
       },
       {
         "h": "Services and results.",
@@ -487,13 +487,14 @@
   },
   "owner_review": [
     "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
-    "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com \"Free 20-min AI consultation\" link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
+    "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com \"Free 20-min Revenue Leak Audit\" link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
     "December offer (owner decision, Nov 24 2026): setup included free for clients who book before December 31, 2026 (normally $497 / $997 / $1,497). The deadline is real: on January 1 end the offer or replace it with a new dated one; never roll the same deadline forward (Competition Act).",
     "Prices (owner decision, Nov 24 2026): Essential $197, Answer $497, Capture $797, Command $1,297 a month; Site $497, Site Pro $997 one-time. The site shows only 'from $197'; exact prices are given on the call.",
-    "Promises on the site you must keep (owner decision needed if not): free 20-min AI consultation; a plain-English playbook for everything built; monitoring, fixes and tuning included in every plan (no break-fix invoices); a clear plan and one price before any build; client data used only to run their systems and never sold.",
+    "Promises on the site you must keep (owner decision needed if not): free 20-min Revenue Leak Audit; a plain-English playbook for everything built; monitoring, fixes and tuning included in every plan (no break-fix invoices); a clear plan and one price before any build; client data used only to run their systems and never sold.",
     "Comparison section describes the usual AI vendor in general terms (no competitor named). Keep every Donna.AI line true.",
     "Privacy policy and terms are real drafts (calls, recordings, processors, retention, offer terms): owner and counsel review them before relying on them; confirm the retention periods.",
-    "Domain not bought yet (donna.ai is not an option): pick one and point it at Netlify; then restrict the Retell public key to it."
+    "Domain not bought yet (donna.ai is not an option): pick one and point it at Netlify; then restrict the Retell public key to it.",
+    "Client quotes: the Web Studio QA (hq_webstudio.py, owner-protected) blocks testimonials and reviews on every site. To publish Al's Diner's real words, the owner must approve a QA change that allows approved, permissioned client quotes. Never invented ones (Competition Act)."
   ],
   "compare": {
     "tagline": "Why Donna.AI",
@@ -513,7 +514,7 @@
     "us": {
       "title": "Donna.AI",
       "items": [
-        "Free 20-min AI consultation",
+        "Free 20-min Revenue Leak Audit",
         "One partner for the whole stack: front desk, leads, automations, AI agents and integration",
         "Month-to-month from $197, setup free until December 31",
         "A plain-English playbook for everything we build, and your data stays yours",
@@ -613,7 +614,9 @@
           "Answers in seconds, 24/7, in a warm, natural voice",
           "Missed callers texted back automatically",
           "Appointments booked straight into your calendar"
-        ]
+        ],
+        "act": "Plug the leaks",
+        "act_text": "Stop the revenue you've already earned from walking out the door."
       },
       {
         "key": "leads",
@@ -625,7 +628,23 @@
           "Instant replies to website and ad leads",
           "Follow-ups that stop the moment they answer",
           "One simple pipeline, so no lead gets lost"
-        ]
+        ],
+        "act": "Plug the leaks",
+        "act_text": "Stop the revenue you've already earned from walking out the door."
+      },
+      {
+        "name": "Quotes & no-shows",
+        "title": "Every quote chased. Every slot filled.",
+        "icon": "tabler:calendar-check",
+        "text": "Quotes get followed up until they're won or lost, every appointment gets a reminder, and cancelled slots get offered to the next customer.",
+        "points": [
+          "Quote follow-ups that send themselves",
+          "A reminder before every appointment",
+          "Cancelled slots offered to the next customer"
+        ],
+        "key": "quotes",
+        "act": "Plug the leaks",
+        "act_text": "Stop the revenue you've already earned from walking out the door."
       },
       {
         "key": "automation",
@@ -637,7 +656,23 @@
           "Quotes and invoices that send themselves",
           "Reminders and review requests on autopilot",
           "Weekly reports that land in your inbox"
-        ]
+        ],
+        "act": "Plug the leaks",
+        "act_text": "Stop the revenue you've already earned from walking out the door."
+      },
+      {
+        "name": "Win-back & reviews",
+        "title": "Your old customer list is money sitting still.",
+        "icon": "tabler:star",
+        "text": "We bring past customers back with messages you approve, ask happy customers for reviews and make referrals easy.",
+        "points": [
+          "Win-back messages you approve",
+          "Review requests after every job",
+          "Referral asks at the right moment"
+        ],
+        "key": "winback",
+        "act": "Grow revenue",
+        "act_text": "Then turn what you have into more: past customers, reviews, AI agents and systems built around you."
       },
       {
         "key": "agents",
@@ -649,7 +684,9 @@
           "Trained on how your business actually works",
           "You approve every word before a customer sees it",
           "Hands off to a person whenever it matters"
-        ]
+        ],
+        "act": "Grow revenue",
+        "act_text": "Then turn what you have into more: past customers, reviews, AI agents and systems built around you."
       },
       {
         "key": "software",
@@ -661,7 +698,9 @@
           "Your existing tools connected, nothing ripped out",
           "Custom dashboards and internal tools",
           "Built, documented and run for you"
-        ]
+        ],
+        "act": "Grow revenue",
+        "act_text": "Then turn what you have into more: past customers, reviews, AI agents and systems built around you."
       },
       {
         "key": "websites",
@@ -673,7 +712,85 @@
           "Designed to turn visitors into bookings",
           "Donna and booking built right in",
           "One-time price, no monthly fees"
-        ]
+        ],
+        "act": "Grow revenue",
+        "act_text": "Then turn what you have into more: past customers, reviews, AI agents and systems built around you."
+      }
+    ]
+  },
+  "leaks": {
+    "tagline": "Your leak check",
+    "title": "How much is your business leaking?",
+    "subtitle": "Move the sliders to match your business. Every number below comes from yours; your free audit replaces these estimates with real ones.",
+    "value_label": "Average value of a new customer or job",
+    "value_default": 250,
+    "close_label": "Share of lost opportunities that would have bought",
+    "close_default": 30,
+    "hourly_label": "What an hour of your team's time costs",
+    "hourly_default": 30,
+    "result_label": "Revenue at risk",
+    "cta": "Get your free Revenue Leak Audit",
+    "note": "An estimate from your own numbers, not a promise. Missed calls, leads and quotes use your close rate; no-shows use the full value; busywork uses your hourly cost.",
+    "rows": [
+      {
+        "key": "calls",
+        "label": "Calls you miss in a week",
+        "short": "Missed calls",
+        "unit": "/wk",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "value": 5,
+        "kind": "weekly_close",
+        "href": "#services"
+      },
+      {
+        "key": "leads",
+        "label": "Leads a month that never get a reply",
+        "short": "Unanswered leads",
+        "unit": "/mo",
+        "min": 0,
+        "max": 60,
+        "step": 1,
+        "value": 4,
+        "kind": "monthly_close",
+        "href": "#solution-leads"
+      },
+      {
+        "key": "quotes",
+        "label": "Quotes a month nobody follows up",
+        "short": "Forgotten quotes",
+        "unit": "/mo",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "value": 3,
+        "kind": "monthly_close",
+        "href": "#solution-quotes"
+      },
+      {
+        "key": "noshows",
+        "label": "No-shows or late cancellations a month",
+        "short": "No-shows",
+        "unit": "/mo",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "value": 2,
+        "kind": "monthly_value",
+        "href": "#solution-quotes"
+      },
+      {
+        "key": "admin",
+        "label": "Hours a week spent on busywork",
+        "short": "Busywork",
+        "unit": "h/wk",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "value": 6,
+        "kind": "weekly_hours",
+        "href": "#solution-automation"
       }
     ]
   }

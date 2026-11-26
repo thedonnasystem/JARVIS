@@ -1,0 +1,26 @@
+---
+// Phones only: a slim bar pinned to the bottom with the two actions that convert (book the audit, talk to Donna).
+// Appears after the hero, hides while the contact section is on screen.
+import { BOOKING, SITE_DATA as S } from '~/data/site';
+const short = (S.links?.booking_label_short as string) || 'Book';
+---
+<div class="m-mbar" data-mbar hidden>
+  <a href={BOOKING} class="m-btn m-btn-metal m-btn-sm"><span>{short}</span></a>
+  <a href="#try" class="m-btn m-btn-ghost m-btn-sm"><span>Talk to Donna</span></a>
+</div>
+<script>
+  const bar = document.querySelector<HTMLElement>('[data-mbar]');
+  if (bar && window.matchMedia('(max-width: 47.99rem)').matches) {
+    const hero = document.querySelector('#top, .m-hero, section');
+    const contact = document.querySelector('#contact');
+    let pastHero = false, atContact = false;
+    const set = () => { bar.hidden = !(pastHero && !atContact); };
+    const io = new IntersectionObserver((es) => es.forEach((e) => {
+      if (e.target === hero) pastHero = !e.isIntersecting;
+      if (e.target === contact) atContact = e.isIntersecting;
+      set();
+    }), { threshold: 0.05 });
+    if (hero) io.observe(hero);
+    if (contact) io.observe(contact);
+  }
+</script>

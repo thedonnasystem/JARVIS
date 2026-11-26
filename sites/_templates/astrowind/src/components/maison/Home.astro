@@ -7,6 +7,9 @@ import Split from './Split.astro';
 import TalkToDonna from './TalkToDonna.astro';
 import TryDonna from './TryDonna.astro';
 import Chapters from './Chapters.astro';
+import LeakCalc from './LeakCalc.astro';
+import Testimonials from './Testimonials.astro';
+import MobileBar from './MobileBar.astro';
 const chapters = Boolean((S as any).chapters?.items?.length);
 import ContactForm from '~/components/widgets/ContactForm.astro';
 import { Icon } from 'astro-icon/components';
@@ -67,7 +70,13 @@ const idx = () => two(++n);
   </div>
 </div>
 
+<LeakCalc idx={(S as any).leaks ? idx() : ''} />
+
 {chapters ? <Chapters /> : <TryDonna idx={(S as any).tryit ? idx() : ''} />}
+
+<Testimonials idx={(S as any).testimonials ? idx() : ''} />
+
+<MobileBar />
 
 {!chapters && S.demo && (
   <section class="m-sec m-call" aria-labelledby="call-title" data-scene="call">
