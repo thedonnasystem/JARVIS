@@ -111,7 +111,7 @@ def preview(intake: dict) -> str:
     lines = [f"Donna agent for {intake.get('client_label')}:",
              f"- hours: {_hours_text(c.get('hours') or {})}",
              f"- {len(c.get('services') or [])} services, {len(c.get('faqs') or [])} FAQs, urgent calls: {'transfer to ' + c['escalation_number'] if 'transfer_to_team' in tools else 'callback note (no valid number)'}",
-             f"- voice: Kate (ElevenLabs via Retell); calls kept 30 days",
+             f"- voice: Kate (Retell voice library); calls kept 30 days",
              f"- prompt: {len(s['llm']['general_prompt'])} characters, from the intake only"]
     if warn:
         lines.append("Open items from the intake: " + "; ".join(warn))
