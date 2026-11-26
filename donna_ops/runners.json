@@ -138,5 +138,69 @@
   ],
   "max_emails": 3,
   "contact": "Contact: thedonnasystem@gmail.com"
+ },
+ "content": {
+  "about": "Donna Content v1 (hq_donna_content.py): weekly creative jobs for the 'donna' office through the Creative Studio; the owner approves every asset before it is scheduled. Hooks are the owner's wording where he gave it.",
+  "per_week": 5,
+  "pin_first": true,
+  "themes": [
+   {
+    "id": "hook",
+    "module": "video",
+    "platform": "9:16",
+    "hook": "We turn your missed calls and missed leads into booked appointments.",
+    "brief": "A 20-second vertical video: a busy owner's phone ringing out on a job, then Donna answering, booking the customer and texting the owner a summary."
+   },
+   {
+    "id": "after-hours",
+    "module": "video",
+    "platform": "9:16",
+    "hook": "Who answers your phone at 9 pm?",
+    "brief": "A vertical video: an after-hours call to a local business; Donna answers, takes the details and books the morning slot."
+   },
+   {
+    "id": "quotes",
+    "module": "image",
+    "platform": "1:1",
+    "hook": "That quote you sent last week. Did anyone follow up?",
+    "brief": "A square image: a quote on a desk with a gentle follow-up text on a phone beside it."
+   },
+   {
+    "id": "no-shows",
+    "module": "image",
+    "platform": "1:1",
+    "hook": "A reminder the day before. That's it.",
+    "brief": "A square image: a calendar slot kept because a reminder text went out the day before."
+   },
+   {
+    "id": "leak-check",
+    "module": "video",
+    "platform": "9:16",
+    "hook": "How much is your business leaking?",
+    "brief": "A vertical video walking through the site's leak calculator: missed calls, unanswered leads, forgotten quotes, no-shows, busywork; ends on the free Revenue Leak Audit."
+   },
+   {
+    "id": "busywork",
+    "module": "image",
+    "platform": "1:1",
+    "hook": "Your evenings shouldn't be invoices.",
+    "brief": "A square image: an owner closing the laptop while quotes and invoices send themselves."
+   },
+   {
+    "id": "audit-offer",
+    "module": "image",
+    "platform": "1:1",
+    "offer": true,
+    "hook": "Free 20-min Revenue Leak Audit. Setup free until December 31.",
+    "brief": "A square image announcing the free 20-minute Revenue Leak Audit with our AI specialist; setup is free on any plan booked before December 31."
+   },
+   {
+    "id": "not-just-calls",
+    "module": "video",
+    "platform": "9:16",
+    "hook": "It's not just missed calls.",
+    "brief": "A vertical video listing the quiet leaks (unanswered leads, quotes nobody chased, no-shows, busywork) and how Donna plugs each one."
+   }
+  ]
  }
 }

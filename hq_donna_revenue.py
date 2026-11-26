@@ -564,6 +564,11 @@ def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, ap
                 out["messages"] += announce(r.get("result") or {}, approve=approve, brief=brief)
             except Exception as e:
                 out["runs"][-1]["announce_error"] = type(e).__name__
+    try:                                                                       # Donna Content v1: the weekly creative jobs (DONNA_CONTENT=1), owner approves each asset
+        import hq_donna_content
+        out["content"] = hq_donna_content.submit_week(rpc, env)
+    except Exception as e:
+        out["content"] = {"error": type(e).__name__}
     try:
         out["cold"] = stage_cold(rpc, approve=approve)
         out["messages"] += out["cold"]["posted"]
