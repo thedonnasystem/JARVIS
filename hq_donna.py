@@ -275,6 +275,9 @@ class Ctx:
 
 # ------------------------------------------------------------------------------------------------------------------- runners
 def market_research(ctx: Ctx, inputs: dict) -> dict:
+    if inputs.get("mode") == "find_prospects":                        # Prospects v1: OpenStreetMap -> contacts verified on each business's own site
+        import hq_donna_prospects
+        return hq_donna_prospects.find_prospects(ctx, inputs)
     import hq_evidence
     cfg = ctx.cfg
     niches = [str(n)[:60] for n in (inputs.get("niches") or cfg["niches"])][:9]

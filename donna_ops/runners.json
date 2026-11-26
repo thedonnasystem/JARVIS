@@ -202,5 +202,11 @@
     "brief": "A vertical video listing the quiet leaks (unanswered leads, quotes nobody chased, no-shows, busywork) and how Donna plugs each one."
    }
   ]
+ },
+ "prospecting": {
+  "about": "Donna Prospects v1 (hq_donna_prospects.py): OpenStreetMap businesses with a website; the contact counts only when verbatim on the business's own page.",
+  "area": "Ottawa",
+  "area_wikidata": "Q1930",
+  "prospects_per_run": 15
  }
 }

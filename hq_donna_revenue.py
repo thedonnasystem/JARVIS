@@ -550,6 +550,14 @@ def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, ap
                 jobs.append(("outreach-prep", {"mode": "client_report"}))
         except Exception:
             pass                                                              # not installed yet (migration 20261211) or no agents
+    try:                                                                       # Prospects v1: once a day, Donna finds new prospects (DONNA_PROSPECTING=1)
+        import hq_donna_prospects
+        now = dt.datetime.now(TZ)
+        if env.get(hq_donna_prospects.FLAG) == "1" and now.hour >= 8 and hq_donna_prospects.due_today(env, now):
+            hq_donna_prospects.mark_today(env, now)
+            jobs.insert(0, ("market-research", {"mode": "find_prospects"}))
+    except Exception:
+        pass
     if q.get("prospects_ready") and not q.get("cold_run_today"):           # once a day: first-email drafts for researched prospects (free brain, $0; drafts only)
         jobs.append(("outreach-prep", {"channels": ["email"], "lead_ids": q["prospects_ready"][:int(rev().get("cold_draft_per_day", 10))]}))
     for mission, inputs in jobs:
