@@ -382,6 +382,18 @@ class Commands(unittest.TestCase):
         blocked = R.proposal_cmd("12 essential 197", get=get, runner=lambda m, i: {"ok": True, "result": {"results": [{"not_staged": "no address"}]}})
         self.assertIn("not ready to send: no address", blocked)
 
+    def test_onboarding(self):
+        s, b = R.onboarding_email(ctx_lead(), "front-desk", ADDR)
+        self.assertEqual(hq_donna.casl_problems("follow_up_email", s, b), [])
+        self.assertIn("Front Desk", s)
+        self.assertIn("number we should text or transfer urgent calls to", b)
+        get = lambda path: [{"id": "VD"}] if "ventures" in path else [{"id": "L12"}]
+        posted = []
+        runner = lambda m, i: {"ok": True, "result": {"results": [{"outbox": "O7", "new": True, "purpose": i["mode"]}]}}
+        self.assertIn("Welcome email drafted", R.onboard_cmd("12 front-desk", get=get, runner=runner, approve=lambda o, l: posted.append(l)))
+        self.assertIn("onboarding questions", posted[0])
+        self.assertIn("Use:", R.onboard_cmd("12 gold"))
+
     def test_brief_cmd_validates(self):
         self.assertIn("Use:", R.brief_cmd("abc"))
 

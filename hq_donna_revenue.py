@@ -35,7 +35,7 @@ FLAG_INBOUND = "DONNA_INBOUND"
 FLAG_AUTODRAFT = "DONNA_AUTODRAFT"
 HOSTS = {"api.netlify.com", "api.retellai.com"}
 PLACEHOLDER_ADDRESS = "[OWNER: mailing address]"
-MODES = ("inbound_reply", "follow_up", "proposal")
+MODES = ("inbound_reply", "follow_up", "proposal", "onboarding")
 TZ = dt.timezone(dt.timedelta(hours=-5))          # Ottawa (EST); used only to word dates
 
 
@@ -313,6 +313,24 @@ def proposal_email(ctx: dict, package: str, monthly_cents: int, findings: list[s
     return f"Your {r['brand']} plan: {p['title']}"[:150], "\n".join(lines)
 
 
+def onboarding_email(ctx: dict, package: str, address: str, *, c: dict | None = None) -> tuple[str, str]:
+    """After the client said yes (the owner recorded the win): what we need to build it. The questions map to the receptionist intake (delivery-onboarding)."""
+    c = c or cfg()
+    r = rev(c)
+    p = r["packages"].get(package) or {"title": "your plan"}
+    biz = ctx.get("business") or "your business"
+    lines = [f"Hi {first_name(ctx.get('person'))},", "", f"Welcome to {r['brand']}. To set up {p['title']} for {biz}, reply to this email with:", "",
+             "1. Your business hours, and what should happen after hours",
+             "2. Your main services, with typical prices or price ranges you're happy for us to share",
+             "3. The 5 to 10 questions customers ask most, with your answers",
+             "4. The number we should text or transfer urgent calls to",
+             "5. How you book today (calendar or booking tool), and who should get new leads",
+             "6. Anything we should never say or promise",
+             "", "Once we have these, we build it, test it with you on a test line, and only then switch it on. Questions? Just reply.",
+             "", "Thanks,", r["brand"], "", footer(address, c)]
+    return f"Welcome to {r['brand']}: what we need to set up {p['title']}"[:150], "\n".join(lines)
+
+
 def audit_brief(ctx: dict, c: dict | None = None) -> str:
     """Internal: what the owner needs before a booked audit. Never sent to the lead."""
     c = c or cfg()
@@ -376,7 +394,12 @@ def outreach_mode(ctx, inputs: dict, *, address_get=None, env: dict | None = Non
     if address == PLACEHOLDER_ADDRESS:                                # no draft without the real address: it could never be sent, and it would block a later reply
         raise hq_donna.DonnaRefused("no mailing address yet: set it once with /setaddress donna <P.O. box> (CASL), then Donna drafts the replies")
     done = []
-    if mode == "proposal":
+    if mode == "onboarding":
+        lead = str(inputs.get("lead") or "")
+        c = ctx.rpc("donna_lead_context", {"p_lead": lead}) or {}
+        subject, body = onboarding_email(c, str(inputs.get("package") or ""), address)
+        done.append(_save_and_stage(ctx, lead, subject, body, "onboarding"))
+    elif mode == "proposal":
         lead = str(inputs.get("lead") or "")
         c = ctx.rpc("donna_lead_context", {"p_lead": lead}) or {}
         cents = int(inputs.get("monthly_cents") or 0)
@@ -441,6 +464,7 @@ LABELS = {"inbound_reply": "Donna drafted a reply to a new inquiry. Approve to s
           "follow_up": "Donna drafted a follow-up. Approve to send it.",
           "proposal": "Donna drafted your proposal. Approve to send it.",
           "retry": "Donna drafted an email for a lead. Approve to send it.",
+          "onboarding": "Donna drafted the welcome email with the onboarding questions. Approve to send it.",
           "cold": "Donna drafted a first email to a prospect (contact published on their own website, CASL implied consent). Approve to send it."}
 
 
@@ -614,6 +638,26 @@ def proposal_cmd(text: str, rpc=None, get=None, runner=None, approve=post_for_ap
     if res.get("outbox") and res.get("new"):
         approve(res["outbox"], LABELS["proposal"])
     return "Proposal drafted. Approve it in the message above to send it."
+
+
+def onboard_cmd(text: str, rpc=None, get=None, runner=None, approve=post_for_approval) -> str:
+    """'/donna onboard 12 front-desk': the welcome email with the setup questions, for the owner's tap. Record the win with /deal won first."""
+    m = re.match(r"^\s*#?(\d{1,7})\s+(essential|front-desk|growth|ai-systems)\s*$", text or "", re.I)
+    if not m:
+        return "Use: /donna onboard <lead #> <essential|front-desk|growth|ai-systems>"
+    lead = lead_by_short_id(int(m.group(1)), get)
+    if not lead:
+        return f"No Donna lead #{m.group(1)}."
+    runner = runner or (lambda mission, inputs: hq_donna.run(mission, inputs, rpc=rpc))
+    r = runner("outreach-prep", {"mode": "onboarding", "lead": lead, "package": m.group(2).lower()}) or {}
+    if not r.get("ok"):
+        return f"Welcome email not drafted: {r.get('refused') or r.get('error') or 'refused'}"
+    res = ((r.get("result") or {}).get("results") or [{}])[0]
+    if res.get("refused") or res.get("not_staged"):
+        return f"Welcome email not ready to send: {res.get('refused') or res.get('not_staged')}"
+    if res.get("outbox") and res.get("new"):
+        approve(res["outbox"], LABELS["onboarding"])
+    return "Welcome email drafted. Approve it in the message above to send it."
 
 
 def brief_cmd(short_id: str, rpc=None, get=None, runner=None) -> str:

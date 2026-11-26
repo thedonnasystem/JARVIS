@@ -95,6 +95,7 @@ What the end-to-end run found, fixed here:
 | `/donna sync` | Pulls the form and the calls now |
 | `/donna brief <lead #>` | The audit brief |
 | `/donna proposal 12 growth 797 \| misses 6 calls a week; quotes never chased` | A proposal for approval |
+| `/donna onboard 12 front-desk` | After `/deal won`: the welcome email with the six setup questions (they map to the receptionist intake) |
 
 ## Files
 

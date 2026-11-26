@@ -1179,7 +1179,8 @@ async def hq_donna_cmd(update, context) -> None:
     """/donna  owner only: Donna's pipeline, drafts waiting and next actions (read-only). /donna drafts  the drafts to decide.
     /donna run <mission>  run one of Donna's missions now (refused while she is dormant; drafts only, nothing is sent). /donna report  the weekly KPI report.
     Revenue loop (hq_donna_revenue): /donna inbound  recent inquiries and what waits; /donna sync  pull the website form and Donna calls now;
-    /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval."""
+    /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
+    /donna onboard <lead #> <package>  the welcome email with the setup questions (after /deal won)."""
     if not _owner(update):
         return
     args = [a.lower() for a in (getattr(context, "args", None) or [])]
@@ -1195,6 +1196,8 @@ async def hq_donna_cmd(update, context) -> None:
                 + (f" Problems: {'; '.join(r['errors'])[:300]}" if r["errors"] else ""))
         elif args and args[0] == "brief":
             text = await asyncio.to_thread(hq_donna_revenue.brief_cmd, args[1] if len(args) > 1 else "")
+        elif args and args[0] == "onboard":
+            text = await asyncio.to_thread(hq_donna_revenue.onboard_cmd, " ".join(args[1:]))
         elif args and args[0] == "proposal":
             raw = (getattr(update.message, "text", "") or "").split(None, 2)              # keep the owner's own wording of the findings
             text = await asyncio.to_thread(hq_donna_revenue.proposal_cmd, raw[2] if len(raw) > 2 else "")
