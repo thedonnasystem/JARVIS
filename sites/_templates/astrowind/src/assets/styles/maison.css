@@ -535,3 +535,7 @@ html.maison .text-primary { color: var(--m-gold) !important; }
   background: rgba(10, 7, 8, 0.92); border-top: 1px solid var(--m-line-soft); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
 .m-mbar .m-btn { flex: 1; justify-content: center; }
 @media (min-width: 48rem) { .m-mbar { display: none !important; } }
+/* 4-up plans: the chip sits above the title instead of over it; every card keeps the same top so titles line up */
+.m-plans-4 .m-plan { padding-top: calc(clamp(2rem, 3vw, 2.8rem) + 1.6rem); }
+.m-plans-4 .m-chip { top: 1.4rem; left: clamp(2rem, 3vw, 2.8rem); right: auto; }
+.m-plans-4 .m-btn { padding: 0 1rem; white-space: nowrap; letter-spacing: 0.16em; }

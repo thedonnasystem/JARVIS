@@ -13,7 +13,7 @@ import MobileBar from './MobileBar.astro';
 const chapters = Boolean((S as any).chapters?.items?.length);
 import ContactForm from '~/components/widgets/ContactForm.astro';
 import { Icon } from 'astro-icon/components';
-import { SITE_DATA as S, BOOKING, BOOK_LABEL, DEMO_PHONE, PLACE } from '~/data/site';
+import { SITE_DATA as S, BOOKING, BOOK_LABEL, BOOK_LABEL_SHORT, DEMO_PHONE, PLACE } from '~/data/site';
 
 const money = (n: number) => `$${Number(n).toLocaleString('en-CA')}`;
 const per = (p: string) => (/month/i.test(p || '') ? '/ month' : p || '');
@@ -191,7 +191,7 @@ const idx = () => two(++n);
             <ul class="m-features">
               {(p.features || []).map((f) => <li><i class="m-diamond" aria-hidden="true" />{f}</li>)}
             </ul>
-            <a href={BOOKING} class:list={['m-btn', p.highlight ? 'm-btn-metal' : 'm-btn-ghost', 'm-btn-block']} data-magnetic><span>{BOOK_LABEL}</span></a>
+            <a href={BOOKING} class:list={['m-btn', p.highlight ? 'm-btn-metal' : 'm-btn-ghost', 'm-btn-block']} data-magnetic><span>{g.items.length > 3 ? BOOK_LABEL_SHORT : BOOK_LABEL}</span></a>
           </li>
         ))}
       </ul>

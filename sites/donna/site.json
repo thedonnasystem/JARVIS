@@ -24,8 +24,7 @@
   },
   "header_hide": [
     "websites",
-    "calculator",
-    "custom-ai"
+    "calculator"
   ],
   "hero": {
     "tagline": "Revenue growth & loss-prevention infrastructure",
@@ -129,117 +128,65 @@
   },
   "pricing": [
     {
-      "id": "custom-ai",
-      "title": "AI solutions and infrastructure",
-      "subtitle": "Automations, AI agents and full AI integration, built around how your business already runs. Scoped and priced in your free 20-min Revenue Leak Audit.",
-      "items": [
-        {
-          "title": "AI Automations",
-          "subtitle": "Your busywork, done for you",
-          "price_label": "Free audit",
-          "period": "then one clear price",
-          "note": "Built into the tools you already use.",
-          "features": [
-            "Quotes, invoices and review requests that send themselves",
-            "Leads and jobs synced across the tools you already use",
-            "Reports that land in your inbox without anyone building them"
-          ]
-        },
-        {
-          "title": "AI Agents",
-          "subtitle": "Staff that never clock out",
-          "price_label": "Free audit",
-          "period": "then one clear price",
-          "note": "Built into the tools you already use.",
-          "features": [
-            "Custom AI agents for intake, scheduling and follow-up",
-            "Trained on your services, prices and policies",
-            "You approve every word before a customer sees it"
-          ]
-        },
-        {
-          "title": "AI Infrastructure & Integration",
-          "subtitle": "Every system talking to each other",
-          "price_label": "Free audit",
-          "period": "then one clear price",
-          "note": "Built into the tools you already use.",
-          "features": [
-            "A plan showing where AI saves you time and money",
-            "Phone, text, booking, CRM and website working as one system",
-            "Ongoing support and tuning as you grow"
-          ]
-        }
-      ],
-      "nav": "AI Solutions",
-      "eyebrow": "Donna Solutions"
-    },
-    {
       "id": "packages",
-      "title": "AI front desk plans",
-      "subtitle": "Plans starting from $197 a month, month-to-month. Book before December 31 and setup is free. Your exact plan and price come out of your free 20-min Revenue Leak Audit.",
+      "eyebrow": "Packages",
+      "nav": "Packages",
+      "title": "Packages built around your business",
+      "subtitle": "Not every business needs an AI receptionist. Start with the leak that costs you most, or combine them. From $197 a month, month-to-month. Your exact package comes out of your free audit, and setup is free until December 31.",
       "items": [
         {
           "title": "Essential",
-          "subtitle": "Every call answered",
+          "subtitle": "Plug your biggest leak",
+          "price_label": "From $197",
           "period": "per month",
-          "note": "Setup free until December 31.",
-          "features": [
-            "AI receptionist answers every call, day and night",
-            "Answers common questions: hours, location, services",
-            "Takes a message from every caller",
-            "Texts callers your booking, order or website link",
-            "A daily summary of every call by email"
-          ],
-          "price_label": "From $197"
-        },
-        {
-          "title": "Answer",
-          "subtitle": "Never miss a call",
-          "period": "on your call",
-          "note": "Setup free until December 31.",
-          "features": [
-            "AI receptionist answers every call, day and night",
-            "Answers questions about your services, hours and prices",
-            "Takes the caller's details and what they need",
-            "Urgent calls sent to you by text right away",
-            "A summary of every call by text or email"
-          ],
-          "price_label": "Tailored"
-        },
-        {
-          "title": "Capture",
-          "subtitle": "Missed calls into booked appointments",
-          "period": "on your call",
-          "note": "Setup free until December 31.",
           "highlight": true,
-          "highlight_label": "Recommended",
+          "highlight_label": "Start here",
           "features": [
-            "Everything in Answer",
-            "Missed-call text-back within minutes",
-            "Books appointments into your calendar, with text confirmations",
-            "Every lead saved to a simple CRM",
-            "New leads followed up until they book, with messages you approve"
-          ],
-          "price_label": "Tailored"
+            "Pick one: AI receptionist, lead follow-up, quote and no-show follow-ups, or one busywork automation",
+            "Built into the tools you already use",
+            "Monitoring, fixes and tuning included",
+            "Month-to-month, no contract"
+          ]
         },
         {
-          "title": "Command",
-          "subtitle": "Your whole front office, on autopilot",
-          "period": "on your call",
-          "note": "Setup free until December 31.",
+          "title": "Front Desk",
+          "subtitle": "Every call and lead answered",
+          "price_label": "Tailored",
+          "period": "to your business",
           "features": [
-            "Everything in Capture",
+            "AI receptionist answers every call, day and night",
+            "Missed-call text-back within minutes",
+            "Books appointments into your calendar",
+            "Urgent calls sent to you by text right away",
+            "Every lead saved to a simple CRM"
+          ]
+        },
+        {
+          "title": "Growth",
+          "subtitle": "Every lead chased, every slot filled",
+          "price_label": "Tailored",
+          "period": "to your business",
+          "features": [
             "Instant replies to website and ad leads",
-            "Follow-up on unsold quotes, with messages you approve",
-            "Appointment reminders to cut no-shows",
-            "Win-back messages to past customers",
-            "A monthly report: calls, leads and bookings"
-          ],
-          "price_label": "Tailored"
+            "Quote follow-ups until they're won or lost",
+            "Reminders that cut no-shows",
+            "Win-back and review requests, with messages you approve",
+            "A monthly report on what came back"
+          ]
+        },
+        {
+          "title": "AI Systems",
+          "subtitle": "Busywork gone, systems connected",
+          "price_label": "Tailored",
+          "period": "to your business",
+          "features": [
+            "Quotes, invoices and reports that run themselves",
+            "Custom AI agents trained on your business",
+            "Phone, booking, CRM, email and accounting connected",
+            "Custom software where nothing off the shelf fits"
+          ]
         }
-      ],
-      "eyebrow": "Donna Solutions",
-      "nav": "Plans"
+      ]
     },
     {
       "id": "websites",
@@ -489,12 +436,12 @@
     "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
     "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com \"Free 20-min Revenue Leak Audit\" link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
     "December offer (owner decision, Nov 24 2026): setup included free for clients who book before December 31, 2026 (normally $497 / $997 / $1,497). The deadline is real: on January 1 end the offer or replace it with a new dated one; never roll the same deadline forward (Competition Act).",
-    "Prices (owner decision, Nov 24 2026): Essential $197, Answer $497, Capture $797, Command $1,297 a month; Site $497, Site Pro $997 one-time. The site shows only 'from $197'; exact prices are given on the call.",
     "Promises on the site you must keep (owner decision needed if not): free 20-min Revenue Leak Audit; a plain-English playbook for everything built; monitoring, fixes and tuning included in every plan (no break-fix invoices); a clear plan and one price before any build; client data used only to run their systems and never sold.",
     "Comparison section describes the usual AI vendor in general terms (no competitor named). Keep every Donna.AI line true.",
     "Privacy policy and terms are real drafts (calls, recordings, processors, retention, offer terms): owner and counsel review them before relying on them; confirm the retention periods.",
     "Domain not bought yet (donna.ai is not an option): pick one and point it at Netlify; then restrict the Retell public key to it.",
-    "Client quotes: the Web Studio QA (hq_webstudio.py, owner-protected) blocks testimonials and reviews on every site. To publish Al's Diner's real words, the owner must approve a QA change that allows approved, permissioned client quotes. Never invented ones (Competition Act)."
+    "Client quotes: the Web Studio QA (hq_webstudio.py, owner-protected) blocks testimonials and reviews on every site. To publish Al's Diner's real words, the owner must approve a QA change that allows approved, permissioned client quotes. Never invented ones (Competition Act).",
+    "Prices (owner decision, Nov 24 2026): Essential $197 a month. Packages are now tailored by need (Nov 26): Essential = one leak plugged (AI receptionist, lead follow-up, quote/no-show follow-ups, or one automation); Front Desk, Growth and Automation & AI are quoted on the call (internal guide: Answer $497, Capture $797, Command $1,297 a month; Site $497, Site Pro $997 one-time). The site shows only 'from $197'."
   ],
   "compare": {
     "tagline": "Why Donna.AI",

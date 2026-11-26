@@ -5,6 +5,7 @@ export const SITE_DATA = site as any;
 export const BRAND = SITE_DATA.brand.name as string;
 export const BOOKING = (SITE_DATA.links?.booking as string) || '#contact';
 export const BOOK_LABEL = (SITE_DATA.links?.booking_label as string) || 'Book a demo';
+export const BOOK_LABEL_SHORT = (SITE_DATA.links?.booking_label_short as string) || BOOK_LABEL;
 export const DEMO_PHONE = (SITE_DATA.links?.demo_phone as string) || '';
 export const FX = SITE_DATA.variant === 'futuristic';
 export const CONSENT = SITE_DATA.consent;
