@@ -290,6 +290,22 @@ class Tick(unittest.TestCase):
         self.assertEqual(briefs, ["Audit brief: x"])
         self.assertEqual(r["messages"], 3)
 
+    def test_cold_drafting_once_a_day(self):
+        runs = []
+        def rpc(name, args):
+            if name == "donna_revenue_queue":
+                return {"active": True, "prospects_ready": ["P1", "P2"], "cold_run_today": False}
+            return []
+        R.tick_once(rpc=rpc, env={"DONNA_AUTODRAFT": "1"}, runner=lambda m, i: runs.append((m, i)) or {"ok": True, "result": {}})
+        self.assertEqual(runs, [("outreach-prep", {"channels": ["email"], "lead_ids": ["P1", "P2"]})])
+        runs.clear()
+        def rpc2(name, args):
+            if name == "donna_revenue_queue":
+                return {"active": True, "prospects_ready": ["P1"], "cold_run_today": True}
+            return []
+        R.tick_once(rpc=rpc2, env={"DONNA_AUTODRAFT": "1"}, runner=lambda m, i: runs.append((m, i)) or {"ok": True})
+        self.assertEqual(runs, [], "already drafted today")
+
     def test_tick_never_raises(self):
         r = R.tick_once(rpc=lambda n, a: (_ for _ in ()).throw(RuntimeError("db down")), env={"DONNA_AUTODRAFT": "1"})
         self.assertIn("queue", r["error"])

@@ -8,7 +8,8 @@
   proposal  outreach-prep mode "proposal": after the audit, the owner's package and price + his findings -> a proposal email (no payment request, nothing to sign).
   brief     offer-pricing mode "audit_brief": for each booked audit, an internal brief to the owner: their numbers, the likely package, the owner's price guide,
             the questions to ask. Never sent to the lead.
-  cold      Donna's per-lead first emails (outreach-prep, researched prospects) are staged for the owner's tap too: at most 20 a day, 5 at a time.
+  cold      once a day, outreach-prep drafts first emails for up to 10 researched prospects (contact published on their own site); they are staged for the
+            owner's tap too: at most 20 a day, 5 at a time.
   tick      every 5 minutes from the bot: inbound sync; then, only with DONNA_AUTODRAFT=1 and Donna ACTIVE, the replies, briefs, follow-ups and cold stages above.
 
 Every email is a DRAFT that goes to the EXISTING outreach gate: donna_stage_outbox puts it in public.outbox as 'draft' (needs_owner) and this module posts it to the
@@ -513,13 +514,15 @@ def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, ap
         due = []
     if due:
         jobs.append(("outreach-prep", {"mode": "follow_up", "targets": due[:10]}))
+    if q.get("prospects_ready") and not q.get("cold_run_today"):           # once a day: first-email drafts for researched prospects (free brain, $0; drafts only)
+        jobs.append(("outreach-prep", {"channels": ["email"], "lead_ids": q["prospects_ready"][:int(rev().get("cold_draft_per_day", 10))]}))
     for mission, inputs in jobs:
         try:
             r = runner(mission, inputs) or {}
         except Exception as e:
             out["runs"].append({"mission": mission, "error": type(e).__name__})
             continue
-        out["runs"].append({"mission": mission, "mode": inputs["mode"], "ok": r.get("ok"), "refused": r.get("refused")})
+        out["runs"].append({"mission": mission, "mode": inputs.get("mode", "cold"), "ok": r.get("ok"), "refused": r.get("refused")})
         if r.get("ok"):
             try:
                 out["messages"] += announce(r.get("result") or {}, approve=approve, brief=brief)

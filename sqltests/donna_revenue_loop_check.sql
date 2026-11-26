@@ -264,6 +264,23 @@ begin
   perform pg_temp.deactivate();
 end $$;
 
+-- R7b researched prospects ready for a first email: published contact, consent basis, no draft yet, not suppressed; cold drafting once a day
+do $$
+declare v_v uuid := (select id from public.ventures where slug = 'donna'); p1 uuid; p2 uuid; q jsonb; v_run uuid;
+begin
+  perform pg_temp.activate();
+  insert into public.leads (venture_id, name, email, status, source, consent_basis) values (v_v, 'Ash Electric', 'hi@ash.example', 'new', 'donna:research', 'implied_published') returning id into p1;
+  insert into public.leads (venture_id, name, email, status, source, consent_basis) values (v_v, 'Oak HVAC', 'gone@unsub.example', 'new', 'donna:research', 'implied_published') returning id into p2;
+  update fz_donna.runs set started_at = now() - interval '2 days' where mission = 'outreach-prep';     -- the runs above were "yesterday"
+  q := pg_temp.j(pg_temp.bot($q$select public.donna_revenue_queue(50)::text$q$));
+  if not (q -> 'prospects_ready') @> to_jsonb(p1::text) or (q -> 'prospects_ready') @> to_jsonb(p2::text) then raise exception 'R7b prospects %', q; end if;
+  if (q ->> 'cold_run_today')::boolean then raise exception 'R7b cold run flagged before any run'; end if;
+  v_run := (pg_temp.j(pg_temp.bot($q$select public.donna_run_begin('outreach-prep')::text$q$)) ->> 'run')::uuid;
+  perform pg_temp.bot(format($q$select public.donna_run_finish(%L, 'done', 'ok', '{"saved": []}'::jsonb)::text$q$, v_run));
+  if not (pg_temp.j(pg_temp.bot($q$select public.donna_revenue_queue()::text$q$)) ->> 'cold_run_today')::boolean then raise exception 'R7b cold run not seen'; end if;
+  perform pg_temp.deactivate();
+end $$;
+
 -- R8 Donna Ops' own rollback still runs with this migration applied (it drops the donna_* functions; this one's schema and tables stay for its own rollback)
 \ir ../ops/rollback_donna_revenue_loop.sql
 \ir ../ops/rollback_donna_ops.sql

@@ -262,6 +262,13 @@ begin
           and not exists (select 1 from fz_donna_rl.staged s where s.lead_id = l.id and s.staged_at >= (select max(i.created_at) from fz_donna_rl.inbound i where i.lead_id = l.id))
           and not exists (select 1 from fz_donna.drafts d where d.lead_id = l.id and d.status = 'draft' and d.created_at >= (select max(i.created_at) from fz_donna_rl.inbound i where i.lead_id = l.id))
         order by l.created_at limit n) l), '[]'::jsonb),
+    'prospects_ready', coalesce((select jsonb_agg(l.id order by l.created_at) from (select l.id, l.created_at from public.leads l
+        where l.venture_id = v_v and l.status = 'new' and l.source = 'donna:research' and not l.do_not_contact and l.email is not null
+          and nullif(btrim(coalesce(l.consent_basis, '')), '') is not null and not public.is_suppressed(l.email)
+          and not exists (select 1 from fz_donna.drafts d where d.lead_id = l.id)
+        order by l.created_at limit n) l), '[]'::jsonb),
+    'cold_run_today', exists (select 1 from fz_donna.runs r where r.mission = 'outreach-prep' and r.status in ('running', 'done') and coalesce(r.output ->> 'mode', '') = ''
+                                and r.started_at >= ((now() at time zone 'America/Toronto')::date::timestamp at time zone 'America/Toronto')),
     'brief_needed', coalesce((select jsonb_agg(l.id order by l.created_at) from (select l.id, l.created_at from public.leads l
         where l.venture_id = v_v and l.status = 'booked' and not exists (select 1 from fz_donna_rl.briefs b where b.lead_id = l.id)
         order by l.created_at limit n) l), '[]'::jsonb),
