@@ -372,6 +372,8 @@ def outreach_mode(ctx, inputs: dict, *, address_get=None, env: dict | None = Non
         raise hq_donna.DonnaRefused(f"unknown outreach mode {mode!r}")
     ctx.check("draft_outreach")
     address = mailing_address(address_get)
+    if address == PLACEHOLDER_ADDRESS:                                # no draft without the real address: it could never be sent, and it would block a later reply
+        raise hq_donna.DonnaRefused("no mailing address yet: set it once with /setaddress donna <P.O. box> (CASL), then Donna drafts the replies")
     done = []
     if mode == "proposal":
         lead = str(inputs.get("lead") or "")
@@ -437,6 +439,7 @@ def post_brief(text: str, post=None) -> None:
 LABELS = {"inbound_reply": "Donna drafted a reply to a new inquiry. Approve to send it.",
           "follow_up": "Donna drafted a follow-up. Approve to send it.",
           "proposal": "Donna drafted your proposal. Approve to send it.",
+          "retry": "Donna drafted an email for a lead. Approve to send it.",
           "cold": "Donna drafted a first email to a prospect (contact published on their own website, CASL implied consent). Approve to send it."}
 
 
@@ -459,24 +462,25 @@ def stage_cold(rpc, c: dict | None = None, *, approve=post_for_approval) -> dict
     r = rev(c)
     out = {"staged": 0, "refused": [], "posted": 0}
     q = rpc("donna_revenue_queue", {"p_limit": 1}) or {}
-    room = min(int(r.get("cold_stage_per_tick", 5)), int(r.get("cold_stage_per_day", 20)) - int(q.get("cold_staged_today") or 0))
-    if room <= 0 or not q.get("active"):
-        out["room"] = max(room, 0)
+    room = max(0, min(int(r.get("cold_stage_per_tick", 5)), int(r.get("cold_stage_per_day", 20)) - int(q.get("cold_staged_today") or 0)))
+    out["room"] = room
+    if not q.get("active"):
         return out
     drafts = rpc("donna_drafts", {"p_status": "draft", "p_limit": 50}) or []
     for d in sorted(drafts, key=lambda x: str(x.get("created_at") or "")):
-        if out["staged"] >= room:
-            break
-        if d.get("kind") != "cold_email" or d.get("channel") != "email" or not d.get("lead"):
+        cold = d.get("kind") == "cold_email"
+        if d.get("kind") not in ("cold_email", "follow_up_email") or d.get("channel") != "email" or not d.get("lead"):
             continue
-        try:
-            s = rpc("donna_stage_outbox", {"p_draft": d["id"], "p_purpose": "cold"}) or {}
+        if cold and out["staged"] >= room:
+            continue
+        try:                                                           # a follow_up_email here is one whose staging failed before: retried, never capped
+            s = rpc("donna_stage_outbox", {"p_draft": d["id"], "p_purpose": "cold" if cold else "retry"}) or {}
         except Exception as e:
             out["refused"].append({"draft": d["id"], "reason": str(e)[:160]})
             continue
         if s.get("outbox") and not s.get("duplicate"):
-            out["staged"] += 1
-            if approve(s["outbox"], LABELS["cold"]):
+            out["staged"] += 1 if cold else 0
+            if approve(s["outbox"], LABELS["cold" if cold else "retry"]):
                 out["posted"] += 1
     return out
 
@@ -552,6 +556,8 @@ def inbound_text(rpc=None) -> str:
              f"Sent this week: {q.get('sent_7d', 0)}."]
     if not q.get("active"):
         lines.append("Donna is dormant: inquiries are recorded, but no replies are drafted until you activate her.")
+    elif mailing_address() == PLACEHOLDER_ADDRESS:
+        lines.append("Blocked: no mailing address. Set it once with /setaddress donna <P.O. box>; Donna drafts the waiting replies on the next pass.")
     for r in rows:
         when = str(r.get("received_at") or "")[:16].replace("T", " ")
         tag = "BOOKED " if r.get("booked") else ""
@@ -565,10 +571,11 @@ def inbound_text(rpc=None) -> str:
 def lead_by_short_id(short_id: int, get=None) -> str | None:
     import hq
     get = get or (lambda path: hq._request("GET", path))
-    rows = get(f"/rest/v1/leads?short_id=eq.{int(short_id)}&select=id,venture_id,ventures(slug)&limit=1") or []
-    if rows and ((rows[0].get("ventures") or {}).get("slug") == "donna"):
-        return rows[0]["id"]
-    return None
+    v = get("/rest/v1/ventures?slug=eq.donna&select=id&limit=1") or []
+    if not v:
+        return None
+    rows = get(f"/rest/v1/leads?short_id=eq.{int(short_id)}&venture_id=eq.{urllib.parse.quote(str(v[0]['id']))}&select=id&limit=1") or []
+    return rows[0]["id"] if rows else None
 
 
 PROPOSAL_RX = re.compile(r"^\s*#?(\d{1,7})\s+(essential|front-desk|growth|ai-systems)\s+\$?([\d,]+(?:\.\d{1,2})?)\s*(?:\|\s*(.*))?$", re.I | re.S)

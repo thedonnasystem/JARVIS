@@ -221,10 +221,17 @@ class Modes(unittest.TestCase):
         self.assertEqual(r["sent"], 0)
 
     def test_not_staged_is_reported(self):
-        ctx = FakeCtx({"L1": ctx_lead()}, stage_error="refused: the draft still has an [OWNER: ...] placeholder")
-        r = R.outreach_mode(ctx, {"mode": "follow_up", "targets": [{"lead": "L1", "step": 2}]}, address_get=lambda: None, env={})
-        self.assertIn("placeholder", r["results"][0]["not_staged"])
+        ctx = FakeCtx({"L1": ctx_lead()}, stage_error="refused: the lead is do-not-contact")
+        r = R.outreach_mode(ctx, {"mode": "follow_up", "targets": [{"lead": "L1", "step": 2}]}, address_get=lambda: {"mailing_address": ADDR}, env={})
+        self.assertIn("do-not-contact", r["results"][0]["not_staged"])
         self.assertNotIn("outbox", r["results"][0])
+
+    def test_no_address_no_draft(self):
+        ctx = FakeCtx({"L1": ctx_lead()})
+        with self.assertRaises(hq_donna.DonnaRefused) as e:
+            R.outreach_mode(ctx, {"mode": "inbound_reply", "lead_ids": ["L1"]}, address_get=lambda: None, env={})
+        self.assertIn("/setaddress", str(e.exception))
+        self.assertFalse([n for n, _ in ctx.calls if n == "donna_save_draft"], "no draft that could block a later reply")
 
     def test_proposal_mode_and_unknown_mode(self):
         ctx = FakeCtx({"L1": ctx_lead()})
@@ -312,9 +319,22 @@ class Cold(unittest.TestCase):
         self.assertEqual(len(r["refused"]), 1)
         self.assertTrue(all("first email to a prospect" in l for _, l in posted))
 
+    def test_unstaged_follow_ups_are_retried_without_cap(self):
+        drafts = [{"id": "F1", "kind": "follow_up_email", "channel": "email", "lead": "L1", "created_at": "2026-11-26T10:00"}]
+        def rpc(name, args):
+            if name == "donna_revenue_queue":
+                return {"active": True, "cold_staged_today": 20}
+            if name == "donna_drafts":
+                return drafts
+            return {"outbox": "OF1", "duplicate": False}
+        posted = []
+        r = R.stage_cold(rpc, approve=lambda o, label: posted.append(label) or "M")
+        self.assertEqual((r["staged"], r["posted"]), (0, 1))
+        self.assertIn("Donna drafted an email", posted[0])
+
     def test_stage_cold_dormant_or_full(self):
         self.assertEqual(R.stage_cold(lambda n, a: {"active": False})["staged"], 0)
-        self.assertEqual(R.stage_cold(lambda n, a: {"active": True, "cold_staged_today": 20})["room"], 0)
+        self.assertEqual(R.stage_cold(lambda n, a: {"active": True, "cold_staged_today": 20} if n == "donna_revenue_queue" else [])["room"], 0)
 
     def test_fill_footer(self):
         c = hq_donna.config()
@@ -335,13 +355,13 @@ class Commands(unittest.TestCase):
             R.parse_proposal("12 gold 797")
 
     def test_proposal_cmd(self):
-        get = lambda path: [{"id": "L12", "ventures": {"slug": "donna"}}]
+        get = lambda path: [{"id": "VD"}] if "ventures" in path else ([{"id": "L12"}] if "venture_id=eq.VD" in path else [])
         posted = []
         runner = lambda m, i: {"ok": True, "result": {"results": [{"outbox": "O9", "new": True, "purpose": "proposal"}]}}
         out = R.proposal_cmd("12 essential 197 | one leak", get=get, runner=runner, approve=lambda o, l: posted.append(o))
         self.assertIn("Proposal drafted", out)
         self.assertEqual(posted, ["O9"])
-        other = R.proposal_cmd("12 essential 197", get=lambda p: [{"id": "X", "ventures": {"slug": "wolf-squad"}}], runner=runner)
+        other = R.proposal_cmd("12 essential 197", get=lambda p: [{"id": "VD"}] if "ventures" in p else [], runner=runner)
         self.assertIn("No Donna lead", other)
         blocked = R.proposal_cmd("12 essential 197", get=get, runner=lambda m, i: {"ok": True, "result": {"results": [{"not_staged": "no address"}]}})
         self.assertIn("not ready to send: no address", blocked)

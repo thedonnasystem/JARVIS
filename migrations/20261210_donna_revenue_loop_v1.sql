@@ -7,7 +7,8 @@
 --     the unticked marketing box ticked = 'express_web_form' (wording version recorded); otherwise 'implied_inquiry' (CASL s.10(10)(b): an inquiry, dated in the notes).
 --     Never a downgrade, never over do-not-contact; a suppressed address or number makes the lead do-not-contact. Works while Donna is DORMANT (the owner's switch
 --     is DONNA_INBOUND=1 on the bot): recording an inquiry the owner already received is bookkeeping, not an agent action. Nothing is sent.
---   * donna_stage_outbox (service path, Donna ACTIVE): an owner-review email draft for a lead goes to public.outbox as 'draft' (needs_owner). That is the
+--   * donna_stage_outbox (service path, Donna ACTIVE): an owner-review email draft for a lead goes to public.outbox as 'draft' (needs_owner) and the Donna draft is
+--     marked superseded (its decision lives on the outbox row now). That is the
 --     existing gate: the owner approves or rejects it in Telegram (CASL gate, suppression, kill switch, policy caps, outreach gate) and only then can hq_mail send it.
 --     Refused while an [OWNER: ...] placeholder is left (e.g. the mailing address), for a do-not-contact / suppressed / no-consent lead, or twice for one draft.
 --   * donna_followups_due / donna_lead_context / donna_save_brief / donna_revenue_queue / donna_inbound_recent: reads and an internal brief. No send path.
@@ -199,10 +200,14 @@ begin
   if nullif(btrim(coalesce(l.consent_basis, '')), '') is null then raise exception 'refused: no consent basis recorded for this lead (CASL)' using errcode = '42501'; end if;
   if l.email is null then raise exception 'refused: the lead has no email' using errcode = '42501'; end if;
   if public.is_suppressed(l.email) then raise exception 'refused: the address is on the suppression list' using errcode = '42501'; end if;
+  if exists (select 1 from public.outbox o where o.lead_id = l.id and o.status in ('draft', 'qa_passed')) then   -- one draft per lead (outbox_one_draft_per_lead)
+    raise exception 'refused: an email to this lead is already waiting for the owner''s decision; approve or reject it first (this draft is retried after)' using errcode = '42501'; end if;
   insert into public.outbox (venture_id, channel, to_ref, subject, body, status, needs_owner, lead_id, idempotency_key)
     values (l.venture_id, 'email', l.email, d.subject, d.body, 'draft', true, l.id, 'donna-draft:' || d.id)
     returning id into v_ob;
   insert into fz_donna_rl.staged (draft_id, outbox_id, lead_id, purpose) values (d.id, v_ob, l.id, p_purpose);
+  -- the decision now lives on the outbox row (the owner's Approve / Reject): the Donna draft stops counting as waiting for review
+  update fz_donna.drafts set status = 'superseded', note = left('handed to the outbox for the owner''s decision (outbox/' || v_ob || ')', 500) where id = d.id;
   insert into public.audit_log (actor, action, target, detail) values ('office:donna', 'donna_stage_outbox', 'outbox/' || v_ob,
                                                                        jsonb_build_object('draft', d.id, 'lead', l.id, 'purpose', p_purpose));
   return jsonb_build_object('duplicate', false, 'outbox', v_ob, 'draft', d.id, 'status', 'draft', 'needs_owner', true);

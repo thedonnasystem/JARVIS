@@ -187,8 +187,13 @@ begin
   if (select status from public.outbox where id = v_ob) <> 'draft' or not (select needs_owner from public.outbox where id = v_ob)
      or (select to_ref from public.outbox where id = v_ob) <> 'al@alsdiner.example' or (select subject from public.outbox where id = v_ob) <> 'Your free Revenue Leak Audit'
      or (select lead_id from public.outbox where id = v_ob) <> v_lead or (select idempotency_key from public.outbox where id = v_ob) <> 'donna-draft:' || d_good then raise exception 'R5 outbox row'; end if;
+  if (select status from fz_donna.drafts where id = d_good) <> 'superseded' then raise exception 'R5 staged draft still waits for review'; end if;
   r := pg_temp.j(pg_temp.bot(format($q$select public.donna_stage_outbox(%L)::text$q$, d_good)));
   if not (r ->> 'duplicate')::boolean or (select count(*) from public.outbox where idempotency_key = 'donna-draft:' || d_good) <> 1 then raise exception 'R5 staged twice %', r; end if;
+  -- one email per lead waits for the owner at a time
+  perform pg_temp.expect('R5 one waiting', pg_temp.bot(format($q$select public.donna_stage_outbox(%L)::text$q$,
+           (pg_temp.j(pg_temp.bot(format($q$select public.donna_save_draft(%L, 'follow_up_email', 'email', %L, 'Second note', %L)::text$q$, v_run, v_lead, (select good from rl_txt)))) ->> 'draft')::uuid)),
+         'ERR:refused: an email to this lead is already waiting%');
   -- a placeholder (no mailing address yet) never reaches the outbox
   d_ph := (pg_temp.j(pg_temp.bot(format($q$select public.donna_save_draft(%L, 'follow_up_email', 'email', %L, 'Your audit', %L)::text$q$, v_run,
              (select id from public.leads where email = 'hi@pine.example'), (select placeholder from rl_txt)))) ->> 'draft')::uuid;
