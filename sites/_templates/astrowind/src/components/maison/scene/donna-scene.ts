@@ -97,13 +97,17 @@ void main(){
   vA=al*tf*tf*uIntro;
   vec4 mv=modelViewMatrix*vec4(p,1.);
   // cursor / touch field: particles near the pointer are pushed aside, swirl around it and light up; a click or tap sends a shockwave
-  vec4 cp=projectionMatrix*mv;vec2 nd=cp.xy/max(cp.w,1e-3);vec2 dv=(nd-uMouse)*vec2(uAspect,1.);float md=length(dv);
-  float fld=uMouseOn*exp(-md*md*(14.-uKick*9.))*(1.+uKick*2.5);
-  vec2 dir=dv/max(md,1e-4);
-  mv.xy+=(dir*.55+vec2(-dir.y,dir.x)*.35*(s.z-.5))*fld*(-mv.z)*.16;
-  col+=uGold*fld*1.6;
+  // (guarded: only runs while the pointer is live, inputs clamped, so no Inf/NaN can reach the bloom pass, where one bad pixel whites out the frame)
+  float fld=0.;
+  if(uMouseOn>.001){
+    vec4 cp=projectionMatrix*mv;vec2 nd=clamp(cp.xy/max(cp.w,.05),-3.,3.);vec2 dv=(nd-uMouse)*vec2(clamp(uAspect,.2,5.),1.);float md=max(length(dv),1e-3);
+    fld=uMouseOn*exp(-min(md*md*(14.-uKick*9.),30.))*(1.+uKick*2.5);
+    vec2 dir=dv/md;
+    mv.xy+=(dir*.55+vec2(-dir.y,dir.x)*.35*(s.z-.5))*fld*(-mv.z)*.16;
+    col+=uGold*fld*.9;
+  }
   vCol=col;
-  gl_PointSize=min(34.,uSize*sz*(1.+fld*.9)*(.55+.9*s.y)*(.35+.65*tf)*uPR*(10./max(.5,-mv.z)));
+  gl_PointSize=min(34.,uSize*sz*(1.+fld*.6)*(.55+.9*s.y)*(.35+.65*tf)*uPR*(10./max(.5,-mv.z)));
   gl_Position=projectionMatrix*mv;}`;
 const CALL_F = `
 varying vec3 vCol;varying float vA;
@@ -131,6 +135,7 @@ const FINAL = {
     c*=1.-uVig*smoothstep(.15,1.25,r);
     float g=fract(sin(dot(floor(vUv*uRes)+fract(uTime)*97.,vec2(12.9898,78.233)))*43758.5453);
     c+=(g-.5)*uGrain;
+    c=clamp(c,0.,1.);
     gl_FragColor=vec4(c,1.);}`,
 };
 
