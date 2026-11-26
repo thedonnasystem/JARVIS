@@ -2648,6 +2648,12 @@ def main() -> None:
             logger.exception("jarvis hands vault not configured")
         app.job_queue.run_repeating(hq_web.poll, interval=hq_web.POLL_SECONDS, first=20, name="hq-web",
                                     job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 5})
+        try:  # Donna Revenue Loop v1: inbound sync (DONNA_INBOUND=1) and owner-review drafts (DONNA_AUTODRAFT=1); both off by default, nothing is sent from here
+            import hq_donna_revenue
+            app.job_queue.run_repeating(hq_donna_revenue.tick, interval=300, first=90, name="donna-revenue",
+                                        job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 60})
+        except Exception:
+            logger.exception("donna revenue loop not scheduled")
         logger.info("Fendezy HQ bridge on: owner messages every 60s, task board and escalations every 5 min")
     else:
         logger.warning(

@@ -190,7 +190,7 @@ class DonnaV1(unittest.TestCase):
         for seg in ("home-services trades", "roofing and renovation", "law firms, intake only", "missed-call audits", "pricing checks", "the owner commits the niche"):
             self.assertIn(seg, ms[0]["objective"])
         for m in ms[:2]:
-            self.assertIn("free 20-minute AI consultation", m["objective"])
+            self.assertIn("free 20-minute Revenue Leak Audit", m["objective"])     # owner wording, Nov 26 2026 (was the free 20-minute AI consultation)
             self.assertIn("never extend it or roll it forward", m["objective"])
             self.assertNotIn("founding", m["objective"].lower())
             self.assertIn("Guarantee terms TBD by owner", m["objective"])
