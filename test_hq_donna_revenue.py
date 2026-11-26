@@ -288,6 +288,45 @@ class Tick(unittest.TestCase):
         self.assertIn("queue", r["error"])
 
 
+class Cold(unittest.TestCase):
+    def test_stage_cold_caps_and_filters(self):
+        drafts = [{"id": f"D{i}", "kind": "cold_email", "channel": "email", "lead": f"L{i}", "created_at": f"2026-11-26T10:0{i}"} for i in range(8)]
+        drafts += [{"id": "DM", "kind": "dm", "channel": "dm", "lead": "LX", "created_at": "2026-11-26T09:00"},
+                   {"id": "TPL", "kind": "cold_email", "channel": "email", "lead": None, "created_at": "2026-11-26T09:00"}]
+        staged = []
+        def rpc(name, args):
+            if name == "donna_revenue_queue":
+                return {"active": True, "cold_staged_today": 17}
+            if name == "donna_drafts":
+                return drafts
+            if name == "donna_stage_outbox":
+                staged.append(args["p_draft"])
+                if args["p_draft"] == "D0":
+                    raise RuntimeError("refused: the lead is do-not-contact")
+                return {"outbox": "O" + args["p_draft"], "duplicate": False}
+            raise AssertionError(name)
+        posted = []
+        r = R.stage_cold(rpc, approve=lambda o, label: posted.append((o, label)) or "M")
+        self.assertEqual(r["staged"], 3, "20 a day, 17 already staged today")
+        self.assertEqual(staged, ["D0", "D1", "D2", "D3"], "oldest first; dm and lead-less templates are never staged")
+        self.assertEqual(len(r["refused"]), 1)
+        self.assertTrue(all("first email to a prospect" in l for _, l in posted))
+
+    def test_stage_cold_dormant_or_full(self):
+        self.assertEqual(R.stage_cold(lambda n, a: {"active": False})["staged"], 0)
+        self.assertEqual(R.stage_cold(lambda n, a: {"active": True, "cold_staged_today": 20})["room"], 0)
+
+    def test_fill_footer(self):
+        c = hq_donna.config()
+        body = "Hi.\n\n" + hq_donna.casl_footer("cold_email", c)
+        self.assertIn("[OWNER: mailing address]", R.fill_footer(body, c, get=lambda: None))
+        filled = R.fill_footer(body, c, get=lambda: {"mailing_address": ADDR})
+        self.assertIn(f"Mailing address: {ADDR}", filled)
+        self.assertIn("Contact: thedonnasystem@gmail.com", filled)
+        self.assertNotIn("[OWNER:", filled)
+        self.assertEqual(hq_donna.casl_problems("cold_email", "Missed calls at Al's Diner", filled), [])
+
+
 class Commands(unittest.TestCase):
     def test_parse_proposal(self):
         p = R.parse_proposal("#12 growth $797 | misses 6 calls a week; quotes never chased")

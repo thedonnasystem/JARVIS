@@ -261,6 +261,9 @@ begin
         where l.venture_id = v_v and l.status = 'booked' and not exists (select 1 from fz_donna_rl.briefs b where b.lead_id = l.id)
         order by l.created_at limit n) l), '[]'::jsonb),
     'outbox_waiting', (select count(*) from fz_donna_rl.staged s join public.outbox o on o.id = s.outbox_id where o.status in ('draft', 'qa_passed')),
+    'staged_today', (select count(*) from fz_donna_rl.staged where staged_at >= ((now() at time zone 'America/Toronto')::date::timestamp at time zone 'America/Toronto')),
+    'cold_staged_today', (select count(*) from fz_donna_rl.staged where purpose = 'cold'
+                            and staged_at >= ((now() at time zone 'America/Toronto')::date::timestamp at time zone 'America/Toronto')),
     'approved_not_sent', (select count(*) from fz_donna_rl.staged s join public.outbox o on o.id = s.outbox_id where o.status = 'approved' and o.sent_at is null),
     'sent_7d', (select count(*) from fz_donna_rl.staged s join public.outbox o on o.id = s.outbox_id where o.status = 'sent' and o.sent_at > now() - interval '7 days'),
     'inbound_7d', (select count(*) from fz_donna_rl.inbound where received_at > now() - interval '7 days'),

@@ -436,6 +436,9 @@ def outreach_prep(ctx: Ctx, inputs: dict) -> dict:
         subject = str(out.get("subject") or "")[:150] if kind in ("cold_email", "follow_up_email") else None
         text = str(out.get("body") or "").strip()[:3000]
         body = (text + "\n\n" + casl_footer(kind, ctx.cfg)).strip()
+        if kind != "call_script":                                      # the send gate's own address (company_profile, /setaddress), once the owner set it
+            import hq_donna_revenue
+            body = hq_donna_revenue.fill_footer(body, ctx.cfg)
         probs = casl_problems(kind, subject, body)
         if probs:
             refused.append({"channel": ch, "reason": "; ".join(probs)[:300]})

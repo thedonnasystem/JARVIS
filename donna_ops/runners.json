@@ -129,6 +129,8 @@
     "If this works, when would you want it live?"
    ]
   },
+  "cold_stage_per_day": 20,
+  "cold_stage_per_tick": 5,
   "followup_days": [
    3,
    4

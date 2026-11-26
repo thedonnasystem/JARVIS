@@ -208,7 +208,8 @@ begin
   perform pg_temp.expect('R5 decided', pg_temp.bot(format($q$select public.donna_stage_outbox(%L)::text$q$, d_ph)), 'ERR:refused: only a draft waiting%');
   if not exists (select 1 from public.audit_log where action = 'donna_stage_outbox' and target = 'outbox/' || v_ob) then raise exception 'R5 audit'; end if;
   r := pg_temp.j(pg_temp.bot($q$select public.donna_revenue_queue()::text$q$));
-  if (r -> 'reply_needed') @> to_jsonb(v_lead::text) or (r ->> 'outbox_waiting')::int < 1 then raise exception 'R5 queue after staging %', r; end if;
+  if (r -> 'reply_needed') @> to_jsonb(v_lead::text) or (r ->> 'outbox_waiting')::int < 1 or (r ->> 'staged_today')::int <> 1 or (r ->> 'cold_staged_today')::int <> 0 then
+    raise exception 'R5 queue after staging %', r; end if;
   perform pg_temp.bot(format($q$select public.donna_run_finish(%L, 'done', 'ok', '{}'::jsonb)::text$q$, v_run));
 end $$;
 

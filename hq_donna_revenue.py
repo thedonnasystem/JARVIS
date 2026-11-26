@@ -8,7 +8,8 @@
   proposal  outreach-prep mode "proposal": after the audit, the owner's package and price + his findings -> a proposal email (no payment request, nothing to sign).
   brief     offer-pricing mode "audit_brief": for each booked audit, an internal brief to the owner: their numbers, the likely package, the owner's price guide,
             the questions to ask. Never sent to the lead.
-  tick      every 5 minutes from the bot: inbound sync; then, only with DONNA_AUTODRAFT=1 and Donna ACTIVE, the replies, briefs and follow-ups above.
+  cold      Donna's per-lead first emails (outreach-prep, researched prospects) are staged for the owner's tap too: at most 20 a day, 5 at a time.
+  tick      every 5 minutes from the bot: inbound sync; then, only with DONNA_AUTODRAFT=1 and Donna ACTIVE, the replies, briefs, follow-ups and cold stages above.
 
 Every email is a DRAFT that goes to the EXISTING outreach gate: donna_stage_outbox puts it in public.outbox as 'draft' (needs_owner) and this module posts it to the
 owner's Telegram with Approve / Reject. Only his Approve lets hq_mail send it, through the CASL profile check, suppression, the kill switch, the policy caps and the
@@ -181,6 +182,18 @@ def mailing_address(get=None) -> str:
         return (p or {}).get("mailing_address") or PLACEHOLDER_ADDRESS
     except Exception:
         return PLACEHOLDER_ADDRESS
+
+
+def fill_footer(body: str, c: dict | None = None, get=None) -> str:
+    """Replace the runners.json placeholders in a fixed CASL footer with the real address (company_profile) and contact, once they exist. Never invents one."""
+    c = c or cfg()
+    addr = mailing_address(get)
+    if addr != PLACEHOLDER_ADDRESS:
+        body = body.replace(c["casl"]["address"], f"Mailing address: {addr}")
+    contact = (c.get("revenue") or {}).get("contact")
+    if contact:
+        body = body.replace(c["casl"]["contact"], contact)
+    return body
 
 
 def footer(address: str, c: dict | None = None) -> str:
@@ -423,7 +436,8 @@ def post_brief(text: str, post=None) -> None:
 
 LABELS = {"inbound_reply": "Donna drafted a reply to a new inquiry. Approve to send it.",
           "follow_up": "Donna drafted a follow-up. Approve to send it.",
-          "proposal": "Donna drafted your proposal. Approve to send it."}
+          "proposal": "Donna drafted your proposal. Approve to send it.",
+          "cold": "Donna drafted a first email to a prospect (contact published on their own website, CASL implied consent). Approve to send it."}
 
 
 def announce(result: dict, *, approve=post_for_approval, brief=post_brief) -> int:
@@ -437,6 +451,34 @@ def announce(result: dict, *, approve=post_for_approval, brief=post_brief) -> in
             brief(r["text"])
             n += 1
     return n
+
+
+def stage_cold(rpc, c: dict | None = None, *, approve=post_for_approval) -> dict:
+    """Hand Donna's per-lead first emails (outreach-prep drafts for researched prospects) to the outbox for the owner's tap, at most
+    revenue.cold_stage_per_day a day and cold_stage_per_tick at a time (the send side has its own daily caps too). Refusals stay as drafts with the reason."""
+    r = rev(c)
+    out = {"staged": 0, "refused": [], "posted": 0}
+    q = rpc("donna_revenue_queue", {"p_limit": 1}) or {}
+    room = min(int(r.get("cold_stage_per_tick", 5)), int(r.get("cold_stage_per_day", 20)) - int(q.get("cold_staged_today") or 0))
+    if room <= 0 or not q.get("active"):
+        out["room"] = max(room, 0)
+        return out
+    drafts = rpc("donna_drafts", {"p_status": "draft", "p_limit": 50}) or []
+    for d in sorted(drafts, key=lambda x: str(x.get("created_at") or "")):
+        if out["staged"] >= room:
+            break
+        if d.get("kind") != "cold_email" or d.get("channel") != "email" or not d.get("lead"):
+            continue
+        try:
+            s = rpc("donna_stage_outbox", {"p_draft": d["id"], "p_purpose": "cold"}) or {}
+        except Exception as e:
+            out["refused"].append({"draft": d["id"], "reason": str(e)[:160]})
+            continue
+        if s.get("outbox") and not s.get("duplicate"):
+            out["staged"] += 1
+            if approve(s["outbox"], LABELS["cold"]):
+                out["posted"] += 1
+    return out
 
 
 def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, approve=post_for_approval, brief=post_brief, status_rpc=None) -> dict:
@@ -479,6 +521,11 @@ def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, ap
                 out["messages"] += announce(r.get("result") or {}, approve=approve, brief=brief)
             except Exception as e:
                 out["runs"][-1]["announce_error"] = type(e).__name__
+    try:
+        out["cold"] = stage_cold(rpc, approve=approve)
+        out["messages"] += out["cold"]["posted"]
+    except Exception as e:
+        out["cold"] = {"error": type(e).__name__}
     return out
 
 
