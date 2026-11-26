@@ -1178,7 +1178,7 @@ async def hq_reception_cmd(update, context) -> None:
 async def hq_donna_cmd(update, context) -> None:
     """/donna  owner only: Donna's pipeline, drafts waiting and next actions (read-only). /donna drafts  the drafts to decide.
     /donna run <mission>  run one of Donna's missions now (refused while she is dormant; drafts only, nothing is sent). /donna report  the weekly KPI report.
-    Revenue loop (hq_donna_revenue): /donna inbound  recent inquiries and what waits; /donna sync  pull the website form and Donna calls now;
+    Revenue loop (hq_donna_revenue): /donna setup  every switch still missing, ticked live; /donna inbound  recent inquiries and what waits; /donna sync  pull the website form and Donna calls now;
     /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
     /donna onboard <lead #> <package>  the welcome email with the setup questions (after /deal won);
     /donna agent <client> [create <code>]  the client's own Donna phone agent on Retell; /donna clientreport <client>  last month's report email."""
@@ -1188,7 +1188,10 @@ async def hq_donna_cmd(update, context) -> None:
     try:
         import hq_donna
         import hq_donna_revenue
-        if args and args[0] == "inbound":
+        if args and args[0] == "setup":
+            import hq_donna_setup
+            text = await asyncio.to_thread(hq_donna_setup.setup_text)
+        elif args and args[0] == "inbound":
             text = await asyncio.to_thread(hq_donna_revenue.inbound_text)
         elif args and args[0] == "sync":
             r = await asyncio.to_thread(hq_donna_revenue.sync)

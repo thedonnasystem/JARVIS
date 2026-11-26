@@ -88,7 +88,6 @@ check("Approve -> outbox approved", st == "approved", f"{out} / {st}")
 # 4. hq_mail sends it (provider faked): proves the subject column fix end to end
 sent = []
 hq_mail.configured = lambda: True
-hq_mail.live = lambda: True
 hq_mail.hq_gatemark.attest = lambda: {"ok": True}
 hq_mail._post = lambda row: sent.append(row) or True
 class D: decision = "allow"

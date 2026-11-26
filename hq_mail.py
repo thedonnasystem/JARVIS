@@ -29,7 +29,10 @@ def _get(path: str):
 def live() -> bool:
     rows = _get("system_state?id=eq.1&select=mode,kill_switch&limit=1")
     s = rows[0] if rows else {}
-    return s.get("mode") == "live" and not s.get("kill_switch")
+    # FIX (Nov 26 2026): system_state.mode can never be 'live' (its check allows dry_run / approve_first / auto_in_caps / exceptions_only), so this was never
+    # true and no approved email could be sent. Any mode but dry_run, kill switch off; the send policy (hq_policy here, outbox_send_policy in the database)
+    # still decides each email (approve_first asks for an approval row, auto_in_caps sends within the daily cap).
+    return s.get("mode") in ("approve_first", "auto_in_caps", "exceptions_only", "live") and not s.get("kill_switch")
 
 
 DONNA = "donna"

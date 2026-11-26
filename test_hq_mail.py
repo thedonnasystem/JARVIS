@@ -218,5 +218,14 @@ class T(unittest.TestCase):
             self.assertEqual(M.deliver_approved()["reason"], "RuntimeError")
 
 
+class LiveModes(unittest.TestCase):
+    def test_any_mode_but_dry_run_and_never_with_the_kill_switch(self):
+        cases = [({"mode": "dry_run", "kill_switch": False}, False), ({"mode": "approve_first", "kill_switch": False}, True),
+                 ({"mode": "auto_in_caps", "kill_switch": False}, True), ({"mode": "auto_in_caps", "kill_switch": True}, False), ({}, False)]
+        for row, want in cases:
+            with mock.patch.object(M, "_get", return_value=[row] if row else []):
+                self.assertEqual(M.live(), want, row)
+
+
 if __name__ == "__main__":
     unittest.main()

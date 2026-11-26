@@ -398,6 +398,18 @@ class Commands(unittest.TestCase):
         self.assertIn("Use:", R.brief_cmd("abc"))
 
 
+class Setup(unittest.TestCase):
+    def test_checklist_never_shows_values(self):
+        env = {"RETELL_API_KEY": "sk_secret_value", "DONNA_INBOUND": "1"}
+        import hq_donna_setup
+        t = hq_donna_setup.setup_text(env=env, rpc=lambda n, a: {"active": True} if n == "donna_revenue_queue" else True, get=lambda: None)
+        self.assertNotIn("sk_secret_value", t)
+        self.assertIn("✅ Retell key", t)
+        self.assertIn("❌ Mailing address", t)
+        self.assertIn("/setaddress donna", t)
+        self.assertRegex(t, r"^Donna money loop: \d+/\d+ ready")
+
+
 class Static(unittest.TestCase):
     def test_no_send_pay_sign_or_deploy_path(self):
         with open(os.path.join(os.path.dirname(__file__), "hq_donna_revenue.py")) as f:

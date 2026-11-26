@@ -697,3 +697,4 @@ def brief_cmd(short_id: str, rpc=None, get=None, runner=None) -> str:
         return f"Brief not written: {r.get('refused') or r.get('error') or 'refused'}"
     res = ((r.get("result") or {}).get("results") or [{}])[0]
     return res.get("text") or f"Brief not written: {res.get('refused')}"
+
