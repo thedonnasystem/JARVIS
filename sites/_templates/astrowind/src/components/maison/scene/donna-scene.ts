@@ -192,13 +192,23 @@ export interface Options { gold: number[]; wine: number[]; mobile: boolean; redu
 
 export function mount(canvas: HTMLCanvasElement, o: Options) {
   const mobile = o.mobile;
-  let tier = o.post === false ? 1 : o.post ? 2 : mobile ? 1 : 2; // 2: bloom + MSAA + glass transmission; 1: direct render, cheaper glass; 0: still frame only
+  // integrated laptop GPUs (Intel HD/UHD/Iris) choke on tier 2 at retina size: start them on tier 1 at a lower resolution
+  let integrated = false;
+  try {
+    const pc = document.createElement('canvas');
+    const g = (pc.getContext('webgl2') || pc.getContext('webgl')) as WebGLRenderingContext | null;
+    const dbg = g?.getExtension('WEBGL_debug_renderer_info');
+    const gpu = g ? String(dbg ? g.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER)) : '';
+    g?.getExtension('WEBGL_lose_context')?.loseContext();
+    integrated = /intel|iris|uhd graphics|hd graphics/i.test(gpu);
+  } catch { /* keep defaults */ }
+  let tier = o.post === false ? 1 : o.post ? 2 : mobile || integrated ? 1 : 2; // 2: bloom + MSAA + glass transmission; 1: direct render, cheaper glass; 0: still frame only
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: tier === 1, alpha: false, stencil: false, powerPreference: 'high-performance' });
   renderer.setClearColor(0x030202, 1);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  let dprCap = mobile ? 1.25 : 1.5;
+  let dprCap = mobile ? 1.25 : integrated ? 1.15 : 1.5;
   const dpr = () => Math.min(window.devicePixelRatio || 1, dprCap);
   renderer.setPixelRatio(dpr());
 
@@ -564,9 +574,17 @@ export function mount(canvas: HTMLCanvasElement, o: Options) {
       dprCap = 0.75;
       pg.setDrawRange(0, Math.floor(P / 2));
       resize();
-    } else { stopped = true; }
-    o.onTier?.(stopped ? 0 : tier);
+    } else { settle(); return; }
+    o.onTier?.(tier);
   };
+  // stop animating, but never freeze mid-intro: finish the intro and draw one settled frame for the current scroll position
+  function settle() {
+    intro = 1;
+    update(0.016);
+    draw();
+    stopped = true;
+    o.onTier?.(0);
+  }
   const loop = (now: number) => {
     raf = 0;
     if (!running) return;
@@ -580,7 +598,7 @@ export function mount(canvas: HTMLCanvasElement, o: Options) {
       if (frames % 30 === 0) {
         const avg = acc / 30;
         acc = 0;
-        if (avg > 0.075) { stopped = true; o.onTier?.(0); } // far too slow (software GL, a struggling phone): keep the still frame
+        if (avg > 0.075 && tier === 1 && dprCap <= 0.8) settle(); // still far too slow after every step down: keep one finished frame
         else if (avg > (tier === 2 ? 0.024 : 0.032)) degrade();
       }
     }
