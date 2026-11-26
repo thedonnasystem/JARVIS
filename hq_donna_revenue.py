@@ -35,7 +35,7 @@ FLAG_INBOUND = "DONNA_INBOUND"
 FLAG_AUTODRAFT = "DONNA_AUTODRAFT"
 HOSTS = {"api.netlify.com", "api.retellai.com"}
 PLACEHOLDER_ADDRESS = "[OWNER: mailing address]"
-MODES = ("inbound_reply", "follow_up", "proposal", "onboarding")
+MODES = ("inbound_reply", "follow_up", "proposal", "onboarding", "client_report")
 TZ = dt.timezone(dt.timedelta(hours=-5))          # Ottawa (EST); used only to word dates
 
 
@@ -389,6 +389,9 @@ def outreach_mode(ctx, inputs: dict, *, address_get=None, env: dict | None = Non
     mode = inputs.get("mode")
     if mode not in MODES:
         raise hq_donna.DonnaRefused(f"unknown outreach mode {mode!r}")
+    if mode == "client_report":                                       # Client Agents v1: the monthly report email to a client (hq_donna_agents)
+        import hq_donna_agents
+        return hq_donna_agents.client_report_run(ctx, inputs, env=env, address_get=address_get)
     ctx.check("draft_outreach")
     address = mailing_address(address_get)
     if address == PLACEHOLDER_ADDRESS:                                # no draft without the real address: it could never be sent, and it would block a later reply
@@ -464,6 +467,7 @@ LABELS = {"inbound_reply": "Donna drafted a reply to a new inquiry. Approve to s
           "follow_up": "Donna drafted a follow-up. Approve to send it.",
           "proposal": "Donna drafted your proposal. Approve to send it.",
           "retry": "Donna drafted an email for a lead. Approve to send it.",
+          "client_report": "Donna drafted the monthly report for your client. Approve to send it.",
           "onboarding": "Donna drafted the welcome email with the onboarding questions. Approve to send it.",
           "cold": "Donna drafted a first email to a prospect (contact published on their own website, CASL implied consent). Approve to send it."}
 
@@ -538,6 +542,14 @@ def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, ap
         due = []
     if due:
         jobs.append(("outreach-prep", {"mode": "follow_up", "targets": due[:10]}))
+    if dt.datetime.now(TZ).day <= 3:                                         # Client Agents v1: last month's report for each client, once
+        try:
+            import hq_donna_agents
+            period = hq_donna_agents._period(dt.datetime.now(TZ).date())[0]
+            if any(a.get("last_report") != period and a.get("lead") for a in (rpc("donna_client_agents", {}) or [])):
+                jobs.append(("outreach-prep", {"mode": "client_report"}))
+        except Exception:
+            pass                                                              # not installed yet (migration 20261211) or no agents
     if q.get("prospects_ready") and not q.get("cold_run_today"):           # once a day: first-email drafts for researched prospects (free brain, $0; drafts only)
         jobs.append(("outreach-prep", {"channels": ["email"], "lead_ids": q["prospects_ready"][:int(rev().get("cold_draft_per_day", 10))]}))
     for mission, inputs in jobs:

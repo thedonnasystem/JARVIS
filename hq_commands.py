@@ -1180,7 +1180,8 @@ async def hq_donna_cmd(update, context) -> None:
     /donna run <mission>  run one of Donna's missions now (refused while she is dormant; drafts only, nothing is sent). /donna report  the weekly KPI report.
     Revenue loop (hq_donna_revenue): /donna inbound  recent inquiries and what waits; /donna sync  pull the website form and Donna calls now;
     /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
-    /donna onboard <lead #> <package>  the welcome email with the setup questions (after /deal won)."""
+    /donna onboard <lead #> <package>  the welcome email with the setup questions (after /deal won);
+    /donna agent <client> [create <code>]  the client's own Donna phone agent on Retell; /donna clientreport <client>  last month's report email."""
     if not _owner(update):
         return
     args = [a.lower() for a in (getattr(context, "args", None) or [])]
@@ -1196,6 +1197,14 @@ async def hq_donna_cmd(update, context) -> None:
                 + (f" Problems: {'; '.join(r['errors'])[:300]}" if r["errors"] else ""))
         elif args and args[0] == "brief":
             text = await asyncio.to_thread(hq_donna_revenue.brief_cmd, args[1] if len(args) > 1 else "")
+        elif args and args[0] == "agent":
+            import hq_donna_agents
+            raw = (getattr(update.message, "text", "") or "").split(None, 2)              # the client's name as typed
+            text = await asyncio.to_thread(hq_donna_agents.agent_cmd, raw[2] if len(raw) > 2 else "")
+        elif args and args[0] == "clientreport":
+            import hq_donna_agents
+            raw = (getattr(update.message, "text", "") or "").split(None, 2)
+            text = await asyncio.to_thread(hq_donna_agents.clientreport_cmd, raw[2] if len(raw) > 2 else "")
         elif args and args[0] == "onboard":
             text = await asyncio.to_thread(hq_donna_revenue.onboard_cmd, " ".join(args[1:]))
         elif args and args[0] == "proposal":
