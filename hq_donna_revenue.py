@@ -118,9 +118,10 @@ def retell_items(env: dict, http=http_json) -> list[dict]:
     if not key:
         return []
     ids = [x.strip() for x in (env.get("DONNA_AGENT_IDS") or "").split(",") if x.strip()]
-    body = {"sort_order": "descending", "limit": 50}
+    body = {"sort_order": "descending", "limit": 50,
+            "filter_criteria": {"start_timestamp": {"lower_threshold": int((dt.datetime.now(dt.timezone.utc).timestamp() - 3 * 86400) * 1000)}}}
     if ids:
-        body["filter_criteria"] = {"agent_id": ids}
+        body["filter_criteria"]["agent_id"] = ids
     rows = http("POST", "https://api.retellai.com/v2/list-calls", {"Authorization": f"Bearer {key}", "User-Agent": "DonnaInbound/1.0"}, body) or []
     out = []
     for c in rows if isinstance(rows, list) else []:
@@ -143,7 +144,19 @@ def retell_items(env: dict, http=http_json) -> list[dict]:
     return out
 
 
-def sync(rpc=None, env: dict | None = None, http=http_json) -> dict:
+_SEEN: set[str] = set()                                                 # refs already handed to the database in this process (saves ~30k RPCs a day)
+WINDOW_DAYS = 3                                                          # only recent items are pulled; older ones are already in (or were refused)
+
+
+def _recent(iso: str | None, now: dt.datetime) -> bool:
+    try:
+        t = dt.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        return t.tzinfo is not None and now - t <= dt.timedelta(days=WINDOW_DAYS)
+    except ValueError:
+        return False
+
+
+def sync(rpc=None, env: dict | None = None, http=http_json, now: dt.datetime | None = None) -> dict:
     """Pull both sources into the CRM. Never raises; returns counts and the new leads."""
     env = os.environ if env is None else env
     out = {"new": [], "updated": 0, "duplicate": 0, "skipped": 0, "errors": []}
@@ -157,15 +170,21 @@ def sync(rpc=None, env: dict | None = None, http=http_json) -> dict:
             items += fn(env, http)
         except Exception as e:                                          # one source down never blocks the other
             out["errors"].append(f"{name}: {type(e).__name__}")
+    now = now or dt.datetime.now(dt.timezone.utc)
     for it in items:
-        if not it.get("p_received_at"):
+        if not it.get("p_received_at") or not _recent(it["p_received_at"], now):
             out["skipped"] += 1
+            continue
+        key = f"{it['p_source']}:{it['p_ref']}"
+        if key in _SEEN:
+            out["duplicate"] += 1
             continue
         try:
             r = rpc("donna_ingest_inbound", it) or {}
         except Exception as e:
             out["errors"].append(f"ingest: {str(e)[:120]}")
             continue
+        _SEEN.add(key)
         if r.get("duplicate"):
             out["duplicate"] += 1
         elif r.get("new_lead"):

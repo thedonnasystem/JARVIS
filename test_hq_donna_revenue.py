@@ -90,7 +90,8 @@ class InboundSources(unittest.TestCase):
             return calls
         out = R.retell_items({"RETELL_API_KEY": "k", "DONNA_AGENT_IDS": "agent_web, agent_demo"}, http)
         self.assertEqual((sent["method"], sent["url"]), ("POST", "https://api.retellai.com/v2/list-calls"))
-        self.assertEqual(sent["body"]["filter_criteria"], {"agent_id": ["agent_web", "agent_demo"]})
+        self.assertEqual(sent["body"]["filter_criteria"]["agent_id"], ["agent_web", "agent_demo"])
+        self.assertIn("lower_threshold", sent["body"]["filter_criteria"]["start_timestamp"], "only the last 3 days are pulled")
         self.assertEqual([o["p_ref"] for o in out], ["rc-call_1", "rc-call_2"])
         web, phone = out
         self.assertEqual((web["p_source"], web["p_booked"], web["p_appointment"], web["p_phone"]), ("web_call", True, "Thu 2 pm", None))
@@ -110,7 +111,8 @@ class InboundSources(unittest.TestCase):
         def http(method, url, headers, body=None):
             if "netlify" in url:
                 raise OSError("down")
-            return [{"call_id": "c9", "call_type": "phone_call", "call_status": "ended", "from_number": "+16135550100", "start_timestamp": 1764169200000,
+            return [{"call_id": "c9", "call_type": "phone_call", "call_status": "ended", "from_number": "+16135550100",
+                     "start_timestamp": int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000) - 3600000,
                      "call_analysis": {"call_summary": "hi"}}]
         def rpc(name, args):
             got.append(args)
@@ -120,6 +122,22 @@ class InboundSources(unittest.TestCase):
         self.assertEqual(len(r["new"]), 1)
         self.assertEqual(got[0]["p_ref"], "rc-c9")
 
+    def test_sync_skips_old_and_remembers_seen(self):
+        R._SEEN.clear()
+        now = dt.datetime(2026, 11, 27, 12, tzinfo=dt.timezone.utc)
+        items = [{"p_source": "website_form", "p_ref": "nf-new1", "p_received_at": "2026-11-27T10:00:00Z"},
+                 {"p_source": "website_form", "p_ref": "nf-old1", "p_received_at": "2026-11-01T10:00:00Z"}]
+        calls = []
+        orig = R.netlify_items
+        R.netlify_items = lambda env, http: items
+        try:
+            R.sync(rpc=lambda n, a: calls.append(a["p_ref"]) or {"duplicate": True}, env={"DONNA_INBOUND": "1"}, now=now)
+            R.sync(rpc=lambda n, a: calls.append(a["p_ref"]) or {"duplicate": True}, env={"DONNA_INBOUND": "1"}, now=now)
+        finally:
+            R.netlify_items = orig
+            R._SEEN.clear()
+        self.assertEqual(calls, ["nf-new1"], "old items skipped; a seen ref is never sent to the database twice")
+
     def test_sync_counts_duplicates_and_updates(self):
         answers = iter([{"duplicate": True}, {"new_lead": False, "lead": "L1"}, RuntimeError("refused: bad inbound ref")])
         def rpc(name, args):
@@ -127,7 +145,9 @@ class InboundSources(unittest.TestCase):
             if isinstance(a, Exception):
                 raise a
             return a
-        items = [{"p_received_at": "2026-11-26T15:00:00Z", "p_ref": f"nf-{i}"} for i in range(3)] + [{"p_received_at": None, "p_ref": "nf-x"}]
+        R._SEEN.clear()
+        recent = dt.datetime.now(dt.timezone.utc).isoformat()
+        items = [{"p_source": "website_form", "p_received_at": recent, "p_ref": f"nf-{i}"} for i in range(3)] + [{"p_source": "website_form", "p_received_at": None, "p_ref": "nf-x"}]
         orig = R.netlify_items
         R.netlify_items = lambda env, http: items
         try:
