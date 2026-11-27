@@ -1180,6 +1180,7 @@ async def hq_donna_cmd(update, context) -> None:
     /donna run <mission>  run one of Donna's missions now (refused while she is dormant; drafts only, nothing is sent). /donna report  the weekly KPI report.
     Revenue loop (hq_donna_revenue): /donna setup  every switch still missing, ticked live; /donna inbound  recent inquiries and what waits; /donna sync  pull the website form and Donna calls now;
     /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
+    /donna won <lead #> <package> <monthly $> [received|expected]  records the deal and first month, drafts the welcome email;
     /donna onboard <lead #> <package>  the welcome email with the setup questions (after /deal won);
     /donna agent <client> [create <code>]  the client's own Donna phone agent on Retell; /donna clientreport <client>  last month's report email."""
     if not _owner(update):
@@ -1208,6 +1209,8 @@ async def hq_donna_cmd(update, context) -> None:
             import hq_donna_agents
             raw = (getattr(update.message, "text", "") or "").split(None, 2)
             text = await asyncio.to_thread(hq_donna_agents.clientreport_cmd, raw[2] if len(raw) > 2 else "")
+        elif args and args[0] == "won":
+            text = await asyncio.to_thread(hq_donna_revenue.won_cmd, " ".join(args[1:]))
         elif args and args[0] == "onboard":
             text = await asyncio.to_thread(hq_donna_revenue.onboard_cmd, " ".join(args[1:]))
         elif args and args[0] == "proposal":

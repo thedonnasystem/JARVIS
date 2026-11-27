@@ -418,6 +418,30 @@ class Commands(unittest.TestCase):
         self.assertIn("Use:", R.brief_cmd("abc"))
 
 
+class Won(unittest.TestCase):
+    def test_won_records_the_owner_deal_then_drafts_onboarding(self):
+        calls, posted = [], []
+        class VO:
+            OWNER = "owner"
+            @staticmethod
+            def find_lead(ref): return {"id": "L12", "name": "Pine Plumbing", "do_not_contact": False} if ref == "12" else None
+            @staticmethod
+            def _parse_cents(t): return int(float(t.replace(",", "")) * 100)
+            @staticmethod
+            def _rpc(name, args):
+                calls.append((name, args)); return "D1" if name == "create_deal" else {}
+        runner = lambda m, i: {"ok": True, "result": {"results": [{"outbox": "O1", "new": True, "purpose": "onboarding"}]}}
+        out = R.won_cmd("12 front-desk 497", runner=runner, approve=lambda o, l: posted.append(o), vo=VO)
+        self.assertEqual([n for n, _ in calls], ["create_deal", "confirm_deal_won"])
+        self.assertEqual(calls[1][1]["p_ledger_status"], "expected")
+        self.assertEqual(calls[1][1]["p_by"], "owner", "the owner's own command records revenue, nothing else does")
+        self.assertIn("$497 a month", out)
+        self.assertEqual(posted, ["O1"])
+        self.assertIn("Use:", R.won_cmd("12 gold 497", vo=VO))
+        self.assertIn("starts at $197", R.won_cmd("12 essential 99", vo=VO))
+        self.assertIn("No contactable lead", R.won_cmd("99 growth 797", vo=VO))
+
+
 class Setup(unittest.TestCase):
     def test_checklist_never_shows_values(self):
         env = {"RETELL_API_KEY": "sk_secret_value", "DONNA_INBOUND": "1"}

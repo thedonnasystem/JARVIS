@@ -718,3 +718,43 @@ def brief_cmd(short_id: str, rpc=None, get=None, runner=None) -> str:
     res = ((r.get("result") or {}).get("results") or [{}])[0]
     return res.get("text") or f"Brief not written: {res.get('refused')}"
 
+
+
+# ------------------------------------------------------------------------------------------------------------------- /donna won: close the deal in one line
+WON_RX = re.compile(r"^\s*#?(\d{1,7})\s+(essential|front-desk|growth|ai-systems)\s+\$?([\d,]+(?:\.\d{1,2})?)\s*(received|expected)?\s*$", re.I)
+
+
+def won_cmd(text: str, rpc=None, runner=None, approve=post_for_approval, vo=None) -> str:
+    """'/donna won 12 front-desk 497 [received|expected]': the OWNER's own words record the deal and the first month (the existing deal path,
+    by = owner), then Donna drafts the welcome email with the setup questions for his tap. Nothing is charged or invoiced here."""
+    m = WON_RX.match(text or "")
+    if not m:
+        return "Use: /donna won <lead #> <essential|front-desk|growth|ai-systems> <monthly $> [received|expected]"
+    import hq_venture_ops as V
+    vo = vo or V
+    lead = vo.find_lead(m.group(1))
+    if not lead or lead.get("do_not_contact"):
+        return f"No contactable lead #{m.group(1)}."
+    cents = vo._parse_cents(m.group(3))
+    if cents is None:
+        return "The monthly amount must look like 497 or 1,297 (at most $100,000)."
+    package = m.group(2).lower()
+    if package == "essential" and cents < rev()["packages"]["essential"]["from_cents"]:
+        return "Essential starts at $197 a month (your price)."
+    status = (m.group(4) or "expected").lower()
+    try:
+        deal = vo._rpc("create_deal", {"p_lead": lead["id"], "p_value_cents": cents, "p_by": vo.OWNER, "p_note": f"Donna {package}, monthly"})
+        vo._rpc("confirm_deal_won", {"p_deal": deal, "p_amount_cents": cents, "p_ledger_status": status, "p_by": vo.OWNER, "p_note": f"Donna {package}: first month"})
+    except Exception as e:
+        return f"Deal not recorded: {str(e)[:200]}"
+    out = [f"Won: {lead.get('name')} on {rev()['packages'][package]['title']}, {money(cents)} a month (first month recorded as {status})."]
+    runner = runner or (lambda mission, inputs: hq_donna.run(mission, inputs, rpc=rpc))
+    r = runner("outreach-prep", {"mode": "onboarding", "lead": lead["id"], "package": package}) or {}
+    res = ((r.get("result") or {}).get("results") or [{}])[0] if r.get("ok") else {}
+    if res.get("outbox") and res.get("new"):
+        approve(res["outbox"], LABELS["onboarding"])
+        out.append("Welcome email with the setup questions drafted: approve it above.")
+    else:
+        out.append(f"Welcome email not drafted yet: {r.get('refused') or res.get('refused') or res.get('not_staged') or 'Donna is dormant'}. Run /donna onboard {m.group(1)} {package} later.")
+    out.append(f"When they answer: /donna run delivery-onboarding, then /donna agent <client> for their phone agent.")
+    return "\n".join(out)
