@@ -77,8 +77,17 @@ def parse_hours(text: str) -> dict:
     """'mon-fri 9-17, sat 10am-2pm, sun closed' -> {"mon": [["09:00","17:00"]], ..., "sun": []}. Days not named are closed."""
     hours = {d: [] for d in DAYS}
     named = False
-    for chunk in [c.strip() for c in re.split(r",", text or "") if c.strip()]:
-        m = re.match(r"^([A-Za-z/&+ -]+?)\s+(closed|[0-9].*)$", chunk, re.I)
+    chunks, pending = [], []
+    for c in [c.strip() for c in re.split(r",", text or "") if c.strip()]:
+        if re.fullmatch(r"[A-Za-z.]+", c) and c.lower() not in ("closed",):           # "mon, wed, fri 9-5": a bare day joins the next chunk
+            pending.append(c)
+            continue
+        chunks.append("/".join(pending + [c]) if pending else c)
+        pending = []
+    if pending:
+        raise IntakeError(f"hours: {', '.join(pending)!r} has no times (use e.g. mon, wed, fri 9-5)")
+    for chunk in chunks:
+        m = re.match(r"^([A-Za-z/&+. -]+?)\s+(closed|[0-9].*)$", chunk, re.I)
         if not m:
             raise IntakeError(f"hours: cannot read {chunk!r} (use e.g. mon-fri 9-17, sat 10-14, sun closed)")
         days = _days(m.group(1))
@@ -107,7 +116,8 @@ def parse_hours(text: str) -> dict:
 def parse_services(text: str) -> list[dict]:
     """'Oil change $89 30min, Brake check $120.50 1h, Free estimate' -> [{"name", "price_cents", "minutes"}]. No price means 0 (an open item)."""
     out = []
-    for chunk in [c.strip() for c in re.split(r",", text or "") if c.strip()][:30]:
+    for chunk in [c.strip() for c in re.split(r",(?!\d{3}\b)", text or "") if c.strip()][:30]:      # "$1,200" keeps its comma
+        chunk = re.sub(r"(?<=\d),(?=\d{3}\b)", "", chunk)
         price = re.search(r"\$\s*([\d]+(?:\.\d{1,2})?)", chunk)
         mins = re.search(r"\b(\d{1,3})\s*(?:min|mins|minutes|m)\b", chunk, re.I)
         hrs = re.search(r"\b(\d(?:\.\d)?)\s*(?:h|hr|hrs|hour|hours)\b", chunk, re.I)

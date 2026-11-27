@@ -25,6 +25,12 @@ class Hours(unittest.TestCase):
         self.assertEqual(h["wed"], [["10:00", "18:00"]], "the later chunk wins")
         self.assertEqual(h["sat"], [])
 
+    def test_comma_separated_days(self):
+        h = I.parse_hours("mon, wed, fri 9-5, sat closed")
+        self.assertEqual([d for d in I.DAYS if h[d]], ["mon", "wed", "fri"])
+        with self.assertRaises(I.IntakeError):
+            I.parse_hours("mon 9-5, tue")
+
     def test_refuses_what_it_cannot_read(self):
         for bad in ("", "sometimes", "mon-fri late", "fri-mon 9-5", "mon 10pm-2am", "funday 9-5", "mon 9"):
             with self.subTest(bad=bad), self.assertRaises(I.IntakeError):
@@ -41,6 +47,10 @@ class Services(unittest.TestCase):
         self.assertEqual(s[0], {"name": "Oil change", "price_cents": 8900, "minutes": 30})
         self.assertEqual(s[1], {"name": "Brake check", "price_cents": 12050, "minutes": 90})
         self.assertEqual(s[2], {"name": "Free estimate", "price_cents": 0, "minutes": 30})
+
+    def test_thousands_separator_is_not_a_new_service(self):
+        s = I.parse_services("Furnace install $4,500 4h, Tune-up $149")
+        self.assertEqual([(x["name"], x["price_cents"], x["minutes"]) for x in s], [("Furnace install", 450000, 240), ("Tune-up", 14900, 30)])
 
     def test_refuses_nameless_or_silly_lengths(self):
         for bad in ("$40", "Detail 900min"):
