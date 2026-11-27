@@ -23,7 +23,9 @@ owner: Test call in Retell → buys or ports the client's number in Retell (cost
 - **Reports:**
   - one per agent and month;
   - the numbers come only from the client's own call log: calls, outside business hours, booking requests, urgent, messages;
-  - each report is staged for the owner's tap like every Donna email (CASL footer, address from `/setaddress`).
+  - each report is staged for the owner's tap like every Donna email (CASL footer, address from `/setaddress`);
+  - when the intake lists prices, one what-if line: booking requests × the client's **lowest** listed price ("If each booking request became a job…"). No other figure is invented;
+  - one referral ask: the client replies and gets a short intro to pass along. Donna never contacts the referred business herself.
 
 ## Files
 
@@ -32,7 +34,7 @@ owner: Test call in Retell → buys or ports the client's number in Retell (cost
 | `migrations/20261211_donna_client_agents_v1.sql` | Schema `fz_donna_ca` (agents, reports) and 4 service-only functions |
 | `ops/rollback_donna_client_agents.sql` | Archives to `fz_archive.donna_ca_*`. Run before the revenue-loop and Donna Ops rollbacks. Retell agents stay on Retell |
 | `sqltests/donna_client_agents_check.sql` | C1 to C4: dormant refusals, find/refuse, once per intake and per month, ACLs, rollback + re-apply |
-| `hq_donna_agents.py`, `test_hq_donna_agents.py` | Spec, preview, create, monthly report (11 tests) |
+| `hq_donna_agents.py`, `test_hq_donna_agents.py` | Spec, preview, create, monthly report with its value line and referral ask (12 tests) |
 | `hq_donna_revenue.py`, `hq_commands.py` | `client_report` mode, the monthly tick, `/donna agent`, `/donna clientreport` |
 
 ## Owner

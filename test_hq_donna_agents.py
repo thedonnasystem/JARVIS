@@ -100,6 +100,22 @@ class Report(unittest.TestCase):
         self.assertIn("November 2026", s)
         self.assertIn("Calls outside your business hours: 12", b)
 
+    def test_value_line_uses_only_the_clients_own_prices(self):
+        st = {"calls": 40, "outside_hours": 12, "booked": 9, "urgent": 2, "messages": 30, "minutes": 95}
+        svc = [{"name": "Drain clearing", "price_cents": 18900}, {"name": "Free estimate", "price_cents": 0}, {"name": "Water heater", "price_cents": 120050}]
+        self.assertEqual(A.value_line(st, svc), "If each booking request became a job at your lowest listed price ($189), that's $1,701 of work.".replace("request ", "requests ", 1))
+        self.assertIn("($1,200.50)", A.value_line({"booked": 1}, [{"price_cents": 120050}]))
+        self.assertIn("booking request became", A.value_line({"booked": 1}, [{"price_cents": 120050}]))
+        self.assertIsNone(A.value_line(st, [{"name": "Free estimate", "price_cents": 0}]))
+        self.assertIsNone(A.value_line({"booked": 0}, svc))
+        self.assertIsNone(A.value_line(st, None))
+        s, b = A.report_email("Pine Plumbing", "Pat Lee", "2026-11", st, "PO Box 1, Ottawa ON", services=svc)
+        self.assertIn("$1,701 of work", b)
+        self.assertIn("Know another business owner", b)
+        self.assertEqual(hq_donna.casl_problems("follow_up_email", s, b), [])
+        _, plain = A.report_email("Pine Plumbing", "Pat Lee", "2026-11", st, "PO Box 1, Ottawa ON")
+        self.assertNotIn("of work", plain)
+
     def test_run_once_per_month(self):
         class Ctx:
             run_id = "RUN"

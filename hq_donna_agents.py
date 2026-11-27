@@ -187,16 +187,32 @@ def stats(calls: list, hours: dict) -> dict:
             "minutes": round(sum(int(c.get("duration_ms") or 0) for c in ended) / 60000)}
 
 
-def report_email(label: str, person: str | None, period: str, st: dict, address: str, c: dict | None = None) -> tuple[str, str]:
+def value_line(st: dict, services: list | None) -> str | None:
+    """The client's own numbers only: booking requests x their LOWEST listed price, worded as a what-if (a request is not a paid job). None without both."""
+    prices = [int(x.get("price_cents") or 0) for x in services or [] if int(x.get("price_cents") or 0) > 0]
+    n = int(st.get("booked") or 0)
+    if not prices or n <= 0:
+        return None
+    low = min(prices)
+    req = "request" if n == 1 else "requests"
+    fmt = lambda v: f"${v / 100:,.2f}" if v % 100 else f"${v // 100:,}"
+    return f"If each booking {req} became a job at your lowest listed price ({fmt(low)}), that's {fmt(low * n)} of work."
+
+
+def report_email(label: str, person: str | None, period: str, st: dict, address: str, c: dict | None = None,
+                 services: list | None = None) -> tuple[str, str]:
     c = c or R.cfg()
     month = dt.date.fromisoformat(period + "-01").strftime("%B %Y")
+    worth = value_line(st, services)
     lines = [f"Hi {R.first_name(person)},", "", f"Here's what Donna handled for {label} in {month}:", "",
              f"- Calls answered: {st['calls']}",
              f"- Calls outside your business hours: {st['outside_hours']}",
              f"- Booking requests taken: {st['booked']}",
              f"- Urgent calls flagged: {st['urgent']}",
-             f"- Messages and callbacks captured: {st['messages']}", "",
-             "Every number comes from your call log. Reply if you'd like anything changed in how Donna answers.", "", "Thanks,", R.rev(c)["brand"], "",
+             f"- Messages and callbacks captured: {st['messages']}", ""] + ([worth, ""] if worth else []) + [
+             "Every number comes from your call log. Reply if you'd like anything changed in how Donna answers.", "",
+             "Know another business owner who misses calls? Reply and we'll send you a short intro you can pass along.", "",
+             "Thanks,", R.rev(c)["brand"], "",
              R.footer(address, c)]
     return f"Donna's {month} report for {label}"[:150], "\n".join(lines)
 
@@ -223,7 +239,8 @@ def client_report_run(ctx, inputs: dict, *, env: dict | None = None, http=R.http
                         "start_timestamp": {"lower_threshold": lo, "upper_threshold": hi}}, "limit": 1000}, http) or []
         st = stats(calls if isinstance(calls, list) else [], (a.get("reception_config") or {}).get("hours") or {})
         lc = ctx.rpc("donna_lead_context", {"p_lead": a["lead"]}) or {}
-        subject, body = report_email(a["client_label"], lc.get("person"), period, st, address)
+        subject, body = report_email(a["client_label"], lc.get("person"), period, st, address,
+                                     services=(a.get("reception_config") or {}).get("services"))
         r = R._save_and_stage(ctx, a["lead"], subject, body, "client_report")
         ctx.rpc("donna_record_client_report", {"p_agent": a["id"], "p_period": period, "p_draft": r.get("draft"), "p_stats": st})
         out.append(r | {"client": a["client_label"], "stats": st})
