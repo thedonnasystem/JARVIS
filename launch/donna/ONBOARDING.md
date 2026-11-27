@@ -11,13 +11,15 @@ Stack you already have:
 ## Timeline
 | When | You | Client |
 |---|---|---|
-| Hour 0 (he says yes) | Send the DocuSign agreement. Create the Helcim recurring plan at the founding price, starting on go-live day. Send the Tally intake link | Signs, fills the intake (about 15 min) |
+| Hour 0 (he says yes) | Send the DocuSign agreement. In Telegram: `/donna won <lead #> <package> <monthly $>` (records the deal, drafts the welcome email with the setup questions). Create the recurring plan at his quoted price, starting on go-live day | Signs, fills the intake (about 15 min) |
 | Hours 0 to 24 | Clone the agent, buy his local number, fill the prompt, connect Cal.com, copy the Make scenario | Creates a free Cal.com account and connects his calendar (or does it with you on a 10-min call) |
 | Hours 24 to 36 | Text him the **test line** (the new Retell number). Fix whatever he flags | Calls it 3 or 4 times, approves the wording by text ("approved") |
 | Hours 36 to 48 | Walk him through call forwarding (below), then run the go-live checklist with him on the phone | Dials the forwarding codes |
 | Every Monday | Send the weekly results text | |
 
 ## 1. Intake form (Tally: build once, about 20 min; one question per line)
+**Faster path, no form to build:** the welcome email Donna drafts on `/donna won` already asks these questions. When he replies, type his answers once: `/donna intake <lead #> | hours: mon-fri 9-5; services: Drain cleaning $149 60min; faq: Do you do emergencies? = Yes; urgent: 613 555 0100; booking: https://...`. Keep the Tally form below for clients who prefer a form.
+
 Tally > Create form > add these as fields. Mark the starred ones required.
 
 **Business and contact**
@@ -84,7 +86,7 @@ Tally > Create form > add these as fields. Mark the starred ones required.
 - **Account:** the client creates a free Cal.com account and connects his Google or Outlook calendar. Cal.com is free for one user.
 - **Event type:** create one named "Service visit", with the length and notice from the intake.
 - **Connect it in Retell:** Functions > + Add > Cal.com > **add a new connection**, and have the client sign in to his Cal.com in the popup. Doing this on a quick screen-share is easiest.
-- **If Retell only allows one Cal.com connection per workspace:** create a separate Retell workspace for the client. Or start him on Answer, where Donna takes details and he books the job himself.
+- **If Retell only allows one Cal.com connection per workspace:** create a separate Retell workspace for the client. Or start him on Essential with the receptionist only: Donna takes the details and he books the job himself.
 
 ## 5. Make.com for the client
 - Duplicate "Donna - after every call" (`voice/MAKE_SCENARIOS.md`) and rename it to the client.
@@ -144,7 +146,7 @@ Put the client's new Retell number (10 digits) where it says NUMBER. Each carrie
 
 When all pass:
 - start the Helcim plan;
-- write the go-live date on his founding-spot record.
+- write the go-live date in `scoreboard.csv`.
 
 ## 8. Weekly results text (every Monday, under 2 minutes)
 Count from Retell > Call history, filtered to his agent and the last 7 days, or from the "Donna calls" Google Sheet. Report real counts only; never estimate.

@@ -90,7 +90,7 @@ The audit is the proof: you show the owner his own missed calls, not anyone's st
 | 1 | **Email**: only to a published business email, and only about their phone handling (it is relevant to the owner's role) | Audit result in 3 lines, demo line, offer sheet attached, your ID and an unsubscribe line (template below) |
 | 3 or Saturday | **Walk in** if they have a shop or showroom | Printed offer sheet, plus their audit result written on the back |
 | 5 | **DM** the business page (Facebook or Instagram), only if the page invites messages | Same 3 lines as the email, with ID and "reply STOP and I won't message again" |
-| 10 | **Last call** | "I'll close your file. Want me to keep a founding spot open for a week?" |
+| 10 | **Last call** | "I'll close your file. Setup is free until December 31 if you want to look again before then." |
 
 Then stop. Anyone who says no or stop goes on your **do-not-contact** list the same day.
 
@@ -110,7 +110,7 @@ Then listen. Ask what one average job is worth to him, and use his number, never
 
 **Email template** (CASL: identification, mailing address, unsubscribe):
 > **Subject:** Your after-hours line, Tuesday 7:40 p.m.
-> Hi [owner], I called [business] on [date] at [time] as a test and it went to [voicemail / rang out]. Donna.AI answers those calls for you with an AI receptionist, texts back missed callers, and books the job into your calendar. Hear it yourself: call 825-462-1250, tell Donna what business you run, and play a customer. Founding price from $497/month, setup included, month-to-month, 10 spots (one-page offer attached).
+> Hi [owner], I called [business] on [date] at [time] as a test and it went to [voicemail / rang out]. Donna.AI answers those calls for you with an AI receptionist, texts back missed callers, and books the job into your calendar. Hear it yourself: call 825-462-1250, tell Donna what business you run, and play a customer. Plans from $197/month, month-to-month, setup free until December 31 (one-page offer attached).
 > Moe [last name], Donna.AI, [mailing address], [phone]. Reply "unsubscribe" and I won't email you again.
 
 ## 5. The demo-call moment (the closer)
@@ -120,27 +120,36 @@ Do it in person or on the phone, the moment he says "huh" or "how does it work".
 3. When the text lands on his phone: "That's what your 7:40 caller would have gotten, instead of your voicemail."
 4. Then: "Want yours set up with your hours and prices? You'd test it on a private line before any customer hears it."
 
-## 6. Close on founding pricing
-- **Recommend Capture at $797/month.** It turns missed calls into booked appointments; Answer alone only takes messages.
-  - Answer: $497 founding, $697 standard.
-  - Capture: $797 founding, $1,097 standard.
-  - Command: $1,297 founding, $1,797 standard.
-  - All plus applicable taxes, in CAD.
+## 6. Close: the package comes out of the audit
+The site and the offer sheet show **Essential from $197** and three **Tailored** packages. You quote the tailored ones on the call, from what the audit found.
+
+| Package | What it fixes | Your guide price (internal, not published) |
+|---|---|---|
+| Essential | One leak, his pick | from $197 / month |
+| Front Desk | Every call and lead answered | about $497 / month |
+| Growth | Every lead chased, every slot filled | about $797 / month |
+| AI Systems | Busywork gone, systems connected | from $1,297 / month |
+
+All prices are in CAD, plus applicable taxes. Websites are optional: $497 / $997 one-time.
+
+- **Recommend from his own numbers.** Use the leak he said costs him most (the audit brief shows his calculator numbers). If that's missed calls → Front Desk. If it's quotes and no-shows → Growth. Either way, Essential is the yes-today option.
 - What you can say, all of it true:
-  - setup included for founding clients;
-  - the founding price is locked in for as long as he stays;
+  - setup is free until December 31, 2026 (a real deadline; on January 1 the offer ends);
   - month-to-month, no contract;
-  - only 10 founding spots;
-  - free missed-call audit, plus a test line before go-live.
+  - free Revenue Leak Audit, plus a test line before go-live.
 - What you must not say:
-  - "regular price", "was $1,097" or anything struck through. The standard price is the price new clients pay **after** the 10 spots;
-  - any guarantee, refund, client count, result or review. You have none yet, and the honesty is part of the pitch.
-- **The ask:** "Want me to hold one of the 10 spots? I'll have your test line ready in 48 hours."
-- **Recommended terms** (owner decision): sign the agreement now, and charge month 1 only when he approves the test line and goes live. It removes the risk without a guarantee.
-- **Paperwork:**
-  - DocuSign: send the month-to-month service agreement. Counsel should review its wording once.
-  - Helcim: create a recurring payment plan at the founding price, starting at go-live.
-  - Founding-spot record: write the spot number and the date sold in `scoreboard.csv` (the founding_spots columns). The Competition Act needs these records (see the research doc).
+  - "regular price", "normally", "was $…" or anything struck through;
+  - any guarantee, refund, client count, result or review. You have none yet, and the honesty is part of the pitch;
+  - scarcity you haven't set ("only 10 spots").
+- **The ask:** "Want me to set it up? You'll have your test line within 48 hours."
+- **Recommended terms** (owner decision): sign now, and charge month 1 only when he approves the test line and goes live. It removes the risk without a guarantee.
+- **In Telegram, the moment he says yes:**
+  1. `/donna won <lead #> <package> <monthly $>`: records the deal and drafts the welcome email with the setup questions. Tap Approve.
+  2. `/invoices link donna <monthly $> <package>, <business>`: a payment link for you to send him (Jarvis never sends it). Needs FZ_STRIPE_INVOICING=1. Until then, use Helcim as before.
+  3. When his answers come back: `/donna intake <lead #> | hours: ...; services: ...; faq: q = a; urgent: ...; booking: https://...`
+  4. `/donna agent <business>`: preview his phone agent, then `create` it with the code shown.
+  5. `/donna stuck` any time: every deal waiting on you, each with the command that moves it. The 6 pm digest lists them too.
+- **Paperwork:** DocuSign the month-to-month service agreement. Counsel should review its wording once.
 
 ## 7. CASL and telemarketing rules (Canada; not legal advice)
 - **Calls to businesses** are exempt from the National DNCL rules. You must still:
@@ -173,7 +182,7 @@ Do it in person or on the phone, the moment he says "huh" or "how does it work".
 - conversations;
 - demo calls heard;
 - offers made;
-- founding spots sold.
+- deals won (`/donna won`).
 
 After 50 audits, look at the numbers. Change the opener, never the product.
 

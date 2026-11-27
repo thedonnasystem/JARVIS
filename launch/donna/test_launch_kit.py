@@ -134,10 +134,13 @@ class Offer(unittest.TestCase):
     html = _read(HERE, "offer_sheet.html")
 
     def test_prices_and_december_offer(self):
-        for price in ("$497", "$797", "$1,297"):
-            self.assertIn(f'<span class="amt gold">{price}</span>', self.html)
-        self.assertIn("Recommended", self.html)
-        for k in ("Essential from $197", "Setup free until Dec 31", "Month-to-month", "Free audit + test line", "+1 (825) 462-1250"):
+        self.assertIn('<span class="amt gold">$197</span>', self.html)
+        self.assertEqual(self.html.count('<span class="amt gold">Tailored</span>'), 3, "Front Desk, Growth, AI Systems: quoted from the audit, like the site")
+        for name in ("Essential", "Front Desk", "Growth", "AI Systems"):
+            self.assertIn(f"<h2>{name}</h2>", self.html)
+        self.assertIn("Start here", self.html)
+        for k in ("Free 20-min Revenue Leak Audit", "Setup free until Dec 31", "Month-to-month", "Test line first", "+1 (825) 462-1250",
+                  "We turn your missed calls and missed leads"):
             self.assertIn(k, self.html)
         self.assertNotIn("founding", self.html.lower())
 
@@ -149,7 +152,7 @@ class Offer(unittest.TestCase):
 
     def test_no_reference_price_or_claim_words(self):
         text = re.sub(r"<[^>]+>", " ", re.sub(r"<style.*?</style>", " ", self.html, flags=re.S))
-        self.assertNotRegex(text, r"(?i)\b(regular price|was \$|guarantee|refund|testimonial|trusted by|reviews?)\b")
+        self.assertNotRegex(text, r"(?i)\b(regular price|was \$|normally|guarantee|refund|testimonial|trusted by|reviews?(?! requests))\b")
         self.assertNotIn("<s>", self.html)
         self.assertNotIn("line-through", self.html)
 

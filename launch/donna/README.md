@@ -13,7 +13,8 @@ It does not depend on merging any Jarvis PR: Netlify builds this branch (`build/
 | `voice/MAKE_SCENARIOS.md` | The Make.com scenario: call summary to you, missed-call text-back, confirmations |
 | `PLAYBOOK_FIRST_CLIENT.md` | Verticals, list building, the after-hours audit, the sequence, the demo moment, closing, CASL |
 | `audit_log.csv`, `scoreboard.csv` | The audit log sheet and the daily scoreboard (open in Google Sheets or Excel) |
-| `offer_sheet.html` | One-page founding offer (print to PDF, Letter) |
+| `offer_sheet.html` | One-page offer: Essential from $197, tailored packages, free Revenue Leak Audit (print to PDF, Letter) |
+| `GOOGLE_BUSINESS_PROFILE.md` | Ready-to-paste Google Business Profile (service area, address hidden) |
 | `ONBOARDING.md` | Client #1 in 48 h: Tally intake, cloning the agent, Cal.com, call forwarding codes, go-live test, weekly text |
 
 ## Your launch hour (in this order)
