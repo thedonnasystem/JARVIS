@@ -1177,13 +1177,43 @@ async def hq_reception_cmd(update, context) -> None:
 
 async def hq_donna_cmd(update, context) -> None:
     """/donna  owner only: Donna's pipeline, drafts waiting and next actions (read-only). /donna drafts  the drafts to decide.
-    /donna run <mission>  run one of Donna's missions now (refused while she is dormant; drafts only, nothing is sent). /donna report  the weekly KPI report."""
+    /donna run <mission>  run one of Donna's missions now (refused while she is dormant; drafts only, nothing is sent). /donna report  the weekly KPI report.
+    Revenue loop (hq_donna_revenue): /donna setup  every switch still missing, ticked live; /donna inbound  recent inquiries and what waits; /donna sync  pull the website form and Donna calls now;
+    /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
+    /donna onboard <lead #> <package>  the welcome email with the setup questions (after /deal won);
+    /donna agent <client> [create <code>]  the client's own Donna phone agent on Retell; /donna clientreport <client>  last month's report email."""
     if not _owner(update):
         return
     args = [a.lower() for a in (getattr(context, "args", None) or [])]
     try:
         import hq_donna
-        if args and args[0] == "drafts":
+        import hq_donna_revenue
+        if args and args[0] == "setup":
+            import hq_donna_setup
+            text = await asyncio.to_thread(hq_donna_setup.setup_text)
+        elif args and args[0] == "inbound":
+            text = await asyncio.to_thread(hq_donna_revenue.inbound_text)
+        elif args and args[0] == "sync":
+            r = await asyncio.to_thread(hq_donna_revenue.sync)
+            text = (r.get("off") and f"Inbound sync is off ({r['off']}).") or (
+                f"Inbound sync: {len(r['new'])} new lead(s), {r['updated']} updated, {r['duplicate']} already in."
+                + (f" Problems: {'; '.join(r['errors'])[:300]}" if r["errors"] else ""))
+        elif args and args[0] == "brief":
+            text = await asyncio.to_thread(hq_donna_revenue.brief_cmd, args[1] if len(args) > 1 else "")
+        elif args and args[0] == "agent":
+            import hq_donna_agents
+            raw = (getattr(update.message, "text", "") or "").split(None, 2)              # the client's name as typed
+            text = await asyncio.to_thread(hq_donna_agents.agent_cmd, raw[2] if len(raw) > 2 else "")
+        elif args and args[0] == "clientreport":
+            import hq_donna_agents
+            raw = (getattr(update.message, "text", "") or "").split(None, 2)
+            text = await asyncio.to_thread(hq_donna_agents.clientreport_cmd, raw[2] if len(raw) > 2 else "")
+        elif args and args[0] == "onboard":
+            text = await asyncio.to_thread(hq_donna_revenue.onboard_cmd, " ".join(args[1:]))
+        elif args and args[0] == "proposal":
+            raw = (getattr(update.message, "text", "") or "").split(None, 2)              # keep the owner's own wording of the findings
+            text = await asyncio.to_thread(hq_donna_revenue.proposal_cmd, raw[2] if len(raw) > 2 else "")
+        elif args and args[0] == "drafts":
             text = await asyncio.to_thread(hq_donna.drafts_text)
         elif args and args[0] in ("run", "report"):
             mission = "weekly-report" if args[0] == "report" else (args[1] if len(args) > 1 else "")

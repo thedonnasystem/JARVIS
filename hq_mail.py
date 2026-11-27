@@ -29,7 +29,10 @@ def _get(path: str):
 def live() -> bool:
     rows = _get("system_state?id=eq.1&select=mode,kill_switch&limit=1")
     s = rows[0] if rows else {}
-    return s.get("mode") == "live" and not s.get("kill_switch")
+    # FIX (Nov 26 2026): system_state.mode can never be 'live' (its check allows dry_run / approve_first / auto_in_caps / exceptions_only), so this was never
+    # true and no approved email could be sent. Any mode but dry_run, kill switch off; the send policy (hq_policy here, outbox_send_policy in the database)
+    # still decides each email (approve_first asks for an approval row, auto_in_caps sends within the daily cap).
+    return s.get("mode") in ("approve_first", "auto_in_caps", "exceptions_only", "live") and not s.get("kill_switch")
 
 
 DONNA = "donna"
@@ -189,13 +192,18 @@ def send_prepared(from_addr: str, from_name: str, to: str, subject: str, text: s
                       "headers": {"List-Unsubscribe": f"<{unsubscribe}>"}}, idempotency_key=idempotency_key)
 
 
+def _open(req, timeout: int = 20):
+    """The ONE outbound call of this module (route inventory: test_audit_paths): sending, and reading received replies."""
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
 def _provider(payload: dict, idempotency_key: str | None = None) -> bool:
     headers = {"Authorization": "Bearer " + os.environ["RESEND_API_KEY"], "Content-Type": "application/json"}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key[:256]   # a retry after a provider timeout can never send the same email twice
     req = urllib.request.Request(API, data=json.dumps(payload).encode(), method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with _open(req, timeout=20) as r:
             return 200 <= r.status < 300
     except (urllib.error.URLError, OSError, ValueError):
         return False
@@ -295,3 +303,28 @@ def deliver_approved(limit: int = 5) -> dict:
     except Exception as e:  # delivery must never break the engine tick
         out["reason"] = type(e).__name__
     return out
+
+
+# ------------------------------------------------------------------------------------------------------------------- received replies (READ-only)
+# Donna Replies v1 (hq_donna_replies): the replies that reached the receiving address (MAIL_REPLY_TO). Same key as sending; nothing is sent here.
+RECEIVING = API + "/receiving"
+
+
+def _get_json(url: str):
+    req = urllib.request.Request(url, method="GET", headers={"Authorization": "Bearer " + os.environ["RESEND_API_KEY"], "User-Agent": "FendezyMail/1.0"})
+    with _open(req, timeout=20) as r:
+        return json.loads(r.read().decode("utf-8") or "null")
+
+
+def received(limit: int = 50) -> list:
+    """The latest received emails: [{id, from, subject, created_at, ...}]. Empty without RESEND_API_KEY."""
+    if not os.environ.get("RESEND_API_KEY"):
+        return []
+    return (_get_json(f"{RECEIVING}?limit={max(1, min(int(limit), 100))}") or {}).get("data") or []
+
+
+def received_text(message_id: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,120}", str(message_id or "")):
+        raise ValueError("bad message id")
+    return str((_get_json(f"{RECEIVING}/{message_id}") or {}).get("text") or "")
+

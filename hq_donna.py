@@ -275,6 +275,9 @@ class Ctx:
 
 # ------------------------------------------------------------------------------------------------------------------- runners
 def market_research(ctx: Ctx, inputs: dict) -> dict:
+    if inputs.get("mode") == "find_prospects":                        # Prospects v1: OpenStreetMap -> contacts verified on each business's own site
+        import hq_donna_prospects
+        return hq_donna_prospects.find_prospects(ctx, inputs)
     import hq_evidence
     cfg = ctx.cfg
     niches = [str(n)[:60] for n in (inputs.get("niches") or cfg["niches"])][:9]
@@ -374,6 +377,9 @@ def delivery_cost(calls_per_month: int = 150, minutes: float = 3.0, texts: int =
 
 
 def offer_pricing(ctx: Ctx, inputs: dict) -> dict:
+    if inputs.get("mode") == "audit_brief":                           # Revenue Loop v1: the internal brief for a booked audit (hq_donna_revenue)
+        import hq_donna_revenue
+        return hq_donna_revenue.audit_brief_run(ctx, inputs)
     prices = price_list(inputs)
     cost = delivery_cost(**{k: inputs[k] for k in ("calls_per_month", "minutes", "texts", "mode") if k in inputs})
     rows = []
@@ -410,6 +416,9 @@ def offer_pricing(ctx: Ctx, inputs: dict) -> dict:
 
 def outreach_prep(ctx: Ctx, inputs: dict) -> dict:
     """DRAFTS ONLY. The model writes the message; the CASL footer is fixed code. Per-lead drafts fill {business} from the lead row: no lead data goes to the model."""
+    if inputs.get("mode"):                                            # Revenue Loop v1: replies, follow-ups, proposals (plain-code templates, hq_donna_revenue)
+        import hq_donna_revenue
+        return hq_donna_revenue.outreach_mode(ctx, inputs)
     channels = [c for c in (inputs.get("channels") or ["email", "dm", "call"]) if c in OUTREACH_KINDS][:4]
     niche = str(inputs.get("niche") or "Ottawa local businesses")[:80]
     offer = str(inputs.get("offer") or "an AI receptionist that answers calls, texts back missed callers and books appointments")[:300]
@@ -430,6 +439,9 @@ def outreach_prep(ctx: Ctx, inputs: dict) -> dict:
         subject = str(out.get("subject") or "")[:150] if kind in ("cold_email", "follow_up_email") else None
         text = str(out.get("body") or "").strip()[:3000]
         body = (text + "\n\n" + casl_footer(kind, ctx.cfg)).strip()
+        if kind != "call_script":                                      # the send gate's own address (company_profile, /setaddress), once the owner set it
+            import hq_donna_revenue
+            body = hq_donna_revenue.fill_footer(body, ctx.cfg)
         probs = casl_problems(kind, subject, body)
         if probs:
             refused.append({"channel": ch, "reason": "; ".join(probs)[:300]})

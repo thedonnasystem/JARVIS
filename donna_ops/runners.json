@@ -24,11 +24,189 @@
  },
  "casl": {
   "about": "Fixed by code, never written by the model. The owner replaces the [OWNER: ...] placeholders before approving (the database refuses an approval while one is left).",
-  "sender": "Donna, the AI receptionist service of [OWNER: legal entity name]",
+  "sender": "Donna.AI, a service of Abundance AI Adoption Inc.",
   "address": "Mailing address: [OWNER: mailing address]",
   "contact": "Contact: [OWNER: email or phone]",
   "unsubscribe_email": "To stop these emails, reply \"unsubscribe\" and we will not contact you again.",
   "unsubscribe_dm": "Reply STOP and we will not message you again.",
   "call_remove": "If you'd rather not hear from us, say so and I'll add your number to our do-not-call list right now."
+ },
+ "revenue": {
+  "about": "Donna Revenue Loop v1 (hq_donna_revenue.py). Templates are plain code, never the model: client and lead data stay out of free AI providers. Prices are the OWNER's (set Nov 24 2026, packages tailored Nov 26 2026): read here, never set by an agent. The mailing address in every email comes from company_profile (Telegram /setaddress), so the send gate (hq_mail.profile_refusal) and the footer always agree.",
+  "brand": "Donna.AI",
+  "hook": "We turn your missed calls and missed leads into booked appointments.",
+  "offer": "free 20-minute Revenue Leak Audit with our AI specialist",
+  "setup_free_until": "2026-12-31",
+  "booking_url_env": "DONNA_BOOKING_URL",
+  "netlify_form": "donna-contact",
+  "packages": {
+   "essential": {
+    "title": "Essential",
+    "from_cents": 19700,
+    "line": "one leak plugged",
+    "deliverables": [
+     "One leak plugged, your pick: AI receptionist, lead follow-up, quote and no-show follow-ups, or one busywork automation",
+     "Built into the tools you already use",
+     "Monitoring, fixes and tuning included"
+    ]
+   },
+   "front-desk": {
+    "title": "Front Desk",
+    "guide_cents": 49700,
+    "line": "every call and lead answered",
+    "deliverables": [
+     "AI receptionist that answers every call, day and night",
+     "Missed-call text-back within minutes",
+     "Appointments booked into your calendar",
+     "Urgent calls sent to you by text right away",
+     "Every lead saved to a simple CRM"
+    ]
+   },
+   "growth": {
+    "title": "Growth",
+    "guide_cents": 79700,
+    "line": "every lead chased, every slot filled",
+    "deliverables": [
+     "Instant replies to website and ad leads",
+     "Quote follow-ups until they're won or lost",
+     "Reminders that cut no-shows",
+     "Win-back and review requests, with messages you approve",
+     "A monthly report on what came back"
+    ]
+   },
+   "ai-systems": {
+    "title": "AI Systems",
+    "guide_cents": 129700,
+    "line": "busywork gone, systems connected",
+    "deliverables": [
+     "Quotes, invoices and reports that run themselves",
+     "Custom AI agents trained on your business",
+     "Phone, booking, CRM, email and accounting connected",
+     "Custom software where nothing off the shelf fits"
+    ]
+   }
+  },
+  "price_note": "Owner's internal guide (not shown on the site): Essential from $197; Front Desk about $497, Growth about $797, AI Systems from $1,297 a month; websites $497 / $997 one-time. The owner quotes on the call.",
+  "leak_packages": {
+   "calls": "front-desk",
+   "leads": "growth",
+   "quotes": "growth",
+   "noshows": "growth",
+   "admin": "ai-systems"
+  },
+  "leak_names": {
+   "calls": "missed calls",
+   "leads": "unanswered leads",
+   "quotes": "forgotten quotes",
+   "noshows": "no-shows",
+   "admin": "busywork"
+  },
+  "questions": {
+   "calls": [
+    "How many calls a week, and how many go to voicemail?",
+    "What happens after hours and on weekends?",
+    "Who calls back missed callers, and how fast?"
+   ],
+   "leads": [
+    "Where do new leads come from (website, Google, social, referrals)?",
+    "How fast does someone reply to a new lead today?",
+    "Where are leads kept?"
+   ],
+   "quotes": [
+    "How many quotes go out a month, and how many get a follow-up?",
+    "What tool sends quotes?"
+   ],
+   "noshows": [
+    "How do customers book, and do they get a reminder?",
+    "What happens to a cancelled slot?"
+   ],
+   "admin": [
+    "Which tasks eat the most hours each week?",
+    "Which tools do you use for booking, invoices and accounting?"
+   ],
+   "close": [
+    "Who else decides on this?",
+    "If this works, when would you want it live?"
+   ]
+  },
+  "cold_draft_per_day": 10,
+  "cold_stage_per_day": 20,
+  "cold_stage_per_tick": 5,
+  "followup_days": [
+   3,
+   4
+  ],
+  "max_emails": 3,
+  "contact": "Contact: thedonnasystem@gmail.com"
+ },
+ "content": {
+  "about": "Donna Content v1 (hq_donna_content.py): weekly creative jobs for the 'donna' office through the Creative Studio; the owner approves every asset before it is scheduled. Hooks are the owner's wording where he gave it.",
+  "per_week": 5,
+  "pin_first": true,
+  "themes": [
+   {
+    "id": "hook",
+    "module": "video",
+    "platform": "9:16",
+    "hook": "We turn your missed calls and missed leads into booked appointments.",
+    "brief": "A 20-second vertical video: a busy owner's phone ringing out on a job, then Donna answering, booking the customer and texting the owner a summary."
+   },
+   {
+    "id": "after-hours",
+    "module": "video",
+    "platform": "9:16",
+    "hook": "Who answers your phone at 9 pm?",
+    "brief": "A vertical video: an after-hours call to a local business; Donna answers, takes the details and books the morning slot."
+   },
+   {
+    "id": "quotes",
+    "module": "image",
+    "platform": "1:1",
+    "hook": "That quote you sent last week. Did anyone follow up?",
+    "brief": "A square image: a quote on a desk with a gentle follow-up text on a phone beside it."
+   },
+   {
+    "id": "no-shows",
+    "module": "image",
+    "platform": "1:1",
+    "hook": "A reminder the day before. That's it.",
+    "brief": "A square image: a calendar slot kept because a reminder text went out the day before."
+   },
+   {
+    "id": "leak-check",
+    "module": "video",
+    "platform": "9:16",
+    "hook": "How much is your business leaking?",
+    "brief": "A vertical video walking through the site's leak calculator: missed calls, unanswered leads, forgotten quotes, no-shows, busywork; ends on the free Revenue Leak Audit."
+   },
+   {
+    "id": "busywork",
+    "module": "image",
+    "platform": "1:1",
+    "hook": "Your evenings shouldn't be invoices.",
+    "brief": "A square image: an owner closing the laptop while quotes and invoices send themselves."
+   },
+   {
+    "id": "audit-offer",
+    "module": "image",
+    "platform": "1:1",
+    "offer": true,
+    "hook": "Free 20-min Revenue Leak Audit. Setup free until December 31.",
+    "brief": "A square image announcing the free 20-minute Revenue Leak Audit with our AI specialist; setup is free on any plan booked before December 31."
+   },
+   {
+    "id": "not-just-calls",
+    "module": "video",
+    "platform": "9:16",
+    "hook": "It's not just missed calls.",
+    "brief": "A vertical video listing the quiet leaks (unanswered leads, quotes nobody chased, no-shows, busywork) and how Donna plugs each one."
+   }
+  ]
+ },
+ "prospecting": {
+  "about": "Donna Prospects v1 (hq_donna_prospects.py): OpenStreetMap businesses with a website; the contact counts only when verbatim on the business's own page.",
+  "area": "Ottawa",
+  "area_wikidata": "Q1930",
+  "prospects_per_run": 15
  }
 }
