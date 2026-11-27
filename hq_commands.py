@@ -334,12 +334,14 @@ def mark_sent(outbox_id: str) -> str:
     except Exception:  # before the sent_by migration: record it the old way
         body.pop("sent_by")
         hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", body, prefer="return=minimal")
-    if rows[0].get("lead_id"):
+    if rows[0].get("lead_id"):                   # same rule as hq_mail._mark_sent: only a lead still being prospected gets the 3-day follow-up
         from datetime import timedelta
         due = (_toronto_today() + timedelta(days=3)).isoformat()
-        hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(rows[0]['lead_id'])}",
+        lead, stages = _q(rows[0]["lead_id"]), ",".join(hq_mail.PROSPECTING)
+        hq._request("PATCH", f"/rest/v1/leads?id=eq.{lead}&status=in.({stages})",
                     {"status": "contacted", "last_contact_at": now, "next_followup_at": due}, prefer="return=minimal")
-    return "Marked sent. Follow-up reminder set for 3 days from now."
+        hq._request("PATCH", f"/rest/v1/leads?id=eq.{lead}&status=not.in.({stages})", {"last_contact_at": now}, prefer="return=minimal")
+    return "Marked sent. Follow-up reminder set for 3 days from now (only for a lead not yet booked, replied or won)."
 
 
 def draft_decision(outbox_id: str, approved: bool) -> str:
@@ -809,8 +811,8 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         if approved:
             ob = _get(f"outbox?id=eq.{_q(ref_id)}&select=to_ref,body,lead_id&limit=1")
             if ob:
-                if ob[0].get("lead_id"):
-                    hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(ob[0]['lead_id'])}", {"status": "approved_to_send"},
+                if ob[0].get("lead_id"):              # only a lead still being prospected moves; a booked / won / replied lead keeps its stage
+                    hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(ob[0]['lead_id'])}&status=in.({','.join(hq_mail.PROSPECTING)})", {"status": "approved_to_send"},
                                 prefer="return=minimal")
                 ready = (f"Approved. Send this from your business email:\n\nTo: {ob[0].get('to_ref')}\n"
                          f"{ob[0].get('body')}{casl_footer(gate_slug)}\n\nOnce sent, reply /sent {ref_id[:8]}")

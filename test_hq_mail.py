@@ -213,6 +213,23 @@ class T(unittest.TestCase):
         out, provider, claims, seen = run([True, True], attest={"ok": False, "reason": "rollback_detected", "detail": "epoch 3 < 5"})
         self.assertEqual((provider, claims, out["sent"], out["reason"]), ([], [], 0, "gate: rollback_detected"))
 
+    def test_mark_sent_never_drags_a_lead_back_to_prospecting(self):
+        # a booked audit, a proposal, a won client's onboarding or monthly report: the email is sent, but the lead keeps its stage and gets no
+        # "book your free audit" follow-ups; only a lead still being prospected becomes 'contacted' with a follow-up in 3 days
+        calls = []
+        with mock.patch.object(M.hq, "_request", side_effect=lambda *a, **k: calls.append(a)):
+            M._mark_sent({"id": "o1", "lead_id": "L1"})
+        leads = [c for c in calls if c[1].startswith("/rest/v1/leads")]
+        self.assertEqual(len(leads), 2)
+        promote, touch = leads
+        self.assertIn("status=in.(new,drafted,approved_to_send,sent,contacted)", promote[1])
+        self.assertEqual(promote[2]["status"], "contacted")
+        self.assertIn("next_followup_at", promote[2])
+        self.assertIn("status=not.in.(new,drafted,approved_to_send,sent,contacted)", touch[1])
+        self.assertEqual(set(touch[2]), {"last_contact_at"}, "a booked / won / replied lead: only the contact time moves")
+        for stage in ("booked", "replied", "won", "lost", "do_not_contact"):
+            self.assertNotIn(stage, M.PROSPECTING)
+
     def test_never_raises(self):
         with mock.patch.dict(os.environ, ENV), mock.patch.object(M, "live", side_effect=RuntimeError("db down")):
             self.assertEqual(M.deliver_approved()["reason"], "RuntimeError")
