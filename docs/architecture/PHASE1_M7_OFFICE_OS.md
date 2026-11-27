@@ -124,3 +124,19 @@ Nothing is live until the owner applies M1..M6 and M7. Every office stays DORMAN
 ## 6. Next step
 
 Owner: run the connect session, then appoint Donna's manager and activate Donna. Build: apply each office's prohibited list through `fz_set_office_policy` at activation, and wire office agents to the scoped office token once M6 lands.
+
+## 7. Follow-up: Donna v1 profile (`migrations/20261204_donna_v1_profile_v1.sql`)
+
+- **What it does:** a data-only change of Donna's single M7 profile row, so the database matches the v1 brief in `offices/donna.json`. It sets:
+  - the mission: Ottawa AI infrastructure and digital-presence agency; 3 paying clients; service lines A and B; no locked niche; founding offer $497 first month with setup waived; guarantee terms TBD by owner;
+  - the 4 v1 roles: `market-research`, `offer-pricing`, `outreach-prep`, `delivery-onboarding`;
+  - the integrations and the green / yellow / red tiers;
+  - a prohibited list holding all 8 mapped `action_policy` actions (`sign_contract`, `financial_transfer`, `deceptive_communication`, `fabricate`, `evade_platform_restrictions`, `spend_outside_budget`, `deploy_website`, `modify_own_permissions`; all seeded by `20261112_permissions_v1.sql`, and checked at apply time) plus advisory entries.
+- **Guards:**
+  - Refused unless Donna is dormant, in both the profile and M1.
+  - Idempotent: a re-run with the v1 values already in place does nothing.
+  - The previous values are kept once in `fz_archive.donna_profile_before_v1`, which no API role can reach.
+- **What it never touches:** no other office, no money control, no protected object. `audit_log` is written by INSERT only, so it works under the production append-only lock.
+- **Rollback:** `ops/rollback_donna_v1_profile.sql` (run it before `rollback_office_os.sql`). It restores the archived values exactly, only while Donna is dormant.
+- **Tests:** `sqltests/donna_v1_profile_check.sql` runs with the append-only triggers on `audit_log` and `ledger` added. It covers the v1 values, the enforced and advisory split, the archive, the idempotent re-apply, the rollback restoring exactly, re-apply, refusal while active (profile or M1), the other 7 offices unchanged and the money controls unchanged.
+- **Note:** re-applying M7 alone resets the template rows, including Donna. The full apply order always runs this file after M7.

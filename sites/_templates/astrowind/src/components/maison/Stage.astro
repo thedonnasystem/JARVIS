@@ -1,0 +1,66 @@
+---
+// Maison 3D stage: one fixed WebGL canvas behind the whole page (three.js, see scene/donna-scene.ts). It loads after the page has painted and the
+// browser is idle, only on a real GPU (software WebGL such as headless browsers keeps the still poster; ?fx=full forces the scene for previews).
+// prefers-reduced-motion gets one fully rendered still frame (the canvas then scrolls away with the hero). Without JS or WebGL the hero shows the
+// pre-rendered poster of the same scene (public/maison/stage-*.webp). Rendering pauses in background tabs; quality steps down on slow GPUs.
+---
+
+<div class="m-stage" aria-hidden="true" data-m-stage>
+  <canvas class="m-stage-canvas" data-m-stage-canvas></canvas>
+</div>
+
+<script>
+  const stage = document.querySelector<HTMLElement>('[data-m-stage]');
+  const cv = document.querySelector<HTMLCanvasElement>('[data-m-stage-canvas]');
+  const root = document.documentElement;
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const mobile = window.matchMedia('(max-width: 63.99rem), (pointer: coarse)').matches;
+  const forced = /[?&]fx=(full|manual)\b/.test(location.search);
+  const hex = (v: string, d: number[]) => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(v.trim());
+    if (!m) return d;
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  };
+
+  const gpuOk = () => {
+    try {
+      const probe = document.createElement('canvas');
+      const gl = (probe.getContext('webgl2') || probe.getContext('webgl')) as WebGLRenderingContext | null;
+      if (!gl) return false;
+      if (!(gl as any).texStorage2D && !forced) return false; // three.js r163+ needs WebGL 2
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      const name = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      return forced || !/swiftshader|llvmpipe|softpipe|software|basic render/i.test(name);
+    } catch {
+      return false;
+    }
+  };
+
+  async function start() {
+    if (!stage || !cv || !gpuOk()) return;
+    const { mount } = await import('./scene/donna-scene');
+    const css = getComputedStyle(root);
+    if (reduce) stage.classList.add('is-still');
+    try {
+      const scene = mount(cv, {
+        gold: hex(css.getPropertyValue('--fx-accent'), [0.79, 0.64, 0.29]),
+        wine: hex(css.getPropertyValue('--fx-primary'), [0.48, 0.08, 0.16]),
+        mobile,
+        reduce,
+        manual: /[?&]fx=manual\b/.test(location.search),
+        post: /[?&]post=0\b/.test(location.search) ? false : /[?&]post=1\b/.test(location.search) ? true : undefined,
+        onTier: (t) => { if (!t) root.classList.add('m-gl-still'); },
+      });
+      (window as any).__mStage = scene;
+      requestAnimationFrame(() => { stage.classList.add('is-on'); root.classList.add('m-gl'); });
+    } catch {
+      /* the poster stays */
+    }
+  }
+
+  const idle = (fn: () => void) => ('requestIdleCallback' in window ? (window as any).requestIdleCallback(fn, { timeout: 1800 }) : setTimeout(fn, 400));
+  if (document.readyState === 'complete') idle(start);
+  else window.addEventListener('load', () => idle(start), { once: true });
+</script>

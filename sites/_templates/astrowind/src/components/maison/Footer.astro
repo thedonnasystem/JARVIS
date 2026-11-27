@@ -1,0 +1,21 @@
+---
+import Wordmark from './Wordmark.astro';
+import { headerData, footerData } from '~/navigation';
+import { SITE_DATA as S, PLACE } from '~/data/site';
+---
+
+<footer class="m-footer">
+  <div class="m-wrap">
+    <div class="m-footer-mark" aria-hidden="true"><Wordmark /></div>
+    <div class="m-hairline"></div>
+    <div class="m-footer-grid">
+      <p class="m-footer-note">{[S.brand.name, PLACE || S.hero?.tagline].filter(Boolean).join(' · ')}</p>
+      <nav aria-label="Footer" class="m-footer-links">
+        {headerData.links.map((l) => <a href={l.href}>{l.text}</a>)}
+      </nav>
+      <nav aria-label="Legal" class="m-footer-links">
+        {footerData.secondaryLinks.map((l) => <a href={l.href}>{l.text}</a>)}
+      </nav>
+    </div>
+  </div>
+</footer>

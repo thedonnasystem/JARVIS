@@ -1,0 +1,128 @@
+{
+ "id": "form-to-sheet",
+ "title": "Lead form -> Google Sheet row",
+ "description": "An n8n-hosted form (name, email, phone, message) appends each submission to a Google Sheet. Consent wording is on the form.",
+ "keywords": [
+  "form",
+  "lead form",
+  "sheet",
+  "google sheet",
+  "spreadsheet",
+  "capture leads",
+  "sign up"
+ ],
+ "params": {
+  "name": {
+   "required": true,
+   "desc": "workflow name"
+  },
+  "form_title": {
+   "required": true,
+   "desc": "title shown on the form"
+  },
+  "sheet_id": {
+   "required": true,
+   "desc": "Google Sheet id (from its URL)",
+   "pattern": "^[A-Za-z0-9_-]{20,80}$"
+  },
+  "consent_text": {
+   "required": false,
+   "default": "I agree to be contacted about my request. I can opt out at any time.",
+   "desc": "consent checkbox wording (CASL)"
+  }
+ },
+ "workflow": {
+  "name": "<<name>>",
+  "settings": {
+   "executionOrder": "v1"
+  },
+  "nodes": [
+   {
+    "name": "Form",
+    "type": "n8n-nodes-base.formTrigger",
+    "typeVersion": 2.2,
+    "position": [
+     0,
+     0
+    ],
+    "parameters": {
+     "formTitle": "<<form_title>>",
+     "formFields": {
+      "values": [
+       {
+        "fieldLabel": "Name",
+        "requiredField": true
+       },
+       {
+        "fieldLabel": "Email",
+        "fieldType": "email",
+        "requiredField": true
+       },
+       {
+        "fieldLabel": "Phone"
+       },
+       {
+        "fieldLabel": "Message",
+        "fieldType": "textarea"
+       },
+       {
+        "fieldLabel": "Consent",
+        "fieldType": "dropdown",
+        "fieldOptions": {
+         "values": [
+          {
+           "option": "<<consent_text>>"
+          }
+         ]
+        },
+        "multiselect": true,
+        "requiredField": true
+       }
+      ]
+     },
+     "options": {}
+    }
+   },
+   {
+    "name": "Sheet",
+    "type": "n8n-nodes-base.googleSheets",
+    "typeVersion": 4.5,
+    "position": [
+     260,
+     0
+    ],
+    "parameters": {
+     "operation": "append",
+     "documentId": {
+      "__rl": true,
+      "mode": "id",
+      "value": "<<sheet_id>>"
+     },
+     "sheetName": {
+      "__rl": true,
+      "mode": "name",
+      "value": "Leads"
+     },
+     "columns": {
+      "mappingMode": "autoMapInputData",
+      "value": {}
+     },
+     "options": {}
+    }
+   }
+  ],
+  "connections": {
+   "Form": {
+    "main": [
+     [
+      {
+       "node": "Sheet",
+       "type": "main",
+       "index": 0
+      }
+     ]
+    ]
+   }
+  }
+ }
+}

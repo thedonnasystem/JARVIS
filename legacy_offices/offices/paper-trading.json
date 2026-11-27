@@ -1,0 +1,112 @@
+{
+ "office": "paper-trading",
+ "title": "Paper Trading Desk",
+ "manager": "appointed by the owner only (office_os_set_manager)",
+ "brain_scope": [
+  "group",
+  "paper-trading"
+ ],
+ "status": "dormant (legacy system; not in the M1/M7 database yet: docs/proposals/legacy_offices.md)",
+ "brief": "Legacy system: the MSS + IFVG paper trader (private repo thedonnasystem/mss-ifvg-paper). PAPER ONLY, hard-locked: no real-money order is ever placed. It earns no revenue by design; its job is to prove or disprove an edge before the owner decides anything.",
+ "agents": [
+  {
+   "role": "risk-reviewer",
+   "title": "Risk reviewer",
+   "model_tier": "small",
+   "purpose": "Reads paper results and risk halts",
+   "prompt": "Report paper results: trades, win rate, average R, max drawdown, halts. Say plainly when the sample is too small to mean anything. Never suggest real-money trading; that is the owner's decision after a long, honest paper record."
+  }
+ ],
+ "legacy": {
+  "repo": "thedonnasystem/mss-ifvg-paper",
+  "private": true,
+  "stack": "Python 3.12 (fastapi, uvicorn, httpx, pyyaml), SQLite, Alpaca paper, Yahoo data, Railway",
+  "hosting": "railway",
+  "railway_project": "mss-ifvg-paper",
+  "entry_points": [
+   "app/main.py",
+   "app/backtest.py",
+   "pine/mss_ifvg_strategy.pine"
+  ],
+  "env": [
+   "DASHBOARD_TOKEN",
+   "WEBHOOK_SECRET",
+   "DB_PATH",
+   "ALPACA_KEY",
+   "ALPACA_SECRET",
+   "TELEGRAM_BOT_TOKEN",
+   "TELEGRAM_CHAT_ID",
+   "CONFIG_PATH",
+   "BROKER_MODE",
+   "ENABLE_CRYPTO",
+   "ENABLE_MNQ_SIM"
+  ],
+  "tests": [
+   [
+    "python3",
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "tests"
+   ]
+  ],
+  "dependency_files": [
+   "requirements.txt"
+  ],
+  "dry_run": {
+   "cwd": ".",
+   "cmd": [
+    "python3",
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:cacheprovider",
+    "tests/test_replay.py"
+   ],
+   "env": {},
+   "note": "The 6000-bar replay on the internal simulator: no broker, no key."
+  }
+ },
+ "qc": {
+  "collector": "trading",
+  "stages": [
+   "found",
+   "qualified",
+   "closed"
+  ],
+  "stage_labels": {
+   "found": "signals",
+   "qualified": "filled paper trades",
+   "closed": "closed paper trades"
+  },
+  "targets": {
+   "min_trades_for_verdict": 100,
+   "win_rate": 0.4,
+   "avg_r": 0.2,
+   "max_drawdown_pct": 10
+  },
+  "changes": [
+   {
+    "change": "Keep it paper and let it build a sample: no verdict on edge before about 100 closed paper trades.",
+    "impact": 2,
+    "effort": "none (time)",
+    "needs": "owner"
+   },
+   {
+    "change": "Add Alpaca PAPER keys so stocks and crypto use Alpaca paper fills instead of the internal simulator.",
+    "impact": 2,
+    "effort": "10 min (owner)",
+    "needs": "owner"
+   },
+   {
+    "change": "Compile the Pine script in TradingView once and compare signals with the Python detector on the same chart (parity is unverified).",
+    "impact": 1,
+    "effort": "30 min (owner)",
+    "needs": "owner"
+   }
+  ]
+ }
+}
