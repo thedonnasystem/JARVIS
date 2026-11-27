@@ -537,6 +537,11 @@ class Setup(unittest.TestCase):
         self.assertIn("✅ Retell key", t)
         self.assertIn("❌ Mailing address", t)
         self.assertIn("/setaddress donna", t)
+        self.assertIn("❌ Payment links (/invoices link) (optional)", t)
+        t2 = hq_donna_setup.setup_text(env={**env, "FZ_STRIPE_INVOICING": "1", "STRIPE_SECRET_KEY": "rk_test_value123"},
+                                       rpc=lambda n, a: {"active": True} if n == "donna_revenue_queue" else True, get=lambda: None)
+        self.assertIn("✅ Payment links", t2)
+        self.assertNotIn("rk_test_value123", t2)
         self.assertRegex(t, r"^Donna money loop: \d+/\d+ ready")
 
 
