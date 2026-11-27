@@ -38,3 +38,18 @@ owner: Test call in Retell → buys or ports the client's number in Retell (cost
 ## Owner
 
 `RETELL_API_KEY` in Railway, the same key the site uses. Optionally, `DONNA_CLIENT_WEBHOOK_URL` sends each client call to a webhook.
+
+## Intake in one line (Donna Intake v1, hq_donna_intake.py)
+
+The welcome email asks the client six questions. When the answers come back (the reply alert says so for a won client), the owner types them once:
+
+    /donna intake <lead #> | hours: mon-fri 9-5, sat 10-2; services: Oil change $89 30min, Brake check $120 1h; faq: Walk-ins? = Yes, before 3 pm;
+                             urgent: 613 555 0100; booking: https://cal.com/...; city: Kanata
+
+- Plain-code parser: no model ever sees client data. It refuses what it cannot read (an unknown day, a time it cannot place, a phone that is not a number,
+  a non-https booking link) instead of guessing. Days not named are closed; a service with no price stays 0 and becomes an open item, so the receptionist never
+  quotes a wrong price.
+- The result runs through the existing delivery-onboarding mission (reception_config validates it, donna_save_intake stores it with its open items), so it is
+  refused while Donna is dormant, like every Donna action.
+- Then `/donna agent <client>` previews the client's own phone agent from that intake. Nothing here sends, pays or deploys.
+- Evidence: test_hq_donna_intake.py; scripts/replica/donna_revenue_e2e.py legs "/donna intake ..." and "/donna agent previews from the saved intake".

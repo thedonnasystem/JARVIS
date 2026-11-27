@@ -1182,6 +1182,7 @@ async def hq_donna_cmd(update, context) -> None:
     /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
     /donna won <lead #> <package> <monthly $> [received|expected]  records the deal and first month, drafts the welcome email;
     /donna onboard <lead #> <package>  the welcome email with the setup questions (after /deal won);
+    /donna intake <lead #> | name: ...; hours: mon-fri 9-17; services: Oil change $89 30min; faq: q = a; urgent: +1...; booking: https://...  the client's answers become the intake;
     /donna agent <client> [create <code>]  the client's own Donna phone agent on Retell; /donna clientreport <client>  last month's report email."""
     if not _owner(update):
         return
@@ -1205,6 +1206,10 @@ async def hq_donna_cmd(update, context) -> None:
             import hq_donna_agents
             raw = (getattr(update.message, "text", "") or "").split(None, 2)              # the client's name as typed
             text = await asyncio.to_thread(hq_donna_agents.agent_cmd, raw[2] if len(raw) > 2 else "")
+        elif args and args[0] == "intake":
+            import hq_donna_intake
+            raw = (getattr(update.message, "text", "") or "").split(None, 2)              # the client's answers as typed
+            text = await asyncio.to_thread(hq_donna_intake.intake_cmd, raw[2] if len(raw) > 2 else "")
         elif args and args[0] == "clientreport":
             import hq_donna_agents
             raw = (getattr(update.message, "text", "") or "").split(None, 2)

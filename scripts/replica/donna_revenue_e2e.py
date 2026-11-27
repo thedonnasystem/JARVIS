@@ -116,5 +116,16 @@ txt = "Proposal drafted"
 pr = db.sql("select o.subject, o.body from fz_donna_rl.staged s join public.outbox o on o.id = s.outbox_id where o.subject like 'Your Donna.AI plan%'")
 check("proposal staged for approval", "Proposal drafted" in txt and len(pr) == 1 and "$497 a month" in pr[0]["body"], (txt, pr))
 check("/donna inbound renders", "Inbound, last 7 days" in R.inbound_text())
+
+# 7. Pat says yes and emails the setup answers: one line becomes the intake, then the client's own agent previews from it (no model, nothing created)
+import hq_donna_intake, hq_donna_agents
+it = hq_donna_intake.intake_cmd(f"{sid} | hours: mon-fri 7-6, sat 8-12; services: Drain cleaning $149 60min, Water heater install; "
+                                f"faq: Do you do emergencies? = Yes, 24/7 for burst pipes; urgent: 613 555 0111; city: Kanata")
+check("/donna intake saves the intake under the lead", "Intake saved for Pine Plumbing" in it and "open: mon, tue, wed, thu, fri, sat" in it, it)
+row = db.sql("select client_label, reception_config, open_items from fz_donna.intakes where lead_id = (select id from public.leads where email = 'pat@pineplumbing.example')")
+check("intake row: hours, prices, urgent number", len(row) == 1 and row[0]["reception_config"]["hours"]["fri"] == [["07:00", "18:00"]]
+      and row[0]["reception_config"]["services"][0]["price_cents"] == 14900 and row[0]["reception_config"]["escalation_number"] == "+16135550111", row)
+pv = hq_donna_agents.agent_cmd("Pine Plumbing")
+check("/donna agent previews from the saved intake", "Donna agent for Pine Plumbing" in pv and "create" in pv, pv)
 print("E2E RESULT:", "ALL PASSED" if not fails else f"FAILED {fails}")
 sys.exit(1 if fails else 0)
