@@ -166,6 +166,7 @@ function	donna_save_brief(uuid,uuid,text)	-	-	execute	security_definer		-
 function	donna_save_draft(uuid,text,text,uuid,text,text,jsonb)	-	-	execute	security_definer		-
 function	donna_save_intake(uuid,text,uuid,jsonb,jsonb,jsonb)	-	-	execute	security_definer		-
 function	donna_stage_outbox(uuid,text)	-	-	execute	security_definer		-
+function	donna_stuck_deals(integer)	-	-	execute	security_definer		-
 function	donna_unseen_messages(text[])	-	-	execute	security_definer		-
 function	donna_weekly_report(boolean)	-	-	execute	security_definer		-
 function	enforce_build_rules()	-	-	execute	invoker	trigger function: cannot be called directly	-

@@ -478,6 +478,42 @@ class Digest(unittest.TestCase):
         self.assertIsNone(R.digest_text({"staged_today": 0, "outbox_waiting": 0, "inbound_7d": 9}))
 
 
+class Stuck(unittest.TestCase):
+    def test_each_stuck_deal_has_its_next_command(self):
+        old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=3)).isoformat()
+        rows = [{"kind": "audit_no_proposal", "short_id": 7, "name": "Pine Plumbing", "since": old},
+                {"kind": "won_no_intake", "short_id": 9, "name": "Elm Auto", "since": old},
+                {"kind": "intake_no_agent", "short_id": 9, "name": "Elm Auto", "client_label": "Elm Auto", "since": "bad"},
+                {"kind": "unknown", "short_id": 1}]
+        t = R.stuck_text(rows)
+        self.assertIn("#7 Pine Plumbing: audit done, no proposal yet, 3 days", t)
+        self.assertIn("/donna proposal 7 <package>", t)
+        self.assertIn("/donna intake 9 |", t)
+        self.assertIn("/donna agent Elm Auto", t)
+        self.assertEqual(t.count("\n- "), 3, "three known kinds; the unknown one is skipped")
+        self.assertIsNone(R.stuck_text([]))
+
+    def test_digest_carries_stuck_deals_even_on_a_quiet_day_and_survives_an_old_database(self):
+        import tempfile
+        six = dt.datetime(2026, 11, 27, 18, 5, tzinfo=R.TZ)
+        def rpc(name, args):
+            if name == "donna_stuck_deals":
+                return [{"kind": "won_no_intake", "short_id": 9, "name": "Elm Auto", "since": six.isoformat()}]
+            return {"staged_today": 0, "outbox_waiting": 0}
+        with tempfile.TemporaryDirectory() as d:
+            posted = []
+            self.assertTrue(R.post_digest(rpc, {"DONNA_STATE_DIR": d}, now=six, brief=posted.append))
+            self.assertIn("Waiting on you", posted[0])
+        def old_db(name, args):
+            if name == "donna_stuck_deals":
+                raise RuntimeError("function does not exist")
+            return {"staged_today": 1, "outbox_waiting": 1}
+        with tempfile.TemporaryDirectory() as d:
+            posted = []
+            self.assertTrue(R.post_digest(old_db, {"DONNA_STATE_DIR": d}, now=six, brief=posted.append))
+            self.assertNotIn("Waiting on you", posted[0])
+
+
 class Setup(unittest.TestCase):
     def test_checklist_never_shows_values(self):
         env = {"RETELL_API_KEY": "sk_secret_value", "DONNA_INBOUND": "1"}

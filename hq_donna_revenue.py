@@ -791,6 +791,36 @@ def digest_text(q: dict) -> str | None:
     return "\n".join(lines)
 
 
+STUCK_NEXT = {"audit_no_proposal": ("audit done, no proposal yet", "/donna proposal {sid} <package> <monthly $> | finding; finding"),
+              "won_no_intake": ("won, setup answers not entered", "/donna intake {sid} | hours: ...; services: ...; faq: q = a; urgent: ..."),
+              "intake_no_agent": ("intake saved, phone agent not created", "/donna agent {label}")}
+
+
+def stuck_text(rows: list | None) -> str | None:
+    """The deals waiting on the OWNER's next step (donna_stuck_deals), each with the one command that moves it. None when nothing is stuck."""
+    lines = []
+    for r in (rows or [])[:10]:
+        what, cmd = STUCK_NEXT.get(str(r.get("kind")), (None, None))
+        if not what:
+            continue
+        days = ""
+        try:
+            d = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(str(r.get("since")).replace("Z", "+00:00"))).days
+            days = f", {d} day{'s' if d != 1 else ''}" if d >= 1 else ""
+        except (TypeError, ValueError):
+            pass
+        lines.append(f"- #{r.get('short_id') or '-'} {r.get('name') or r.get('client_label') or 'a client'}: {what}{days}\n  {cmd.format(sid=r.get('short_id'), label=r.get('client_label') or r.get('name'))}")
+    return ("Waiting on you (money on the table):\n" + "\n".join(lines)) if lines else None
+
+
+def stuck_rows(rpc) -> list:
+    try:
+        r = rpc("donna_stuck_deals", {"p_limit": 10})
+        return [x for x in r if isinstance(x, dict)] if isinstance(r, list) else []
+    except Exception:
+        return []                                                              # before the nudges migration: no list, the digest still goes
+
+
 def post_digest(rpc, env: dict, now: dt.datetime | None = None, brief=None) -> bool:
     now = now or dt.datetime.now(TZ)
     if not digest_due(env, now):
@@ -801,7 +831,7 @@ def post_digest(rpc, env: dict, now: dt.datetime | None = None, brief=None) -> b
             f.write(now.date().isoformat())
     except OSError:
         return False
-    text = digest_text(rpc("donna_revenue_queue", {"p_limit": 1}) or {})
+    text = "\n\n".join(t for t in (digest_text(rpc("donna_revenue_queue", {"p_limit": 1}) or {}), stuck_text(stuck_rows(rpc))) if t)
     if text:
         (brief or post_brief)(text)
     return bool(text)

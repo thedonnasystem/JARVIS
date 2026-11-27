@@ -1188,7 +1188,7 @@ async def hq_donna_cmd(update, context) -> None:
     """/donna  owner only: Donna's pipeline, drafts waiting and next actions (read-only). /donna drafts  the drafts to decide.
     /donna run <mission>  run one of Donna's missions now (refused while she is dormant; drafts only, nothing is sent). /donna report  the weekly KPI report.
     Revenue loop (hq_donna_revenue): /donna setup  every switch still missing, ticked live; /donna inbound  recent inquiries and what waits; /donna sync  pull the website form and Donna calls now;
-    /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
+    /donna stuck  deals waiting on your next step, each with the command that moves it; /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
     /donna won <lead #> <package> <monthly $> [received|expected]  records the deal and first month, drafts the welcome email;
     /donna onboard <lead #> <package>  the welcome email with the setup questions (after /deal won);
     /donna intake <lead #> | name: ...; hours: mon-fri 9-17; services: Oil change $89 30min; faq: q = a; urgent: +1...; booking: https://...  the client's answers become the intake;
@@ -1204,6 +1204,9 @@ async def hq_donna_cmd(update, context) -> None:
             text = await asyncio.to_thread(hq_donna_setup.setup_text)
         elif args and args[0] == "inbound":
             text = await asyncio.to_thread(hq_donna_revenue.inbound_text)
+        elif args and args[0] == "stuck":
+            rows = await asyncio.to_thread(hq_donna_revenue.stuck_rows, hq_donna._rpc_default)
+            text = hq_donna_revenue.stuck_text(rows) or "Nothing is waiting on you: every audit has a proposal, every client has an intake and an agent."
         elif args and args[0] == "sync":
             r = await asyncio.to_thread(hq_donna_revenue.sync)
             text = (r.get("off") and f"Inbound sync is off ({r['off']}).") or (
