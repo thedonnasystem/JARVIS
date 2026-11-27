@@ -100,6 +100,36 @@ class InboundSources(unittest.TestCase):
         self.assertFalse(any(o["p_marketing_consent"] for o in out), "a call is never express consent")
         self.assertTrue(web["p_received_at"].startswith("2025-11-26") or web["p_received_at"].startswith("2026-"))
 
+    def test_calcom_only_the_audit_event_type(self):
+        bookings = {"status": "success", "data": [
+            {"uid": "aud1", "status": "accepted", "eventTypeId": 77, "eventType": {"id": 77, "slug": "revenue-leak-audit"}, "start": "2026-12-03T15:00:00.000Z",
+             "createdAt": "2026-11-27T14:00:00.000Z", "attendees": [{"name": "Pat Lee", "email": "pat@pine.example", "phoneNumber": "613 555 0142"}],
+             "bookingFieldsResponses": {"name": "Pat Lee", "email": "pat@pine.example", "business": "Pine Plumbing", "notes": "We miss calls on jobs"}},
+            {"uid": "dentist", "status": "accepted", "eventTypeId": 5, "eventType": {"id": 5, "slug": "personal"}, "start": "2026-12-04T15:00:00Z",
+             "createdAt": "2026-11-27T14:00:00Z", "attendees": [{"name": "Me", "email": "me@example.com"}]},
+            {"uid": "gone", "status": "cancelled", "eventTypeId": 77, "eventType": {"id": 77, "slug": "revenue-leak-audit"}, "start": "2026-12-05T15:00:00Z",
+             "createdAt": "2026-11-27T14:00:00Z", "attendees": [{"name": "X", "email": "x@example.com"}]},
+            {"uid": "", "status": "accepted", "eventTypeId": 77, "createdAt": "2026-11-27T14:00:00Z"}]}
+        sent = {}
+        def http(method, url, headers, body=None):
+            sent.update(method=method, url=url, headers=headers)
+            return bookings
+        env = {"CALCOM_API_KEY": "cal_live_x", "DONNA_BOOKING_URL": "https://cal.com/donna-ai/revenue-leak-audit"}
+        out = R.calcom_items(env, http)
+        self.assertEqual((sent["method"], sent["url"]), ("GET", "https://api.cal.com/v2/bookings?status=upcoming&take=100"))
+        self.assertEqual(sent["headers"]["cal-api-version"], "2024-08-13")
+        self.assertEqual([o["p_ref"] for o in out], ["cal-aud1"], "only the audit event type, never the owner's other bookings or a cancelled one")
+        b = out[0]
+        self.assertEqual((b["p_source"], b["p_booked"], b["p_marketing_consent"], b["p_consent_version"]), ("booking", True, False, None))
+        self.assertEqual((b["p_person"], b["p_business"], b["p_email"], b["p_phone"]), ("Pat Lee", "Pine Plumbing", "pat@pine.example", "613 555 0142"))
+        self.assertEqual(b["p_appointment"], "Thu Dec 3, 10 AM")
+        self.assertEqual(b["p_summary"], "We miss calls on jobs")
+        self.assertEqual([o["p_ref"] for o in R.calcom_items({"CALCOM_API_KEY": "k", "DONNA_CALCOM_EVENT_TYPE_IDS": "5"}, http)], ["cal-dentist"])
+        self.assertEqual(R.calcom_items({"CALCOM_API_KEY": "k"}, http), [], "no audit event type known: nothing is pulled")
+        self.assertEqual(R.calcom_items({"CALCOM_API_KEY": "k", "DONNA_BOOKING_URL": "https://calendly.com/x/y"}, http), [])
+        self.assertEqual(R.calcom_items({"DONNA_BOOKING_URL": env["DONNA_BOOKING_URL"]}, http), [], "no key: nothing")
+        self.assertIn("api.cal.com", R.HOSTS)
+
     def test_http_only_two_hosts(self):
         for url in ("https://evil.example/x", "http://api.netlify.com/api", "https://api.netlify.com.evil.example/"):
             with self.assertRaises(R.RevenueError):

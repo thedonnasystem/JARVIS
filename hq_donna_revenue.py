@@ -1,6 +1,7 @@
 """Donna Revenue Loop v1: the money loop around Donna Ops v1. Design: docs/architecture/DONNA_REVENUE_LOOP_V1.md. Database: migrations/20261210_donna_revenue_loop_v1.sql.
 
-  inbound   website form (Netlify Forms API) and Donna calls (Retell list-calls) -> donna_ingest_inbound -> a lead of the 'donna' venture, consent basis from what
+  inbound   website form (Netlify Forms API), Donna calls (Retell list-calls) and audits booked on the website calendar (Cal.com, CALCOM_API_KEY; only the
+            audit event type: DONNA_CALCOM_EVENT_TYPE_IDS, or the slug at the end of DONNA_BOOKING_URL) -> donna_ingest_inbound -> a lead of the 'donna' venture, consent basis from what
             the person did (the unticked marketing box = express; otherwise an inquiry = implied). PULL only: no new public endpoint, idempotent per source + ref.
             OFF unless DONNA_INBOUND=1. Works while Donna is dormant (it records inquiries the owner already got as Telegram alerts; nothing is sent).
   replies   outreach-prep mode "inbound_reply": a plain-code reply to each new inquiry (booked or not), with the leak estimate they entered.
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 FLAG_INBOUND = "DONNA_INBOUND"
 FLAG_AUTODRAFT = "DONNA_AUTODRAFT"
-HOSTS = {"api.netlify.com", "api.retellai.com"}
+HOSTS = {"api.netlify.com", "api.retellai.com", "api.cal.com"}
 PLACEHOLDER_ADDRESS = "[OWNER: mailing address]"
 MODES = ("inbound_reply", "follow_up", "proposal", "onboarding", "client_report")
 TZ = dt.timezone(dt.timedelta(hours=-5))          # Ottawa (EST); used only to word dates
@@ -144,6 +145,59 @@ def retell_items(env: dict, http=http_json) -> list[dict]:
     return out
 
 
+def _calcom_filter(env: dict, c: dict | None = None) -> tuple[set[str], str | None]:
+    """Which bookings are Donna audits: explicit event type ids, else the event slug at the end of the cal.com booking link. Neither -> none (the owner's
+    other bookings are never pulled in)."""
+    ids = {x.strip() for x in (env.get("DONNA_CALCOM_EVENT_TYPE_IDS") or "").split(",") if x.strip().isdigit()}
+    url = env.get((rev(c) if c else rev()).get("booking_url_env") or "DONNA_BOOKING_URL", "") if not ids else ""
+    u = urllib.parse.urlparse(url)
+    parts = [x for x in u.path.split("/") if x]
+    slug = parts[-1].lower() if u.scheme == "https" and (u.hostname or "").endswith("cal.com") and len(parts) >= 2 else None
+    return ids, slug
+
+
+def _when(iso: str | None) -> str | None:
+    try:
+        t = dt.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(TZ)
+    except (TypeError, ValueError):
+        return None
+    return t.strftime("%a %b %-d, %-I:%M %p").replace(":00 ", " ")
+
+
+def calcom_items(env: dict, http=http_json, c: dict | None = None) -> list[dict]:
+    """Upcoming Revenue Leak Audits booked on the website calendar (Cal.com bookings API, read-only). Needs CALCOM_API_KEY and an audit event type (see
+    _calcom_filter). A booking is an inquiry: implied consent, never express. The attendee's own notes become the summary."""
+    key = env.get("CALCOM_API_KEY")
+    ids, slug = _calcom_filter(env, c)
+    if not key or not (ids or slug):
+        return []
+    res = http("GET", "https://api.cal.com/v2/bookings?status=upcoming&take=100",
+               {"Authorization": f"Bearer {key}", "cal-api-version": "2024-08-13", "User-Agent": "DonnaInbound/1.0"}) or {}
+    rows = res.get("data") if isinstance(res, dict) else res
+    out = []
+    for b in rows if isinstance(rows, list) else []:
+        et = b.get("eventType") or {}
+        et_id = str(b.get("eventTypeId") or et.get("id") or "")
+        if not ((ids and et_id in ids) or (slug and str(et.get("slug") or "").lower() == slug)):
+            continue
+        if str(b.get("status") or "").lower() not in ("accepted", "pending"):
+            continue
+        uid = re.sub(r"[^A-Za-z0-9_-]", "", str(b.get("uid") or ""))[:90]
+        att = next((a for a in b.get("attendees") or [] if isinstance(a, dict)), {})
+        f = b.get("bookingFieldsResponses") or {}
+        if not uid:
+            continue
+        out.append({"p_source": "booking", "p_ref": f"cal-{uid}", "p_received_at": _iso(b.get("createdAt") or b.get("start")),
+                    "p_person": _clip(att.get("name") or f.get("name"), 120),
+                    "p_business": _clip(f.get("business") or f.get("company") or f.get("business_name"), 160),
+                    "p_email": _clip(att.get("email") or f.get("email"), 200),
+                    "p_phone": _clip(att.get("phoneNumber") or f.get("attendeePhoneNumber") or f.get("phone"), 40),
+                    "p_marketing_consent": False, "p_consent_version": None,
+                    "p_booked": True, "p_appointment": _clip(_when(b.get("start")), 120),
+                    "p_leak_estimate": None, "p_summary": _clip(f.get("notes") or b.get("description"), 600)})
+    return out
+
+
 _SEEN: set[str] = set()                                                 # refs already handed to the database in this process (saves ~30k RPCs a day)
 WINDOW_DAYS = 3                                                          # only recent items are pulled; older ones are already in (or were refused)
 
@@ -157,7 +211,7 @@ def _recent(iso: str | None, now: dt.datetime) -> bool:
 
 
 def sync(rpc=None, env: dict | None = None, http=http_json, now: dt.datetime | None = None) -> dict:
-    """Pull both sources into the CRM. Never raises; returns counts and the new leads."""
+    """Pull every source into the CRM. Never raises; returns counts and the new leads."""
     env = os.environ if env is None else env
     out = {"new": [], "updated": 0, "duplicate": 0, "skipped": 0, "errors": []}
     if env.get(FLAG_INBOUND) != "1":
@@ -165,7 +219,7 @@ def sync(rpc=None, env: dict | None = None, http=http_json, now: dt.datetime | N
         return out
     rpc = rpc or hq_donna._rpc_default
     items = []
-    for name, fn in (("netlify", netlify_items), ("retell", retell_items)):
+    for name, fn in (("netlify", netlify_items), ("retell", retell_items), ("calcom", calcom_items)):
         try:
             items += fn(env, http)
         except Exception as e:                                          # one source down never blocks the other

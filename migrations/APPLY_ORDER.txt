@@ -67,6 +67,7 @@
 20261211_donna_client_agents_v1.sql
 20261212_donna_replies_v1.sql
 20261213_donna_nudges_v1.sql
+20261214_donna_bookings_v1.sql
 20261112_lockdown_v1.sql
 20261121_postlock_backup_identity_v1.sql
 20261122_postlock_backup_identity_v2.sql

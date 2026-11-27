@@ -134,5 +134,18 @@ st = R.stuck_rows(hq_donna._rpc_default)
 check("stuck list: Pat's phone agent is the next step", any(r["kind"] == "intake_no_agent" and r["client_label"] == "Pine Plumbing" for r in st)
       and not any(r["kind"] in ("won_no_intake", "audit_no_proposal") and r["name"] == "Pine Plumbing" for r in st), st)
 check("/donna stuck text names the command", "/donna agent Pine Plumbing" in (R.stuck_text(st) or ""), R.stuck_text(st))
+# 9. an audit booked on the website calendar (Cal.com) becomes a booked lead; the owner's other bookings never come in
+now_iso = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+CAL = {"status": "success", "data": [
+    {"uid": "e2eaud1", "status": "accepted", "eventTypeId": 77, "eventType": {"id": 77, "slug": "revenue-leak-audit"}, "start": "2026-12-03T15:00:00Z", "createdAt": now_iso,
+     "attendees": [{"name": "Rae Moss", "email": "rae@mossroofing.example"}], "bookingFieldsResponses": {"business": "Moss Roofing", "notes": "Quotes go cold"}},
+    {"uid": "e2epersonal", "status": "accepted", "eventTypeId": 5, "eventType": {"id": 5, "slug": "dentist"}, "start": "2026-12-04T15:00:00Z", "createdAt": now_iso,
+     "attendees": [{"name": "Owner", "email": "owner-personal@example.invalid"}]}]}
+CENV = dict(ENV, CALCOM_API_KEY="cal_test", DONNA_BOOKING_URL="https://cal.com/donna-ai/revenue-leak-audit")
+rc = R.sync(env=CENV, http=lambda m, u, h, b=None: CAL if "cal.com" in u else http(m, u, h, b))
+rae = db.sql("select status, consent_basis, source, notes from public.leads where email = 'rae@mossroofing.example'")
+check("calendar booking: a booked lead, implied consent", len(rae) == 1 and rae[0]["status"] == "booked" and rae[0]["consent_basis"] == "implied_inquiry"
+      and rae[0]["source"] == "donna:booking" and "booked on the website calendar" in rae[0]["notes"], (rc, rae))
+check("calendar booking: the owner's other bookings never come in", not db.sql("select 1 from public.leads where email = 'owner-personal@example.invalid'"))
 print("E2E RESULT:", "ALL PASSED" if not fails else f"FAILED {fails}")
 sys.exit(1 if fails else 0)
