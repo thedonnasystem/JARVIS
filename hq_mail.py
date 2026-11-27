@@ -209,6 +209,9 @@ def _provider(payload: dict, idempotency_key: str | None = None) -> bool:
         return False
 
 
+PROSPECTING = ("new", "drafted", "approved_to_send", "sent", "contacted")   # stages where a sent email means "contacted, follow up in 3 days"
+
+
 def _mark_sent(row: dict) -> None:
     now = datetime.now(timezone.utc).isoformat()
     body = {"status": "sent", "sent_at": now, "sent_by": "system"}
@@ -218,9 +221,14 @@ def _mark_sent(row: dict) -> None:
         body.pop("sent_by")
         hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(row['id'])}&status=eq.approved", body, prefer="return=minimal")
     if row.get("lead_id"):
+        # Only a lead still being prospected becomes 'contacted' with a follow-up in 3 days. A lead further along (booked an audit, replied, got a proposal,
+        # won, a client getting its monthly report, lost) keeps its stage and gets no "book your free audit" follow-ups: only last_contact_at moves.
         due = (datetime.now(timezone.utc) + timedelta(days=3)).date().isoformat()
-        hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(row['lead_id'])}",
+        lead = _q(row["lead_id"])
+        hq._request("PATCH", f"/rest/v1/leads?id=eq.{lead}&status=in.({','.join(PROSPECTING)})",
                     {"status": "contacted", "last_contact_at": now, "next_followup_at": due}, prefer="return=minimal")
+        hq._request("PATCH", f"/rest/v1/leads?id=eq.{lead}&status=not.in.({','.join(PROSPECTING)})",
+                    {"last_contact_at": now}, prefer="return=minimal")
 
 
 def _claim(row: dict) -> bool:

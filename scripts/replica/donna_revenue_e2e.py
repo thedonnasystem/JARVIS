@@ -88,7 +88,7 @@ check("Approve -> outbox approved", st == "approved", f"{out} / {st}")
 # 4. hq_mail sends it (provider faked): proves the subject column fix end to end
 sent = []
 hq_mail.configured = lambda: True
-hq_mail.hq_gatemark.attest = lambda: {"ok": True}
+hq_mail.hq_gatemark.attest = lambda **k: {"ok": True}
 hq_mail._post = lambda row: sent.append(row) or True
 class D: decision = "allow"
 hq_mail.hq_policy.authorize = lambda *a, **k: D()
@@ -130,6 +130,14 @@ check("/donna agent previews from the saved intake", "Donna agent for Pine Plumb
 # 8. the owner closes Pat: the stuck list moves her from "audit, no proposal" to "intake saved, agent not created" (one command each)
 won = R.won_cmd(f"{sid} front-desk 497")
 check("/donna won records the deal", won.startswith("Won: Pine Plumbing"), won)
+ob = db.sql("select m.id from public.owner_messages m join public.outbox o on o.id = m.ref_id where m.ref_table = 'outbox' and m.needs_decision "
+            "and o.to_ref = 'pat@pineplumbing.example' and o.status = 'draft' order by m.created_at desc limit 1")
+check("won: the welcome email waits for the owner's tap", len(ob) == 1, ob)
+if ob:
+    hq_commands.apply_decision(ob[0]["id"], True)
+    res = hq_mail.deliver_approved()
+    pl = db.sql("select status from public.leads where email = 'pat@pineplumbing.example'")[0]
+    check("a sent welcome email never drags a won client back to 'contacted' (no audit follow-ups to a client)", res.get("sent") == 1 and pl["status"] == "won", (res, pl))
 st = R.stuck_rows(hq_donna._rpc_default)
 check("stuck list: Pat's phone agent is the next step", any(r["kind"] == "intake_no_agent" and r["client_label"] == "Pine Plumbing" for r in st)
       and not any(r["kind"] in ("won_no_intake", "audit_no_proposal") and r["name"] == "Pine Plumbing" for r in st), st)
