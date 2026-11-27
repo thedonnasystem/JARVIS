@@ -30,16 +30,28 @@ begin
   exception when others then
     if sqlerrm !~ 'unknown inbound source' then raise; end if;
   end;
+  -- B9 a calendar booking made now for an audit in 5 days: its time is kept, and it is not "stuck" until a day after the audit
+  r := public.donna_ingest_inbound('booking', 'cal-fut1', now() - interval '3 days', 'Kim', 'Fir Salon', 'kim@fir.example', null, false, null, true, 'Wed', null, null,
+                                   now() + interval '5 days');
+  if (select appointment_at from fz_donna_rl.inbound where ref = 'cal-fut1') is null then raise exception 'B9 appointment_at not kept'; end if;
+  if exists (select 1 from jsonb_array_elements(public.donna_stuck_deals(50)) e where e ->> 'name' = 'Fir Salon') then raise exception 'B9 future audit listed as stuck'; end if;
+  update fz_donna_rl.inbound set appointment_at = now() - interval '2 days' where ref = 'cal-fut1';
+  if not exists (select 1 from jsonb_array_elements(public.donna_stuck_deals(50)) e where e ->> 'name' = 'Fir Salon' and e ->> 'kind' = 'audit_no_proposal') then
+    raise exception 'B9 past audit without a proposal not listed'; end if;
+  perform public.donna_ingest_inbound('booking', 'cal-odd1', now(), 'Q', null, 'q@ex.example', null, false, null, true, null, null, null, now() + interval '5 years');
+  if (select appointment_at from fz_donna_rl.inbound where ref = 'cal-odd1') is not null then raise exception 'B9 absurd appointment time kept'; end if;
 end $$;
 \set fz_in_txn 1
 \ir ../ops/rollback_donna_bookings.sql
 \ir ../ops/rollback_donna_bookings.sql
 do $$
 begin
-  if (select count(*) from fz_donna_rl.inbound where source = 'booking') <> 2 then raise exception 'B6 rollback lost booking rows'; end if;
+  if (select count(*) from fz_donna_rl.inbound where source = 'booking') <> 4 then raise exception 'B6 rollback lost booking rows'; end if;
   if not exists (select 1 from pg_constraint where conrelid = 'fz_donna_rl.inbound'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%booking%') then
     raise exception 'B6 check narrowed under existing booking rows'; end if;
   if (select count(*) from public.audit_log where action = 'donna_bookings_rollback') <> 1 then raise exception 'B6 rollback audit rows: second run must be a no-op'; end if;
+  if to_regprocedure('public.donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text, timestamptz)') is not null then
+    raise exception 'B6 new signature left behind'; end if;
   begin
     perform public.donna_ingest_inbound('booking', 'cal-aud9', now(), 'Z', null, 'z@ex.example', null, false, null, true, null, null, null);
     raise exception 'B6 old function still takes bookings';

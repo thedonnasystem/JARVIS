@@ -194,7 +194,8 @@ def calcom_items(env: dict, http=http_json, c: dict | None = None) -> list[dict]
                     "p_phone": _clip(att.get("phoneNumber") or f.get("attendeePhoneNumber") or f.get("phone"), 40),
                     "p_marketing_consent": False, "p_consent_version": None,
                     "p_booked": True, "p_appointment": _clip(_when(b.get("start")), 120),
-                    "p_leak_estimate": None, "p_summary": _clip(f.get("notes") or b.get("description"), 600)})
+                    "p_leak_estimate": None, "p_summary": _clip(f.get("notes") or b.get("description"), 600),
+                    "p_appointment_at": _iso(b.get("start"))})
     return out
 
 
@@ -854,7 +855,7 @@ def digest_text(q: dict) -> str | None:
     return "\n".join(lines)
 
 
-STUCK_NEXT = {"audit_no_proposal": ("audit done, no proposal yet", "/donna proposal {sid} <package> <monthly $> | finding; finding"),
+STUCK_NEXT = {"audit_no_proposal": ("audit booked, no proposal yet", "/donna proposal {sid} <package> <monthly $> | finding; finding"),
               "won_no_intake": ("won, setup answers not entered", "/donna intake {sid} | hours: ...; services: ...; faq: q = a; urgent: ..."),
               "intake_no_agent": ("intake saved, phone agent not created", "/donna agent {label}")}
 

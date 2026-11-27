@@ -21,14 +21,17 @@ With neither set, nothing is pulled, so the owner's other bookings never enter t
 **Consent:** a booking is an inquiry, so consent is implied (6 months). The database refuses express consent from any source but the website form's own box, and that rule is unchanged. Suppression, do-not-contact and dedupe (per source + ref, `cal-<uid>`) are unchanged.
 
 ## Database (`migrations/20261214_donna_bookings_v1.sql`)
-- The `fz_donna_rl.inbound.source` check is widened to include `booking`.
-- `donna_ingest_inbound` is re-created with the same body as Revenue Loop v1, with two changes:
+- The `fz_donna_rl.inbound.source` check is widened to include `booking`, and a nullable `appointment_at` column keeps the audit's time.
+- `donna_ingest_inbound` is re-created with the same body as Revenue Loop v1, with three changes:
   - `booking` is an allowed source;
-  - its CRM note says "booked on the website calendar".
+  - its CRM note says "booked on the website calendar";
+  - an optional last argument `p_appointment_at` (default null, so existing callers are unchanged) is stored. An absurd time is dropped.
+- `donna_stuck_deals` counts "audit booked, no proposal yet" from the audit's own time when it is known. A booking made today for next week is not stuck until a day after the audit.
 - Ordered before the lockdown. Safe to re-run. Nothing sends, pays or deploys.
 
 **Rollback:** `ops/rollback_donna_bookings.sql`.
-- It restores the old function.
+- It restores the old function (13 arguments) and the Nudges v1 stuck list. The `appointment_at` column is kept (nullable; nothing reads it after the rollback).
+- `ops/rollback_donna_revenue_loop.sql` now drops both signatures.
 - Booking rows are **kept** (never deleted). While any exist, the widened check stays so they remain valid.
 - It writes one audit row; a second run does nothing.
 
@@ -46,6 +49,7 @@ With neither set, nothing is pulled, so the owner's other bookings never enter t
   - unknown sources refused;
   - rollback keeps the rows and is idempotent;
   - the original check is restored when no booking rows exist;
-  - re-apply.
+  - re-apply;
+  - B9: the audit's time is kept, a future audit is not stuck, a past one is, an absurd time is dropped.
 - `test_hq_donna_revenue.InboundSources.test_calcom_only_the_audit_event_type`.
 - e2e leg 9: a calendar booking becomes a booked lead, and the owner's personal booking never comes in.

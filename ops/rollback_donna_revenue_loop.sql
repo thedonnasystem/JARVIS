@@ -13,7 +13,8 @@ do $$
 declare v_suffix text := to_char(clock_timestamp(), 'YYYYMMDDHH24MISSUS'); t text; r text; v_counts jsonb := '{}'::jsonb; n bigint; f text;
 begin
   if to_regnamespace('fz_donna_rl') is null then
-    foreach f in array array['donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text)', 'donna_inbound_recent(integer)',
+    foreach f in array array['donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text)',
+                           'donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text, timestamptz)', 'donna_inbound_recent(integer)',
                              'donna_lead_context(uuid)', 'donna_stage_outbox(uuid, text)', 'donna_followups_due(integer)', 'donna_save_brief(uuid, uuid, text)', 'donna_revenue_queue(integer)'] loop
       if to_regprocedure('public.' || f) is not null then execute 'drop function public.' || f; end if;
     end loop;
@@ -38,7 +39,8 @@ begin
     execute format('alter table fz_donna_rl.%I rename to %I', t, 'donna_rl_' || t);
     execute format('alter table fz_donna_rl.%I set schema fz_archive', 'donna_rl_' || t);
   end loop;
-  foreach f in array array['donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text)', 'donna_inbound_recent(integer)',
+  foreach f in array array['donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text)',
+                           'donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text, timestamptz)', 'donna_inbound_recent(integer)',
                            'donna_lead_context(uuid)', 'donna_stage_outbox(uuid, text)', 'donna_followups_due(integer)', 'donna_save_brief(uuid, uuid, text)', 'donna_revenue_queue(integer)'] loop
     if to_regprocedure('public.' || f) is not null then execute 'drop function public.' || f; end if;
   end loop;

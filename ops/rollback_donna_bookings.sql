@@ -1,14 +1,15 @@
 -- Rollback of migrations/20261214_donna_bookings_v1.sql. Idempotent. Run BEFORE ops/rollback_donna_nudges.sql:
 --   psql -v ON_ERROR_STOP=1 -f ops/rollback_donna_bookings.sql        (one transaction; sqltests set fz_in_txn and run it inside theirs)
 -- Puts back the Revenue Loop v1 donna_ingest_inbound (no 'booking' source). Booking rows already ingested are KEPT (never deleted): if any exist, the widened
--- source check stays so they remain valid, and the audit row says so; otherwise the original check is restored.
+-- source check stays so they remain valid, and the audit row says so; otherwise the original check is restored. The appointment_at column is kept (nullable,
+-- nothing reads it after the rollback); donna_stuck_deals goes back to the Nudges v1 body.
 \if :{?fz_in_txn}
 \else
 begin;
 \endif
 do $$
 declare c text; n bigint := (select count(*) from fz_donna_rl.inbound where source = 'booking');
-        v_on boolean := pg_get_functiondef('public.donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text)'::regprocedure) like '%''booking''%';
+        v_on boolean := to_regprocedure('public.donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text, timestamptz)') is not null;
 begin
   if not v_on and (n > 0 or not exists (select 1 from pg_constraint where conrelid = 'fz_donna_rl.inbound'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%booking%')) then
     return;                                                              -- already rolled back (the widened check stays only while booking rows exist)
@@ -23,6 +24,7 @@ begin
   insert into public.audit_log (actor, action, target, detail)
     values ('rollback', 'donna_bookings_rollback', 'public.donna_ingest_inbound', jsonb_build_object('booking_rows_kept', n, 'source_check_restored', n = 0));
 end $$;
+drop function if exists public.donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text, timestamptz);
 create or replace function public.donna_ingest_inbound(p_source text, p_ref text, p_received_at timestamptz, p_person text, p_business text, p_email text,
                                                        p_phone text, p_marketing_consent boolean, p_consent_version text, p_booked boolean, p_appointment text,
                                                        p_leak_estimate text, p_summary text) returns jsonb
@@ -87,6 +89,36 @@ begin
                             'contactable', v_lead is not null and not v_supp and not coalesce(l.do_not_contact, false));
 end $$;
 revoke all on function public.donna_ingest_inbound(text, text, timestamptz, text, text, text, text, boolean, text, boolean, text, text, text) from public, anon, authenticated;
+create or replace function public.donna_stuck_deals(p_limit integer default 10) returns jsonb
+language plpgsql stable security definer set search_path to 'pg_catalog' as $$
+declare v_v uuid := fz_donna.donna_venture(); n integer := least(greatest(coalesce(p_limit, 10), 1), 50);
+begin
+  perform fz_donna.guard();
+  return coalesce((select jsonb_agg(to_jsonb(x) order by x.since) from (
+    select * from (
+      select 'audit_no_proposal'::text kind, l.short_id, l.name, coalesce((select min(i.received_at) from fz_donna_rl.inbound i where i.lead_id = l.id and i.booked), l.created_at) since,
+             null::text client_label
+        from public.leads l
+       where l.venture_id = v_v and l.status = 'booked' and not l.do_not_contact
+         and not exists (select 1 from fz_donna_rl.staged s where s.lead_id = l.id and s.purpose = 'proposal')
+         and not exists (select 1 from fz_donna.drafts d where d.lead_id = l.id and d.status = 'draft')      -- a draft already queued for this lead (it stages on retry)
+      union all
+      select 'won_no_intake', l.short_id, l.name, coalesce((select max(d.updated_at) from public.deals d where d.lead_id = l.id and d.stage = 'won'), l.created_at), null
+        from public.leads l
+       where l.venture_id = v_v and l.status = 'won'
+         and not exists (select 1 from fz_donna.intakes t where t.lead_id = l.id)
+      union all
+      select 'intake_no_agent', l.short_id, coalesce(l.name, t.client_label), t.created_at, t.client_label
+        from (select distinct on (coalesce(t.lead_id::text, t.client_label)) t.* from fz_donna.intakes t
+               where t.status in ('draft', 'owner_approved') order by coalesce(t.lead_id::text, t.client_label), t.created_at desc) t
+        left join public.leads l on l.id = t.lead_id
+       where not exists (select 1 from fz_donna_ca.agents a where a.intake_id = t.id)
+         and (l.id is null or l.status = 'won')
+    ) s
+    where s.kind <> 'audit_no_proposal' or s.since < now() - interval '1 day'
+    order by s.since limit n) x), '[]'::jsonb);
+end $$;
+revoke all on function public.donna_stuck_deals(integer) from public, anon, authenticated;
 \if :{?fz_in_txn}
 \else
 commit;

@@ -124,6 +124,7 @@ class InboundSources(unittest.TestCase):
         self.assertEqual((b["p_person"], b["p_business"], b["p_email"], b["p_phone"]), ("Pat Lee", "Pine Plumbing", "pat@pine.example", "613 555 0142"))
         self.assertEqual(b["p_appointment"], "Thu Dec 3, 10 AM")
         self.assertEqual(b["p_summary"], "We miss calls on jobs")
+        self.assertEqual(b["p_appointment_at"], "2026-12-03T15:00:00.000Z", "the audit's own time, so /donna stuck waits until after it")
         self.assertEqual([o["p_ref"] for o in R.calcom_items({"CALCOM_API_KEY": "k", "DONNA_CALCOM_EVENT_TYPE_IDS": "5"}, http)], ["cal-dentist"])
         self.assertEqual(R.calcom_items({"CALCOM_API_KEY": "k"}, http), [], "no audit event type known: nothing is pulled")
         self.assertEqual(R.calcom_items({"CALCOM_API_KEY": "k", "DONNA_BOOKING_URL": "https://calendly.com/x/y"}, http), [])
@@ -530,7 +531,7 @@ class Stuck(unittest.TestCase):
                 {"kind": "intake_no_agent", "short_id": 9, "name": "Elm Auto", "client_label": "Elm Auto", "since": "bad"},
                 {"kind": "unknown", "short_id": 1}]
         t = R.stuck_text(rows)
-        self.assertIn("#7 Pine Plumbing: audit done, no proposal yet, 3 days", t)
+        self.assertIn("#7 Pine Plumbing: audit booked, no proposal yet, 3 days", t)
         self.assertIn("/donna proposal 7 <package>", t)
         self.assertIn("/donna intake 9 |", t)
         self.assertIn("/donna agent Elm Auto", t)
