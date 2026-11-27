@@ -42,7 +42,13 @@ Limits of B:
    - Why: CASL requires sender identification, and the footer shows `[OWNER: ...]` until you do.
 2. **The Cal.com link.** One value: `links.booking` in `sites/donna/site.json`.
    - Now: it is `#contact`, so every "Book a demo" button scrolls to the working contact form.
-   - In Cal.com: create a 20-minute "Donna.AI demo" event (Zoom), copy its link (`https://cal.com/<you>/donna-demo`), and send it to Claude or paste it into the file in GitHub (pencil icon > edit > Commit).
+   - In Cal.com, create a 20-minute event:
+     - Name it "Free Revenue Leak Audit", on Zoom or Google Meet. Use the URL slug `revenue-leak-audit`.
+     - Under **Advanced → Booking questions**, add "Business name" with identifier `business`, and a phone number question. Jarvis reads both.
+   - Copy its link (`https://cal.com/<you>/revenue-leak-audit`). Send it to Claude, or paste it into the file in GitHub (pencil icon > edit > Commit).
+   - Put **the same link** in Railway as `DONNA_BOOKING_URL`. Also add a Cal.com API key (Settings → Developer → API keys) as `CALCOM_API_KEY`.
+     - Every audit booked on the site then becomes a booked lead in Jarvis: the prep-questions email waits for your tap, the audit brief is written, and the lead shows in `/donna stuck`.
+     - Only this event type is read. Your other Cal.com bookings never reach Jarvis.
    - With Option A, Netlify rebuilds by itself.
    - Also set `booking_is_placeholder` to `false`.
 
