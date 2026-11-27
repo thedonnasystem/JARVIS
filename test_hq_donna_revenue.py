@@ -442,6 +442,21 @@ class Won(unittest.TestCase):
         self.assertIn("No contactable lead", R.won_cmd("99 growth 797", vo=VO))
 
 
+class Digest(unittest.TestCase):
+    def test_once_a_day_after_six_and_quiet_days_stay_quiet(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            env, posted = {"DONNA_STATE_DIR": d}, []
+            q = {"staged_today": 3, "outbox_waiting": 2, "inbound_7d": 5, "booked_7d": 1, "sent_7d": 4}
+            five = dt.datetime(2026, 11, 27, 17, 0, tzinfo=R.TZ)
+            self.assertFalse(R.post_digest(lambda n, a: q, env, now=five, brief=posted.append))
+            six = five.replace(hour=18, minute=5)
+            self.assertTrue(R.post_digest(lambda n, a: q, env, now=six, brief=posted.append))
+            self.assertFalse(R.post_digest(lambda n, a: q, env, now=six.replace(minute=30), brief=posted.append), "once a day")
+            self.assertIn("Waiting for your tap: 2", posted[0])
+        self.assertIsNone(R.digest_text({"staged_today": 0, "outbox_waiting": 0, "inbound_7d": 9}))
+
+
 class Setup(unittest.TestCase):
     def test_checklist_never_shows_values(self):
         env = {"RETELL_API_KEY": "sk_secret_value", "DONNA_INBOUND": "1"}

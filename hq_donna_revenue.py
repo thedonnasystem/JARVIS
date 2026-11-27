@@ -602,6 +602,10 @@ def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, ap
         out["messages"] += out["cold"]["posted"]
     except Exception as e:
         out["cold"] = {"error": type(e).__name__}
+    try:
+        out["digest"] = post_digest(rpc, env, brief=brief)
+    except Exception as e:
+        out["digest"] = type(e).__name__
     return out
 
 
@@ -758,3 +762,44 @@ def won_cmd(text: str, rpc=None, runner=None, approve=post_for_approval, vo=None
         out.append(f"Welcome email not drafted yet: {r.get('refused') or res.get('refused') or res.get('not_staged') or 'Donna is dormant'}. Run /donna onboard {m.group(1)} {package} later.")
     out.append(f"When they answer: /donna run delivery-onboarding, then /donna agent <client> for their phone agent.")
     return "\n".join(out)
+
+
+# ------------------------------------------------------------------------------------------------------------------- the 6 pm digest
+def digest_due(env: dict, now: dt.datetime) -> bool:
+    if now.hour < 18:
+        return False
+    try:
+        with open(os.path.join(env.get("DONNA_STATE_DIR") or "/data", "donna_digest_day.txt")) as f:
+            return f.read().strip() != now.date().isoformat()
+    except OSError:
+        return True
+
+
+def digest_text(q: dict) -> str | None:
+    """One evening line for the owner: what came in, what waits for his tap, what went out. None on a quiet day (no message)."""
+    n = {k: int(q.get(k) or 0) for k in ("inbound_7d", "booked_7d", "outbox_waiting", "approved_not_sent", "sent_7d", "staged_today")}
+    if not (n["staged_today"] or n["outbox_waiting"]):
+        return None
+    lines = [f"Donna today: {n['staged_today']} email(s) drafted for you."]
+    if n["outbox_waiting"]:
+        lines.append(f"Waiting for your tap: {n['outbox_waiting']} (scroll up, Approve or Reject).")
+    if n["approved_not_sent"]:
+        lines.append(f"Approved but not sent yet: {n['approved_not_sent']} (/donna setup shows why).")
+    lines.append(f"Last 7 days: {n['inbound_7d']} inquiries, {n['booked_7d']} booked, {n['sent_7d']} emails sent.")
+    return "\n".join(lines)
+
+
+def post_digest(rpc, env: dict, now: dt.datetime | None = None, brief=None) -> bool:
+    now = now or dt.datetime.now(TZ)
+    if not digest_due(env, now):
+        return False
+    try:
+        os.makedirs(env.get("DONNA_STATE_DIR") or "/data", exist_ok=True)
+        with open(os.path.join(env.get("DONNA_STATE_DIR") or "/data", "donna_digest_day.txt"), "w") as f:
+            f.write(now.date().isoformat())
+    except OSError:
+        return False
+    text = digest_text(rpc("donna_revenue_queue", {"p_limit": 1}) or {})
+    if text:
+        (brief or post_brief)(text)
+    return bool(text)
