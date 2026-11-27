@@ -31,6 +31,8 @@ def setup_text(env: dict | None = None, rpc=None, get=None) -> str:
     row(env.get("DONNA_CONTENT") == "1", "Weekly content jobs", "DONNA_CONTENT=1")
     row(env.get(rev().get("booking_url_env") or "DONNA_BOOKING_URL", "").startswith("https://"), "Booking link in replies", "DONNA_BOOKING_URL (Cal.com audit link)")
     row(has("RESEND_API_KEY") and has("MAIL_FROM"), "Email sender", "RESEND_API_KEY + MAIL_FROM on your domain")
+    row(env.get("DONNA_REPLIES") == "1" and has("MAIL_REPLY_TO"), "Replies stop follow-ups, unsubscribes honoured",
+        "MAIL_REPLY_TO = your receiving address (email provider, Receiving tab) + DONNA_REPLIES=1")
     try:
         import hq
         st = (hq._request("GET", "/rest/v1/system_state?select=mode,kill_switch&limit=1") or [{}])[0]

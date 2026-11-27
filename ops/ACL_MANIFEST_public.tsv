@@ -158,6 +158,7 @@ function	donna_owner_golive_approve(text,boolean,boolean,boolean)	-	-	execute	se
 function	donna_pipeline(integer)	-	-	execute	security_definer		-
 function	donna_record_client_agent(uuid,text,text,text)	-	-	execute	security_definer		-
 function	donna_record_client_report(uuid,text,uuid,jsonb)	-	-	execute	security_definer		-
+function	donna_record_email_reply(text,text,timestamp with time zone,boolean)	-	-	execute	security_definer		-
 function	donna_revenue_queue(integer)	-	-	execute	security_definer		-
 function	donna_run_begin(text)	-	-	execute	security_definer		-
 function	donna_run_finish(uuid,text,text,jsonb,jsonb)	-	-	execute	security_definer		-
@@ -165,6 +166,7 @@ function	donna_save_brief(uuid,uuid,text)	-	-	execute	security_definer		-
 function	donna_save_draft(uuid,text,text,uuid,text,text,jsonb)	-	-	execute	security_definer		-
 function	donna_save_intake(uuid,text,uuid,jsonb,jsonb,jsonb)	-	-	execute	security_definer		-
 function	donna_stage_outbox(uuid,text)	-	-	execute	security_definer		-
+function	donna_unseen_messages(text[])	-	-	execute	security_definer		-
 function	donna_weekly_report(boolean)	-	-	execute	security_definer		-
 function	enforce_build_rules()	-	-	execute	invoker	trigger function: cannot be called directly	-
 function	enforce_max_active_ventures()	-	-	execute	invoker	trigger function: cannot be called directly	-

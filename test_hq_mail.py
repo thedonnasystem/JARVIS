@@ -226,6 +226,26 @@ class LiveModes(unittest.TestCase):
             with mock.patch.object(M, "_get", return_value=[row] if row else []):
                 self.assertEqual(M.live(), want, row)
 
+class Received(unittest.TestCase):
+    def test_read_only_and_validated(self):
+        import io, json as _j
+        class R:
+            def __init__(s, body): s.body = body
+            def __enter__(s): return s
+            def __exit__(s, *a): return False
+            def read(s): return _j.dumps(s.body).encode()
+        seen = []
+        def fake(req, timeout=20):
+            seen.append((req.get_method(), req.full_url))
+            return R({"data": [{"id": "rid-1234567"}]} if "?limit=" in req.full_url else {"text": "hello"})
+        with mock.patch.dict(os.environ, {"RESEND_API_KEY": "k"}), mock.patch.object(M, "_open", fake):
+            self.assertEqual(M.received(500), [{"id": "rid-1234567"}])
+            self.assertEqual(M.received_text("rid-1234567"), "hello")
+            with self.assertRaises(ValueError):
+                M.received_text("../emails")
+        self.assertTrue(all(method == "GET" for method, _ in seen))
+        self.assertIn("limit=100", seen[0][1], "capped at the provider's maximum")
+
 
 if __name__ == "__main__":
     unittest.main()

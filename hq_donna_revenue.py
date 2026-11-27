@@ -52,10 +52,11 @@ def rev(c: dict | None = None) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------------------------- outbound HTTP (two read-only APIs)
-def http_json(method: str, url: str, headers: dict, body: dict | None = None, timeout: int = 20):
-    """https only, to the two inbound APIs only; no redirects followed (urllib follows them, so the final host is checked too)."""
+def http_json(method: str, url: str, headers: dict, body: dict | None = None, timeout: int = 20, hosts: set | None = None):
+    """https only, to the allowed APIs only (HOSTS, or a caller's own fixed set); the final host after any redirect is checked too."""
+    allowed = HOSTS if hosts is None else hosts
     u = urllib.parse.urlparse(url)
-    if u.scheme != "https" or u.hostname not in HOSTS:
+    if u.scheme != "https" or u.hostname not in allowed:
         raise RevenueError(f"refused host {u.hostname!r}")
     req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, method=method)
     for k, v in headers.items():
@@ -64,7 +65,7 @@ def http_json(method: str, url: str, headers: dict, body: dict | None = None, ti
     if body is not None:
         req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        if urllib.parse.urlparse(r.geturl()).hostname not in HOSTS:
+        if urllib.parse.urlparse(r.geturl()).hostname not in allowed:
             raise RevenueError("redirected off the allowed hosts")
         return json.loads(r.read().decode("utf-8") or "null")
 
