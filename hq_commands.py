@@ -1107,7 +1107,7 @@ async def hq_account_cmd(update, context) -> None:
 
 
 async def hq_invoices_cmd(update, context) -> None:
-    """/invoices  owner only: list; request <id>; send <id>; plans; bill <office>; check <office> (payment failures); cancel <plan> (immediate, no refund); log."""
+    """/invoices  owner only: list; request <id>; send <id>; link <office> <$> <for what> (a payment link the owner shares himself); plans; bill <office>; check <office> (payment failures); cancel <plan> (immediate, no refund); log."""
     if not _owner(update):
         return
     args = getattr(context, "args", None) or []
@@ -1119,6 +1119,15 @@ async def hq_invoices_cmd(update, context) -> None:
         elif len(args) == 2 and args[0] == "bill":
             r = hq_invoices.bill_plans(args[1])
             text = f"Billing plans: {len(r['sent'])} sent, {len(r['refused'])} refused." + "".join(f"\n- refused: {x['reason']}" for x in r["refused"])
+        elif len(args) >= 4 and args[0] == "link":                                   # /invoices link donna 497 Front Desk, Pine Plumbing
+            m = re.fullmatch(r"\$?([\d,]{1,9}(?:\.\d{1,2})?)", args[2])
+            if not m:
+                raise ValueError("Use: /invoices link <office> <$ amount> <what it is for>")
+            cents = int(round(float(m.group(1).replace(",", "")) * 100))
+            raw = (getattr(update.message, "text", "") or "").split(None, 4)
+            r = await asyncio.to_thread(hq_invoices.draft_payment_link, args[1], cents, "cad", raw[4] if len(raw) > 4 else "Service")
+            text = (f"Payment link ({r.get('mode')} mode), ${cents / 100:,.2f} CAD: {r.get('url')}\n"
+                    "Share it with the client yourself; Jarvis never sends it. Paid links show in /invoices.")
         elif args == ["plans"]:
             text = hq_invoices.plans_text()
         elif args == ["log"]:
