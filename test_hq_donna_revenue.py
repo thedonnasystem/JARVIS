@@ -317,7 +317,9 @@ class Tick(unittest.TestCase):
                 return {"active": True, "prospects_ready": ["P1", "P2"], "cold_run_today": False}
             return []
         R.tick_once(rpc=rpc, env={"DONNA_AUTODRAFT": "1"}, runner=lambda m, i: runs.append((m, i)) or {"ok": True, "result": {}})
-        self.assertEqual(runs, [("outreach-prep", {"channels": ["email"], "lead_ids": ["P1", "P2"]})])
+        (m, inp), = runs
+        self.assertEqual((m, inp["channels"], inp["lead_ids"]), ("outreach-prep", ["email"], ["P1", "P2"]))
+        self.assertTrue(inp["offer"].startswith(R.rev()["hook"]), "the first email is about the owner's own hook, not the old receptionist-only line")
         runs.clear()
         def rpc2(name, args):
             if name == "donna_revenue_queue":
@@ -329,6 +331,18 @@ class Tick(unittest.TestCase):
     def test_tick_never_raises(self):
         r = R.tick_once(rpc=lambda n, a: (_ for _ in ()).throw(RuntimeError("db down")), env={"DONNA_AUTODRAFT": "1"})
         self.assertIn("queue", r["error"])
+
+
+class ColdOffer(unittest.TestCase):
+    def test_hook_leaks_audit_real_price_and_real_deadline(self):
+        before = R.cold_offer(dt.date(2026, 12, 31))
+        self.assertIn("We turn your missed calls and missed leads into booked appointments.", before)
+        self.assertIn("Not every business needs an AI receptionist", before)
+        self.assertIn("Revenue Leak Audit", before)
+        self.assertIn("Plans from $197 a month", before)
+        self.assertIn("setup is free", before)
+        self.assertNotIn("setup is free", R.cold_offer(dt.date(2027, 1, 1)), "the deadline is real: gone the day after")
+        self.assertLessEqual(len(before), 600)
 
 
 class Cold(unittest.TestCase):

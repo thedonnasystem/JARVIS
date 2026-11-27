@@ -251,6 +251,14 @@ def setup_line(today: dt.date | None = None, c: dict | None = None) -> str:
     return f"Book before {until.strftime('%B')} {until.day} and setup is free on any plan." if today <= until else ""
 
 
+def cold_offer(today: dt.date | None = None, c: dict | None = None) -> str:
+    """What a first email is about: the owner's own hook, the leaks beyond calls, the audit as the next step, the real price floor and the real deadline."""
+    r = rev(c)
+    return (f"{r['hook']} Beyond calls, the same service plugs other revenue leaks (slow lead follow-up, unchased quotes, no-shows, busywork) with AI "
+            f"built around the business. Not every business needs an AI receptionist. The next step is a {r['offer']}. Plans from "
+            f"${r['packages']['essential']['from_cents'] // 100} a month, month-to-month. {setup_line(today, c)}").strip()[:600]
+
+
 def book_line(env: dict | None = None, c: dict | None = None) -> str:
     url = (env if env is not None else os.environ).get(rev(c).get("booking_url_env") or "DONNA_BOOKING_URL", "")
     if url.startswith("https://"):
@@ -579,7 +587,8 @@ def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, ap
     except Exception:
         pass
     if q.get("prospects_ready") and not q.get("cold_run_today"):           # once a day: first-email drafts for researched prospects (free brain, $0; drafts only)
-        jobs.append(("outreach-prep", {"channels": ["email"], "lead_ids": q["prospects_ready"][:int(rev().get("cold_draft_per_day", 10))]}))
+        jobs.append(("outreach-prep", {"channels": ["email"], "offer": cold_offer(), "niche": "local service businesses",
+                                       "lead_ids": q["prospects_ready"][:int(rev().get("cold_draft_per_day", 10))]}))
     for mission, inputs in jobs:
         try:
             r = runner(mission, inputs) or {}

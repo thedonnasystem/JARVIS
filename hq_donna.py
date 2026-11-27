@@ -421,7 +421,7 @@ def outreach_prep(ctx: Ctx, inputs: dict) -> dict:
         return hq_donna_revenue.outreach_mode(ctx, inputs)
     channels = [c for c in (inputs.get("channels") or ["email", "dm", "call"]) if c in OUTREACH_KINDS][:4]
     niche = str(inputs.get("niche") or "Ottawa local businesses")[:80]
-    offer = str(inputs.get("offer") or "an AI receptionist that answers calls, texts back missed callers and books appointments")[:300]
+    offer = str(inputs.get("offer") or "an AI receptionist that answers calls, texts back missed callers and books appointments")[:600]
     saved, refused = [], []
     for ch in channels:
         kind = OUTREACH_KINDS[ch]
