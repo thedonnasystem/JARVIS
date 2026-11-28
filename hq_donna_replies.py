@@ -78,6 +78,8 @@ def check(rpc=None, post=None, limit: int = 50, list_fn=None, text_fn=None) -> d
         else:
             out["replies"] += 1
             text = f"📩 {name} (#{res.get('short_id')}) replied: “{own[:300]}”\nFollow-ups stopped. Answer from your email, or tell me what to say."
+            if res.get("status") == "won":
+                text += (f"\nA client: if these are the setup answers, /donna intake {res.get('short_id')} | hours: ...; services: ...; faq: q = a; urgent: +1...; booking: https://...")
         (post or R.post_brief)(text)
     return out
 

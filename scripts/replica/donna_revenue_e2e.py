@@ -88,7 +88,7 @@ check("Approve -> outbox approved", st == "approved", f"{out} / {st}")
 # 4. hq_mail sends it (provider faked): proves the subject column fix end to end
 sent = []
 hq_mail.configured = lambda: True
-hq_mail.hq_gatemark.attest = lambda: {"ok": True}
+hq_mail.hq_gatemark.attest = lambda **k: {"ok": True}
 hq_mail._post = lambda row: sent.append(row) or True
 class D: decision = "allow"
 hq_mail.hq_policy.authorize = lambda *a, **k: D()
@@ -116,5 +116,44 @@ txt = "Proposal drafted"
 pr = db.sql("select o.subject, o.body from fz_donna_rl.staged s join public.outbox o on o.id = s.outbox_id where o.subject like 'Your Donna.AI plan%'")
 check("proposal staged for approval", "Proposal drafted" in txt and len(pr) == 1 and "$497 a month" in pr[0]["body"], (txt, pr))
 check("/donna inbound renders", "Inbound, last 7 days" in R.inbound_text())
+
+# 7. Pat says yes and emails the setup answers: one line becomes the intake, then the client's own agent previews from it (no model, nothing created)
+import hq_donna_intake, hq_donna_agents
+it = hq_donna_intake.intake_cmd(f"{sid} | hours: mon-fri 7-6, sat 8-12; services: Drain cleaning $149 60min, Water heater install; "
+                                f"faq: Do you do emergencies? = Yes, 24/7 for burst pipes; urgent: 613 555 0111; city: Kanata")
+check("/donna intake saves the intake under the lead", "Intake saved for Pine Plumbing" in it and "open: mon, tue, wed, thu, fri, sat" in it, it)
+row = db.sql("select client_label, reception_config, open_items from fz_donna.intakes where lead_id = (select id from public.leads where email = 'pat@pineplumbing.example')")
+check("intake row: hours, prices, urgent number", len(row) == 1 and row[0]["reception_config"]["hours"]["fri"] == [["07:00", "18:00"]]
+      and row[0]["reception_config"]["services"][0]["price_cents"] == 14900 and row[0]["reception_config"]["escalation_number"] == "+16135550111", row)
+pv = hq_donna_agents.agent_cmd("Pine Plumbing")
+check("/donna agent previews from the saved intake", "Donna agent for Pine Plumbing" in pv and "create" in pv, pv)
+# 8. the owner closes Pat: the stuck list moves her from "audit, no proposal" to "intake saved, agent not created" (one command each)
+won = R.won_cmd(f"{sid} front-desk 497")
+check("/donna won records the deal", won.startswith("Won: Pine Plumbing"), won)
+ob = db.sql("select m.id from public.owner_messages m join public.outbox o on o.id = m.ref_id where m.ref_table = 'outbox' and m.needs_decision "
+            "and o.to_ref = 'pat@pineplumbing.example' and o.status = 'draft' order by m.created_at desc limit 1")
+check("won: the welcome email waits for the owner's tap", len(ob) == 1, ob)
+if ob:
+    hq_commands.apply_decision(ob[0]["id"], True)
+    res = hq_mail.deliver_approved()
+    pl = db.sql("select status from public.leads where email = 'pat@pineplumbing.example'")[0]
+    check("a sent welcome email never drags a won client back to 'contacted' (no audit follow-ups to a client)", res.get("sent") == 1 and pl["status"] == "won", (res, pl))
+st = R.stuck_rows(hq_donna._rpc_default)
+check("stuck list: Pat's phone agent is the next step", any(r["kind"] == "intake_no_agent" and r["client_label"] == "Pine Plumbing" for r in st)
+      and not any(r["kind"] in ("won_no_intake", "audit_no_proposal") and r["name"] == "Pine Plumbing" for r in st), st)
+check("/donna stuck text names the command", "/donna agent Pine Plumbing" in (R.stuck_text(st) or ""), R.stuck_text(st))
+# 9. an audit booked on the website calendar (Cal.com) becomes a booked lead; the owner's other bookings never come in
+now_iso = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+CAL = {"status": "success", "data": [
+    {"uid": "e2eaud1", "status": "accepted", "eventTypeId": 77, "eventType": {"id": 77, "slug": "revenue-leak-audit"}, "start": "2026-12-03T15:00:00Z", "createdAt": now_iso,
+     "attendees": [{"name": "Rae Moss", "email": "rae@mossroofing.example"}], "bookingFieldsResponses": {"business": "Moss Roofing", "notes": "Quotes go cold"}},
+    {"uid": "e2epersonal", "status": "accepted", "eventTypeId": 5, "eventType": {"id": 5, "slug": "dentist"}, "start": "2026-12-04T15:00:00Z", "createdAt": now_iso,
+     "attendees": [{"name": "Owner", "email": "owner-personal@example.invalid"}]}]}
+CENV = dict(ENV, CALCOM_API_KEY="cal_test", DONNA_BOOKING_URL="https://cal.com/donna-ai/revenue-leak-audit")
+rc = R.sync(env=CENV, http=lambda m, u, h, b=None: CAL if "cal.com" in u else http(m, u, h, b))
+rae = db.sql("select status, consent_basis, source, notes from public.leads where email = 'rae@mossroofing.example'")
+check("calendar booking: a booked lead, implied consent", len(rae) == 1 and rae[0]["status"] == "booked" and rae[0]["consent_basis"] == "implied_inquiry"
+      and rae[0]["source"] == "donna:booking" and "booked on the website calendar" in rae[0]["notes"], (rc, rae))
+check("calendar booking: the owner's other bookings never come in", not db.sql("select 1 from public.leads where email = 'owner-personal@example.invalid'"))
 print("E2E RESULT:", "ALL PASSED" if not fails else f"FAILED {fails}")
 sys.exit(1 if fails else 0)

@@ -272,6 +272,22 @@ class D(unittest.TestCase):
         self.assertIn("To: info@coolair.example.ca", out)
         self.assertIn("/sent abcdef12", out)
         self.assertFalse(any(c[0] == "POST" and "memory" in c[1] for c in f.calls))  # single emails are not policy
+        adv = [c for c in f.calls if c[0] == "PATCH" and c[1].startswith("/rest/v1/leads?id=eq.L7")]
+        self.assertEqual(len(adv), 1)
+        self.assertIn("status=in.(new,drafted,approved_to_send,sent,contacted)", adv[0][1], "approving never drags a booked / won / replied lead back to approved_to_send")
+
+    def test_owner_sent_keeps_a_won_clients_stage(self):
+        calls = []
+        def rq(method, path, body=None, timeout=30, prefer=None):
+            calls.append((method, path, body))
+            return [{"id": "ob1", "lead_id": "L9"}] if method == "GET" else []
+        with mock.patch.object(hq, "_request", rq), mock.patch.object(C, "_get", lambda q: [{"id": "ob1", "lead_id": "L9"}]):
+            C.mark_sent("ob1")
+        leads = [c for c in calls if c[0] == "PATCH" and c[1].startswith("/rest/v1/leads")]
+        self.assertEqual(len(leads), 2)
+        self.assertIn("status=in.(new,drafted,approved_to_send,sent,contacted)", leads[0][1])
+        self.assertIn("status=not.in.(", leads[1][1])
+        self.assertEqual(set(leads[1][2]), {"last_contact_at"})
 
     def test_cap_proposal_applies_with_ceiling(self):
         class F(DecisionFake):

@@ -30,9 +30,15 @@ def setup_text(env: dict | None = None, rpc=None, get=None) -> str:
     row(env.get("DONNA_PROSPECTING") == "1", "Donna finds prospects daily", "DONNA_PROSPECTING=1")
     row(env.get("DONNA_CONTENT") == "1", "Weekly content jobs", "DONNA_CONTENT=1")
     row(env.get(rev().get("booking_url_env") or "DONNA_BOOKING_URL", "").startswith("https://"), "Booking link in replies", "DONNA_BOOKING_URL (Cal.com audit link)")
+    import hq_donna_revenue as _R
+    row(has("CALCOM_API_KEY") and any(_R._calcom_filter(env)), "Website calendar bookings come in (Cal.com)",
+        "CALCOM_API_KEY (Cal.com Settings > Developer > API keys) + DONNA_BOOKING_URL = your cal.com audit link")
     row(has("RESEND_API_KEY") and has("MAIL_FROM"), "Email sender", "RESEND_API_KEY + MAIL_FROM on your domain")
     row(env.get("DONNA_REPLIES") == "1" and has("MAIL_REPLY_TO"), "Replies stop follow-ups, unsubscribes honoured",
         "MAIL_REPLY_TO = your receiving address (email provider, Receiving tab) + DONNA_REPLIES=1")
+    stripe_key = str(env.get("STRIPE_SECRET_KEY") or "")
+    row(env.get("FZ_STRIPE_INVOICING") == "1" and stripe_key.startswith(("sk_", "rk_")), "Payment links (/invoices link) (optional)",
+        "FZ_STRIPE_INVOICING=1 + a restricted STRIPE_SECRET_KEY (rk_), or keep using Helcim")
     try:
         import hq
         st = (hq._request("GET", "/rest/v1/system_state?select=mode,kill_switch&limit=1") or [{}])[0]

@@ -334,12 +334,14 @@ def mark_sent(outbox_id: str) -> str:
     except Exception:  # before the sent_by migration: record it the old way
         body.pop("sent_by")
         hq._request("PATCH", f"/rest/v1/outbox?id=eq.{_q(rows[0]['id'])}", body, prefer="return=minimal")
-    if rows[0].get("lead_id"):
+    if rows[0].get("lead_id"):                   # same rule as hq_mail._mark_sent: only a lead still being prospected gets the 3-day follow-up
         from datetime import timedelta
         due = (_toronto_today() + timedelta(days=3)).isoformat()
-        hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(rows[0]['lead_id'])}",
+        lead, stages = _q(rows[0]["lead_id"]), ",".join(hq_mail.PROSPECTING)
+        hq._request("PATCH", f"/rest/v1/leads?id=eq.{lead}&status=in.({stages})",
                     {"status": "contacted", "last_contact_at": now, "next_followup_at": due}, prefer="return=minimal")
-    return "Marked sent. Follow-up reminder set for 3 days from now."
+        hq._request("PATCH", f"/rest/v1/leads?id=eq.{lead}&status=not.in.({stages})", {"last_contact_at": now}, prefer="return=minimal")
+    return "Marked sent. Follow-up reminder set for 3 days from now (only for a lead not yet booked, replied or won)."
 
 
 def draft_decision(outbox_id: str, approved: bool) -> str:
@@ -809,8 +811,8 @@ def apply_decision(msg_id: str, approved: bool) -> str:
         if approved:
             ob = _get(f"outbox?id=eq.{_q(ref_id)}&select=to_ref,body,lead_id&limit=1")
             if ob:
-                if ob[0].get("lead_id"):
-                    hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(ob[0]['lead_id'])}", {"status": "approved_to_send"},
+                if ob[0].get("lead_id"):              # only a lead still being prospected moves; a booked / won / replied lead keeps its stage
+                    hq._request("PATCH", f"/rest/v1/leads?id=eq.{_q(ob[0]['lead_id'])}&status=in.({','.join(hq_mail.PROSPECTING)})", {"status": "approved_to_send"},
                                 prefer="return=minimal")
                 ready = (f"Approved. Send this from your business email:\n\nTo: {ob[0].get('to_ref')}\n"
                          f"{ob[0].get('body')}{casl_footer(gate_slug)}\n\nOnce sent, reply /sent {ref_id[:8]}")
@@ -1107,7 +1109,7 @@ async def hq_account_cmd(update, context) -> None:
 
 
 async def hq_invoices_cmd(update, context) -> None:
-    """/invoices  owner only: list; request <id>; send <id>; plans; bill <office>; check <office> (payment failures); cancel <plan> (immediate, no refund); log."""
+    """/invoices  owner only: list; request <id>; send <id>; link <office> <$ or $/mo> <for what> (a payment link the owner shares himself; /mo bills monthly); plans; bill <office>; check <office> (payment failures); cancel <plan> (immediate, no refund); log."""
     if not _owner(update):
         return
     args = getattr(context, "args", None) or []
@@ -1119,6 +1121,16 @@ async def hq_invoices_cmd(update, context) -> None:
         elif len(args) == 2 and args[0] == "bill":
             r = hq_invoices.bill_plans(args[1])
             text = f"Billing plans: {len(r['sent'])} sent, {len(r['refused'])} refused." + "".join(f"\n- refused: {x['reason']}" for x in r["refused"])
+        elif len(args) >= 4 and args[0] == "link":                 # /invoices link donna 497/mo Front Desk, Pine Plumbing   (no /mo: a one-time link)
+            m = re.fullmatch(r"\$?([\d,]{1,9}(?:\.\d{1,2})?)(/mo(?:nth)?)?", args[2], re.I)
+            if not m:
+                raise ValueError("Use: /invoices link <office> <$ amount, or $/mo for monthly> <what it is for>")
+            cents, monthly = int(round(float(m.group(1).replace(",", "")) * 100)), bool(m.group(2))
+            raw = (getattr(update.message, "text", "") or "").split(None, 4)
+            r = await asyncio.to_thread(hq_invoices.draft_payment_link, args[1], cents, "cad", raw[4] if len(raw) > 4 else "Service", monthly=monthly)
+            text = (f"{'Monthly payment' if monthly else 'Payment'} link ({r.get('mode')} mode), ${cents / 100:,.2f} CAD{' a month' if monthly else ''}: {r.get('url')}\n"
+                    + ("When the client pays, Stripe bills them every month until they or you cancel in Stripe.\n" if monthly else "")
+                    + "Share it with the client yourself; Jarvis never sends it. Paid links show in /invoices.")
         elif args == ["plans"]:
             text = hq_invoices.plans_text()
         elif args == ["log"]:
@@ -1179,8 +1191,10 @@ async def hq_donna_cmd(update, context) -> None:
     """/donna  owner only: Donna's pipeline, drafts waiting and next actions (read-only). /donna drafts  the drafts to decide.
     /donna run <mission>  run one of Donna's missions now (refused while she is dormant; drafts only, nothing is sent). /donna report  the weekly KPI report.
     Revenue loop (hq_donna_revenue): /donna setup  every switch still missing, ticked live; /donna inbound  recent inquiries and what waits; /donna sync  pull the website form and Donna calls now;
-    /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
+    /donna stuck  deals waiting on your next step, each with the command that moves it; /donna brief <lead #>  the audit-prep brief; /donna proposal <lead #> <package> <monthly $> | finding; finding  a proposal email for your approval;
+    /donna won <lead #> <package> <monthly $> [received|expected]  records the deal and first month, drafts the welcome email;
     /donna onboard <lead #> <package>  the welcome email with the setup questions (after /deal won);
+    /donna intake <lead #> | name: ...; hours: mon-fri 9-17; services: Oil change $89 30min; faq: q = a; urgent: +1...; booking: https://...  the client's answers become the intake;
     /donna agent <client> [create <code>]  the client's own Donna phone agent on Retell; /donna clientreport <client>  last month's report email."""
     if not _owner(update):
         return
@@ -1193,6 +1207,9 @@ async def hq_donna_cmd(update, context) -> None:
             text = await asyncio.to_thread(hq_donna_setup.setup_text)
         elif args and args[0] == "inbound":
             text = await asyncio.to_thread(hq_donna_revenue.inbound_text)
+        elif args and args[0] == "stuck":
+            rows = await asyncio.to_thread(hq_donna_revenue.stuck_rows, hq_donna._rpc_default)
+            text = hq_donna_revenue.stuck_text(rows) or "Nothing is waiting on you: every audit has a proposal, every client has an intake and an agent."
         elif args and args[0] == "sync":
             r = await asyncio.to_thread(hq_donna_revenue.sync)
             text = (r.get("off") and f"Inbound sync is off ({r['off']}).") or (
@@ -1204,10 +1221,16 @@ async def hq_donna_cmd(update, context) -> None:
             import hq_donna_agents
             raw = (getattr(update.message, "text", "") or "").split(None, 2)              # the client's name as typed
             text = await asyncio.to_thread(hq_donna_agents.agent_cmd, raw[2] if len(raw) > 2 else "")
+        elif args and args[0] == "intake":
+            import hq_donna_intake
+            raw = (getattr(update.message, "text", "") or "").split(None, 2)              # the client's answers as typed
+            text = await asyncio.to_thread(hq_donna_intake.intake_cmd, raw[2] if len(raw) > 2 else "")
         elif args and args[0] == "clientreport":
             import hq_donna_agents
             raw = (getattr(update.message, "text", "") or "").split(None, 2)
             text = await asyncio.to_thread(hq_donna_agents.clientreport_cmd, raw[2] if len(raw) > 2 else "")
+        elif args and args[0] == "won":
+            text = await asyncio.to_thread(hq_donna_revenue.won_cmd, " ".join(args[1:]))
         elif args and args[0] == "onboard":
             text = await asyncio.to_thread(hq_donna_revenue.onboard_cmd, " ".join(args[1:]))
         elif args and args[0] == "proposal":

@@ -1,6 +1,7 @@
 """Donna Revenue Loop v1: the money loop around Donna Ops v1. Design: docs/architecture/DONNA_REVENUE_LOOP_V1.md. Database: migrations/20261210_donna_revenue_loop_v1.sql.
 
-  inbound   website form (Netlify Forms API) and Donna calls (Retell list-calls) -> donna_ingest_inbound -> a lead of the 'donna' venture, consent basis from what
+  inbound   website form (Netlify Forms API), Donna calls (Retell list-calls) and audits booked on the website calendar (Cal.com, CALCOM_API_KEY; only the
+            audit event type: DONNA_CALCOM_EVENT_TYPE_IDS, or the slug at the end of DONNA_BOOKING_URL) -> donna_ingest_inbound -> a lead of the 'donna' venture, consent basis from what
             the person did (the unticked marketing box = express; otherwise an inquiry = implied). PULL only: no new public endpoint, idempotent per source + ref.
             OFF unless DONNA_INBOUND=1. Works while Donna is dormant (it records inquiries the owner already got as Telegram alerts; nothing is sent).
   replies   outreach-prep mode "inbound_reply": a plain-code reply to each new inquiry (booked or not), with the leak estimate they entered.
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 FLAG_INBOUND = "DONNA_INBOUND"
 FLAG_AUTODRAFT = "DONNA_AUTODRAFT"
-HOSTS = {"api.netlify.com", "api.retellai.com"}
+HOSTS = {"api.netlify.com", "api.retellai.com", "api.cal.com"}
 PLACEHOLDER_ADDRESS = "[OWNER: mailing address]"
 MODES = ("inbound_reply", "follow_up", "proposal", "onboarding", "client_report")
 TZ = dt.timezone(dt.timedelta(hours=-5))          # Ottawa (EST); used only to word dates
@@ -144,6 +145,60 @@ def retell_items(env: dict, http=http_json) -> list[dict]:
     return out
 
 
+def _calcom_filter(env: dict, c: dict | None = None) -> tuple[set[str], str | None]:
+    """Which bookings are Donna audits: explicit event type ids, else the event slug at the end of the cal.com booking link. Neither -> none (the owner's
+    other bookings are never pulled in)."""
+    ids = {x.strip() for x in (env.get("DONNA_CALCOM_EVENT_TYPE_IDS") or "").split(",") if x.strip().isdigit()}
+    url = env.get((rev(c) if c else rev()).get("booking_url_env") or "DONNA_BOOKING_URL", "") if not ids else ""
+    u = urllib.parse.urlparse(url)
+    parts = [x for x in u.path.split("/") if x]
+    slug = parts[-1].lower() if u.scheme == "https" and (u.hostname or "").endswith("cal.com") and len(parts) >= 2 else None
+    return ids, slug
+
+
+def _when(iso: str | None) -> str | None:
+    try:
+        t = dt.datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(TZ)
+    except (TypeError, ValueError):
+        return None
+    return t.strftime("%a %b %-d, %-I:%M %p").replace(":00 ", " ")
+
+
+def calcom_items(env: dict, http=http_json, c: dict | None = None) -> list[dict]:
+    """Upcoming Revenue Leak Audits booked on the website calendar (Cal.com bookings API, read-only). Needs CALCOM_API_KEY and an audit event type (see
+    _calcom_filter). A booking is an inquiry: implied consent, never express. The attendee's own notes become the summary."""
+    key = env.get("CALCOM_API_KEY")
+    ids, slug = _calcom_filter(env, c)
+    if not key or not (ids or slug):
+        return []
+    res = http("GET", "https://api.cal.com/v2/bookings?status=upcoming&take=100",
+               {"Authorization": f"Bearer {key}", "cal-api-version": "2024-08-13", "User-Agent": "DonnaInbound/1.0"}) or {}
+    rows = res.get("data") if isinstance(res, dict) else res
+    out = []
+    for b in rows if isinstance(rows, list) else []:
+        et = b.get("eventType") or {}
+        et_id = str(b.get("eventTypeId") or et.get("id") or "")
+        if not ((ids and et_id in ids) or (slug and str(et.get("slug") or "").lower() == slug)):
+            continue
+        if str(b.get("status") or "").lower() not in ("accepted", "pending"):
+            continue
+        uid = re.sub(r"[^A-Za-z0-9_-]", "", str(b.get("uid") or ""))[:90]
+        att = next((a for a in b.get("attendees") or [] if isinstance(a, dict)), {})
+        f = b.get("bookingFieldsResponses") or {}
+        if not uid:
+            continue
+        out.append({"p_source": "booking", "p_ref": f"cal-{uid}", "p_received_at": _iso(b.get("createdAt") or b.get("start")),
+                    "p_person": _clip(att.get("name") or f.get("name"), 120),
+                    "p_business": _clip(f.get("business") or f.get("company") or f.get("business_name"), 160),
+                    "p_email": _clip(att.get("email") or f.get("email"), 200),
+                    "p_phone": _clip(att.get("phoneNumber") or f.get("attendeePhoneNumber") or f.get("phone"), 40),
+                    "p_marketing_consent": False, "p_consent_version": None,
+                    "p_booked": True, "p_appointment": _clip(_when(b.get("start")), 120),
+                    "p_leak_estimate": None, "p_summary": _clip(f.get("notes") or b.get("description"), 600),
+                    "p_appointment_at": _iso(b.get("start"))})
+    return out
+
+
 _SEEN: set[str] = set()                                                 # refs already handed to the database in this process (saves ~30k RPCs a day)
 WINDOW_DAYS = 3                                                          # only recent items are pulled; older ones are already in (or were refused)
 
@@ -157,7 +212,7 @@ def _recent(iso: str | None, now: dt.datetime) -> bool:
 
 
 def sync(rpc=None, env: dict | None = None, http=http_json, now: dt.datetime | None = None) -> dict:
-    """Pull both sources into the CRM. Never raises; returns counts and the new leads."""
+    """Pull every source into the CRM. Never raises; returns counts and the new leads."""
     env = os.environ if env is None else env
     out = {"new": [], "updated": 0, "duplicate": 0, "skipped": 0, "errors": []}
     if env.get(FLAG_INBOUND) != "1":
@@ -165,7 +220,7 @@ def sync(rpc=None, env: dict | None = None, http=http_json, now: dt.datetime | N
         return out
     rpc = rpc or hq_donna._rpc_default
     items = []
-    for name, fn in (("netlify", netlify_items), ("retell", retell_items)):
+    for name, fn in (("netlify", netlify_items), ("retell", retell_items), ("calcom", calcom_items)):
         try:
             items += fn(env, http)
         except Exception as e:                                          # one source down never blocks the other
@@ -249,6 +304,14 @@ def setup_line(today: dt.date | None = None, c: dict | None = None) -> str:
     until = dt.date.fromisoformat(rev(c)["setup_free_until"])
     today = today or dt.datetime.now(TZ).date()
     return f"Book before {until.strftime('%B')} {until.day} and setup is free on any plan." if today <= until else ""
+
+
+def cold_offer(today: dt.date | None = None, c: dict | None = None) -> str:
+    """What a first email is about: the owner's own hook, the leaks beyond calls, the audit as the next step, the real price floor and the real deadline."""
+    r = rev(c)
+    return (f"{r['hook']} Beyond calls, the same service plugs other revenue leaks (slow lead follow-up, unchased quotes, no-shows, busywork) with AI "
+            f"built around the business. Not every business needs an AI receptionist. The next step is a {r['offer']}. Plans from "
+            f"${r['packages']['essential']['from_cents'] // 100} a month, month-to-month. {setup_line(today, c)}").strip()[:600]
 
 
 def book_line(env: dict | None = None, c: dict | None = None) -> str:
@@ -579,7 +642,8 @@ def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, ap
     except Exception:
         pass
     if q.get("prospects_ready") and not q.get("cold_run_today"):           # once a day: first-email drafts for researched prospects (free brain, $0; drafts only)
-        jobs.append(("outreach-prep", {"channels": ["email"], "lead_ids": q["prospects_ready"][:int(rev().get("cold_draft_per_day", 10))]}))
+        jobs.append(("outreach-prep", {"channels": ["email"], "offer": cold_offer(), "niche": "local service businesses",
+                                       "lead_ids": q["prospects_ready"][:int(rev().get("cold_draft_per_day", 10))]}))
     for mission, inputs in jobs:
         try:
             r = runner(mission, inputs) or {}
@@ -602,6 +666,10 @@ def tick_once(rpc=None, env: dict | None = None, http=http_json, runner=None, ap
         out["messages"] += out["cold"]["posted"]
     except Exception as e:
         out["cold"] = {"error": type(e).__name__}
+    try:
+        out["digest"] = post_digest(rpc, env, brief=brief)
+    except Exception as e:
+        out["digest"] = type(e).__name__
     return out
 
 
@@ -718,3 +786,117 @@ def brief_cmd(short_id: str, rpc=None, get=None, runner=None) -> str:
     res = ((r.get("result") or {}).get("results") or [{}])[0]
     return res.get("text") or f"Brief not written: {res.get('refused')}"
 
+
+
+# ------------------------------------------------------------------------------------------------------------------- /donna won: close the deal in one line
+WON_RX = re.compile(r"^\s*#?(\d{1,7})\s+(essential|front-desk|growth|ai-systems)\s+\$?([\d,]+(?:\.\d{1,2})?)\s*(received|expected)?\s*$", re.I)
+
+
+def won_cmd(text: str, rpc=None, runner=None, approve=post_for_approval, vo=None) -> str:
+    """'/donna won 12 front-desk 497 [received|expected]': the OWNER's own words record the deal and the first month (the existing deal path,
+    by = owner), then Donna drafts the welcome email with the setup questions for his tap. Nothing is charged or invoiced here."""
+    m = WON_RX.match(text or "")
+    if not m:
+        return "Use: /donna won <lead #> <essential|front-desk|growth|ai-systems> <monthly $> [received|expected]"
+    import hq_venture_ops as V
+    vo = vo or V
+    lead = vo.find_lead(m.group(1))
+    if not lead or lead.get("do_not_contact"):
+        return f"No contactable lead #{m.group(1)}."
+    cents = vo._parse_cents(m.group(3))
+    if cents is None:
+        return "The monthly amount must look like 497 or 1,297 (at most $100,000)."
+    package = m.group(2).lower()
+    if package == "essential" and cents < rev()["packages"]["essential"]["from_cents"]:
+        return "Essential starts at $197 a month (your price)."
+    status = (m.group(4) or "expected").lower()
+    try:
+        deal = vo._rpc("create_deal", {"p_lead": lead["id"], "p_value_cents": cents, "p_by": vo.OWNER, "p_note": f"Donna {package}, monthly"})
+        vo._rpc("confirm_deal_won", {"p_deal": deal, "p_amount_cents": cents, "p_ledger_status": status, "p_by": vo.OWNER, "p_note": f"Donna {package}: first month"})
+    except Exception as e:
+        return f"Deal not recorded: {str(e)[:200]}"
+    out = [f"Won: {lead.get('name')} on {rev()['packages'][package]['title']}, {money(cents)} a month (first month recorded as {status})."]
+    runner = runner or (lambda mission, inputs: hq_donna.run(mission, inputs, rpc=rpc))
+    r = runner("outreach-prep", {"mode": "onboarding", "lead": lead["id"], "package": package}) or {}
+    res = ((r.get("result") or {}).get("results") or [{}])[0] if r.get("ok") else {}
+    if res.get("outbox") and res.get("new"):
+        approve(res["outbox"], LABELS["onboarding"])
+        out.append("Welcome email with the setup questions drafted: approve it above.")
+    else:
+        out.append(f"Welcome email not drafted yet: {r.get('refused') or res.get('refused') or res.get('not_staged') or 'Donna is dormant'}. Run /donna onboard {m.group(1)} {package} later.")
+    if status == "expected":
+        out.append(f"To start monthly billing: /invoices link donna {cents / 100:g}/mo {rev()['packages'][package]['title']}, {lead.get('name')}  "
+                   "(you share the link; it then bills them each month).")
+    out.append(f"When they email the answers: /donna intake {m.group(1)} | hours: ...; services: ...; faq: q = a; urgent: ...  then /donna agent <client>.")
+    return "\n".join(out)
+
+
+# ------------------------------------------------------------------------------------------------------------------- the 6 pm digest
+def digest_due(env: dict, now: dt.datetime) -> bool:
+    if now.hour < 18:
+        return False
+    try:
+        with open(os.path.join(env.get("DONNA_STATE_DIR") or "/data", "donna_digest_day.txt")) as f:
+            return f.read().strip() != now.date().isoformat()
+    except OSError:
+        return True
+
+
+def digest_text(q: dict) -> str | None:
+    """One evening line for the owner: what came in, what waits for his tap, what went out. None on a quiet day (no message)."""
+    n = {k: int(q.get(k) or 0) for k in ("inbound_7d", "booked_7d", "outbox_waiting", "approved_not_sent", "sent_7d", "staged_today")}
+    if not (n["staged_today"] or n["outbox_waiting"]):
+        return None
+    lines = [f"Donna today: {n['staged_today']} email(s) drafted for you."]
+    if n["outbox_waiting"]:
+        lines.append(f"Waiting for your tap: {n['outbox_waiting']} (scroll up, Approve or Reject).")
+    if n["approved_not_sent"]:
+        lines.append(f"Approved but not sent yet: {n['approved_not_sent']} (/donna setup shows why).")
+    lines.append(f"Last 7 days: {n['inbound_7d']} inquiries, {n['booked_7d']} booked, {n['sent_7d']} emails sent.")
+    return "\n".join(lines)
+
+
+STUCK_NEXT = {"audit_no_proposal": ("audit booked, no proposal yet", "/donna proposal {sid} <package> <monthly $> | finding; finding"),
+              "won_no_intake": ("won, setup answers not entered", "/donna intake {sid} | hours: ...; services: ...; faq: q = a; urgent: ..."),
+              "intake_no_agent": ("intake saved, phone agent not created", "/donna agent {label}")}
+
+
+def stuck_text(rows: list | None) -> str | None:
+    """The deals waiting on the OWNER's next step (donna_stuck_deals), each with the one command that moves it. None when nothing is stuck."""
+    lines = []
+    for r in (rows or [])[:10]:
+        what, cmd = STUCK_NEXT.get(str(r.get("kind")), (None, None))
+        if not what:
+            continue
+        days = ""
+        try:
+            d = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(str(r.get("since")).replace("Z", "+00:00"))).days
+            days = f", {d} day{'s' if d != 1 else ''}" if d >= 1 else ""
+        except (TypeError, ValueError):
+            pass
+        lines.append(f"- #{r.get('short_id') or '-'} {r.get('name') or r.get('client_label') or 'a client'}: {what}{days}\n  {cmd.format(sid=r.get('short_id'), label=r.get('client_label') or r.get('name'))}")
+    return ("Waiting on you (money on the table):\n" + "\n".join(lines)) if lines else None
+
+
+def stuck_rows(rpc) -> list:
+    try:
+        r = rpc("donna_stuck_deals", {"p_limit": 10})
+        return [x for x in r if isinstance(x, dict)] if isinstance(r, list) else []
+    except Exception:
+        return []                                                              # before the nudges migration: no list, the digest still goes
+
+
+def post_digest(rpc, env: dict, now: dt.datetime | None = None, brief=None) -> bool:
+    now = now or dt.datetime.now(TZ)
+    if not digest_due(env, now):
+        return False
+    try:
+        os.makedirs(env.get("DONNA_STATE_DIR") or "/data", exist_ok=True)
+        with open(os.path.join(env.get("DONNA_STATE_DIR") or "/data", "donna_digest_day.txt"), "w") as f:
+            f.write(now.date().isoformat())
+    except OSError:
+        return False
+    text = "\n\n".join(t for t in (digest_text(rpc("donna_revenue_queue", {"p_limit": 1}) or {}), stuck_text(stuck_rows(rpc))) if t)
+    if text:
+        (brief or post_brief)(text)
+    return bool(text)

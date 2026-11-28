@@ -146,7 +146,7 @@ function	donna_drafts(text,integer)	-	-	execute	security_definer		-
 function	donna_followups_due(integer)	-	-	execute	security_definer		-
 function	donna_golive_checklist(text)	-	-	execute	security_definer		-
 function	donna_inbound_recent(integer)	-	-	execute	security_definer		-
-function	donna_ingest_inbound(text,text,timestamp with time zone,text,text,text,text,boolean,text,boolean,text,text,text)	-	-	execute	security_definer		-
+function	donna_ingest_inbound(text,text,timestamp with time zone,text,text,text,text,boolean,text,boolean,text,text,text,timestamp with time zone)	-	-	execute	security_definer		-
 function	donna_intake_for_agent(text)	-	-	execute	security_definer		-
 function	donna_lead_context(uuid)	-	-	execute	security_definer		-
 function	donna_lead_label(uuid)	-	-	execute	security_definer		-
@@ -166,6 +166,7 @@ function	donna_save_brief(uuid,uuid,text)	-	-	execute	security_definer		-
 function	donna_save_draft(uuid,text,text,uuid,text,text,jsonb)	-	-	execute	security_definer		-
 function	donna_save_intake(uuid,text,uuid,jsonb,jsonb,jsonb)	-	-	execute	security_definer		-
 function	donna_stage_outbox(uuid,text)	-	-	execute	security_definer		-
+function	donna_stuck_deals(integer)	-	-	execute	security_definer		-
 function	donna_unseen_messages(text[])	-	-	execute	security_definer		-
 function	donna_weekly_report(boolean)	-	-	execute	security_definer		-
 function	enforce_build_rules()	-	-	execute	invoker	trigger function: cannot be called directly	-
