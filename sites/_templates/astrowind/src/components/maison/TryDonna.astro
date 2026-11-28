@@ -1,0 +1,60 @@
+---
+// "Pick your business": one click shows what AI would take off that owner's plate and the exact line to say to Donna
+// on the demo line or in the browser. Content lives in site.json "tryit" ({ title, subtitle, industries: [{ name, say, ai: [3] }] }).
+import { SITE_DATA as S, BOOKING, BOOK_LABEL, DEMO_PHONE } from '~/data/site';
+import TalkToDonna from './TalkToDonna.astro';
+import Split from './Split.astro';
+
+const T = (S as any).tryit;
+const list = (T?.industries || []) as { name: string; say: string; ai: string[] }[];
+const tel = DEMO_PHONE ? `tel:${DEMO_PHONE.replace(/[^0-9+]/g, '')}` : '';
+const { idx = '' } = Astro.props;
+---
+
+{list.length > 0 && (
+  <section class="m-sec m-try" id="try" aria-labelledby="try-title" data-scene="call">
+    <div class="m-wrap">
+      <header class="m-sec-head m-sec-head-split">
+        <div>
+          <p class="m-eyebrow" data-reveal><span class="m-idx">{idx}</span>{T.tagline || 'Try it'}</p>
+          <Split as="h2" id="try-title" class="m-h2" text={T.title} />
+        </div>
+        {T.subtitle && <p class="m-body m-sec-sub" data-reveal>{T.subtitle}</p>}
+      </header>
+      <div class="m-try-chips" role="tablist" aria-label="Pick your business" data-reveal>
+        {list.map((x, i) => (
+          <button type="button" role="tab" class="m-tchip" aria-selected={i === 0 ? 'true' : 'false'} aria-controls={`try-p${i}`} id={`try-t${i}`} data-try={i}>{x.name}</button>
+        ))}
+      </div>
+      {list.map((x, i) => (
+        <div class="m-try-panel" role="tabpanel" id={`try-p${i}`} aria-labelledby={`try-t${i}`} hidden={i !== 0}>
+          <div class="m-card m-try-ai">
+            <p class="m-try-k">What AI takes off your plate</p>
+            <ul>{x.ai.map((a) => <li><i class="m-diamond" aria-hidden="true" />{a}</li>)}</ul>
+          </div>
+          <div class="m-card m-try-say" data-spot>
+            <p class="m-try-k">Test Donna right now. Say this:</p>
+            <p class="m-try-quote">“{x.say}”</p>
+            <div class="m-try-cta">
+              <TalkToDonna cls="m-btn m-btn-metal" label="Talk to Donna now" />
+              {tel && <a href={tel} class="m-btn m-btn-ghost" data-magnetic><span>Call {DEMO_PHONE}</span></a>}
+            </div>
+            <a href={BOOKING} class="m-try-book">{BOOK_LABEL} →</a>
+          </div>
+        </div>
+      ))}
+    </div>
+  </section>
+)}
+
+<script>
+  const chips = document.querySelectorAll<HTMLButtonElement>('[data-try]');
+  chips.forEach((c) => c.addEventListener('click', () => {
+    chips.forEach((o) => {
+      const on = o === c;
+      o.setAttribute('aria-selected', on ? 'true' : 'false');
+      const p = document.getElementById(o.getAttribute('aria-controls') || '');
+      if (p) p.hidden = !on;
+    });
+  }));
+</script>

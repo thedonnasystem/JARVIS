@@ -1,0 +1,30 @@
+# Netlify config for the Donna.AI site (launch kit). In Netlify set: Base directory = launch/donna (everything else comes from here).
+# Live: https://donna-ai-solutions.netlify.app (project donna-ai-solutions, branch build/donna-site-r). Form detection is on in Netlify.
+# The build runs the repo's own Web Studio pipeline (hq_webstudio.py build donna: lockfile install, no install scripts, Astro build, content QA),
+# so the published site is exactly what the QA checked. Netlify sets URL, which the template uses for the sitemap and canonical links.
+
+[build]
+  command = "bash build_site.sh"
+  publish = ".out/dist"
+  # Always build. Netlify's default skips a build when nothing under the base directory (launch/donna) changed, which
+  # cancelled real site edits (sites/donna, the template); a path-diff ignore rule also failed in Netlify's shallow clone.
+  # Exit 1 = build. Each build costs 15 of the free plan's 300 monthly credits.
+  ignore = "exit 1"
+
+[functions]
+  # Lead alerts: netlify/functions/retell-webhook.mjs (Retell call_analyzed -> Telegram) and submission-created.mjs (form -> Telegram).
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[build.environment]
+  NODE_VERSION = "22"
+  PYTHON_VERSION = "3.12"
+  NPM_CONFIG_FUND = "false"
+  NPM_CONFIG_AUDIT = "false"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Frame-Options = "DENY"

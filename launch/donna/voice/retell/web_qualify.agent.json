@@ -1,0 +1,114 @@
+{
+  "agent_name": "Donna.AI - Website (qualify, sell, book with our AI specialist)",
+  "voice_id": "11labs-Kate",
+  "voice_model": "eleven_flash_v2_5",
+  "language": "en-US",
+  "timezone": "America/Toronto",
+  "responsiveness": 0.9,
+  "interruption_sensitivity": 0.8,
+  "enable_backchannel": true,
+  "end_call_after_silence_ms": 20000,
+  "max_call_duration_ms": 480000,
+  "data_storage_setting": "everything",
+  "data_storage_retention_days": 30,
+  "webhook_url": "${DONNA_ALERT_WEBHOOK_URL}",
+  "webhook_events": [
+    "call_analyzed"
+  ],
+  "post_call_analysis_model": "gpt-4.1-mini",
+  "post_call_analysis_data": [
+    {
+      "type": "string",
+      "name": "caller_name",
+      "description": "The caller's name, if given.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "business_name",
+      "description": "The caller's own business name, if given.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "business_type",
+      "description": "The caller's kind of business (for example: plumbing, med spa, dental, law firm, auto repair, real estate, cleaning).",
+      "required": false
+    },
+    {
+      "type": "boolean",
+      "name": "booked",
+      "description": "True if a call with our AI specialist was booked on this call.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "appointment_time",
+      "description": "The booked call's day and time in plain words. Empty if none.",
+      "required": false
+    },
+    {
+      "type": "boolean",
+      "name": "sms_ok",
+      "description": "True only if the caller clearly said yes to receiving a text message.",
+      "required": false
+    },
+    {
+      "type": "boolean",
+      "name": "urgent",
+      "description": "True if the caller asked the founder to call back today, or reported a real emergency.",
+      "required": false
+    },
+    {
+      "type": "enum",
+      "name": "lead_temperature",
+      "description": "Hot: wants to book or start. Warm: interested, not ready. Cold: not interested or not a business owner.",
+      "choices": [
+        "hot",
+        "warm",
+        "cold"
+      ],
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "main_problem",
+      "description": "The visitor's main problem or bottleneck, in their words.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "solution_fit",
+      "description": "What fits best: Essential, Answer, Capture, Command, a website, or a custom AI build (automation, agents, infrastructure), with one line why.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "team_size",
+      "description": "About how many people work there, if said.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "timeline",
+      "description": "How soon they want it fixed, in their words.",
+      "required": false
+    },
+    {
+      "type": "boolean",
+      "name": "decision_maker",
+      "description": "True if they said they make the decision.",
+      "required": false
+    },
+    {
+      "type": "string",
+      "name": "email",
+      "description": "The email they confirmed for the booking or link. Empty if none.",
+      "required": false
+    }
+  ],
+  "response_engine": {
+    "type": "retell-llm",
+    "llm_id": "${LLM_ID}"
+  }
+}

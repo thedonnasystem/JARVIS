@@ -1,0 +1,744 @@
+{
+  "schema": 1,
+  "slug": "donna",
+  "version": 1,
+  "office": "donna",
+  "template": "astrowind",
+  "variant": "futuristic",
+  "theme": "maison",
+  "brand": {
+    "name": "Donna.AI",
+    "primary": "#7a1428",
+    "accent": "#c9a24a"
+  },
+  "meta": {
+    "title": "Donna.AI | Revenue growth and loss-prevention infrastructure",
+    "description": "Donna.AI finds where your business is losing revenue (missed calls, slow follow-up, forgotten quotes, no-shows, busywork) and builds the AI that plugs the leaks and grows what's left. Free 20-min Revenue Leak Audit. Plans from $197 a month."
+  },
+  "links": {
+    "booking": "#contact",
+    "booking_is_placeholder": true,
+    "demo_phone": "+1 (825) 462-1250",
+    "booking_label": "Get your free Revenue Leak Audit",
+    "booking_label_short": "Free Leak Audit"
+  },
+  "header_hide": [
+    "websites",
+    "calculator"
+  ],
+  "hero": {
+    "tagline": "Revenue growth & loss-prevention infrastructure",
+    "title": "Stop losing revenue",
+    "title_accent": "you've already earned.",
+    "subtitle": "We turn your missed calls and missed leads into booked appointments. Then we plug every other leak, from forgotten quotes to no-shows to busywork, and build the AI that grows what's left. Done for you, month-to-month.",
+    "offer": "Free 20-min Revenue Leak Audit · Plans from $197 / month · Free setup until December 31",
+    "foot": "Free 20-min Revenue Leak Audit",
+    "deadline": "2026-12-31T23:59:59-05:00"
+  },
+  "demo": {
+    "label": "Illustration of a call, not a real customer",
+    "lines": [
+      {
+        "who": "caller",
+        "text": "Hi, I called earlier and got voicemail. Can I book something for this week?"
+      },
+      {
+        "who": "donna",
+        "text": "Sorry we missed you. I'm Donna, the AI assistant for this business. I can book you in right now. What do you need?"
+      },
+      {
+        "who": "caller",
+        "text": "A first appointment, ideally Thursday."
+      },
+      {
+        "who": "donna",
+        "text": "I have Thursday at 9:30 or 2:00. Which works?"
+      },
+      {
+        "who": "caller",
+        "text": "2:00."
+      },
+      {
+        "who": "donna",
+        "text": "Booked for Thursday at 2:00. You'll get a text confirmation now, and the team will have your details before you arrive."
+      }
+    ]
+  },
+  "services": {
+    "tagline": "What we build",
+    "title": "One partner for all the AI in your business.",
+    "items": [
+      {
+        "title": "AI front desk",
+        "description": "Every call answered day and night, missed callers texted back in minutes and appointments booked straight into your calendar.",
+        "icon": "tabler:phone-call"
+      },
+      {
+        "title": "Lead capture and follow-up",
+        "description": "Every lead from calls, your website, ads and messages lands in one place and gets followed up, with messages you approve, until they book.",
+        "icon": "tabler:user-check"
+      },
+      {
+        "title": "Workflow automation",
+        "description": "Quotes, invoices, reminders, review requests and reports that run themselves, so your team stops doing busywork.",
+        "icon": "tabler:settings-automation"
+      },
+      {
+        "title": "Custom AI agents",
+        "description": "AI agents trained on your services, prices and policies for intake, scheduling, support and internal questions.",
+        "icon": "tabler:robot"
+      },
+      {
+        "title": "AI infrastructure and integration",
+        "description": "Your phone, calendar, CRM, email, accounting and website connected into one system, with no rip-and-replace.",
+        "icon": "tabler:plug-connected"
+      },
+      {
+        "title": "Run, monitored, improved",
+        "description": "We monitor everything we build, fix what breaks and keep tuning it, and you get a plain-English playbook for all of it.",
+        "icon": "tabler:shield-check"
+      }
+    ]
+  },
+  "steps": {
+    "title": "How it works",
+    "items": [
+      {
+        "title": "Free 20-min Revenue Leak Audit",
+        "description": "We find where AI saves you the most time and money, and show you what we'd build. No cost, no obligation."
+      },
+      {
+        "title": "Your AI plan",
+        "description": "A clear plan: what we automate first, how it connects to your tools and one price. No surprises."
+      },
+      {
+        "title": "We build and integrate",
+        "description": "We set it up inside the tools you already use. You test it and approve every word before a customer sees it."
+      },
+      {
+        "title": "We run and improve it",
+        "description": "Monitoring, fixes and tuning are part of your plan, and we add the next win when you're ready."
+      }
+    ]
+  },
+  "offer": {
+    "title": "Free 20-min Revenue Leak Audit",
+    "text": "In 20 minutes our AI specialist finds where your business is losing revenue and shows you what we'd build to plug it. No cost, no obligation. Book before December 31 and setup is free on any plan.",
+    "seal": "Free"
+  },
+  "pricing": [
+    {
+      "id": "packages",
+      "eyebrow": "Packages",
+      "nav": "Packages",
+      "title": "Packages built around your business",
+      "subtitle": "Not every business needs an AI receptionist. Start with the leak that costs you most, or combine them. From $197 a month, month-to-month. Your exact package comes out of your free audit, and setup is free until December 31.",
+      "items": [
+        {
+          "title": "Essential",
+          "subtitle": "Plug your biggest leak",
+          "price_label": "From $197",
+          "period": "per month",
+          "highlight": true,
+          "highlight_label": "Start here",
+          "features": [
+            "Pick one: AI receptionist, lead follow-up, quote and no-show follow-ups, or one busywork automation",
+            "Built into the tools you already use",
+            "Monitoring, fixes and tuning included",
+            "Month-to-month, no contract"
+          ]
+        },
+        {
+          "title": "Front Desk",
+          "subtitle": "Every call and lead answered",
+          "price_label": "Tailored",
+          "period": "to your business",
+          "features": [
+            "AI receptionist answers every call, day and night",
+            "Missed-call text-back within minutes",
+            "Books appointments into your calendar",
+            "Urgent calls sent to you by text right away",
+            "Every lead saved to a simple CRM"
+          ]
+        },
+        {
+          "title": "Growth",
+          "subtitle": "Every lead chased, every slot filled",
+          "price_label": "Tailored",
+          "period": "to your business",
+          "features": [
+            "Instant replies to website and ad leads",
+            "Quote follow-ups until they're won or lost",
+            "Reminders that cut no-shows",
+            "Win-back and review requests, with messages you approve",
+            "A monthly report on what came back"
+          ]
+        },
+        {
+          "title": "AI Systems",
+          "subtitle": "Busywork gone, systems connected",
+          "price_label": "Tailored",
+          "period": "to your business",
+          "features": [
+            "Quotes, invoices and reports that run themselves",
+            "Custom AI agents trained on your business",
+            "Phone, booking, CRM, email and accounting connected",
+            "Custom software where nothing off the shelf fits"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "websites",
+      "title": "Add a website",
+      "subtitle": "Optional. One-time payment, no monthly fees. Quoted with your plan.",
+      "items": [
+        {
+          "title": "Site",
+          "subtitle": "A fast website that brings in calls",
+          "period": "one-time",
+          "note": "Pay once. No monthly fees.",
+          "features": [
+            "Mobile-first website",
+            "Click-to-call and booking built in",
+            "Lead-capture form into your CRM",
+            "Basic local SEO setup"
+          ],
+          "price_label": "Quoted"
+        },
+        {
+          "title": "Site Pro",
+          "subtitle": "More pages, more reach",
+          "period": "one-time",
+          "note": "Pay once. No monthly fees.",
+          "features": [
+            "Everything in Site",
+            "Service and area pages",
+            "Priority support"
+          ],
+          "price_label": "Quoted"
+        }
+      ],
+      "eyebrow": "Donna Solutions"
+    }
+  ],
+  "results": {
+    "title": "Client results",
+    "content": "We are just getting started, so there are no case studies here yet. Real results from real clients will be published here, with their permission.",
+    "slots": 3
+  },
+  "faq": [
+    {
+      "q": "What happens in the free Revenue Leak Audit?",
+      "a": "In 20 minutes our AI specialist walks through how your business handles calls, leads, quotes, bookings and admin, finds where revenue is slipping away, and shows you what we'd build first and what it costs. No cost and no obligation."
+    },
+    {
+      "q": "What can you build?",
+      "a": "An AI front desk that answers every call and books appointments, lead follow-up, workflow automation for quotes, invoices, reminders and reports, custom AI agents for your team, and the integration that connects your phone, calendar, CRM, email, accounting and website."
+    },
+    {
+      "q": "Do I have to change my tools?",
+      "a": "No. We build around the tools you already use and connect them. Nothing gets ripped out."
+    },
+    {
+      "q": "How much does it cost?",
+      "a": "Plans start at $197 a month. Your exact price depends on what you need, and you get it in your free audit, before we build anything. Book before December 31 and setup is free."
+    },
+    {
+      "q": "Is there a contract?",
+      "a": "No. Every plan is month-to-month. Stay because it works, not because you signed for a year."
+    },
+    {
+      "q": "Will my customers know they're talking to an AI?",
+      "a": "Yes. Donna always says she's an AI, and anyone who wants a person gets a call back. You approve every word before a customer hears it."
+    },
+    {
+      "q": "What if something breaks?",
+      "a": "Monitoring, fixes and tuning are included in your plan. You won't get a separate bill when something needs fixing."
+    },
+    {
+      "q": "Is my data safe?",
+      "a": "Your data stays yours. We only use it to run what we build for you, and we never sell it."
+    }
+  ],
+  "contact": {
+    "title": "Get your free Revenue Leak Audit",
+    "subtitle": "Tell us a little about your business and we'll book your audit. Prefer email? thedonnasystem@gmail.com",
+    "tagline": "Setup free until December 31"
+  },
+  "calculator": {
+    "path": "calculator",
+    "nav": "Calculator",
+    "meta_title": "Missed-Call Cost Calculator | Donna.AI",
+    "meta_description": "Estimate what missed calls cost your business each month, and what answering them could bring back. The math runs in your browser.",
+    "tagline": "Missed-Call Cost Calculator",
+    "title": "What are missed calls",
+    "title_accent": "costing you?",
+    "subtitle": "Pick your type of business for example values, then change the four numbers to yours. The math runs in your browser and nothing you type is sent anywhere.",
+    "defaults": {
+      "calls_per_week": 30,
+      "missed_pct": 27,
+      "job_value": 400,
+      "close_pct": 40,
+      "recover_pct": 50
+    },
+    "presets_label": "Type of business",
+    "presets_note": "Example values for a small business of that type, to start from. They are not research and not a promise: replace them with your own numbers.",
+    "presets": [
+      {
+        "id": "home",
+        "label": "Home services and trades",
+        "calls_per_week": 30,
+        "missed_pct": 27,
+        "job_value": 400,
+        "close_pct": 40
+      },
+      {
+        "id": "beauty",
+        "label": "Med spa, salon or beauty",
+        "calls_per_week": 50,
+        "missed_pct": 28,
+        "job_value": 180,
+        "close_pct": 50
+      },
+      {
+        "id": "clinic",
+        "label": "Dental, chiro or clinic",
+        "calls_per_week": 80,
+        "missed_pct": 28,
+        "job_value": 250,
+        "close_pct": 60
+      },
+      {
+        "id": "law",
+        "label": "Law firm intake",
+        "calls_per_week": 20,
+        "missed_pct": 28,
+        "job_value": 3000,
+        "close_pct": 20
+      },
+      {
+        "id": "auto",
+        "label": "Auto repair or detailing",
+        "calls_per_week": 40,
+        "missed_pct": 28,
+        "job_value": 350,
+        "close_pct": 50
+      },
+      {
+        "id": "realestate",
+        "label": "Real estate agent",
+        "calls_per_week": 15,
+        "missed_pct": 28,
+        "job_value": 8000,
+        "close_pct": 5
+      },
+      {
+        "id": "cleaning",
+        "label": "Cleaning or landscaping",
+        "calls_per_week": 25,
+        "missed_pct": 28,
+        "job_value": 250,
+        "close_pct": 40
+      }
+    ],
+    "notes": {
+      "calls_per_week": "Example value. Use your own count from your phone bill or call log.",
+      "missed_pct": "Starting value from industry research: 27% of calls to home services businesses go unanswered (Invoca, 2024), used for home services; 28% of calls to businesses go unanswered (CallRail, 2025), used for the other types. Your audit shows your real number.",
+      "job_value": "Example value. Use what a new customer is worth to you on average: a job, a visit, a case or a commission.",
+      "close_pct": "Example value. Of the new callers who reach you, how many become paying customers?",
+      "recover_pct": "Donna.AI planning assumption, not a measured result: the share of missed callers who would still book if they were answered, or texted back within minutes. Donna.AI has no client data yet."
+    },
+    "sources": [
+      {
+        "label": "Invoca, How much missed sales calls cost home services businesses (2024-05-23)",
+        "url": "https://invoca.com/blog/how-much-missed-sales-calls-cost-home-services-businesses"
+      },
+      {
+        "label": "CallRail, How missed calls are costing your business (2025-09-11)",
+        "url": "https://www.callrail.com/blog/missed-calls-costing-your-business"
+      }
+    ],
+    "disclaimer": "Estimates for planning only. Not every missed call is a new job: some are existing customers, spam, or callers who reach you later. Lower the numbers if that fits your business.",
+    "cta_title": "See your real numbers",
+    "cta_text": "The calculator uses estimates. The free missed-call audit uses your own line: we call it during the day and after hours, the way a new customer would, and show you what happened.",
+    "cta": "Book your free missed-call audit"
+  },
+  "legal": {
+    "entity": "[OWNER: legal entity name]",
+    "contact": "thedonnasystem@gmail.com · [OWNER: business mailing address before launch]",
+    "privacy": [
+      {
+        "h": "What we collect.",
+        "p": "From the contact form: your name, business name, phone, email, your message, the time you sent it and whether you ticked the optional marketing box. From a conversation with Donna, our AI receptionist, on this website or by phone: a recording and transcript of the call, an automatic summary, the details you choose to share (such as your name, business, email and the problem you want solved) and, for phone calls, your phone number. From a booking: your name, email and the time you picked."
+      },
+      {
+        "h": "Donna is an AI.",
+        "p": "Every call starts by telling you that you are speaking with an AI and that the call is recorded. If you do not want to be recorded, end the call and use the contact form or email us instead."
+      },
+      {
+        "h": "Why we use it.",
+        "p": "To answer your inquiry, book and hold your audit, follow up about it, and improve how Donna answers. If you ticked the marketing box, also to send you occasional messages about our services. We do not sell your information."
+      },
+      {
+        "h": "Who processes it for us.",
+        "p": "Netlify (website hosting and forms), Retell AI (voice calls, recordings and transcripts, using AI speech and language models from its providers), Cal.com (bookings), Google (email) and Telegram (instant alerts to our team about new requests). Some of these providers store or process data outside Canada, including in the United States, where it may be accessible to authorities under local law."
+      },
+      {
+        "h": "How long we keep it.",
+        "p": "Call recordings and transcripts are kept by our voice provider for 30 days, then deleted. Form submissions and booking details are kept for up to 24 months after our last contact, unless you become a client, in which case your client agreement applies. [OWNER: confirm these periods.]"
+      },
+      {
+        "h": "Consent and unsubscribing.",
+        "p": "Every marketing message identifies us and includes a way to unsubscribe. You can withdraw consent at any time by replying STOP to a text, using the unsubscribe link in an email, or writing to us."
+      },
+      {
+        "h": "Cookies.",
+        "p": "This site does not use advertising or analytics cookies."
+      },
+      {
+        "h": "Your rights.",
+        "p": "You can ask to see, correct or delete your information, or ask questions about this policy, by writing to us at the contact above. If you are not satisfied with our answer, you can contact the Office of the Privacy Commissioner of Canada."
+      }
+    ],
+    "terms": [
+      {
+        "h": "Free Revenue Leak Audit.",
+        "p": "The free 20-minute Revenue Leak Audit is free and carries no obligation. Any plan or project starts only after you accept a written quote or agreement."
+      },
+      {
+        "h": "Services and results.",
+        "p": "We describe our services on this site. We build and run AI systems for your business, but we do not promise a specific number of calls, bookings, customers, sales or savings."
+      },
+      {
+        "h": "Prices.",
+        "p": "Plans start at $197 a month. Prices are in Canadian dollars, plus applicable taxes. Your exact price is in your written quote or agreement, and that price applies."
+      },
+      {
+        "h": "Month-to-month.",
+        "p": "Monthly plans are month-to-month with no long-term contract. Notice and cancellation terms are in your agreement."
+      },
+      {
+        "h": "Current offer.",
+        "p": "Setup is free for plans booked before December 31, 2026 (setup is otherwise $497, $997 or $1,497 depending on the plan). The offer ends on that date."
+      },
+      {
+        "h": "AI disclosure.",
+        "p": "Donna is an AI. Calls with Donna are recorded and transcribed as described in our Privacy Policy."
+      },
+      {
+        "h": "Website content.",
+        "p": "Provided as is, for information only."
+      }
+    ]
+  },
+  "owner_review": [
+    "Capture now includes booking; Command adds instant lead replies, quote follow-up, reminders and win-back messages: only offer what is delivered and tested.",
+    "Cal.com booking link is a placeholder: links.booking is \"#contact\" (the working contact form) until the owner pastes the Cal.com \"Free 20-min Revenue Leak Audit\" link (see launch/donna/SITE_GO_LIVE.md). The demo line +1 (825) 462-1250 is live on Retell.",
+    "December offer (owner decision, Nov 24 2026): setup included free for clients who book before December 31, 2026 (normally $497 / $997 / $1,497). The deadline is real: on January 1 end the offer or replace it with a new dated one; never roll the same deadline forward (Competition Act).",
+    "Promises on the site you must keep (owner decision needed if not): free 20-min Revenue Leak Audit; a plain-English playbook for everything built; monitoring, fixes and tuning included in every plan (no break-fix invoices); a clear plan and one price before any build; client data used only to run their systems and never sold.",
+    "Comparison section describes the usual AI vendor in general terms (no competitor named). Keep every Donna.AI line true.",
+    "Privacy policy and terms are real drafts (calls, recordings, processors, retention, offer terms): owner and counsel review them before relying on them; confirm the retention periods.",
+    "Domain not bought yet (donna.ai is not an option): pick one and point it at Netlify; then restrict the Retell public key to it.",
+    "Client quotes: the Web Studio QA (hq_webstudio.py, owner-protected) blocks testimonials and reviews on every site. To publish Al's Diner's real words, the owner must approve a QA change that allows approved, permissioned client quotes. Never invented ones (Competition Act).",
+    "Prices (owner decision, Nov 24 2026): Essential $197 a month. Packages are now tailored by need (Nov 26): Essential = one leak plugged (AI receptionist, lead follow-up, quote/no-show follow-ups, or one automation); Front Desk, Growth and Automation & AI are quoted on the call (internal guide: Answer $497, Capture $797, Command $1,297 a month; Site $497, Site Pro $997 one-time). The site shows only 'from $197'."
+  ],
+  "compare": {
+    "tagline": "Why Donna.AI",
+    "title": "The usual AI vendor vs. Donna.AI",
+    "subtitle": "We looked at how AI consultants, agencies and AI receptionist apps sell to businesses like yours, then built the offer we'd want to buy.",
+    "them": {
+      "title": "The usual AI vendor",
+      "items": [
+        "Charges thousands just to assess your business",
+        "Sells you one tool and leaves you to connect the rest",
+        "Setup fees and long contracts",
+        "Hands you a system nobody on your team understands",
+        "Bills you every time something breaks",
+        "Vague pitch, pricing you only see at the end"
+      ]
+    },
+    "us": {
+      "title": "Donna.AI",
+      "items": [
+        "Free 20-min Revenue Leak Audit",
+        "One partner for the whole stack: front desk, leads, automations, AI agents and integration",
+        "Month-to-month from $197, setup free until December 31",
+        "A plain-English playbook for everything we build, and your data stays yours",
+        "Monitoring, fixes and tuning included in your plan",
+        "A clear plan and one price before we build anything"
+      ]
+    }
+  },
+  "tryit": {
+    "tagline": "Try it in 30 seconds",
+    "title": "Pick your business. Then test Donna.",
+    "subtitle": "See what AI would take off your plate, then talk to Donna and say the line. She'll answer like she already works for you.",
+    "industries": [
+      {
+        "name": "Trades & home services",
+        "say": "My furnace just stopped working. Can someone come out today?",
+        "ai": [
+          "Every call answered, even when you're on a job or it's after hours",
+          "Missed callers texted back and booked into your open slots",
+          "Quotes followed up until the job is won or lost"
+        ]
+      },
+      {
+        "name": "Med spa & beauty",
+        "say": "Hi, I'd like to book a consultation. What do you have Thursday?",
+        "ai": [
+          "Bookings and rebookings handled day and night",
+          "A reminder before every appointment",
+          "Past clients invited back with messages you approve"
+        ]
+      },
+      {
+        "name": "Clinic & dental",
+        "say": "I chipped a tooth. Can I get in this week?",
+        "ai": [
+          "New-patient calls answered and booked",
+          "Appointment reminders sent automatically",
+          "Your front desk freed from routine questions"
+        ]
+      },
+      {
+        "name": "Law firm",
+        "say": "I was in a car accident and I need to talk to a lawyer.",
+        "ai": [
+          "Every intake call answered and qualified",
+          "Consultations booked into the right calendar",
+          "Every lead that didn't book gets followed up"
+        ]
+      },
+      {
+        "name": "Auto",
+        "say": "My check-engine light came on. Can you look at it tomorrow?",
+        "ai": [
+          "Service calls answered while your techs work",
+          "Appointments booked and confirmed by text",
+          "Customers reminded when their next service is due"
+        ]
+      },
+      {
+        "name": "Real estate",
+        "say": "I saw one of your listings. Is it still available?",
+        "ai": [
+          "Listing inquiries answered in seconds, day or night",
+          "Showings booked straight into your calendar",
+          "Every lead followed up until they're ready to move"
+        ]
+      },
+      {
+        "name": "Restaurants & food",
+        "say": "Can I book a table for six on Saturday at seven?",
+        "ai": [
+          "Calls answered during the rush",
+          "Order and reservation links texted to callers",
+          "Catering and big-group requests sent straight to you"
+        ]
+      },
+      {
+        "name": "Something else",
+        "say": "I run a small business. What could AI do for me?",
+        "ai": [
+          "Find where AI saves you the most time and money",
+          "Automate the busywork your team hates",
+          "Connect your tools into one system that runs itself"
+        ]
+      }
+    ]
+  },
+  "chapters": {
+    "items": [
+      {
+        "key": "receptionist",
+        "name": "AI Receptionist",
+        "title": "Every call answered. Every caller booked.",
+        "icon": "tabler:phone-call",
+        "text": "Donna answers every call day and night, texts back anyone who hangs up and books the appointment straight into your calendar.",
+        "points": [
+          "Answers in seconds, 24/7, in a warm, natural voice",
+          "Missed callers texted back automatically",
+          "Appointments booked straight into your calendar"
+        ],
+        "act": "Plug the leaks",
+        "act_text": "Stop the revenue you've already earned from walking out the door."
+      },
+      {
+        "key": "leads",
+        "name": "Lead capture & follow-up",
+        "title": "Every lead followed up until they book.",
+        "icon": "tabler:user-check",
+        "text": "Calls, website forms, ads and messages land in one place, and every lead gets a fast reply and a follow-up you approve.",
+        "points": [
+          "Instant replies to website and ad leads",
+          "Follow-ups that stop the moment they answer",
+          "One simple pipeline, so no lead gets lost"
+        ],
+        "act": "Plug the leaks",
+        "act_text": "Stop the revenue you've already earned from walking out the door."
+      },
+      {
+        "name": "Quotes & no-shows",
+        "title": "Every quote chased. Every slot filled.",
+        "icon": "tabler:calendar-check",
+        "text": "Quotes get followed up until they're won or lost, every appointment gets a reminder, and cancelled slots get offered to the next customer.",
+        "points": [
+          "Quote follow-ups that send themselves",
+          "A reminder before every appointment",
+          "Cancelled slots offered to the next customer"
+        ],
+        "key": "quotes",
+        "act": "Plug the leaks",
+        "act_text": "Stop the revenue you've already earned from walking out the door."
+      },
+      {
+        "key": "automation",
+        "name": "Workflow automation",
+        "title": "The busywork runs itself.",
+        "icon": "tabler:settings-automation",
+        "text": "Quotes, invoices, reminders, review requests and reports run on their own, so your team spends its time on the work that pays.",
+        "points": [
+          "Quotes and invoices that send themselves",
+          "Reminders and review requests on autopilot",
+          "Weekly reports that land in your inbox"
+        ],
+        "act": "Plug the leaks",
+        "act_text": "Stop the revenue you've already earned from walking out the door."
+      },
+      {
+        "name": "Win-back & reviews",
+        "title": "Your old customer list is money sitting still.",
+        "icon": "tabler:star",
+        "text": "We bring past customers back with messages you approve, ask happy customers for reviews and make referrals easy.",
+        "points": [
+          "Win-back messages you approve",
+          "Review requests after every job",
+          "Referral asks at the right moment"
+        ],
+        "key": "winback",
+        "act": "Grow revenue",
+        "act_text": "Then turn what you have into more: past customers, reviews, AI agents and systems built around you."
+      },
+      {
+        "key": "agents",
+        "name": "AI agents",
+        "title": "AI agents that know your business.",
+        "icon": "tabler:robot",
+        "text": "Custom AI agents trained on your services, prices and policies, for intake, scheduling, support and your team's everyday questions.",
+        "points": [
+          "Trained on how your business actually works",
+          "You approve every word before a customer sees it",
+          "Hands off to a person whenever it matters"
+        ],
+        "act": "Grow revenue",
+        "act_text": "Then turn what you have into more: past customers, reviews, AI agents and systems built around you."
+      },
+      {
+        "key": "software",
+        "name": "Custom software & integrations",
+        "title": "One system instead of ten apps.",
+        "icon": "tabler:plug-connected",
+        "text": "We connect your phone, calendar, CRM, email, accounting and website, and build custom software where off-the-shelf tools fall short.",
+        "points": [
+          "Your existing tools connected, nothing ripped out",
+          "Custom dashboards and internal tools",
+          "Built, documented and run for you"
+        ],
+        "act": "Grow revenue",
+        "act_text": "Then turn what you have into more: past customers, reviews, AI agents and systems built around you."
+      },
+      {
+        "key": "websites",
+        "name": "Websites",
+        "title": "A website that books, not just looks good.",
+        "icon": "tabler:world",
+        "text": "A fast website with your AI front desk built in, so every visitor can talk to Donna, book or leave a request. An optional add-on.",
+        "points": [
+          "Designed to turn visitors into bookings",
+          "Donna and booking built right in",
+          "One-time price, no monthly fees"
+        ],
+        "act": "Grow revenue",
+        "act_text": "Then turn what you have into more: past customers, reviews, AI agents and systems built around you."
+      }
+    ]
+  },
+  "leaks": {
+    "tagline": "Your leak check",
+    "title": "How much is your business leaking?",
+    "subtitle": "Move the sliders to match your business. Every number below comes from yours; your free audit replaces these estimates with real ones.",
+    "value_label": "Average value of a new customer or job",
+    "value_default": 250,
+    "close_label": "Share of lost opportunities that would have bought",
+    "close_default": 30,
+    "hourly_label": "What an hour of your team's time costs",
+    "hourly_default": 30,
+    "result_label": "Revenue at risk",
+    "cta": "Get your free Revenue Leak Audit",
+    "note": "An estimate from your own numbers, not a promise. Missed calls, leads and quotes use your close rate; no-shows use the full value; busywork uses your hourly cost.",
+    "rows": [
+      {
+        "key": "calls",
+        "label": "Calls you miss in a week",
+        "short": "Missed calls",
+        "unit": "/wk",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "value": 5,
+        "kind": "weekly_close",
+        "href": "#services"
+      },
+      {
+        "key": "leads",
+        "label": "Leads a month that never get a reply",
+        "short": "Unanswered leads",
+        "unit": "/mo",
+        "min": 0,
+        "max": 60,
+        "step": 1,
+        "value": 4,
+        "kind": "monthly_close",
+        "href": "#solution-leads"
+      },
+      {
+        "key": "quotes",
+        "label": "Quotes a month nobody follows up",
+        "short": "Forgotten quotes",
+        "unit": "/mo",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "value": 3,
+        "kind": "monthly_close",
+        "href": "#solution-quotes"
+      },
+      {
+        "key": "noshows",
+        "label": "No-shows or late cancellations a month",
+        "short": "No-shows",
+        "unit": "/mo",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "value": 2,
+        "kind": "monthly_value",
+        "href": "#solution-quotes"
+      },
+      {
+        "key": "admin",
+        "label": "Hours a week spent on busywork",
+        "short": "Busywork",
+        "unit": "h/wk",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "value": 6,
+        "kind": "weekly_hours",
+        "href": "#solution-automation"
+      }
+    ]
+  }
+}

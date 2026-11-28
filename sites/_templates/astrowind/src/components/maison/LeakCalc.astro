@@ -1,0 +1,112 @@
+---
+// "How much is your business leaking?": visitors set their own numbers and see revenue at risk per month and per year,
+// leak by leak, each linked to the chapter that fixes it. No invented statistics: every figure comes from their inputs,
+// and the one assumption (how many lost opportunities would have bought) is on screen and adjustable.
+// The total rides along into the contact form (hidden field leak_estimate) when they ask for the audit.
+// Config: site.json "leaks" { tagline, title, subtitle, cta, note, rows: [{ key, label, unit, min, max, step, value, kind, href }] }.
+// kind: "weekly_close" (per week x 4.33 x close rate x value), "monthly_close", "monthly_value" (x value), "weekly_hours" (x 4.33 x hourly).
+import { SITE_DATA as S } from '~/data/site';
+import Split from './Split.astro';
+
+const L = (S as any).leaks;
+const rows = (L?.rows || []) as any[];
+const { idx = '' } = Astro.props;
+---
+
+{rows.length > 0 && (
+  <section class="m-sec m-leak" id="leaks" aria-labelledby="leak-title" data-scene="call">
+    <div class="m-wrap">
+      <header class="m-sec-head m-sec-head-split">
+        <div>
+          <p class="m-eyebrow" data-reveal><span class="m-idx">{idx}</span>{L.tagline}</p>
+          <Split as="h2" id="leak-title" class="m-h2" text={L.title} />
+        </div>
+        {L.subtitle && <p class="m-body m-sec-sub" data-reveal>{L.subtitle}</p>}
+      </header>
+      <div class="m-leak-grid" data-leak data-reveal>
+        <div class="m-card m-leak-inputs">
+          <div class="m-leak-shared">
+            <label class="m-leak-row">
+              <span class="m-leak-label">{L.value_label}</span>
+              <span class="m-leak-ctrl"><span class="m-leak-cur">$</span><input type="number" inputmode="numeric" min="0" step="10" value={L.value_default} data-shared="value" aria-label={L.value_label} /></span>
+            </label>
+            <label class="m-leak-row">
+              <span class="m-leak-label">{L.close_label}</span>
+              <span class="m-leak-ctrl"><input type="range" min="5" max="80" step="5" value={L.close_default} data-shared="close" aria-label={L.close_label} /><output data-out="close">{L.close_default}%</output></span>
+            </label>
+          </div>
+          {rows.map((r) => (
+            <label class="m-leak-row">
+              <span class="m-leak-label">{r.label}</span>
+              <span class="m-leak-ctrl">
+                <input type="range" min={r.min} max={r.max} step={r.step} value={r.value} data-row={r.key} data-kind={r.kind} aria-label={r.label} />
+                <output data-out={r.key}>{r.value}</output><span class="m-leak-unit">{r.unit}</span>
+              </span>
+            </label>
+          ))}
+          {L.hourly_label && (
+            <label class="m-leak-row">
+              <span class="m-leak-label">{L.hourly_label}</span>
+              <span class="m-leak-ctrl"><span class="m-leak-cur">$</span><input type="number" inputmode="numeric" min="0" step="5" value={L.hourly_default} data-shared="hourly" aria-label={L.hourly_label} /></span>
+            </label>
+          )}
+        </div>
+        <div class="m-card m-leak-result" data-spot>
+          <p class="m-try-k">{L.result_label}</p>
+          <p class="m-leak-total"><span data-total-month>$0</span><small> / month</small></p>
+          <p class="m-leak-year"><span data-total-year>$0</span> a year</p>
+          <ul class="m-leak-list">
+            {rows.map((r) => (
+              <li><a href={r.href}>{r.short}</a><span data-line={r.key}>$0</span></li>
+            ))}
+          </ul>
+          <a href="#contact" class="m-btn m-btn-metal m-btn-block" data-leak-cta data-magnetic><span>{L.cta}</span></a>
+          {L.note && <p class="m-leak-note">{L.note}</p>}
+        </div>
+      </div>
+    </div>
+  </section>
+)}
+
+<script>
+  const box = document.querySelector<HTMLElement>('[data-leak]');
+  if (box) {
+    const money = (n: number) => '$' + Math.round(n).toLocaleString('en-CA');
+    const num = (sel: string, d = 0) => { const v = parseFloat((box.querySelector(sel) as HTMLInputElement | null)?.value || ''); return Number.isFinite(v) && v >= 0 ? v : d; };
+    let lastText = '';
+    const calc = () => {
+      const value = num('[data-shared="value"]');
+      const close = num('[data-shared="close"]') / 100;
+      const hourly = num('[data-shared="hourly"]');
+      const out = box.querySelector('[data-out="close"]'); if (out) out.textContent = Math.round(close * 100) + '%';
+      let total = 0; const parts: string[] = [];
+      box.querySelectorAll<HTMLInputElement>('[data-row]').forEach((el) => {
+        const n = parseFloat(el.value) || 0, key = el.dataset.row || '';
+        const o = box.querySelector(`[data-out="${key}"]`); if (o) o.textContent = String(n);
+        let m = 0;
+        switch (el.dataset.kind) {
+          case 'weekly_close': m = n * 4.33 * close * value; break;
+          case 'monthly_close': m = n * close * value; break;
+          case 'monthly_value': m = n * value; break;
+          case 'weekly_hours': m = n * 4.33 * hourly; break;
+        }
+        total += m;
+        const line = box.querySelector(`[data-line="${key}"]`); if (line) line.textContent = money(m);
+        parts.push(`${key}: ${money(m)}/mo (${n})`);
+      });
+      const tm = box.querySelector('[data-total-month]'), ty = box.querySelector('[data-total-year]');
+      if (tm) tm.textContent = money(total);
+      if (ty) ty.textContent = money(total * 12);
+      lastText = `Leak estimate ${money(total)}/month, ${money(total * 12)}/year. Avg value ${money(value)}, close rate ${Math.round(close * 100)}%. ${parts.join('; ')}`;
+    };
+    box.addEventListener('input', calc);
+    calc();
+    box.querySelector('[data-leak-cta]')?.addEventListener('click', () => {
+      const f = document.querySelector<HTMLFormElement>('#contact form');
+      if (!f) return;
+      const h = f.querySelector<HTMLInputElement>('input[name="leak_estimate"]'); if (h) h.value = lastText.slice(0, 900);
+      const msg = f.querySelector<HTMLTextAreaElement>('textarea[name="message"]');
+      if (msg && !msg.value) msg.value = 'I used the leak calculator: ' + (box.querySelector('[data-total-month]')?.textContent || '') + ' a month. I want my free Revenue Leak Audit.';
+    });
+  }
+</script>

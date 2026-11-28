@@ -1,0 +1,124 @@
+---
+// Maison call demo: a phone that plays the illustrative call from site.json, clearly labelled as an illustration. Every line is in the HTML
+// (readable without JS, by screen readers and under prefers-reduced-motion). With motion allowed it plays like a live call while the phone is
+// on screen: the caller's words are transcribed word by word, Donna's replies type out letter by letter after a thinking indicator, and the
+// waveform follows whoever is speaking; it then loops. The 3D scene hears it too (m:voice makes the gold heart pulse).
+import { SITE_DATA as S } from '~/data/site';
+const demo = S.demo;
+const bars = Array.from({ length: 28 }, (_, i) => 0.25 + 0.75 * Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.6)));
+---
+
+{
+  demo && (
+    <figure class="m-phone-wrap">
+      <div class="m-phone" data-m-phone>
+        <div class="m-phone-screen">
+          <div class="m-island" aria-hidden="true" />
+          <div class="m-call-head" aria-hidden="true">
+            <span class="m-call-avatar" />
+            <span class="m-call-name">{S.brand.name}</span>
+            <span class="m-call-status"><span class="m-rec" /> On a call · <span data-m-timer>00:00</span></span>
+          </div>
+          <div class="m-wave" aria-hidden="true">
+            {bars.map((b, i) => <span style={`--h:${b.toFixed(2)};--i:${i}`} />)}
+          </div>
+          <ol class="m-transcript" data-m-transcript>
+            {demo.lines.map((l) => (
+              <li class:list={['m-say', l.who === 'caller' ? 'm-say-caller' : 'm-say-agent']}>
+                <span class="m-say-who">{l.who === 'caller' ? 'Caller' : S.brand.name}</span>
+                <span class="m-say-text">{l.text}</span>
+              </li>
+            ))}
+            <li class="m-typing" aria-hidden="true"><span /><span /><span /></li>
+          </ol>
+          <div class="m-call-actions" aria-hidden="true">
+            <span /><span /><span class="m-end" />
+          </div>
+        </div>
+      </div>
+      <figcaption class="m-phone-label">{demo.label}</figcaption>
+    </figure>
+  )
+}
+
+<script>
+  const phone = document.querySelector<HTMLElement>('[data-m-phone]');
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (phone && !reduce) {
+    const list = phone.querySelector<HTMLElement>('[data-m-transcript]')!;
+    const lines = Array.from(list.querySelectorAll<HTMLElement>('.m-say'));
+    const texts = lines.map((l) => l.querySelector<HTMLElement>('.m-say-text')!);
+    const full = texts.map((t) => t.textContent || '');
+    const typing = list.querySelector<HTMLElement>('.m-typing')!;
+    const timer = phone.querySelector<HTMLElement>('[data-m-timer]');
+    const bars = Array.from(phone.querySelectorAll<HTMLElement>('.m-wave span'));
+    const voice = (v: number) => { level = v; window.dispatchEvent(new CustomEvent('m:voice', { detail: v })); };
+    let running = false, visible = false, sec = 0, level = 0, gen = 0, waveId = 0;
+    const later = (fn: () => void, ms: number) => { const g = gen; window.setTimeout(() => { if (g === gen) fn(); }, ms); };
+    const fit = () => {
+      let h = 0;
+      lines.forEach((l) => { if (l.classList.contains('is-in')) h += l.offsetHeight + 10; });
+      if (typing.classList.contains('is-in')) h += typing.offsetHeight + 10;
+      list.style.setProperty('--shift', `${Math.min(0, list.clientHeight - h - 6)}px`);
+    };
+    // waveform: every bar follows the speaking level with its own flutter
+    let amp = 0;
+    const wave = (now: number) => {
+      amp += (level - amp) * 0.18;
+      const t = now / 1000;
+      bars.forEach((b, i) => {
+        const base = Number(b.style.getPropertyValue('--h')) || 0.5;
+        const f = 0.5 + 0.5 * Math.sin(t * (9 + (i % 5)) + i * 1.7) * Math.sin(t * 3.3 + i * 0.6);
+        b.style.transform = `scaleY(${(0.12 + amp * base * (0.35 + 0.65 * f)).toFixed(3)})`;
+      });
+      waveId = visible ? requestAnimationFrame(wave) : 0;
+    };
+    const say = (i: number, at: number) => {
+      const agent = lines[i].classList.contains('m-say-agent');
+      const words = full[i].split(' ');
+      const caret = document.createElement('i');
+      caret.className = 'm-caret';
+      later(() => {
+        typing.classList.remove('is-in');
+        texts[i].textContent = '';
+        if (agent) texts[i].appendChild(caret);
+        lines[i].classList.add('is-in');
+        fit();
+        voice(agent ? 1 : 0.45);
+      }, at);
+      if (agent) {
+        const chars = full[i].length;
+        for (let c = 1; c <= chars; c++) later(() => { texts[i].textContent = full[i].slice(0, c); texts[i].appendChild(caret); if (c % 12 === 0) fit(); }, at + 60 + c * 26);
+        later(() => { caret.remove(); fit(); voice(0); }, at + 120 + chars * 26);
+        return at + 120 + chars * 26;
+      }
+      words.forEach((_, w) => later(() => { texts[i].textContent = words.slice(0, w + 1).join(' '); if (w % 4 === 0) fit(); }, at + 80 + w * 170));
+      later(() => { texts[i].textContent = full[i]; fit(); voice(0); }, at + 120 + words.length * 170);
+      return at + 120 + words.length * 170;
+    };
+    const play = () => {
+      gen++;
+      running = true;
+      sec = 0;
+      lines.forEach((l, i) => { l.classList.remove('is-in'); texts[i].textContent = full[i]; });
+      fit();
+      let at = 700;
+      lines.forEach((l, i) => {
+        if (l.classList.contains('m-say-agent')) { later(() => { typing.classList.add('is-in'); fit(); }, at); at += 1100; }
+        at = say(i, at) + 650;
+      });
+      later(() => { running = false; if (visible) play(); }, at + 4200);
+    };
+    window.setInterval(() => {
+      if (!running || !visible) return;
+      sec += 1;
+      if (timer) timer.textContent = `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+    }, 1000);
+    phone.classList.add('is-js');
+    new IntersectionObserver(([e]) => {
+      visible = e.isIntersecting;
+      if (visible && !waveId) waveId = requestAnimationFrame(wave);
+      if (visible && !running) play();
+    }, { threshold: 0.3 }).observe(phone);
+  }
+</script>

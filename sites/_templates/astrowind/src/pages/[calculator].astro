@@ -1,0 +1,19 @@
+---
+// Optional lead-magnet page: the Missed-Call Cost Calculator. It exists only when site.json has a "calculator" block (path defaults to
+// /calculator); sites without one build no page. Copy, defaults and sources come from site.json; the math runs in the browser.
+import Layout from '~/layouts/PageLayout.astro';
+import Calculator from '~/components/maison/Calculator.astro';
+import { SITE_DATA as S } from '~/data/site';
+
+export function getStaticPaths() {
+  const c = S.calculator;
+  return c ? [{ params: { calculator: String(c.path || 'calculator') } }] : [];
+}
+
+const c = S.calculator;
+const metadata = { title: c.meta_title || `${c.tagline} | ${S.brand.name}`, description: c.meta_description || c.subtitle, ignoreTitleTemplate: true };
+---
+
+<Layout metadata={metadata}>
+  <Calculator />
+</Layout>

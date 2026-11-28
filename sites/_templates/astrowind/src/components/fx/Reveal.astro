@@ -1,0 +1,10 @@
+<script>
+  // Scroll reveals: sections fade up once. Content is visible without JS and under prefers-reduced-motion.
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches && 'IntersectionObserver' in window) {
+    const els = document.querySelectorAll<HTMLElement>('main section');
+    const io = new IntersectionObserver((entries) => entries.forEach((e) => {
+      if (e.isIntersecting) { e.target.classList.add('fx-in'); io.unobserve(e.target); }
+    }), { threshold: 0.12 });
+    els.forEach((el) => { el.classList.add('fx-reveal'); io.observe(el); });
+  }
+</script>

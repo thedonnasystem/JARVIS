@@ -186,12 +186,12 @@ class DonnaV1(unittest.TestCase):
         for seg in ("home-services trades", "roofing and renovation", "law firms, intake only", "missed-call audits", "pricing checks", "the owner commits the niche"):
             self.assertIn(seg, ms[0]["objective"])
         for m in ms[:2]:
-            self.assertIn("$497 for the first month with the setup fee waived", m["objective"])
+            self.assertIn("Founding offer: every package at its founding price", m["objective"])
             self.assertIn("Guarantee terms TBD by owner", m["objective"])
         blob = json.dumps(ms) + json.dumps(O.office_config("donna"))
         self.assertNotIn("PENDING", blob)
         self.assertNotRegex(blob.replace("Guarantee terms TBD by owner", "").replace("no guarantee or refund promise", "").replace("never promise a guarantee or a refund", "").replace("never offer a guarantee or a refund", "").lower(), r"guarantee|refund")
-        self.assertIn("$1,297/mo + $1,497 setup", ms[1]["objective"])
+        self.assertIn("Command $1,297/mo founding ($1,797/mo standard)", ms[1]["objective"])
         self.assertIn("funding request approval", ms[2]["checkpoint"]["needs_owner"])
         self.assertEqual(O.missions("monopoly"), [])
 

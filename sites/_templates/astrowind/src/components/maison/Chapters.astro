@@ -1,0 +1,41 @@
+---
+// Solutions as scroll chapters: one full-screen chapter per offer (site.json "chapters"), text alternating sides while the
+// 3D instrument moves to the other side (scene states ch1..ch6 in scene/donna-scene.ts). "Pick your business" sits after chapter 1.
+import { SITE_DATA as S, BOOKING, BOOK_LABEL } from '~/data/site';
+import { Icon } from 'astro-icon/components';
+import Split from './Split.astro';
+import TryDonna from './TryDonna.astro';
+
+type Ch = { key: string; act?: string; act_text?: string; name: string; title: string; text: string; points: string[]; icon?: string; cta?: string; href?: string };
+const C = (S as any).chapters as { tagline?: string; items: Ch[] };
+const items = C?.items || [];
+const two = (n: number) => String(n).padStart(2, '0');
+---
+
+{items.map((c, i) => (
+  <>
+    {c.act && c.act !== items[i - 1]?.act && (
+      <div class="m-act m-wrap" data-reveal>
+        <p class="m-act-k">{c.act}</p>
+        {c.act_text && <p class="m-act-t">{c.act_text}</p>}
+      </div>
+    )}
+    <section class:list={['m-sec', 'm-chap', i % 2 === 1 && 'is-right']} id={i === 0 ? 'services' : `solution-${c.key}`} aria-labelledby={`chap-${c.key}`} data-scene={`ch${(i % 6) + 1}`}>
+      <div class="m-wrap m-chap-grid">
+        <div class="m-chap-copy">
+          <p class="m-eyebrow" data-reveal><span class="m-idx">{two(i + 1)} / {two(items.length)}</span>{c.name}</p>
+          <Split as="h2" id={`chap-${c.key}`} class="m-h2" text={c.title} />
+          <p class="m-body m-chap-text" data-reveal>{c.text}</p>
+          <ul class="m-chap-points" data-reveal>
+            {c.points.map((p) => <li><Icon name={c.icon || 'tabler:point'} />{p}</li>)}
+          </ul>
+          <div class="m-chap-cta" data-reveal>
+            <a href={c.href || BOOKING} class="m-btn m-btn-metal" data-magnetic><span>{c.cta || BOOK_LABEL}</span></a>
+            {i === 0 && <a href="#try" class="m-btn m-btn-ghost" data-magnetic><span>Test Donna on your business</span></a>}
+          </div>
+        </div>
+      </div>
+    </section>
+    {i === 0 && <TryDonna idx="↳" />}
+  </>
+))}

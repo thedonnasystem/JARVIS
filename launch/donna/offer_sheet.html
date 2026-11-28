@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en-CA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Donna.AI Offer Sheet</title>
+<meta name="description" content="Donna.AI one-page offer: packages from $197 a month, free setup until December 31, free 20-minute Revenue Leak Audit and demo line.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* One US Letter page. Colours match the site's maison theme: black, wine (brand.primary #7a1428), metallic gold (brand.accent #c9a24a). */
+  :root {
+    --ink: #0b0a09; --panel: #15110f; --line: #3a2a22; --wine: #7a1428; --wine-deep: #4a0c18;
+    --gold: #c9a24a; --gold-hi: #ecd593; --text: #efe8dc; --muted: #b9ad9b;
+  }
+  @page { size: letter; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #2a2522; }
+  body { font: 400 10.5pt/1.42 Inter, "Helvetica Neue", Arial, sans-serif; color: var(--text); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page {
+    width: 8.5in; height: 11in; margin: 0.25in auto; padding: 0.42in 0.5in 0.36in; position: relative; overflow: hidden;
+    background: radial-gradient(120% 60% at 85% -10%, rgba(122,20,40,.55), transparent 60%), radial-gradient(80% 40% at -10% 105%, rgba(122,20,40,.35), transparent 60%), var(--ink);
+    display: flex; flex-direction: column;
+  }
+  .page::before { content: ""; position: absolute; inset: 0.22in; border: 1px solid rgba(201,162,74,.35); pointer-events: none; }
+  .serif { font-family: "Cormorant Garamond", Georgia, "Times New Roman", serif; }
+  .gold { background: linear-gradient(100deg, var(--gold) 0%, var(--gold-hi) 45%, var(--gold) 70%, #9c7a2c 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header { display: flex; justify-content: space-between; align-items: baseline; }
+  .brand { font-size: 22pt; letter-spacing: .02em; }
+  .tag { font-size: 8pt; letter-spacing: .22em; text-transform: uppercase; color: var(--gold); }
+  h1 { font-family: "Cormorant Garamond", Georgia, serif; font-weight: 400; font-size: 26pt; line-height: 1.04; margin: .16in 0 .07in; }
+  h1 em { font-style: italic; }
+  .lede { color: var(--muted); font-size: 9.8pt; max-width: 6.4in; margin: 0; }
+  .demo {
+    margin: .13in 0 .17in; display: flex; align-items: center; gap: .2in; padding: .09in .18in;
+    border: 1px solid rgba(201,162,74,.55); border-radius: 10px; background: linear-gradient(90deg, rgba(122,20,40,.55), rgba(74,12,24,.25));
+  }
+  .demo .num { font-family: "Cormorant Garamond", Georgia, serif; font-size: 22pt; white-space: nowrap; }
+  .demo p { margin: 0; font-size: 8.8pt; color: var(--text); }
+  .demo b { color: var(--gold-hi); font-weight: 600; }
+  .grid { display: grid; grid-template-columns: 1.06fr 1fr 1fr 1fr; gap: .11in; align-items: stretch; }
+  .pkg { border: 1px solid var(--line); border-radius: 10px; padding: .13in .14in .11in; background: rgba(21,17,15,.92); display: flex; flex-direction: column; position: relative; }
+  .pkg.rec { border-color: var(--gold); background: linear-gradient(180deg, rgba(122,20,40,.6), rgba(21,17,15,.95) 55%); box-shadow: 0 0 0 1px rgba(201,162,74,.25) inset; }
+  .badge { position: absolute; top: -.1in; left: 50%; transform: translateX(-50%); background: var(--gold); color: var(--ink); font-size: 7pt; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; padding: 2px 10px; border-radius: 99px; white-space: nowrap; }
+  .pkg h2 { font-family: "Cormorant Garamond", Georgia, serif; font-weight: 500; font-size: 17pt; margin: 0; }
+  .pkg .sub { color: var(--muted); font-size: 8.5pt; margin: 0 0 .04in; min-height: 2.4em; line-height: 1.2; }
+  .price { display: flex; align-items: baseline; gap: 4px; }
+  .price .amt { font-family: "Cormorant Garamond", Georgia, serif; font-size: 26pt; line-height: 1; }
+  .price .per { color: var(--muted); font-size: 8.5pt; }
+  .fp { font-size: 6.6pt; letter-spacing: .1em; text-transform: uppercase; color: var(--gold); margin-top: .04in; }
+  .std { font-size: 7.6pt; line-height: 1.3; color: var(--muted); margin: .04in 0 .06in; padding-bottom: .06in; border-bottom: 1px solid var(--line); }
+  .std b { color: var(--text); font-weight: 600; }
+  ul { list-style: none; margin: 0; padding: 0; font-size: 8pt; line-height: 1.32; }
+  li { padding-left: 12px; position: relative; margin: 0 0 2px; }
+  li::before { content: ""; position: absolute; left: 0; top: .55em; width: 6px; height: 6px; border-radius: 50%; background: var(--gold); }
+  .terms { margin: .13in 0 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: .1in; }
+  .terms div { border-top: 1px solid var(--gold); padding-top: .05in; font-size: 7.8pt; line-height: 1.3; color: var(--muted); }
+  .terms b { display: block; color: var(--text); font-weight: 600; font-size: 8.6pt; }
+  .example { margin: .12in 0 0; font-size: 8.6pt; color: var(--muted); border-left: 2px solid var(--gold); padding-left: .1in; }
+  .example b { color: var(--gold-hi); font-weight: 600; }
+  .lower { margin-top: .12in; display: grid; grid-template-columns: 1.25fr 1fr; gap: .2in; }
+  .steps h3, .audit h3 { font-family: "Cormorant Garamond", Georgia, serif; font-weight: 500; font-size: 13pt; margin: 0 0 .04in; }
+  .steps ol { margin: 0; padding-left: 16px; font-size: 8pt; line-height: 1.32; color: var(--muted); }
+  .steps li::before { display: none; }
+  .steps ol li { padding-left: 2px; margin-bottom: 2px; }
+  .steps ol li b { color: var(--text); font-weight: 600; }
+  .audit { border: 1px dashed rgba(201,162,74,.6); border-radius: 10px; padding: .09in .14in; }
+  .audit p { margin: 0 0 .02in; font-size: 8pt; color: var(--muted); }
+  .audit .line { border-bottom: 1px solid rgba(239,232,220,.35); height: .22in; margin-bottom: 0; font-size: 8pt; color: var(--muted); display: flex; align-items: flex-end; }
+  footer { margin-top: auto; padding-bottom: .02in; display: flex; justify-content: space-between; align-items: flex-end; gap: .2in; font-size: 7.2pt; line-height: 1.35; color: var(--muted); padding-top: .08in; border-top: 1px solid var(--line); }
+  footer .contact { color: var(--text); font-size: 9pt; text-align: right; flex: 0 0 auto; white-space: nowrap; }
+  @media print { html, body { background: none; } .page { margin: 0; } }
+  @media screen and (max-width: 840px) { .page { zoom: .7; margin: 8px auto; } }
+  @media screen and (max-width: 600px) { .page { zoom: .45; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <div class="brand serif gold">Donna.AI</div>
+    <div class="tag">Revenue growth &amp; loss-prevention infrastructure</div>
+  </header>
+
+  <h1>We turn your missed calls and missed leads <em class="gold">into booked appointments.</em></h1>
+  <p class="lede">Then we plug every other leak, from forgotten quotes to no-shows to busywork. Not every business needs an AI receptionist: start with the leak that costs you most, or combine them. Done for you, tested by you before any customer hears it, month-to-month.</p>
+
+  <section class="demo">
+    <div class="num gold">+1 (825) 462-1250</div>
+    <p><b>Hear it yourself, right now.</b> Call from your own phone, tell Donna what kind of business you run, and she'll answer as a receptionist in your industry while you play the customer. Donna is an AI and says so; the demo companies are made up.</p>
+  </section>
+
+  <section class="grid" aria-label="Packages">
+    <article class="pkg rec">
+      <span class="badge">Start here</span>
+      <h2>Essential</h2>
+      <p class="sub">Plug your biggest leak</p>
+      <div class="price"><span class="amt gold">$197</span><span class="per">/ month and up</span></div>
+      <p class="std">Setup <b>free until Dec 31</b>.</p>
+      <ul>
+        <li>Pick one: AI receptionist, lead follow-up, quote and no-show follow-ups, or one busywork automation</li>
+        <li>Built into the tools you already use</li>
+        <li>Monitoring, fixes and tuning included</li>
+      </ul>
+    </article>
+    <article class="pkg">
+      <h2>Front Desk</h2>
+      <p class="sub">Every call and lead answered</p>
+      <div class="price"><span class="amt gold">Tailored</span></div>
+      <p class="std">Quoted from your <b>free audit</b>.</p>
+      <ul>
+        <li>AI receptionist answers every call, day and night</li>
+        <li>Missed-call text-back within minutes</li>
+        <li>Books appointments into your calendar</li>
+        <li>Urgent calls sent to you by text right away</li>
+        <li>Every lead saved to a simple CRM</li>
+      </ul>
+    </article>
+    <article class="pkg">
+      <h2>Growth</h2>
+      <p class="sub">Every lead chased, every slot filled</p>
+      <div class="price"><span class="amt gold">Tailored</span></div>
+      <p class="std">Quoted from your <b>free audit</b>.</p>
+      <ul>
+        <li>Instant replies to website and ad leads</li>
+        <li>Quote follow-ups until they're won or lost</li>
+        <li>Reminders that cut no-shows</li>
+        <li>Win-back and review requests, with messages you approve</li>
+        <li>A monthly report on what came back</li>
+      </ul>
+    </article>
+    <article class="pkg">
+      <h2>AI Systems</h2>
+      <p class="sub">Busywork gone, systems connected</p>
+      <div class="price"><span class="amt gold">Tailored</span></div>
+      <p class="std">Quoted from your <b>free audit</b>.</p>
+      <ul>
+        <li>Quotes, invoices and reports that run themselves</li>
+        <li>Custom AI agents trained on your business</li>
+        <li>Phone, booking, CRM, email and accounting connected</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="terms" aria-label="Terms">
+    <div><b>Free 20-min Revenue Leak Audit</b>Where revenue slips away today, and what it is worth, in your numbers.</div>
+    <div><b>Setup free until Dec 31</b>Book before December 31 and setup is on us.</div>
+    <div><b>Month-to-month</b>No contracts. Stay because it books you jobs.</div>
+    <div><b>Test line first</b>You test and approve your Donna before any customer hears it.</div>
+  </section>
+
+  <!-- Optional per-industry example line: replace the text below, or delete this <p> for the neutral sheet. Examples:
+       Home services: "A no-heat call at 9 p.m. gets answered, booked for 8 a.m. and confirmed by text."
+       Med spa / salon: "A Sunday-night booking request gets answered and booked into Tuesday's 2 p.m. opening."
+       Dental / clinic: "A new-patient call during lunch gets answered and booked for an exam, with no advice given."
+       Law firm: "A Saturday intake call gets the basics taken and a consultation booked for Monday."
+       Auto: "A 'my brakes are grinding' call at 7 p.m. gets answered and booked for drop-off at 8 a.m."
+       Real estate: "A buyer calling about your listing at 10 p.m. gets a showing booked before another agent calls back."
+       Cleaning / landscaping: "A quote request while your crew is on a job gets answered and a walkthrough booked." -->
+  <p class="example"><b>Example:</b> a call that comes in while you're with a customer, or after you've closed, gets answered, booked and confirmed by text instead of going to voicemail.</p>
+
+  <section class="lower">
+    <div class="steps">
+      <h3>How it works</h3>
+      <ol>
+        <li><b>Free 20-min Revenue Leak Audit.</b> Missed calls, slow follow-up, forgotten quotes, no-shows, busywork: we find the leaks and size them with your numbers.</li>
+        <li><b>We build your package.</b> Your hours, services, prices, questions and tools.</li>
+        <li><b>You test it first</b> on a private test line and approve every word.</li>
+        <li><b>It goes live</b> on your existing number: calls forward to Donna when you're busy or after hours.</li>
+      </ol>
+    </div>
+    <div class="audit">
+      <h3>Your missed-call audit</h3>
+      <p>We called your business line as a test:</p>
+      <div class="line">Day / time:</div>
+      <div class="line">What happened:</div>
+      <div class="line">After hours:</div>
+    </div>
+  </section>
+
+  <footer>
+    <div>Canadian dollars, plus applicable taxes. Package contents as listed; tailored packages are quoted after your free audit. We only switch on what is built and tested for you.<br>Callers are told they are speaking with an AI assistant.</div>
+    <div class="contact">[OWNER: your name · phone · email]<br>Book a demo: [OWNER: Cal.com link]</div>
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,27 @@
+---
+// Testimonials: only real client words the owner has permission to publish. site.json "testimonials": { title, items: [{ quote, name, business, approved: true }] }.
+// Items without approved: true never render, so a draft or placeholder can never reach the live page.
+import { SITE_DATA as S } from '~/data/site';
+import Split from './Split.astro';
+const T = (S as any).testimonials;
+const items = ((T?.items || []) as any[]).filter((x) => x && x.approved === true && x.quote && x.name);
+const { idx = '' } = Astro.props;
+---
+{items.length > 0 && (
+  <section class="m-sec" id="clients" aria-labelledby="clients-title" data-scene="results">
+    <div class="m-wrap">
+      <header class="m-sec-head">
+        <p class="m-eyebrow" data-reveal><span class="m-idx">{idx}</span>{T.tagline || 'Clients'}</p>
+        <Split as="h2" id="clients-title" class="m-h2" text={T.title || 'In their words.'} />
+      </header>
+      <div class="m-quotes">
+        {items.map((x) => (
+          <figure class="m-card m-quote" data-reveal>
+            <blockquote>“{x.quote}”</blockquote>
+            <figcaption><b>{x.name}</b>{x.business && <span> · {x.business}</span>}</figcaption>
+          </figure>
+        ))}
+      </div>
+    </div>
+  </section>
+)}
