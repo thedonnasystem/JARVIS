@@ -127,17 +127,25 @@ def draft_invoice(office: str, customer_id: str, cents: int, currency: str, desc
     return {"ok": True, "invoice": r.get("invoice"), "stripe_id": iid, "mode": m, "status": "draft"}
 
 
-def draft_payment_link(office: str, cents: int, currency: str, name: str, env=None, http=None, rpc=None) -> dict:
-    """A Stripe payment link, recorded against the office. The bot never sends it; the owner shares the URL himself."""
+def draft_payment_link(office: str, cents: int, currency: str, name: str, env=None, http=None, rpc=None, monthly: bool = False) -> dict:
+    """A Stripe payment link, recorded against the office. The bot never sends it; the owner shares the URL himself.
+    monthly=True: a month-to-month price, so the client's own checkout starts a Stripe subscription that bills itself each month (the client cancels any
+    time through Stripe; the owner cancels in Stripe). Still only a price + a link: no customer, subscription, refund or payout call is made here."""
     m = mode(env)
     slug = _office(office, rpc)
     c, cur = _amount(cents, currency)
     nm = re.sub(r"[\x00-\x1f]+", " ", str(name or ""))[:120].strip() or "Service"
-    price = _stripe("POST", "/v1/prices", {"currency": cur, "unit_amount": c, "product_data[name]": nm}, env, http)
+    if monthly and not nm.endswith("(monthly)"):
+        nm = (nm[:109] + " (monthly)")
+    form = {"currency": cur, "unit_amount": c, "product_data[name]": nm}
+    if monthly:
+        form["recurring[interval]"] = "month"
+    price = _stripe("POST", "/v1/prices", form, env, http)
     link = _stripe("POST", "/v1/payment_links", {"line_items[0][price]": str(price.get("id") or ""), "line_items[0][quantity]": 1}, env, http)
     lid = str(link.get("id") or "")
     r = _rpc("office_os_invoice_record", {"p_office": slug, "p_kind": "payment_link", "p_customer": None, "p_stripe_id": lid, "p_mode": m, "p_cents": c, "p_currency": cur, "p_description": nm}, rpc)
-    return {"ok": True, "invoice": r.get("invoice"), "stripe_id": lid, "url": link.get("url"), "mode": m, "note": "the owner shares this link; the bot never sends it"}
+    return {"ok": True, "invoice": r.get("invoice"), "stripe_id": lid, "url": link.get("url"), "mode": m, "monthly": bool(monthly),
+            "note": "the owner shares this link; the bot never sends it"}
 
 
 def request_send(invoice: str, env=None, rpc=None) -> dict:

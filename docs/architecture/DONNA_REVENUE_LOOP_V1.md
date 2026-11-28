@@ -96,10 +96,10 @@ What the end-to-end run found, fixed here:
 | `/donna brief <lead #>` | The audit brief |
 | `/donna proposal 12 growth 797 \| misses 6 calls a week; quotes never chased` | A proposal for approval |
 | `/donna onboard 12 front-desk` | After `/deal won`: the welcome email with the six setup questions (they map to the receptionist intake) |
-| `/donna won 12 front-desk 497 [received\|expected]` | Records the deal and the first month (owner deal path), drafts the welcome email; points to `/invoices link` when the month is expected |
+| `/donna won 12 front-desk 497 [received\|expected]` | Records the deal and the first month (owner deal path), drafts the welcome email; points to the monthly `/invoices link …/mo` when the month is expected |
 | `/donna intake 12 \| hours: mon-fri 9-5; services: ...; faq: q = a; urgent: ...` | The client's emailed answers become the onboarding intake (plain-code parser) |
 | `/donna stuck` | Deals waiting on the owner's next step, each with its command (also in the 6 pm digest) |
-| `/invoices link donna 497 Front Desk, Pine Plumbing` | A payment link the owner shares himself (never sent by Jarvis; needs FZ_STRIPE_INVOICING=1) |
+| `/invoices link donna 497/mo Front Desk, Pine Plumbing` | A payment link the owner shares himself (never sent by Jarvis; needs FZ_STRIPE_INVOICING=1). `/mo` makes it monthly: the client's checkout starts a Stripe subscription that bills itself each month until the client or the owner cancels in Stripe. Without `/mo`: one-time |
 
 ## Files
 

@@ -161,6 +161,18 @@ class Flow(unittest.TestCase):
         self.assertFalse(any("send" in p or "finalize" in p for _, p, _ in st.calls))
 
 
+    def test_monthly_link_is_a_recurring_price_and_nothing_more(self):
+        db, st = FakeDB(), FakeStripe()
+        r = I.draft_payment_link("donna", 19700, "cad", "Essential, Pine Plumbing", env=ENV, http=st, rpc=db, monthly=True)
+        self.assertTrue(r["monthly"])
+        price = [f for m, p, f in st.calls if p == "/v1/prices"][0]
+        self.assertEqual((price["recurring[interval]"], price["unit_amount"], price["product_data[name]"]), ("month", 19700, "Essential, Pine Plumbing (monthly)"))
+        self.assertEqual([p for _, p, _ in st.calls], ["/v1/prices", "/v1/payment_links"], "a price and a link only: no customer, subscription, refund or payout call")
+        one = FakeStripe()
+        I.draft_payment_link("donna", 19700, "cad", "Setup", env=ENV, http=one, rpc=FakeDB())
+        self.assertNotIn("recurring[interval]", [f for m, p, f in one.calls if p == "/v1/prices"][0], "one-time links stay one-time")
+
+
 class Plans(unittest.TestCase):
     def test_bill_only_approved_plans_exact_amount(self):
         db, st = FakeDB(), FakeStripe()

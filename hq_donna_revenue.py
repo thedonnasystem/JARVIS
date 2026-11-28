@@ -825,7 +825,8 @@ def won_cmd(text: str, rpc=None, runner=None, approve=post_for_approval, vo=None
     else:
         out.append(f"Welcome email not drafted yet: {r.get('refused') or res.get('refused') or res.get('not_staged') or 'Donna is dormant'}. Run /donna onboard {m.group(1)} {package} later.")
     if status == "expected":
-        out.append(f"To collect the first month: /invoices link donna {cents / 100:g} {rev()['packages'][package]['title']}, {lead.get('name')}  (you share the link).")
+        out.append(f"To start monthly billing: /invoices link donna {cents / 100:g}/mo {rev()['packages'][package]['title']}, {lead.get('name')}  "
+                   "(you share the link; it then bills them each month).")
     out.append(f"When they email the answers: /donna intake {m.group(1)} | hours: ...; services: ...; faq: q = a; urgent: ...  then /donna agent <client>.")
     return "\n".join(out)
 

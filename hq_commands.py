@@ -1109,7 +1109,7 @@ async def hq_account_cmd(update, context) -> None:
 
 
 async def hq_invoices_cmd(update, context) -> None:
-    """/invoices  owner only: list; request <id>; send <id>; link <office> <$> <for what> (a payment link the owner shares himself); plans; bill <office>; check <office> (payment failures); cancel <plan> (immediate, no refund); log."""
+    """/invoices  owner only: list; request <id>; send <id>; link <office> <$ or $/mo> <for what> (a payment link the owner shares himself; /mo bills monthly); plans; bill <office>; check <office> (payment failures); cancel <plan> (immediate, no refund); log."""
     if not _owner(update):
         return
     args = getattr(context, "args", None) or []
@@ -1121,15 +1121,16 @@ async def hq_invoices_cmd(update, context) -> None:
         elif len(args) == 2 and args[0] == "bill":
             r = hq_invoices.bill_plans(args[1])
             text = f"Billing plans: {len(r['sent'])} sent, {len(r['refused'])} refused." + "".join(f"\n- refused: {x['reason']}" for x in r["refused"])
-        elif len(args) >= 4 and args[0] == "link":                                   # /invoices link donna 497 Front Desk, Pine Plumbing
-            m = re.fullmatch(r"\$?([\d,]{1,9}(?:\.\d{1,2})?)", args[2])
+        elif len(args) >= 4 and args[0] == "link":                 # /invoices link donna 497/mo Front Desk, Pine Plumbing   (no /mo: a one-time link)
+            m = re.fullmatch(r"\$?([\d,]{1,9}(?:\.\d{1,2})?)(/mo(?:nth)?)?", args[2], re.I)
             if not m:
-                raise ValueError("Use: /invoices link <office> <$ amount> <what it is for>")
-            cents = int(round(float(m.group(1).replace(",", "")) * 100))
+                raise ValueError("Use: /invoices link <office> <$ amount, or $/mo for monthly> <what it is for>")
+            cents, monthly = int(round(float(m.group(1).replace(",", "")) * 100)), bool(m.group(2))
             raw = (getattr(update.message, "text", "") or "").split(None, 4)
-            r = await asyncio.to_thread(hq_invoices.draft_payment_link, args[1], cents, "cad", raw[4] if len(raw) > 4 else "Service")
-            text = (f"Payment link ({r.get('mode')} mode), ${cents / 100:,.2f} CAD: {r.get('url')}\n"
-                    "Share it with the client yourself; Jarvis never sends it. Paid links show in /invoices.")
+            r = await asyncio.to_thread(hq_invoices.draft_payment_link, args[1], cents, "cad", raw[4] if len(raw) > 4 else "Service", monthly=monthly)
+            text = (f"{'Monthly payment' if monthly else 'Payment'} link ({r.get('mode')} mode), ${cents / 100:,.2f} CAD{' a month' if monthly else ''}: {r.get('url')}\n"
+                    + ("When the client pays, Stripe bills them every month until they or you cancel in Stripe.\n" if monthly else "")
+                    + "Share it with the client yourself; Jarvis never sends it. Paid links show in /invoices.")
         elif args == ["plans"]:
             text = hq_invoices.plans_text()
         elif args == ["log"]:

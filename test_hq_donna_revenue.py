@@ -485,7 +485,7 @@ class Won(unittest.TestCase):
         self.assertIn("Use:", R.won_cmd("12 gold 497", vo=VO))
         self.assertIn("starts at $197", R.won_cmd("12 essential 99", vo=VO))
         self.assertIn("No contactable lead", R.won_cmd("99 growth 797", vo=VO))
-        self.assertIn("/invoices link donna 497 ", out, "an expected first month points to the payment link the owner shares")
+        self.assertIn("/invoices link donna 497/mo ", out, "an expected first month points to the monthly payment link the owner shares")
         self.assertIn("/donna intake 12 |", out)
         got = R.won_cmd("12 front-desk 497 received", runner=runner, approve=lambda o, l: None, vo=VO)
         self.assertNotIn("/invoices link", got, "already paid: no link")
@@ -495,14 +495,18 @@ class Won(unittest.TestCase):
         from unittest import mock
         import hq_commands, hq_invoices
         out, seen = [], []
-        def link(office, cents, cur, name, **k):
-            seen.append((office, cents, cur, name)); return {"url": "https://buy.example/abc", "mode": "test"}
+        def link(office, cents, cur, name, monthly=False, **k):
+            seen.append((office, cents, cur, name, monthly)); return {"url": "https://buy.example/abc", "mode": "test"}
         upd = types.SimpleNamespace(message=types.SimpleNamespace(text="/invoices link donna 1,297 Growth, Pine Plumbing"))
         with mock.patch.object(hq_commands, "_owner", return_value=True), mock.patch.object(hq_invoices, "draft_payment_link", side_effect=link), \
              mock.patch.object(hq_commands.hq_core, "reply_to", new=mock.AsyncMock(side_effect=lambda m, t: out.append(t))):
             asyncio.run(hq_commands.hq_invoices_cmd(upd, types.SimpleNamespace(args=["link", "donna", "1,297", "Growth,", "Pine", "Plumbing"])))
             asyncio.run(hq_commands.hq_invoices_cmd(upd, types.SimpleNamespace(args=["link", "donna", "lots", "x"])))
-        self.assertEqual(seen, [("donna", 129700, "cad", "Growth, Pine Plumbing")])
+            upd.message.text = "/invoices link donna 197/mo Essential, Pine Plumbing"
+            asyncio.run(hq_commands.hq_invoices_cmd(upd, types.SimpleNamespace(args=["link", "donna", "197/mo", "Essential,", "Pine", "Plumbing"])))
+        self.assertEqual(seen, [("donna", 129700, "cad", "Growth, Pine Plumbing", False), ("donna", 19700, "cad", "Essential, Pine Plumbing", True)])
+        self.assertIn("$197.00 CAD a month", out[2])
+        self.assertIn("bills them every month", out[2])
         self.assertIn("https://buy.example/abc", out[0])
         self.assertIn("Share it with the client yourself", out[0])
         self.assertIn("Use: /invoices link", out[1])
