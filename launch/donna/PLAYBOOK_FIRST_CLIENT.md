@@ -145,7 +145,10 @@ All prices are in CAD, plus applicable taxes. Websites are optional: $497 / $997
 - **Recommended terms** (owner decision): sign now, and charge month 1 only when he approves the test line and goes live. It removes the risk without a guarantee.
 - **In Telegram, the moment he says yes:**
   1. `/donna won <lead #> <package> <monthly $>`: records the deal and drafts the welcome email with the setup questions. Tap Approve.
-  2. `/invoices link donna <monthly $> <package>, <business>`: a payment link for you to send him (Jarvis never sends it). Needs FZ_STRIPE_INVOICING=1. Until then, use Helcim as before.
+  2. `/invoices link donna <monthly $>/mo <package>, <business>` (for example `/invoices link donna 197/mo Essential, Pine Plumbing`): a monthly payment link for you to send him. Jarvis never sends it.
+     - Once he pays, Stripe bills him every month until he or you cancel in Stripe.
+     - Leave out `/mo` for a one-time charge.
+     - Needs FZ_STRIPE_INVOICING=1. Until then, use Helcim as before.
   3. When his answers come back: `/donna intake <lead #> | hours: ...; services: ...; faq: q = a; urgent: ...; booking: https://...`
   4. `/donna agent <business>`: preview his phone agent, then `create` it with the code shown.
   5. `/donna stuck` any time: every deal waiting on you, each with the command that moves it. The 6 pm digest lists them too.
